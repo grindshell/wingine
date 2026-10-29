@@ -4,6 +4,7 @@ mod app;
 mod context;
 mod error;
 pub mod graphics;
+pub mod headless;
 pub mod math;
 
 pub use app::{Game, WindowConfig, run};

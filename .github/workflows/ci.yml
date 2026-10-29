@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Format and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Runners have no GPU, so screenshot tests render with software adapters.
+          # lavapipe: Mesa's software Vulkan driver.
+          - os: ubuntu-latest
+            wgpu_backend: vulkan
+          # WARP: the software DX12 adapter that ships with Windows.
+          - os: windows-latest
+            wgpu_backend: dx12
+    runs-on: ${{ matrix.os }}
+    env:
+      WGPU_BACKEND: ${{ matrix.wgpu_backend }}
+      # Use the DX12 shader compiler built into Windows rather than whatever dxcompiler.dll is on
+      # PATH; some builds of it crash on WARP.
+      WGPU_DX12_COMPILER: fxc
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install lavapipe
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers
+      - run: cargo test
+      - name: Upload screenshot mismatches
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: screenshots-${{ matrix.os }}
+          path: target/tmp/screenshots/
+          if-no-files-found: ignore

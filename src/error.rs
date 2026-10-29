@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-/// Errors from starting the engine or loading assets.
+/// Errors from starting the engine, loading assets, or headless rendering.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("event loop error: {0}")]
@@ -20,6 +20,8 @@ pub enum Error {
         path: PathBuf,
         source: image::ImageError,
     },
+    #[error("failed to read a rendered frame back from the GPU: {0}")]
+    ReadFrame(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

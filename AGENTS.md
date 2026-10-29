@@ -44,13 +44,15 @@ of scope until the milestone is done.
 - `src/app.rs`: the public `run` entry point, the `Game` trait, and the winit event loop. `run`
   takes an init closure that builds the game once the GPU is ready.
 - `src/context.rs`: `Context`, the engine services passed to games (currently texture loading).
-- `src/graphics/`: `Gpu` (device + surface), `Renderer` (wgpu pipelines), and the public drawing
-  API: `Canvas` (what games draw to each frame), `Texture`, `Sprite` and `SpriteSheet`. All quads
+- `src/graphics/`: `Gpu` (adapter + device), `WindowSurface` (presents to the window),
+  `Renderer` (wgpu pipelines), and the public drawing API: `Canvas` (what games draw to each frame), `Texture`, `Sprite` and `SpriteSheet`. All quads
   go through one textured pipeline; solid fills use a 1x1 white texture, and consecutive quads
   with the same texture are batched into one draw call. Shaders are WGSL files next to the code
   that loads them.
+- `src/headless.rs`: `Headless`, which renders a `Canvas` to an in-memory image without a window.
 - `src/math.rs`: geometry types such as `Rect`.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
+- `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 
 ## Conventions
 
@@ -73,4 +75,21 @@ cargo run --example sprites
 ```
 
 Run `cargo fmt` and `cargo clippy --all-targets` before considering a change finished, and keep
-both clean.
+both clean. CI (`.github/workflows/ci.yml`) runs fmt, clippy with `-D warnings`, and `cargo test`
+on Linux and Windows.
+
+## Screenshot tests
+
+Rendering changes are covered by screenshot tests: each renders a scene with `Headless` and
+compares it with a reference PNG, allowing a per-channel difference of 2 so references pass on any
+GPU. Add a test there when adding a drawing feature.
+
+- A mismatch writes the rendered frame and a diff (mismatched pixels in magenta) to
+  `target/tmp/screenshots/`. In CI they are uploaded as a build artifact.
+- To create or update references, run with `UPDATE_SCREENSHOTS=1`. Only missing or mismatched
+  references are rewritten. Look at every changed PNG before committing it.
+- CI runners have no GPU: Linux uses lavapipe (`mesa-vulkan-drivers`) and Windows uses WARP. To
+  reproduce locally, pick the adapter with wgpu's environment variables, e.g. on Windows:
+  `WGPU_BACKEND=dx12 WGPU_ADAPTER_NAME="Microsoft Basic Render Driver" WGPU_DX12_COMPILER=fxc`.
+  Set `WGPU_DX12_COMPILER=fxc` whenever testing on WARP: the Vulkan SDK's `dxcompiler.dll`
+  crashes it if it's on `PATH`.

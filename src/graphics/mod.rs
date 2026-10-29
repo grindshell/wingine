@@ -5,6 +5,7 @@ mod color;
 pub(crate) mod gpu;
 pub(crate) mod renderer;
 mod sprite;
+pub(crate) mod surface;
 mod texture;
 
 pub use canvas::Canvas;

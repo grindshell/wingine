@@ -10,7 +10,7 @@ use winit::{
 
 use crate::{
     Context, Error, Result,
-    graphics::{Canvas, gpu::Gpu, renderer::Renderer},
+    graphics::{Canvas, gpu::Gpu, renderer::Renderer, surface::WindowSurface},
 };
 
 /// Longest frame time passed to [`Game::update`], so a stall (dragging the window, a breakpoint,
@@ -110,7 +110,7 @@ where
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                state.ctx.gpu.resize(size);
+                state.surface.resize(&state.ctx.gpu, size);
                 state.window.request_redraw();
             }
             WindowEvent::RedrawRequested => state.frame(),
@@ -121,6 +121,7 @@ where
 
 struct State<G> {
     window: Arc<Window>,
+    surface: WindowSurface,
     ctx: Context,
     canvas: Canvas,
     game: G,
@@ -138,13 +139,22 @@ impl<G: Game> State<G> {
             .with_inner_size(LogicalSize::new(config.width, config.height))
             .with_resizable(config.resizable);
         let window = Arc::new(event_loop.create_window(attributes)?);
-        let gpu = pollster::block_on(Gpu::new(event_loop.owned_display_handle(), window.clone()))?;
-        let renderer = Renderer::new(&gpu.device, &gpu.queue, gpu.view_format());
+        let instance = wgpu::Instance::new(
+            wgpu::InstanceDescriptor::new_with_display_handle(Box::new(
+                event_loop.owned_display_handle(),
+            ))
+            .with_env(),
+        );
+        let surface = instance.create_surface(window.clone())?;
+        let gpu = pollster::block_on(Gpu::new(instance, Some(&surface)))?;
+        let surface = WindowSurface::new(&gpu, window.clone(), surface);
+        let renderer = Renderer::new(&gpu.device, &gpu.queue, surface.view_format());
         let mut ctx = Context { gpu, renderer };
         let game = init(&mut ctx)?;
 
         Ok(Self {
             window,
+            surface,
             ctx,
             canvas: Canvas::new(),
             game,
@@ -169,13 +179,13 @@ impl<G: Game> State<G> {
         self.game.draw(&mut self.canvas);
 
         let Context { gpu, renderer } = &mut self.ctx;
-        if let Some(frame) = gpu.acquire_frame() {
+        if let Some(frame) = self.surface.acquire_frame(gpu) {
             let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(gpu.view_format()),
+                format: Some(self.surface.view_format()),
                 ..Default::default()
             });
             renderer.render(&gpu.device, &gpu.queue, &self.canvas, &view);
-            gpu.present(frame);
+            self.surface.present(gpu, frame);
         }
         self.window.request_redraw();
     }
