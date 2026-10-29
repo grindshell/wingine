@@ -1,14 +1,9 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Wingine: a 2D-first desktop game engine.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+mod app;
+mod error;
+pub mod graphics;
+pub mod math;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use app::{Game, WindowConfig, run};
+pub use error::{Error, Result};

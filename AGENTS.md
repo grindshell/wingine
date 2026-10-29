@@ -33,12 +33,26 @@ of scope until the milestone is done.
 
 - Rust edition 2024.
 - Target platforms: desktop only (Windows, macOS, Linux).
-- The repo is freshly scaffolded: these dependencies are not yet in `Cargo.toml`, and `src/lib.rs`
-  still holds the `cargo new` placeholder.
+- `kira` and `mlua` are not yet in `Cargo.toml`; add them when audio and scripting work starts.
 - `wgpu` and `winit` change their APIs substantially between releases. Check the version pinned in
   `Cargo.toml` and that version's docs on docs.rs rather than relying on memory of older APIs.
 - Scripts are **Luau**, not standard Lua 5.x. Luau has its own syntax additions (type annotations,
   compound assignment, `continue`) and a sandboxed standard library.
+
+## Layout
+
+- `src/app.rs`: the public `run` entry point, the `Game` trait, and the winit event loop.
+- `src/graphics/`: `Gpu` (device + surface), `Renderer` (wgpu pipelines), and the public `Canvas`
+  that games draw to each frame. Shaders are WGSL files next to the code that loads them.
+- `src/math.rs`: geometry types such as `Rect`.
+- `examples/`: small runnable programs that exercise engine features.
+
+## Conventions
+
+- Drawing coordinates are logical pixels with the origin at the top-left and `y` pointing down.
+- `Color` values are sRGB, as authored. The renderer converts them to linear space, and the
+  surface is viewed through an sRGB format so blending happens in linear space.
+- wgpu and winit types stay internal (`pub(crate)`). Games use the engine's own API.
 
 ## Commands
 
@@ -47,6 +61,7 @@ cargo build
 cargo test
 cargo clippy --all-targets
 cargo fmt
+cargo run --example shapes
 ```
 
 Run `cargo fmt` and `cargo clippy --all-targets` before considering a change finished, and keep
