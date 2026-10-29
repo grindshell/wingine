@@ -27,7 +27,7 @@ impl Headless {
         let gpu = pollster::block_on(Gpu::new(instance, None))?;
         let renderer = Renderer::new(&gpu.device, &gpu.queue, FORMAT);
         Ok(Self {
-            ctx: Context { gpu, renderer },
+            ctx: Context::new(gpu, renderer),
             canvas: Canvas::new(),
         })
     }
@@ -54,7 +54,7 @@ impl Headless {
         self.canvas.begin(width as f32, height as f32);
         draw(&mut self.canvas);
 
-        let Context { gpu, renderer } = &mut self.ctx;
+        let Context { gpu, renderer, .. } = &mut self.ctx;
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("headless frame"),
             size: wgpu::Extent3d {

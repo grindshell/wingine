@@ -3,7 +3,7 @@
 //! Run with `cargo run --example shapes`.
 
 use wingine::{
-    Game, WindowConfig,
+    Context, Game, WindowConfig,
     graphics::{Canvas, Color},
     math::Rect,
 };
@@ -16,7 +16,7 @@ struct Shapes {
 }
 
 impl Game for Shapes {
-    fn update(&mut self, dt: f32) {
+    fn update(&mut self, _ctx: &mut Context, dt: f32) {
         self.time += dt;
     }
 

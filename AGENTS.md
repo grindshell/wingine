@@ -43,7 +43,10 @@ of scope until the milestone is done.
 
 - `src/app.rs`: the public `run` entry point, the `Game` trait, and the winit event loop. `run`
   takes an init closure that builds the game once the GPU is ready.
-- `src/context.rs`: `Context`, the engine services passed to games (currently texture loading).
+- `src/context.rs`: `Context`, the engine services passed to games: input and texture loading.
+  Games get it in their init closure and in `Game::update`.
+- `src/input.rs`: `Input` (keyboard state per frame) and `Key`. The event loop feeds it winit
+  key events and clears per-frame presses and releases after each `update`.
 - `src/graphics/`: `Gpu` (adapter + device), `WindowSurface` (presents to the window),
   `Renderer` (wgpu pipelines), and the public drawing API: `Canvas` (what games draw to each frame), `Texture`, `Sprite` and `SpriteSheet`. All quads
   go through one textured pipeline; solid fills use a 1x1 white texture, and consecutive quads
@@ -61,6 +64,8 @@ of scope until the milestone is done.
   surface is viewed through an sRGB format so blending happens in linear space. Textures are
   uploaded as sRGB for the same reason.
 - Textures are sampled nearest-neighbor so pixel art stays crisp.
+- Keys are physical (by position, named for US QWERTY), so WASD works on any layout. Games
+  bind named actions (strings, so Lua scripts can use them too) to keys and query the actions.
 - wgpu and winit types stay internal (`pub(crate)`). Games use the engine's own API.
 
 ## Commands

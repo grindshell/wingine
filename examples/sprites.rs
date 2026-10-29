@@ -1,4 +1,5 @@
-//! Draws a small top-down scene from a 16x16 tileset, with a hero walking back and forth.
+//! A small top-down scene from a 16x16 tileset. Walk the hero around with the arrow keys or WASD;
+//! holding a direction keeps walking. Trees and the house block the way.
 //!
 //! Run with `cargo run --example sprites`. The tileset is Kenney's 1-bit Pack
 //! (<https://kenney.nl/assets/1-bit-pack>, CC0). Its sprites are white on transparent, so they are
@@ -7,6 +8,7 @@
 use wingine::{
     Context, Game, WindowConfig,
     graphics::{Canvas, Color, Sprite, SpriteSheet},
+    input::Key,
     math::Rect,
 };
 
@@ -18,6 +20,19 @@ const TILE_SIZE: u32 = 16;
 /// Tiles are drawn at a whole-number scale so pixels stay square.
 const SCALE: f32 = 3.0;
 const CELL: f32 = TILE_SIZE as f32 * SCALE;
+
+const MAP_COLUMNS: i32 = 20;
+const MAP_ROWS: i32 = 12;
+const HOUSE_TILE: [i32; 2] = [3, 2];
+/// Seconds the hero takes to walk one tile.
+const STEP_SECONDS: f32 = 0.16;
+/// Movement actions and the direction each walks in, checked in this order.
+const DIRECTIONS: [(&str, [i32; 2]); 4] = [
+    ("up", [0, -1]),
+    ("down", [0, 1]),
+    ("left", [-1, 0]),
+    ("right", [1, 0]),
+];
 
 const BACKGROUND: Color = Color::rgb8(0x1b, 0x26, 0x1e);
 const GRASS: Color = Color::rgb8(0x3e, 0x6b, 0x3f);
@@ -37,11 +52,45 @@ struct Scene {
     bat: Sprite,
     heart_full: Sprite,
     heart_empty: Sprite,
+    hero: Hero,
     time: f32,
+}
+
+struct Hero {
+    tile: [i32; 2],
+    /// The walk to `tile` currently under way, if any.
+    step: Option<Step>,
+    facing_left: bool,
+}
+
+struct Step {
+    from: [i32; 2],
+    /// From 0 at `from` to 1 at the destination.
+    progress: f32,
+}
+
+impl Hero {
+    /// Position in tiles, between two tiles while walking.
+    fn position(&self) -> [f32; 2] {
+        let to = self.tile.map(|v| v as f32);
+        match &self.step {
+            Some(Step { from, progress }) => {
+                let from = from.map(|v| v as f32);
+                [0, 1].map(|i| from[i] + (to[i] - from[i]) * progress)
+            }
+            None => to,
+        }
+    }
 }
 
 impl Scene {
     fn new(ctx: &mut Context) -> wingine::Result<Self> {
+        let input = ctx.input_mut();
+        input.bind("up", [Key::Up, Key::W]);
+        input.bind("down", [Key::Down, Key::S]);
+        input.bind("left", [Key::Left, Key::A]);
+        input.bind("right", [Key::Right, Key::D]);
+
         let sheet = SpriteSheet::new(ctx.load_texture(TILESET)?, TILE_SIZE, TILE_SIZE);
         let hero = sheet.sprite(27, 0);
         Ok(Self {
@@ -53,51 +102,81 @@ impl Scene {
             bat: sheet.sprite(26, 8),
             heart_full: sheet.sprite(39, 10),
             heart_empty: sheet.sprite(40, 10),
+            hero: Hero {
+                tile: [MAP_COLUMNS / 2, MAP_ROWS / 2],
+                step: None,
+                facing_left: false,
+            },
             time: 0.0,
         })
     }
 }
 
 impl Game for Scene {
-    fn update(&mut self, dt: f32) {
+    fn update(&mut self, ctx: &mut Context, dt: f32) {
         self.time += dt;
+
+        let hero = &mut self.hero;
+        if let Some(step) = &mut hero.step {
+            step.progress += dt / STEP_SECONDS;
+            if step.progress < 1.0 {
+                return;
+            }
+            hero.step = None;
+        }
+
+        // Start the next step, so holding a direction keeps walking tile by tile. A tap shorter
+        // than a frame is pressed but never held, so presses count too.
+        let input = ctx.input();
+        let Some(&(_, [dx, dy])) = DIRECTIONS
+            .iter()
+            .find(|(action, _)| input.held(action) || input.pressed(action))
+        else {
+            return;
+        };
+        if dx != 0 {
+            hero.facing_left = dx < 0;
+        }
+        let target = [hero.tile[0] + dx, hero.tile[1] + dy];
+        if walkable(target) {
+            hero.step = Some(Step {
+                from: hero.tile,
+                progress: 0.0,
+            });
+            hero.tile = target;
+        }
     }
 
     fn draw(&mut self, canvas: &mut Canvas) {
         canvas.clear(BACKGROUND);
 
-        let columns = (canvas.width() / CELL).ceil() as u32;
-        let rows = (canvas.height() / CELL).ceil() as u32;
-        for row in 0..rows {
-            for column in 0..columns {
-                let h = hash(column, row);
-                let on_border = column == 0 || row == 0 || column + 1 == columns || row + 1 == rows;
-                if on_border {
+        for row in 0..MAP_ROWS {
+            for column in 0..MAP_COLUMNS {
+                let h = hash(column as u32, row as u32);
+                let dest = cell(column as f32, row as f32);
+                if is_border([column, row]) {
                     let tree = &self.trees[h as usize % self.trees.len()];
-                    canvas.draw_sprite(tree, cell(column as f32, row as f32), TREE);
+                    canvas.draw_sprite(tree, dest, TREE);
                 } else if h.is_multiple_of(3) {
                     let grass = &self.grass[(h >> 8) as usize % self.grass.len()];
-                    canvas.draw_sprite(grass, cell(column as f32, row as f32), GRASS);
+                    canvas.draw_sprite(grass, dest, GRASS);
                 }
             }
         }
 
-        canvas.draw_sprite(&self.house, cell(3.0, 2.0), HOUSE);
+        let [house_x, house_y] = HOUSE_TILE.map(|v| v as f32);
+        canvas.draw_sprite(&self.house, cell(house_x, house_y), HOUSE);
 
-        // Walk back and forth along the middle row, facing the direction of travel.
-        let middle = (rows / 2) as f32;
-        let walk = self.time * 0.6;
-        let span = columns.saturating_sub(4) as f32 / 2.0;
-        let x = columns as f32 / 2.0 - 0.5 + walk.sin() * span;
-        let hero = if walk.cos() >= 0.0 {
-            &self.hero_right
-        } else {
+        let hero = if self.hero.facing_left {
             &self.hero_left
+        } else {
+            &self.hero_right
         };
-        canvas.draw_sprite(hero, cell(x, middle), HERO);
+        let [x, y] = self.hero.position();
+        canvas.draw_sprite(hero, cell(x, y), HERO);
 
         let bat_y = 2.0 + (self.time * 3.0).sin() * 0.25;
-        canvas.draw_sprite(&self.bat, cell(columns as f32 - 4.0, bat_y), BAT);
+        canvas.draw_sprite(&self.bat, cell(MAP_COLUMNS as f32 - 4.0, bat_y), BAT);
 
         // HUD: a translucent solid panel with sprites on top, which switches textures mid-frame.
         canvas.fill_rect(
@@ -114,6 +193,17 @@ impl Game for Scene {
             canvas.draw_sprite(heart, dest, HEART);
         }
     }
+}
+
+fn is_border([column, row]: [i32; 2]) -> bool {
+    column == 0 || row == 0 || column == MAP_COLUMNS - 1 || row == MAP_ROWS - 1
+}
+
+/// Whether the hero can stand on `tile`: inside the map, and not a tree or the house.
+fn walkable(tile: [i32; 2]) -> bool {
+    let [column, row] = tile;
+    let inside = (0..MAP_COLUMNS).contains(&column) && (0..MAP_ROWS).contains(&row);
+    inside && !is_border(tile) && tile != HOUSE_TILE
 }
 
 /// The screen rectangle of the grid cell at `column`, `row`, snapped to whole screen pixels.
@@ -133,7 +223,9 @@ fn main() -> wingine::Result<()> {
     wingine::run(
         WindowConfig {
             title: "Wingine - sprites".into(),
-            ..Default::default()
+            width: (MAP_COLUMNS as f32 * CELL) as u32,
+            height: (MAP_ROWS as f32 * CELL) as u32,
+            resizable: false,
         },
         Scene::new,
     )

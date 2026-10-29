@@ -3,14 +3,16 @@ use std::{sync::Arc, time::Instant};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
-    event::WindowEvent,
+    event::{ElementState, KeyEvent, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    keyboard::PhysicalKey,
     window::{Window, WindowId},
 };
 
 use crate::{
     Context, Error, Result,
     graphics::{Canvas, gpu::Gpu, renderer::Renderer, surface::WindowSurface},
+    input::Key,
 };
 
 /// Longest frame time passed to [`Game::update`], so a stall (dragging the window, a breakpoint,
@@ -20,7 +22,7 @@ const MAX_FRAME_TIME: f32 = 0.25;
 /// A game driven by the engine's main loop.
 pub trait Game {
     /// Advances the game by `dt` seconds. Called once per frame, before [`Game::draw`].
-    fn update(&mut self, _dt: f32) {}
+    fn update(&mut self, _ctx: &mut Context, _dt: f32) {}
 
     /// Draws the current frame.
     fn draw(&mut self, canvas: &mut Canvas);
@@ -113,6 +115,13 @@ where
                 state.surface.resize(&state.ctx.gpu, size);
                 state.window.request_redraw();
             }
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic,
+                ..
+            } => state.key_event(&event, is_synthetic),
+            // Key releases aren't delivered while unfocused, so treat every key as released.
+            WindowEvent::Focused(false) => state.ctx.input.release_all(),
             WindowEvent::RedrawRequested => state.frame(),
             _ => {}
         }
@@ -149,7 +158,7 @@ impl<G: Game> State<G> {
         let gpu = pollster::block_on(Gpu::new(instance, Some(&surface)))?;
         let surface = WindowSurface::new(&gpu, window.clone(), surface);
         let renderer = Renderer::new(&gpu.device, &gpu.queue, surface.view_format());
-        let mut ctx = Context { gpu, renderer };
+        let mut ctx = Context::new(gpu, renderer);
         let game = init(&mut ctx)?;
 
         Ok(Self {
@@ -162,6 +171,22 @@ impl<G: Game> State<G> {
         })
     }
 
+    fn key_event(&mut self, event: &KeyEvent, is_synthetic: bool) {
+        let PhysicalKey::Code(code) = event.physical_key else {
+            return;
+        };
+        let Some(key) = Key::from_winit(code) else {
+            return;
+        };
+        match event.state {
+            // Synthetic presses report keys already held when the window gains focus, such as
+            // the Alt of an Alt+Tab. They weren't pressed for this game, so they're ignored.
+            ElementState::Pressed if !is_synthetic => self.ctx.input.key_down(key),
+            ElementState::Pressed => {}
+            ElementState::Released => self.ctx.input.key_up(key),
+        }
+    }
+
     fn frame(&mut self) {
         let size = self.window.inner_size();
         if size.width == 0 || size.height == 0 {
@@ -172,13 +197,14 @@ impl<G: Game> State<G> {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(MAX_FRAME_TIME);
         self.last_frame = now;
-        self.game.update(dt);
+        self.game.update(&mut self.ctx, dt);
+        self.ctx.input.end_frame();
 
         let logical = size.to_logical::<f32>(self.window.scale_factor());
         self.canvas.begin(logical.width, logical.height);
         self.game.draw(&mut self.canvas);
 
-        let Context { gpu, renderer } = &mut self.ctx;
+        let Context { gpu, renderer, .. } = &mut self.ctx;
         if let Some(frame) = self.surface.acquire_frame(gpu) {
             let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
                 format: Some(self.surface.view_format()),
