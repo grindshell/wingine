@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-/// Errors from starting the engine, loading or saving images, headless rendering, or scripts.
+/// Errors from starting the engine, loading or saving files, headless rendering, Luau scripts, or
+/// scripted runs.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("event loop error: {0}")]
@@ -25,8 +26,16 @@ pub enum Error {
         path: PathBuf,
         source: image::ImageError,
     },
+    #[error("failed to read {}: {source}", .path.display())]
+    ReadFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("failed to read a rendered frame back from the GPU: {0}")]
     ReadFrame(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// A Luau script failed to compile or raised an error.
+    #[error("Luau: {0}")]
+    Lua(#[from] mlua::Error),
     #[error("script {}: {message}", .path.display())]
     Script { path: PathBuf, message: String },
 }

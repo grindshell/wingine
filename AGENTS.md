@@ -33,11 +33,14 @@ of scope until the milestone is done.
 
 - Rust edition 2024.
 - Target platforms: desktop only (Windows, macOS, Linux).
-- `kira` and `mlua` are not yet in `Cargo.toml`; add them when audio and scripting work starts.
-- `wgpu` and `winit` change their APIs substantially between releases. Check the version pinned in
-  `Cargo.toml` and that version's docs on docs.rs rather than relying on memory of older APIs.
+- `kira` is not yet in `Cargo.toml`; add it when audio work starts.
+- `wgpu`, `winit` and `mlua` change their APIs substantially between releases. Check the version
+  pinned in `Cargo.toml` and that version's docs on docs.rs rather than relying on memory of older
+  APIs.
 - Scripts are **Luau**, not standard Lua 5.x. Luau has its own syntax additions (type annotations,
-  compound assignment, `continue`) and a sandboxed standard library.
+  compound assignment, `continue`, generalized `for ... in t`) and a sandboxed standard library.
+- `mlua` builds Luau from C++ source, so building needs a C++ compiler (MSVC on Windows, `g++` or
+  `clang` elsewhere). The first build takes about 30 seconds longer because of it.
 
 ## Layout
 
@@ -75,11 +78,17 @@ of scope until the milestone is done.
   keys and mouse, and screenshots on demand. All of them in a process share one GPU device, and
   only one thread at a time may hold any (a reentrant lease): lavapipe crashes with a device per
   thread and WARP renders wrongly with a shared one, so parallel GPU tests take turns.
-- `src/script.rs`: the scripted-run format and runner, built on `Simulation`.
+- `src/lua.rs`: `Scripts`, a sandboxed Luau VM for gameplay scripts, and its task scheduler.
+  Games register Rust functions (`set_function`), load script files, and start script functions
+  as tasks (`spawn`): coroutines that `update` resumes once a frame with the frame's duration.
+  The built-ins `wait`, `wait_until`, `spawn` and `print` are documented at the top of the file.
+  Its unit tests don't need a GPU.
+- `src/script.rs`: scripted runs, which drive a game with simulated input from a text file
+  (unrelated to Luau scripts), built on `Simulation`.
 - `src/math.rs`: geometry types such as `Rect`.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
   `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
-  `Simulation`.
+  `Simulation`, and its events and NPC are scripted in `sprites.luau`.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 
@@ -102,11 +111,21 @@ of scope until the milestone is done.
   surface is viewed through an sRGB format so blending happens in linear space. Textures are
   uploaded as sRGB for the same reason.
 - Textures are sampled nearest-neighbor so pixel art stays crisp.
+- Luau scripts reach game state only through functions the game registers. Those functions share
+  state with the game through `Rc<RefCell<_>>`, so the game must not hold a borrow while scripts
+  run (`Scripts::update`, `spawn` or `call`). A game function that waits, such as showing
+  dialogue until it's closed, is a Rust function that starts the action plus a few lines of Luau
+  that `wait_until` it's done.
+- Script errors don't stop the game: a failing task stops, the rest carry on, and `update`
+  returns the error to log.
 - Keys are physical (by position, named for US QWERTY), so WASD works on any layout. Games
   bind named actions (strings, so Lua scripts can use them too) to keys and query the actions.
 - The mouse position is in canvas pixels (through any fixed-resolution scaling and bars).
   `Camera::canvas_to_world` converts it to world coordinates, using `Context::canvas_size`.
-- wgpu and winit types stay internal (`pub(crate)`). Games use the engine's own API.
+- wgpu and winit types stay internal (`pub(crate)`). Games use the engine's own API. `mlua` is
+  the exception: `wingine::lua` re-exports it, since registering functions and converting values
+  is its API. Engine types scripts use implement `FromLua`/`IntoLua` in `src/lua.rs` (`Direction`
+  is a string such as `"up"`).
 
 ## Commands
 

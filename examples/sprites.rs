@@ -3,15 +3,20 @@
 //! walking), or click a tile to walk toward it. The camera follows, and trees and the house block
 //! the way. Face the house and press Space, Enter or E to read the note on its door.
 //!
+//! The note and the bat circling the house are scripted in Luau, in `examples/sprites.luau`.
+//!
 //! Run with `cargo run --example sprites`. The tileset is Kenney's 1-bit Pack
 //! (<https://kenney.nl/assets/1-bit-pack>, CC0). Its sprites are white on transparent, so they are
 //! tinted when drawn.
+
+use std::{cell::RefCell, rc::Rc};
 
 use wingine::{
     Context, Game, WindowConfig,
     graphics::{Camera, Canvas, Color, Font, Resolution, Sprite, SpriteSheet, TextLayout},
     grid::{Direction, GridMover},
     input::{Key, MouseButton},
+    lua::{Scripts, TaskId},
     math::Rect,
     tilemap::{Tile, Tilemap, Tileset},
 };
@@ -20,6 +25,14 @@ const TILESET: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/examples/kenney_1-bit-pack_transparent-packed.png"
 );
+const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/sprites.luau");
+/// Lets scripts make the scene's functions wait, in Luau.
+const SCRIPT_API: &str = "
+function say(text: string)
+    show_text(text)
+    wait_until(function() return not text_open() end)
+end
+";
 const TILE: u32 = 16;
 const TILE_SIZE: f32 = TILE as f32;
 /// 16 by 9 tiles, which scales by whole numbers to fill 720p, 1080p and 1440p screens.
@@ -42,8 +55,9 @@ const DIRECTIONS: [(&str, Direction); 4] = [
     ("right", Direction::Right),
 ];
 
-const NOTE: &str = "A note on the door reads: “Gone to find the key. Don’t wait up!” \
-                    A bat circles overhead… perhaps it knows where the key went.";
+/// Where the bat starts circling the house, from its top-left corner.
+const BAT_START: [i32; 2] = [HOUSE_TILE[0] - 1, HOUSE_TILE[1] - 1];
+const BAT_STEP_SECONDS: f32 = 0.3;
 /// Glyphs of dialogue revealed per second.
 const REVEAL_RATE: f32 = 45.0;
 /// The dialogue box spans the canvas, 4 pixels in from each side.
@@ -75,9 +89,18 @@ struct Scene {
     hero: Hero,
     /// The map tile under the cursor.
     hovered: Option<[i32; 2]>,
+    shared: Rc<RefCell<Shared>>,
+    scripts: Scripts,
+    /// The script the hero set off, such as reading the note. The hero waits while it runs.
+    event: Option<TaskId>,
+    time: f32,
+}
+
+/// The parts of the scene that scripts change, through the functions `register_api` gives them.
+struct Shared {
     /// Text being read, which stops the hero until it's closed.
     dialogue: Option<Dialogue>,
-    time: f32,
+    bat: GridMover,
 }
 
 struct Dialogue {
@@ -145,9 +168,19 @@ impl Scene {
 
         let sheet = SpriteSheet::new(ctx.load_texture(TILESET)?, TILE, TILE);
         let hero = sheet.sprite(27, 0);
+        let font = ctx.default_font().clone();
+        let shared = Rc::new(RefCell::new(Shared {
+            dialogue: None,
+            bat: GridMover::new(BAT_START, BAT_STEP_SECONDS),
+        }));
+        let mut scripts = Scripts::new()?;
+        register_api(&scripts, &shared, &font)?;
+        scripts.load(SCRIPT)?;
+        scripts.spawn("bat", ())?;
+
         Ok(Self {
             map: build_map(&sheet),
-            font: ctx.default_font().clone(),
+            font,
             hero_left: hero.clone().flipped_x(),
             hero_right: hero,
             bat: sheet.sprite(26, 8),
@@ -160,7 +193,9 @@ impl Scene {
                 facing_left: false,
             },
             hovered: None,
-            dialogue: None,
+            shared,
+            scripts,
+            event: None,
             time: 0.0,
         })
     }
@@ -192,6 +227,11 @@ impl Scene {
 impl Game for Scene {
     fn update(&mut self, ctx: &mut Context, dt: f32) {
         self.time += dt;
+        // Scripts run first, so what they ask for this frame shows this frame.
+        if let Err(err) = self.scripts.update(dt) {
+            log::error!("{err}");
+        }
+        self.shared.borrow_mut().bat.update(dt);
 
         let input = ctx.input();
         self.hovered = input.mouse_position().and_then(|mouse| {
@@ -202,24 +242,34 @@ impl Game for Scene {
         });
 
         // While reading, presses reveal the rest of the text, then close it.
-        if let Some(dialogue) = &mut self.dialogue {
+        let mut shared = self.shared.borrow_mut();
+        if let Some(dialogue) = &mut shared.dialogue {
             let total = dialogue.layout.glyph_count() as f32;
             if !(input.pressed("interact") || input.mouse_pressed(MouseButton::Left)) {
                 dialogue.shown = (dialogue.shown + dt * REVEAL_RATE).min(total);
             } else if !dialogue.is_complete() {
                 dialogue.shown = total;
             } else {
-                self.dialogue = None;
+                shared.dialogue = None;
             }
             return;
         }
+        // Scripts borrow the shared state while they run.
+        drop(shared);
+
+        // The hero waits for the script it set off, such as between pages of dialogue.
+        if self
+            .event
+            .is_some_and(|event| self.scripts.is_running(event))
+        {
+            return;
+        }
         if input.pressed("interact") && self.facing_the_house() {
-            let text_width = DIALOGUE_WIDTH - DIALOGUE_PADDING * 2.0;
-            self.dialogue = Some(Dialogue {
-                layout: self.font.layout(NOTE, Some(text_width)),
-                shown: 0.0,
-            });
             self.hero.target = None;
+            match self.scripts.spawn("read_note", ()) {
+                Ok(event) => self.event = Some(event),
+                Err(err) => log::error!("{err}"),
+            }
             return;
         }
 
@@ -289,8 +339,11 @@ impl Game for Scene {
         let [hero_x, hero_y] = self.hero_position();
         canvas.draw_sprite(hero, Rect::new(hero_x, hero_y, TILE_SIZE, TILE_SIZE), HERO);
 
-        let bat_y = (6.0 + (self.time * 3.0).sin() * 0.25) * TILE_SIZE;
-        let bat = Rect::new(24.0 * TILE_SIZE, bat_y.round(), TILE_SIZE, TILE_SIZE);
+        let shared = self.shared.borrow();
+        // The bat bobs as it flies.
+        let [bat_x, bat_y] = self.map.tile_to_world(shared.bat.position());
+        let bat_y = bat_y + (self.time * 3.0).sin() * 4.0;
+        let bat = Rect::new(bat_x.round(), bat_y.round(), TILE_SIZE, TILE_SIZE);
         canvas.draw_sprite(&self.bat, bat, BAT);
 
         // The HUD is drawn in canvas pixels, so it stays put as the camera moves.
@@ -309,7 +362,7 @@ impl Game for Scene {
             canvas.draw_sprite(heart, dest, HEART);
         }
 
-        if let Some(dialogue) = &self.dialogue {
+        if let Some(dialogue) = &shared.dialogue {
             let height = dialogue.layout.size()[1] + DIALOGUE_PADDING + 2.0;
             let x = (canvas.width() - DIALOGUE_WIDTH) / 2.0;
             let panel = Rect::new(x, canvas.height() - 4.0 - height, DIALOGUE_WIDTH, height);
@@ -336,6 +389,35 @@ impl Game for Scene {
             canvas.draw_text(&self.font, prompt, position, TEXT);
         }
     }
+}
+
+/// Gives scripts the scene's functions, which change it through `shared`. They're documented for
+/// script authors at the top of `sprites.luau`.
+fn register_api(
+    scripts: &Scripts,
+    shared: &Rc<RefCell<Shared>>,
+    font: &Font,
+) -> wingine::Result<()> {
+    let (state, font) = (Rc::clone(shared), font.clone());
+    scripts.set_function("show_text", move |_, text: String| {
+        let width = DIALOGUE_WIDTH - DIALOGUE_PADDING * 2.0;
+        state.borrow_mut().dialogue = Some(Dialogue {
+            layout: font.layout(&text, Some(width)),
+            shown: 0.0,
+        });
+        Ok(())
+    })?;
+    let state = Rc::clone(shared);
+    scripts.set_function("text_open", move |_, ()| {
+        Ok(state.borrow().dialogue.is_some())
+    })?;
+    let state = Rc::clone(shared);
+    scripts.set_function("bat_fly", move |_, direction: Direction| {
+        // Bats fly over trees and houses alike.
+        state.borrow_mut().bat.step(direction, |_| false);
+        Ok(())
+    })?;
+    scripts.load_source("sprites API", SCRIPT_API)
 }
 
 /// Scattered grass on the ground layer, and trees and the house, which block the way, on the
@@ -515,40 +597,50 @@ mod tests {
         scene.hero.mover.face(side.opposite());
     }
 
+    /// How much of the open dialogue is shown, out of how many glyphs, if any is open.
     fn shown(simulation: &Simulation<Scene>) -> Option<(f32, usize)> {
-        let dialogue = simulation.game().dialogue.as_ref()?;
+        let shared = simulation.game().shared.borrow();
+        let dialogue = shared.dialogue.as_ref()?;
         Some((dialogue.shown, dialogue.layout.glyph_count()))
     }
 
+    fn event_running(simulation: &Simulation<Scene>) -> bool {
+        let scene = simulation.game();
+        scene
+            .event
+            .is_some_and(|event| scene.scripts.is_running(event))
+    }
+
     #[test]
-    fn reading_the_note_reveals_it_then_closes() {
+    fn reading_the_note_shows_its_pages_in_turn() {
         let mut simulation = simulation();
         face_the_house(&mut simulation);
         simulation.tap(Key::Space);
-        assert_eq!(shown(&simulation).map(|(shown, _)| shown), Some(0.0));
+        let (shown_so_far, first_page) = shown(&simulation).expect("the note opens");
+        assert_eq!(shown_so_far, 0.0);
 
         simulation.run_for(0.5);
-        let (shown_so_far, total) = shown(&simulation).unwrap();
+        let (shown_so_far, _) = shown(&simulation).unwrap();
         assert!(
-            shown_so_far > 0.0 && shown_so_far < total as f32,
-            "partly revealed: {shown_so_far} of {total}"
-        );
-        assert!(
-            simulation
-                .game()
-                .dialogue
-                .as_ref()
-                .unwrap()
-                .layout
-                .line_count()
-                > 1
+            shown_so_far > 0.0 && shown_so_far < first_page as f32,
+            "partly revealed: {shown_so_far} of {first_page}"
         );
 
         // The next press shows the rest, and the one after closes it.
         simulation.tap(Key::Enter);
-        assert_eq!(shown(&simulation), Some((total as f32, total)));
+        assert_eq!(shown(&simulation), Some((first_page as f32, first_page)));
         simulation.tap(Key::E);
         assert_eq!(shown(&simulation), None);
+
+        // The script goes on to the second page on the next frame.
+        simulation.step();
+        let (_, second_page) = shown(&simulation).expect("the second page opens");
+        assert_ne!(second_page, first_page);
+        simulation.tap(Key::Space);
+        simulation.tap(Key::Space);
+        simulation.step();
+        assert_eq!(shown(&simulation), None);
+        assert!(!event_running(&simulation), "the note is read");
     }
 
     #[test]
@@ -561,7 +653,7 @@ mod tests {
             simulation.hold(key, 0.3);
         }
         assert_eq!(simulation.game().hero.mover.tile(), tile);
-        assert!(simulation.game().dialogue.is_some());
+        assert!(shown(&simulation).is_some());
     }
 
     #[test]
@@ -571,7 +663,25 @@ mod tests {
         let mover = &mut simulation.game_mut().hero.mover;
         mover.face(mover.facing().opposite());
         simulation.tap(Key::Space);
-        assert!(simulation.game().dialogue.is_none());
+        assert!(shown(&simulation).is_none());
+        assert!(!event_running(&simulation));
+    }
+
+    #[test]
+    fn the_bat_circles_the_house() {
+        let mut simulation = simulation();
+        let mut visited = std::collections::HashSet::new();
+        // Long enough to go all the way round.
+        for _ in 0..270 {
+            simulation.step();
+            visited.insert(simulation.game().shared.borrow().bat.tile());
+        }
+        let ring: std::collections::HashSet<[i32; 2]> = [[-1, -1], [0, -1], [1, -1], [1, 0]]
+            .into_iter()
+            .chain([[1, 1], [0, 1], [-1, 1], [-1, 0]])
+            .map(|[dx, dy]| [HOUSE_TILE[0] + dx, HOUSE_TILE[1] + dy])
+            .collect();
+        assert_eq!(visited, ring);
     }
 
     #[test]

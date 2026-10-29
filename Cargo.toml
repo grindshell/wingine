@@ -7,6 +7,8 @@ edition = "2024"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 log = "0.4.34"
+# `error-send` keeps `wingine::Error` `Send + Sync` when it wraps Lua errors.
+mlua = { version = "0.12.2", features = ["luau-jit", "error-send"] }
 pollster = "1.0.1"
 thiserror = "2.0.21"
 wgpu = "30.0.1"

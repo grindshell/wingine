@@ -7,6 +7,7 @@ pub mod graphics;
 pub mod grid;
 pub mod headless;
 pub mod input;
+pub mod lua;
 pub mod math;
 pub mod script;
 pub mod tilemap;
