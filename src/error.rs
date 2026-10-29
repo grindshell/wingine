@@ -1,6 +1,8 @@
+use std::path::PathBuf;
+
 use thiserror::Error;
 
-/// Errors that can stop the engine from starting or running.
+/// Errors from starting the engine or loading assets.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("event loop error: {0}")]
@@ -13,6 +15,11 @@ pub enum Error {
     RequestAdapter(#[from] wgpu::RequestAdapterError),
     #[error("failed to open GPU device: {0}")]
     RequestDevice(#[from] wgpu::RequestDeviceError),
+    #[error("failed to load image {}: {source}", .path.display())]
+    LoadImage {
+        path: PathBuf,
+        source: image::ImageError,
+    },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

@@ -41,17 +41,24 @@ of scope until the milestone is done.
 
 ## Layout
 
-- `src/app.rs`: the public `run` entry point, the `Game` trait, and the winit event loop.
-- `src/graphics/`: `Gpu` (device + surface), `Renderer` (wgpu pipelines), and the public `Canvas`
-  that games draw to each frame. Shaders are WGSL files next to the code that loads them.
+- `src/app.rs`: the public `run` entry point, the `Game` trait, and the winit event loop. `run`
+  takes an init closure that builds the game once the GPU is ready.
+- `src/context.rs`: `Context`, the engine services passed to games (currently texture loading).
+- `src/graphics/`: `Gpu` (device + surface), `Renderer` (wgpu pipelines), and the public drawing
+  API: `Canvas` (what games draw to each frame), `Texture`, `Sprite` and `SpriteSheet`. All quads
+  go through one textured pipeline; solid fills use a 1x1 white texture, and consecutive quads
+  with the same texture are batched into one draw call. Shaders are WGSL files next to the code
+  that loads them.
 - `src/math.rs`: geometry types such as `Rect`.
-- `examples/`: small runnable programs that exercise engine features.
+- `examples/`: small runnable programs that exercise engine features, plus their assets.
 
 ## Conventions
 
 - Drawing coordinates are logical pixels with the origin at the top-left and `y` pointing down.
 - `Color` values are sRGB, as authored. The renderer converts them to linear space, and the
-  surface is viewed through an sRGB format so blending happens in linear space.
+  surface is viewed through an sRGB format so blending happens in linear space. Textures are
+  uploaded as sRGB for the same reason.
+- Textures are sampled nearest-neighbor so pixel art stays crisp.
 - wgpu and winit types stay internal (`pub(crate)`). Games use the engine's own API.
 
 ## Commands
@@ -62,6 +69,7 @@ cargo test
 cargo clippy --all-targets
 cargo fmt
 cargo run --example shapes
+cargo run --example sprites
 ```
 
 Run `cargo fmt` and `cargo clippy --all-targets` before considering a change finished, and keep

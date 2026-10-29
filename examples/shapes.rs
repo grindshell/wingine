@@ -62,6 +62,6 @@ fn main() -> wingine::Result<()> {
             title: "Wingine - shapes".into(),
             ..Default::default()
         },
-        Shapes::default(),
+        |_| Ok(Shapes::default()),
     )
 }

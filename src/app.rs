@@ -9,7 +9,7 @@ use winit::{
 };
 
 use crate::{
-    Error, Result,
+    Context, Error, Result,
     graphics::{Canvas, gpu::Gpu, renderer::Renderer},
 };
 
@@ -48,8 +48,15 @@ impl Default for WindowConfig {
     }
 }
 
-/// Opens a window and runs `game` until the window is closed.
-pub fn run(config: WindowConfig, game: impl Game) -> Result<()> {
+/// Opens a window and runs a game until the window is closed.
+///
+/// `init` builds the game once the window and GPU are ready, so it can load assets through the
+/// [`Context`]. An error from `init` closes the window and is returned from `run`.
+pub fn run<G, F>(config: WindowConfig, init: F) -> Result<()>
+where
+    G: Game,
+    F: FnOnce(&mut Context) -> Result<G>,
+{
     let event_loop = EventLoop::new()?;
     // Frames are driven by requesting a redraw after each one, paced by vsync. Waiting (rather
     // than polling) lets the loop sleep when no frame is wanted, e.g. while minimized.
@@ -57,7 +64,7 @@ pub fn run(config: WindowConfig, game: impl Game) -> Result<()> {
 
     let mut app = App {
         config,
-        game,
+        init: Some(init),
         state: None,
         error: None,
     };
@@ -65,21 +72,26 @@ pub fn run(config: WindowConfig, game: impl Game) -> Result<()> {
     app.error.map_or(Ok(()), Err)
 }
 
-struct App<G> {
+struct App<G, F> {
     config: WindowConfig,
-    game: G,
+    /// Taken on startup.
+    init: Option<F>,
     /// Created once the event loop starts, since windows can't be created before then.
-    state: Option<State>,
+    state: Option<State<G>>,
     /// A startup failure, returned from [`run`] after the event loop exits.
     error: Option<Error>,
 }
 
-impl<G: Game> ApplicationHandler for App<G> {
+impl<G, F> ApplicationHandler for App<G, F>
+where
+    G: Game,
+    F: FnOnce(&mut Context) -> Result<G>,
+{
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.state.is_some() {
+        let Some(init) = self.init.take() else {
             return;
-        }
-        match State::new(event_loop, &self.config) {
+        };
+        match State::new(event_loop, &self.config, init) {
             Ok(state) => {
                 state.window.request_redraw();
                 self.state = Some(state);
@@ -98,43 +110,49 @@ impl<G: Game> ApplicationHandler for App<G> {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                state.gpu.resize(size);
+                state.ctx.gpu.resize(size);
                 state.window.request_redraw();
             }
-            WindowEvent::RedrawRequested => state.frame(&mut self.game),
+            WindowEvent::RedrawRequested => state.frame(),
             _ => {}
         }
     }
 }
 
-struct State {
+struct State<G> {
     window: Arc<Window>,
-    gpu: Gpu,
-    renderer: Renderer,
+    ctx: Context,
     canvas: Canvas,
+    game: G,
     last_frame: Instant,
 }
 
-impl State {
-    fn new(event_loop: &ActiveEventLoop, config: &WindowConfig) -> Result<Self> {
+impl<G: Game> State<G> {
+    fn new(
+        event_loop: &ActiveEventLoop,
+        config: &WindowConfig,
+        init: impl FnOnce(&mut Context) -> Result<G>,
+    ) -> Result<Self> {
         let attributes = Window::default_attributes()
             .with_title(&config.title)
             .with_inner_size(LogicalSize::new(config.width, config.height))
             .with_resizable(config.resizable);
         let window = Arc::new(event_loop.create_window(attributes)?);
         let gpu = pollster::block_on(Gpu::new(event_loop.owned_display_handle(), window.clone()))?;
-        let renderer = Renderer::new(&gpu.device, gpu.view_format());
+        let renderer = Renderer::new(&gpu.device, &gpu.queue, gpu.view_format());
+        let mut ctx = Context { gpu, renderer };
+        let game = init(&mut ctx)?;
 
         Ok(Self {
             window,
-            gpu,
-            renderer,
+            ctx,
             canvas: Canvas::new(),
+            game,
             last_frame: Instant::now(),
         })
     }
 
-    fn frame(&mut self, game: &mut impl Game) {
+    fn frame(&mut self) {
         let size = self.window.inner_size();
         if size.width == 0 || size.height == 0 {
             // Minimized. The next `Resized` event requests a redraw.
@@ -144,20 +162,20 @@ impl State {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(MAX_FRAME_TIME);
         self.last_frame = now;
-        game.update(dt);
+        self.game.update(dt);
 
         let logical = size.to_logical::<f32>(self.window.scale_factor());
         self.canvas.begin(logical.width, logical.height);
-        game.draw(&mut self.canvas);
+        self.game.draw(&mut self.canvas);
 
-        if let Some(frame) = self.gpu.acquire_frame() {
+        let Context { gpu, renderer } = &mut self.ctx;
+        if let Some(frame) = gpu.acquire_frame() {
             let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(self.gpu.view_format()),
+                format: Some(gpu.view_format()),
                 ..Default::default()
             });
-            self.renderer
-                .render(&self.gpu.device, &self.gpu.queue, &self.canvas, &view);
-            self.gpu.present(frame);
+            renderer.render(&gpu.device, &gpu.queue, &self.canvas, &view);
+            gpu.present(frame);
         }
         self.window.request_redraw();
     }
