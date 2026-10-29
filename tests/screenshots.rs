@@ -16,6 +16,7 @@ use wingine::{
     graphics::{Camera, Color, Resolution, SpriteSheet},
     headless::{Headless, Image},
     math::Rect,
+    tilemap::{Tile, Tilemap, Tileset},
 };
 
 /// Largest per-channel difference for a pixel to still match. GPUs and software rasterizers round
@@ -216,6 +217,55 @@ fn camera() {
         })
         .unwrap();
     assert_screenshot(&headless, "camera", frame);
+}
+
+/// A two-layer tilemap through a camera that cuts its edge cells in half: tints apply, an empty
+/// cell shows the clear color, and a sprite drawn between the layers goes over the ground but
+/// under the tree on the layer above.
+#[test]
+fn tilemap() {
+    let mut headless = headless();
+    let sheet = SpriteSheet::new(headless.context().load_texture(TILESET).unwrap(), 16, 16);
+    let mut tileset = Tileset::new(16, 16);
+    let grass = tileset.add(Tile {
+        tint: Color::rgb8(0x3e, 0x6b, 0x3f),
+        ..Tile::new(sheet.sprite(5, 0))
+    });
+    let tree = tileset.add(Tile {
+        tint: Color::rgb8(0x6a, 0xa8, 0x4f),
+        solid: true,
+        ..Tile::new(sheet.sprite(0, 1))
+    });
+    let mut map = Tilemap::new(tileset, 6, 4);
+    let ground = map.add_layer();
+    let above = map.add_layer();
+    for row in 0..4 {
+        for column in 0..6 {
+            if [column, row] != [2, 2] {
+                map.set(ground, [column, row], Some(grass));
+            }
+        }
+    }
+    map.set(above, [1, 1], Some(tree));
+    map.set(above, [3, 2], Some(tree));
+    let hero = sheet.sprite(27, 0);
+
+    let frame = headless
+        .render(64, 48, |canvas| {
+            canvas.clear(Color::rgb8(0x10, 0x10, 0x18));
+            // Shows x 8..72 and y 6..54 of the 96x64 map.
+            canvas.set_camera(Some(Camera {
+                bounds: Some(map.bounds()),
+                ..Camera::new(40.0, 30.0)
+            }));
+            map.draw_layer(canvas, ground);
+            // Half over the empty cell, half under the tree.
+            let hero_tint = Color::rgb8(0xf2, 0xd3, 0xab);
+            canvas.draw_sprite(&hero, Rect::new(40.0, 32.0, 16.0, 16.0), hero_tint);
+            map.draw_layer(canvas, above);
+        })
+        .unwrap();
+    assert_screenshot(&headless, "tilemap", frame);
 }
 
 fn headless() -> Headless {

@@ -56,6 +56,14 @@ of scope until the milestone is done.
   and consecutive quads with the same texture are batched into one draw call. A fixed resolution
   renders the canvas to an offscreen texture, then draws that texture scaled onto the output
   with the same pipeline. Shaders are WGSL files next to the code that loads them.
+- `src/tilemap.rs`: `Tilemap`, a grid of cells in layers, built from a `Tileset` of `Tile`s
+  (a sprite, a tint, and whether it's solid). Layers draw in order, culled to what the canvas
+  shows, and `draw_layer` lets games draw characters between them. `is_solid` is the collision
+  check: a cell is solid if a tile on any layer is, and everything outside the map is solid. Its
+  unit tests create a texture, so like the screenshot tests they need a GPU adapter.
+- `src/grid.rs`: `Direction` and `GridMover`, for characters that walk tile by tile. Each frame a
+  game calls `update`, then `step` when the mover is idle; a step carries over time left from the
+  one before, so continuous walking keeps an even pace.
 - `src/headless.rs`: `Headless`, which renders a `Canvas` to an in-memory image without a window,
   and `Simulation`, which runs a whole `Game` without a window: fixed 60 fps frames, simulated
   keys and mouse, and screenshots on demand. All of them in a process share one GPU device, and
@@ -77,6 +85,10 @@ of scope until the milestone is done.
 - `Canvas::set_camera` switches drawing to world coordinates; the camera's translation is
   applied on the CPU as quads are recorded, so switching costs nothing. Draw the world with a
   camera, then call `set_camera(None)` and draw the HUD in canvas pixels.
+- Tiles are addressed as `[column, row]` (`[i32; 2]`, so neighbors off the map's edge are
+  representable), with the map's top-left corner at the world origin. A `GridMover` occupies its
+  destination tile from the start of a step. Movement asks a `blocked` closure whether it may
+  enter a tile, so games can combine `Tilemap::is_solid` with their own rules, such as NPCs.
 - `Color` values are sRGB, as authored. The renderer converts them to linear space, and the
   surface is viewed through an sRGB format so blending happens in linear space. Textures are
   uploaded as sRGB for the same reason.

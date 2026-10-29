@@ -29,13 +29,7 @@ impl Camera {
 
     /// The world area visible on a canvas of `width` by `height` pixels, after applying bounds.
     pub fn visible_area(&self, width: f32, height: f32) -> Rect {
-        let transform = self.transform(width, height);
-        Rect::new(
-            transform.offset[0] / transform.scale,
-            transform.offset[1] / transform.scale,
-            width / transform.scale,
-            height / transform.scale,
-        )
+        self.transform(width, height).visible_area(width, height)
     }
 
     /// The world position under `point` on a canvas of `width` by `height` pixels, such as the
@@ -93,6 +87,17 @@ impl Transform {
             rect.y * self.scale - self.offset[1],
             rect.w * self.scale,
             rect.h * self.scale,
+        )
+    }
+
+    /// The area that lands on a canvas of `width` by `height` pixels, in the coordinates this
+    /// transform maps from.
+    pub fn visible_area(&self, width: f32, height: f32) -> Rect {
+        Rect::new(
+            self.offset[0] / self.scale,
+            self.offset[1] / self.scale,
+            width / self.scale,
+            height / self.scale,
         )
     }
 }

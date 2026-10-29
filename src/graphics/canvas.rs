@@ -77,6 +77,13 @@ impl Canvas {
         });
     }
 
+    /// The area the canvas shows, in the coordinates drawing currently uses: world coordinates
+    /// with a camera set, otherwise canvas pixels. Anything drawn outside it is off-screen, so
+    /// large scenes can skip it.
+    pub fn visible_area(&self) -> Rect {
+        self.transform.visible_area(self.width, self.height)
+    }
+
     /// Fills the whole canvas with `color`, discarding anything drawn so far this frame.
     pub fn clear(&mut self, color: Color) {
         self.clear_color = color;
@@ -169,6 +176,18 @@ mod tests {
         canvas.fill_rect(Rect::new(100.0, 100.0, 1.0, 1.0), Color::WHITE);
         assert_eq!(canvas.vertices[0].position, [10.0, 10.0]);
         assert_eq!(canvas.vertices[4].position, [100.0, 100.0]);
+    }
+
+    #[test]
+    fn visible_area_follows_the_camera() {
+        let mut canvas = Canvas::new();
+        canvas.begin(20.0, 10.0);
+        assert_eq!(canvas.visible_area(), Rect::new(0.0, 0.0, 20.0, 10.0));
+        canvas.set_camera(Some(Camera {
+            zoom: 2.0,
+            ..Camera::new(100.0, 50.0)
+        }));
+        assert_eq!(canvas.visible_area(), Rect::new(95.0, 47.5, 10.0, 5.0));
     }
 
     #[test]
