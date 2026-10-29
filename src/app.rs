@@ -11,7 +11,9 @@ use winit::{
 
 use crate::{
     Context, Error, Result,
-    graphics::{Canvas, gpu::Gpu, renderer::Renderer, surface::WindowSurface},
+    graphics::{
+        Canvas, Resolution, gpu::Gpu, renderer::Renderer, screen::Screen, surface::WindowSurface,
+    },
     input::Key,
 };
 
@@ -37,6 +39,8 @@ pub struct WindowConfig {
     /// Initial height in logical pixels.
     pub height: u32,
     pub resizable: bool,
+    /// The size of the canvas the game draws on.
+    pub resolution: Resolution,
 }
 
 impl Default for WindowConfig {
@@ -46,6 +50,7 @@ impl Default for WindowConfig {
             width: 1280,
             height: 720,
             resizable: true,
+            resolution: Resolution::Window,
         }
     }
 }
@@ -131,6 +136,7 @@ where
 struct State<G> {
     window: Arc<Window>,
     surface: WindowSurface,
+    screen: Screen,
     ctx: Context,
     canvas: Canvas,
     game: G,
@@ -164,6 +170,7 @@ impl<G: Game> State<G> {
         Ok(Self {
             window,
             surface,
+            screen: Screen::new(config.resolution),
             ctx,
             canvas: Canvas::new(),
             game,
@@ -200,8 +207,10 @@ impl<G: Game> State<G> {
         self.game.update(&mut self.ctx, dt);
         self.ctx.input.end_frame();
 
-        let logical = size.to_logical::<f32>(self.window.scale_factor());
-        self.canvas.begin(logical.width, logical.height);
+        let [width, height] = self
+            .screen
+            .canvas_size([size.width, size.height], self.window.scale_factor());
+        self.canvas.begin(width, height);
         self.game.draw(&mut self.canvas);
 
         let Context { gpu, renderer, .. } = &mut self.ctx;
@@ -210,7 +219,15 @@ impl<G: Game> State<G> {
                 format: Some(self.surface.view_format()),
                 ..Default::default()
             });
-            renderer.render(&gpu.device, &gpu.queue, &self.canvas, &view);
+            let output_size = [frame.texture.width(), frame.texture.height()];
+            self.screen.render(
+                &gpu.device,
+                &gpu.queue,
+                renderer,
+                &self.canvas,
+                &view,
+                output_size,
+            );
             self.surface.present(gpu, frame);
         }
         self.window.request_redraw();

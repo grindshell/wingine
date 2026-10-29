@@ -4,7 +4,7 @@ use std::sync::mpsc;
 
 use crate::{
     Context, Error, Result,
-    graphics::{Canvas, gpu::Gpu, renderer::Renderer},
+    graphics::{Canvas, Resolution, gpu::Gpu, renderer::Renderer, screen::Screen},
 };
 
 /// Format of headless render targets. sRGB, matching what the window surface is viewed as.
@@ -17,6 +17,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// lavapipe work, which lets this run on machines without a GPU.
 pub struct Headless {
     ctx: Context,
+    screen: Screen,
     canvas: Canvas,
 }
 
@@ -28,8 +29,16 @@ impl Headless {
         let renderer = Renderer::new(&gpu.device, &gpu.queue, FORMAT);
         Ok(Self {
             ctx: Context::new(gpu, renderer),
+            screen: Screen::new(Resolution::Window),
             canvas: Canvas::new(),
         })
+    }
+
+    /// Sets the canvas size for later frames, as [`WindowConfig::resolution`] does for a window.
+    ///
+    /// [`WindowConfig::resolution`]: crate::WindowConfig::resolution
+    pub fn set_resolution(&mut self, resolution: Resolution) {
+        self.screen = Screen::new(resolution);
     }
 
     /// Engine services, for loading the assets a frame draws.
@@ -44,14 +53,18 @@ impl Headless {
     }
 
     /// Renders one `width` by `height` frame drawn by `draw` and returns its pixels.
-    /// The canvas is `width` by `height` logical pixels, one per physical pixel.
+    ///
+    /// The frame is treated like a window of that size with a scale factor of 1: with
+    /// [`Resolution::Window`] the canvas is `width` by `height`, and with a fixed resolution the
+    /// canvas is scaled onto the frame.
     pub fn render(
         &mut self,
         width: u32,
         height: u32,
         draw: impl FnOnce(&mut Canvas),
     ) -> Result<Image> {
-        self.canvas.begin(width as f32, height as f32);
+        let [canvas_width, canvas_height] = self.screen.canvas_size([width, height], 1.0);
+        self.canvas.begin(canvas_width, canvas_height);
         draw(&mut self.canvas);
 
         let Context { gpu, renderer, .. } = &mut self.ctx;
@@ -70,7 +83,14 @@ impl Headless {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        renderer.render(&gpu.device, &gpu.queue, &self.canvas, &view);
+        self.screen.render(
+            &gpu.device,
+            &gpu.queue,
+            renderer,
+            &self.canvas,
+            &view,
+            [width, height],
+        );
         read_texture(gpu, &texture)
     }
 }

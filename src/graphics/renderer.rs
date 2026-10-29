@@ -20,6 +20,8 @@ struct Globals {
 /// Turns a recorded [`Canvas`] into GPU draw calls, and creates the textures it draws with.
 pub(crate) struct Renderer {
     pipeline: wgpu::RenderPipeline,
+    /// The format of the targets `pipeline` renders to.
+    target_format: wgpu::TextureFormat,
     globals_buffer: wgpu::Buffer,
     globals_bind_group: wgpu::BindGroup,
     texture_layout: wgpu::BindGroupLayout,
@@ -151,6 +153,7 @@ impl Renderer {
 
         Self {
             pipeline,
+            target_format,
             globals_buffer,
             globals_bind_group,
             texture_layout,
@@ -179,6 +182,40 @@ impl Renderer {
             height,
             rgba,
         )
+    }
+
+    /// Creates a texture this renderer can both render into and draw with.
+    pub fn create_render_target(
+        &self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> RenderTarget {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("render target"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // The pipeline only renders to this format.
+            format: self.target_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let texture = bind_texture(
+            device,
+            &self.texture_layout,
+            &self.sampler,
+            &view,
+            width,
+            height,
+        );
+        RenderTarget { view, texture }
     }
 
     pub fn render(
@@ -281,13 +318,25 @@ fn create_texture(
         rgba,
     );
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    bind_texture(device, layout, sampler, &view, width, height)
+}
+
+/// Wraps a texture view as a [`Texture`] the quad pipeline can draw with.
+fn bind_texture(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    view: &wgpu::TextureView,
+    width: u32,
+    height: u32,
+) -> Texture {
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
+                resource: wgpu::BindingResource::TextureView(view),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
@@ -296,6 +345,12 @@ fn create_texture(
         ],
     });
     Texture::new(bind_group, width, height)
+}
+
+/// An offscreen texture to render a canvas into, then draw like any other texture.
+pub(crate) struct RenderTarget {
+    pub view: wgpu::TextureView,
+    pub texture: Texture,
 }
 
 fn create_buffer(

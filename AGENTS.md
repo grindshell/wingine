@@ -48,10 +48,12 @@ of scope until the milestone is done.
 - `src/input.rs`: `Input` (keyboard state per frame) and `Key`. The event loop feeds it winit
   key events and clears per-frame presses and releases after each `update`.
 - `src/graphics/`: `Gpu` (adapter + device), `WindowSurface` (presents to the window),
-  `Renderer` (wgpu pipelines), and the public drawing API: `Canvas` (what games draw to each frame), `Texture`, `Sprite` and `SpriteSheet`. All quads
-  go through one textured pipeline; solid fills use a 1x1 white texture, and consecutive quads
-  with the same texture are batched into one draw call. Shaders are WGSL files next to the code
-  that loads them.
+  `Renderer` (wgpu pipelines), `Screen` (applies the `Resolution`), and the public drawing API:
+  `Canvas` (what games draw to each frame), `Camera`, `Resolution`, `Texture`, `Sprite` and
+  `SpriteSheet`. All quads go through one textured pipeline; solid fills use a 1x1 white texture,
+  and consecutive quads with the same texture are batched into one draw call. A fixed resolution
+  renders the canvas to an offscreen texture, then draws that texture scaled onto the output
+  with the same pipeline. Shaders are WGSL files next to the code that loads them.
 - `src/headless.rs`: `Headless`, which renders a `Canvas` to an in-memory image without a window.
 - `src/math.rs`: geometry types such as `Rect`.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
@@ -59,7 +61,12 @@ of scope until the milestone is done.
 
 ## Conventions
 
-- Drawing coordinates are logical pixels with the origin at the top-left and `y` pointing down.
+- Drawing coordinates are canvas pixels with the origin at the top-left and `y` pointing down.
+  The canvas is the window's size in logical pixels (`Resolution::Window`), or a fixed size scaled
+  up by whole numbers with black bars (`Resolution::Fixed`, the choice for pixel art).
+- `Canvas::set_camera` switches drawing to world coordinates; the camera's translation is
+  applied on the CPU as quads are recorded, so switching costs nothing. Draw the world with a
+  camera, then call `set_camera(None)` and draw the HUD in canvas pixels.
 - `Color` values are sRGB, as authored. The renderer converts them to linear space, and the
   surface is viewed through an sRGB format so blending happens in linear space. Textures are
   uploaded as sRGB for the same reason.

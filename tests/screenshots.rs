@@ -13,7 +13,7 @@ use std::{env, fs, path::Path};
 
 use image::{Rgba, RgbaImage};
 use wingine::{
-    graphics::{Color, SpriteSheet},
+    graphics::{Camera, Color, Resolution, SpriteSheet},
     headless::{Headless, Image},
     math::Rect,
 };
@@ -148,6 +148,74 @@ fn many_quads() {
         })
         .unwrap();
     assert_screenshot(&headless, "many_quads", frame);
+}
+
+/// A fixed resolution scales up by the largest whole number that fits, without smoothing, and is
+/// centered between black bars.
+#[test]
+fn fixed_resolution() {
+    let mut headless = headless();
+    headless.set_resolution(Resolution::Fixed {
+        width: 32,
+        height: 16,
+    });
+    // 3x fits a 100x60 frame, leaving bars on every side.
+    let frame = headless
+        .render(100, 60, |canvas| {
+            assert_eq!((canvas.width(), canvas.height()), (32.0, 16.0));
+            canvas.clear(Color::rgb8(0x20, 0x30, 0x60));
+            // Single-pixel details, which any smoothing would blur.
+            for x in (0..32).step_by(2) {
+                canvas.fill_rect(Rect::new(x as f32, 0.0, 1.0, 1.0), Color::WHITE);
+            }
+            canvas.fill_rect(
+                Rect::new(0.0, 15.0, 32.0, 1.0),
+                Color::rgb8(0xf0, 0xc0, 0x30),
+            );
+            canvas.fill_rect(
+                Rect::new(31.0, 0.0, 1.0, 16.0),
+                Color::rgb8(0x30, 0xa0, 0xf0),
+            );
+            canvas.fill_rect(Rect::new(8.0, 4.0, 8.0, 8.0), Color::RED);
+        })
+        .unwrap();
+    assert_screenshot(&headless, "fixed_resolution", frame);
+}
+
+/// World drawing through a zoomed camera held inside its bounds, then a HUD in canvas pixels.
+#[test]
+fn camera() {
+    let mut headless = headless();
+    let frame = headless
+        .render(64, 48, |canvas| {
+            canvas.clear(Color::rgb8(0x10, 0x10, 0x18));
+            // Asks to center on (40, 4), but the 32x24 view must stay inside the 48x48 world,
+            // so it shows x 16..48, y 0..24.
+            canvas.set_camera(Some(Camera {
+                zoom: 2.0,
+                bounds: Some(Rect::new(0.0, 0.0, 48.0, 48.0)),
+                ..Camera::new(40.0, 4.0)
+            }));
+            for row in 0..6u8 {
+                for column in 0..6u8 {
+                    if (row + column).is_multiple_of(2) {
+                        let tile =
+                            Rect::new(f32::from(column) * 8.0, f32::from(row) * 8.0, 8.0, 8.0);
+                        canvas.fill_rect(tile, Color::rgb8(0x30, 0x60, 0x40));
+                    }
+                }
+            }
+            canvas.fill_rect(Rect::new(44.0, 2.0, 2.0, 2.0), Color::RED);
+
+            canvas.set_camera(None);
+            canvas.fill_rect(
+                Rect::new(0.0, 40.0, 64.0, 8.0),
+                Color::rgba(0.0, 0.0, 0.0, 0.6),
+            );
+            canvas.fill_rect(Rect::new(2.0, 42.0, 4.0, 4.0), Color::GREEN);
+        })
+        .unwrap();
+    assert_screenshot(&headless, "camera", frame);
 }
 
 fn headless() -> Headless {

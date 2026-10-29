@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use bytemuck::{Pod, Zeroable};
 
-use super::{Color, Sprite, Texture};
+use super::{Camera, Color, Sprite, Texture, camera::Transform};
 use crate::math::Rect;
 
 #[repr(C)]
@@ -23,9 +23,10 @@ pub(crate) struct Batch {
 
 /// Records what a game draws during a frame.
 ///
-/// Coordinates are in logical pixels (physical pixels divided by the window's scale factor), with
-/// the origin at the top-left of the window and `y` growing downward. Shapes are drawn in the order
-/// they are submitted, later shapes on top.
+/// Coordinates are canvas pixels, with the origin at the top-left and `y` growing downward. The
+/// canvas is the window's size in logical pixels, or the fixed size set by
+/// [`Resolution::Fixed`](super::Resolution::Fixed). With a camera set, drawing is in world
+/// coordinates instead. Shapes are drawn in the order they are submitted, later shapes on top.
 pub struct Canvas {
     pub(crate) clear_color: Color,
     pub(crate) vertices: Vec<Vertex>,
@@ -33,6 +34,7 @@ pub struct Canvas {
     pub(crate) batches: Vec<Batch>,
     width: f32,
     height: f32,
+    transform: Transform,
 }
 
 impl Canvas {
@@ -44,6 +46,7 @@ impl Canvas {
             batches: Vec::new(),
             width: 0.0,
             height: 0.0,
+            transform: Transform::IDENTITY,
         }
     }
 
@@ -51,17 +54,27 @@ impl Canvas {
     pub(crate) fn begin(&mut self, width: f32, height: f32) {
         self.width = width;
         self.height = height;
+        self.transform = Transform::IDENTITY;
         self.clear(Color::BLACK);
     }
 
-    /// Width of the drawable area in logical pixels.
+    /// Width of the drawable area in canvas pixels.
     pub fn width(&self) -> f32 {
         self.width
     }
 
-    /// Height of the drawable area in logical pixels.
+    /// Height of the drawable area in canvas pixels.
     pub fn height(&self) -> f32 {
         self.height
+    }
+
+    /// Positions everything drawn after this call with `camera`, so coordinates are in the
+    /// world. `None`, the default at the start of each frame, draws in canvas pixels, as for a
+    /// HUD.
+    pub fn set_camera(&mut self, camera: Option<Camera>) {
+        self.transform = camera.map_or(Transform::IDENTITY, |camera| {
+            camera.transform(self.width, self.height)
+        });
     }
 
     /// Fills the whole canvas with `color`, discarding anything drawn so far this frame.
@@ -99,6 +112,7 @@ impl Canvas {
         }
 
         let base = self.vertices.len() as u32;
+        let dest = self.transform.apply(dest);
         let color = color.to_linear();
         let corners = [
             ([dest.x, dest.y], uv_min),
@@ -143,6 +157,28 @@ mod tests {
         canvas.fill_rect(Rect::new(2.0, 2.0, 1.0, 1.0), Color::RED);
         assert_eq!(canvas.batches.len(), 1);
         assert_eq!(canvas.batches[0].indices, 0..12);
+    }
+
+    #[test]
+    fn camera_applies_until_unset() {
+        let mut canvas = Canvas::new();
+        canvas.begin(20.0, 20.0);
+        canvas.set_camera(Some(Camera::new(100.0, 100.0)));
+        canvas.fill_rect(Rect::new(100.0, 100.0, 1.0, 1.0), Color::WHITE);
+        canvas.set_camera(None);
+        canvas.fill_rect(Rect::new(100.0, 100.0, 1.0, 1.0), Color::WHITE);
+        assert_eq!(canvas.vertices[0].position, [10.0, 10.0]);
+        assert_eq!(canvas.vertices[4].position, [100.0, 100.0]);
+    }
+
+    #[test]
+    fn begin_resets_the_camera() {
+        let mut canvas = Canvas::new();
+        canvas.begin(20.0, 20.0);
+        canvas.set_camera(Some(Camera::new(100.0, 100.0)));
+        canvas.begin(20.0, 20.0);
+        canvas.fill_rect(Rect::new(1.0, 1.0, 1.0, 1.0), Color::WHITE);
+        assert_eq!(canvas.vertices[0].position, [1.0, 1.0]);
     }
 
     #[test]

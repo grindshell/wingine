@@ -1,5 +1,6 @@
-//! A small top-down scene from a 16x16 tileset. Walk the hero around with the arrow keys or WASD;
-//! holding a direction keeps walking. Trees and the house block the way.
+//! A small top-down map from a 16x16 tileset, drawn at a fixed 256x144 resolution and scaled up to
+//! the window. Walk the hero around with the arrow keys or WASD; holding a direction keeps
+//! walking, and the camera follows. Trees and the house block the way.
 //!
 //! Run with `cargo run --example sprites`. The tileset is Kenney's 1-bit Pack
 //! (<https://kenney.nl/assets/1-bit-pack>, CC0). Its sprites are white on transparent, so they are
@@ -7,7 +8,7 @@
 
 use wingine::{
     Context, Game, WindowConfig,
-    graphics::{Canvas, Color, Sprite, SpriteSheet},
+    graphics::{Camera, Canvas, Color, Resolution, Sprite, SpriteSheet},
     input::Key,
     math::Rect,
 };
@@ -16,14 +17,18 @@ const TILESET: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/examples/kenney_1-bit-pack_transparent-packed.png"
 );
-const TILE_SIZE: u32 = 16;
-/// Tiles are drawn at a whole-number scale so pixels stay square.
-const SCALE: f32 = 3.0;
-const CELL: f32 = TILE_SIZE as f32 * SCALE;
+const TILE: u32 = 16;
+const TILE_SIZE: f32 = TILE as f32;
+/// 16 by 9 tiles, which scales by whole numbers to fill 720p, 1080p and 1440p screens.
+const RESOLUTION: Resolution = Resolution::Fixed {
+    width: 256,
+    height: 144,
+};
 
-const MAP_COLUMNS: i32 = 20;
-const MAP_ROWS: i32 = 12;
-const HOUSE_TILE: [i32; 2] = [3, 2];
+const MAP_COLUMNS: i32 = 40;
+const MAP_ROWS: i32 = 24;
+const HOUSE_TILE: [i32; 2] = [17, 9];
+const START_TILE: [i32; 2] = [MAP_COLUMNS / 2, MAP_ROWS / 2];
 /// Seconds the hero takes to walk one tile.
 const STEP_SECONDS: f32 = 0.16;
 /// Movement actions and the direction each walks in, checked in this order.
@@ -91,7 +96,7 @@ impl Scene {
         input.bind("left", [Key::Left, Key::A]);
         input.bind("right", [Key::Right, Key::D]);
 
-        let sheet = SpriteSheet::new(ctx.load_texture(TILESET)?, TILE_SIZE, TILE_SIZE);
+        let sheet = SpriteSheet::new(ctx.load_texture(TILESET)?, TILE, TILE);
         let hero = sheet.sprite(27, 0);
         Ok(Self {
             grass: [sheet.sprite(1, 0), sheet.sprite(5, 0), sheet.sprite(7, 0)],
@@ -103,7 +108,7 @@ impl Scene {
             heart_full: sheet.sprite(39, 10),
             heart_empty: sheet.sprite(40, 10),
             hero: Hero {
-                tile: [MAP_COLUMNS / 2, MAP_ROWS / 2],
+                tile: START_TILE,
                 step: None,
                 facing_left: false,
             },
@@ -150,37 +155,54 @@ impl Game for Scene {
     fn draw(&mut self, canvas: &mut Canvas) {
         canvas.clear(BACKGROUND);
 
-        for row in 0..MAP_ROWS {
-            for column in 0..MAP_COLUMNS {
-                let h = hash(column as u32, row as u32);
-                let dest = cell(column as f32, row as f32);
-                if is_border([column, row]) {
+        // Follow the hero, snapped to whole pixels so it doesn't jitter against the map.
+        let [hero_x, hero_y] = self.hero.position().map(|v| (v * TILE_SIZE).round());
+        let camera = Camera {
+            bounds: Some(Rect::new(
+                0.0,
+                0.0,
+                MAP_COLUMNS as f32 * TILE_SIZE,
+                MAP_ROWS as f32 * TILE_SIZE,
+            )),
+            ..Camera::new(hero_x + TILE_SIZE / 2.0, hero_y + TILE_SIZE / 2.0)
+        };
+        canvas.set_camera(Some(camera));
+
+        // Only draw the tiles the camera can see.
+        let visible = camera.visible_area(canvas.width(), canvas.height());
+        let columns = tile_range(visible.x, visible.right(), MAP_COLUMNS);
+        let rows = tile_range(visible.y, visible.bottom(), MAP_ROWS);
+        for row in rows {
+            for column in columns.clone() {
+                let tile = [column, row];
+                let h = hash(tile);
+                if tile == HOUSE_TILE {
+                    canvas.draw_sprite(&self.house, tile_rect(tile), HOUSE);
+                } else if is_tree(tile) {
                     let tree = &self.trees[h as usize % self.trees.len()];
-                    canvas.draw_sprite(tree, dest, TREE);
+                    canvas.draw_sprite(tree, tile_rect(tile), TREE);
                 } else if h.is_multiple_of(3) {
                     let grass = &self.grass[(h >> 8) as usize % self.grass.len()];
-                    canvas.draw_sprite(grass, dest, GRASS);
+                    canvas.draw_sprite(grass, tile_rect(tile), GRASS);
                 }
             }
         }
-
-        let [house_x, house_y] = HOUSE_TILE.map(|v| v as f32);
-        canvas.draw_sprite(&self.house, cell(house_x, house_y), HOUSE);
 
         let hero = if self.hero.facing_left {
             &self.hero_left
         } else {
             &self.hero_right
         };
-        let [x, y] = self.hero.position();
-        canvas.draw_sprite(hero, cell(x, y), HERO);
+        canvas.draw_sprite(hero, Rect::new(hero_x, hero_y, TILE_SIZE, TILE_SIZE), HERO);
 
-        let bat_y = 2.0 + (self.time * 3.0).sin() * 0.25;
-        canvas.draw_sprite(&self.bat, cell(MAP_COLUMNS as f32 - 4.0, bat_y), BAT);
+        let bat_y = (6.0 + (self.time * 3.0).sin() * 0.25) * TILE_SIZE;
+        let bat = Rect::new(24.0 * TILE_SIZE, bat_y.round(), TILE_SIZE, TILE_SIZE);
+        canvas.draw_sprite(&self.bat, bat, BAT);
 
-        // HUD: a translucent solid panel with sprites on top, which switches textures mid-frame.
+        // The HUD is drawn in canvas pixels, so it stays put as the camera moves.
+        canvas.set_camera(None);
         canvas.fill_rect(
-            Rect::new(8.0, 8.0, CELL * 3.0 + 16.0, CELL + 16.0),
+            Rect::new(2.0, 2.0, TILE_SIZE * 3.0 + 4.0, TILE_SIZE + 4.0),
             HUD_PANEL,
         );
         for i in 0..3 {
@@ -189,31 +211,45 @@ impl Game for Scene {
             } else {
                 &self.heart_empty
             };
-            let dest = Rect::new(16.0 + i as f32 * CELL, 16.0, CELL, CELL);
+            let dest = Rect::new(4.0 + i as f32 * TILE_SIZE, 4.0, TILE_SIZE, TILE_SIZE);
             canvas.draw_sprite(heart, dest, HEART);
         }
     }
 }
 
-fn is_border([column, row]: [i32; 2]) -> bool {
-    column == 0 || row == 0 || column == MAP_COLUMNS - 1 || row == MAP_ROWS - 1
+/// The tiles along one axis that overlap world coordinates `start..end`.
+fn tile_range(start: f32, end: f32, tiles: i32) -> std::ops::Range<i32> {
+    let first = (start / TILE_SIZE).floor() as i32;
+    let last = (end / TILE_SIZE).ceil() as i32;
+    first.max(0)..last.min(tiles)
+}
+
+fn tile_rect([column, row]: [i32; 2]) -> Rect {
+    Rect::new(
+        column as f32 * TILE_SIZE,
+        row as f32 * TILE_SIZE,
+        TILE_SIZE,
+        TILE_SIZE,
+    )
+}
+
+/// Trees ring the map and are scattered inside it.
+fn is_tree(tile: [i32; 2]) -> bool {
+    let [column, row] = tile;
+    let border = column == 0 || row == 0 || column == MAP_COLUMNS - 1 || row == MAP_ROWS - 1;
+    border || (tile != START_TILE && tile != HOUSE_TILE && (hash(tile) >> 4).is_multiple_of(13))
 }
 
 /// Whether the hero can stand on `tile`: inside the map, and not a tree or the house.
 fn walkable(tile: [i32; 2]) -> bool {
     let [column, row] = tile;
     let inside = (0..MAP_COLUMNS).contains(&column) && (0..MAP_ROWS).contains(&row);
-    inside && !is_border(tile) && tile != HOUSE_TILE
-}
-
-/// The screen rectangle of the grid cell at `column`, `row`, snapped to whole screen pixels.
-fn cell(column: f32, row: f32) -> Rect {
-    Rect::new((column * CELL).round(), (row * CELL).round(), CELL, CELL)
+    inside && !is_tree(tile) && tile != HOUSE_TILE
 }
 
 /// Cheap deterministic noise, so the scattered tiles don't change between frames.
-fn hash(x: u32, y: u32) -> u32 {
-    let mut h = x.wrapping_mul(0x9e37_79b1) ^ y.wrapping_mul(0x85eb_ca77);
+fn hash([x, y]: [i32; 2]) -> u32 {
+    let mut h = (x as u32).wrapping_mul(0x9e37_79b1) ^ (y as u32).wrapping_mul(0x85eb_ca77);
     h ^= h >> 15;
     h.wrapping_mul(0x2c1b_3c6d)
 }
@@ -223,9 +259,8 @@ fn main() -> wingine::Result<()> {
     wingine::run(
         WindowConfig {
             title: "Wingine - sprites".into(),
-            width: (MAP_COLUMNS as f32 * CELL) as u32,
-            height: (MAP_ROWS as f32 * CELL) as u32,
-            resizable: false,
+            resolution: RESOLUTION,
+            ..Default::default()
         },
         Scene::new,
     )
