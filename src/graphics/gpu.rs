@@ -1,6 +1,7 @@
 use crate::Result;
 
-/// The wgpu instance and device that everything renders with.
+/// The wgpu instance and device that everything renders with. Clones share the same device.
+#[derive(Clone)]
 pub(crate) struct Gpu {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,

@@ -1,23 +1,29 @@
-//! Keyboard input, queried by key or by named action.
+//! Keyboard and mouse input, queried by key, by mouse button, or by named action.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    hash::Hash,
+    str::FromStr,
+};
 
 use winit::keyboard::KeyCode;
 
-/// Keyboard state for the current frame, available from [`Context::input`](crate::Context::input).
+/// Keyboard and mouse state for the current frame, available from
+/// [`Context::input`](crate::Context::input).
 ///
 /// Games usually bind named actions (such as `"confirm"`) to keys with [`Input::bind`] and query
-/// those, so controls can be rebound without touching game code. Keys can also be queried
-/// directly.
+/// those, so controls can be rebound without touching game code. Keys and mouse buttons can also
+/// be queried directly.
 ///
-/// A key is *pressed* or *released* on the frame its state changed, and *held* while it is down.
-/// A key tapped between two frames counts as both pressed and released on the next frame, so
-/// quick taps are never lost.
+/// A key or button is *pressed* or *released* on the frame its state changed, and *held* while it
+/// is down. One tapped between two frames counts as both pressed and released on the next frame,
+/// so quick taps are never lost.
 #[derive(Debug, Default)]
 pub struct Input {
-    held: HashSet<Key>,
-    pressed: HashSet<Key>,
-    released: HashSet<Key>,
+    keys: Buttons<Key>,
+    mouse_buttons: Buttons<MouseButton>,
+    mouse_position: Option<[f32; 2]>,
     actions: HashMap<String, Vec<Key>>,
 }
 
@@ -34,17 +40,17 @@ impl Input {
 
     /// Whether `key` is down.
     pub fn key_held(&self, key: Key) -> bool {
-        self.held.contains(&key)
+        self.keys.held.contains(&key)
     }
 
     /// Whether `key` went down this frame.
     pub fn key_pressed(&self, key: Key) -> bool {
-        self.pressed.contains(&key)
+        self.keys.pressed.contains(&key)
     }
 
     /// Whether `key` went up this frame.
     pub fn key_released(&self, key: Key) -> bool {
-        self.released.contains(&key)
+        self.keys.released.contains(&key)
     }
 
     /// Whether any key bound to `action` is down. Unbound actions are never held.
@@ -62,6 +68,29 @@ impl Input {
         self.any_key(action, |key| self.key_released(key))
     }
 
+    /// The cursor's position in canvas pixels, or `None` while it is outside the window. With a
+    /// fixed [`Resolution`](crate::graphics::Resolution), positions over the black bars fall
+    /// outside the canvas. Use [`Camera::canvas_to_world`](crate::graphics::Camera::canvas_to_world)
+    /// to find the world position under the cursor.
+    pub fn mouse_position(&self) -> Option<[f32; 2]> {
+        self.mouse_position
+    }
+
+    /// Whether `button` is down.
+    pub fn mouse_held(&self, button: MouseButton) -> bool {
+        self.mouse_buttons.held.contains(&button)
+    }
+
+    /// Whether `button` went down this frame.
+    pub fn mouse_pressed(&self, button: MouseButton) -> bool {
+        self.mouse_buttons.pressed.contains(&button)
+    }
+
+    /// Whether `button` went up this frame.
+    pub fn mouse_released(&self, button: MouseButton) -> bool {
+        self.mouse_buttons.released.contains(&button)
+    }
+
     fn any_key(&self, action: &str, test: impl Fn(Key) -> bool) -> bool {
         self.actions
             .get(action)
@@ -69,29 +98,136 @@ impl Input {
     }
 
     pub(crate) fn key_down(&mut self, key: Key) {
-        // Key repeat sends more presses while a key is held; only the first counts.
-        if self.held.insert(key) {
-            self.pressed.insert(key);
-        }
+        self.keys.down(key);
     }
 
     pub(crate) fn key_up(&mut self, key: Key) {
-        if self.held.remove(&key) {
-            self.released.insert(key);
-        }
+        self.keys.up(key);
     }
 
-    /// Releases every held key, for when the window loses focus and stops receiving key events.
+    pub(crate) fn mouse_down(&mut self, button: MouseButton) {
+        self.mouse_buttons.down(button);
+    }
+
+    pub(crate) fn mouse_up(&mut self, button: MouseButton) {
+        self.mouse_buttons.up(button);
+    }
+
+    pub(crate) fn set_mouse_position(&mut self, position: Option<[f32; 2]>) {
+        self.mouse_position = position;
+    }
+
+    /// Releases every held key and button, for when the window loses focus and stops receiving
+    /// input events.
     pub(crate) fn release_all(&mut self) {
-        self.released.extend(self.held.drain());
+        self.keys.release_all();
+        self.mouse_buttons.release_all();
     }
 
     /// Clears this frame's presses and releases. Call after the game has updated.
     pub(crate) fn end_frame(&mut self) {
+        self.keys.end_frame();
+        self.mouse_buttons.end_frame();
+    }
+}
+
+/// Held, pressed and released state for a set of keys or buttons.
+#[derive(Debug)]
+struct Buttons<T> {
+    held: HashSet<T>,
+    pressed: HashSet<T>,
+    released: HashSet<T>,
+}
+
+impl<T> Default for Buttons<T> {
+    fn default() -> Self {
+        Self {
+            held: HashSet::new(),
+            pressed: HashSet::new(),
+            released: HashSet::new(),
+        }
+    }
+}
+
+impl<T: Copy + Eq + Hash> Buttons<T> {
+    fn down(&mut self, button: T) {
+        // Key repeat sends more presses while a key is held; only the first counts.
+        if self.held.insert(button) {
+            self.pressed.insert(button);
+        }
+    }
+
+    fn up(&mut self, button: T) {
+        if self.held.remove(&button) {
+            self.released.insert(button);
+        }
+    }
+
+    fn release_all(&mut self) {
+        self.released.extend(self.held.drain());
+    }
+
+    fn end_frame(&mut self) {
         self.pressed.clear();
         self.released.clear();
     }
 }
+
+/// A mouse button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+    Back,
+    Forward,
+}
+
+impl MouseButton {
+    pub(crate) fn from_winit(button: winit::event::MouseButton) -> Option<Self> {
+        use winit::event::MouseButton as Winit;
+        match button {
+            Winit::Left => Some(Self::Left),
+            Winit::Right => Some(Self::Right),
+            Winit::Middle => Some(Self::Middle),
+            Winit::Back => Some(Self::Back),
+            Winit::Forward => Some(Self::Forward),
+            Winit::Other(_) => None,
+        }
+    }
+}
+
+/// Parses a button name such as `"left"`, ignoring case.
+impl FromStr for MouseButton {
+    type Err = ParseInputError;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        [
+            ("Left", Self::Left),
+            ("Right", Self::Right),
+            ("Middle", Self::Middle),
+            ("Back", Self::Back),
+            ("Forward", Self::Forward),
+        ]
+        .into_iter()
+        .find(|(candidate, _)| name.eq_ignore_ascii_case(candidate))
+        .map(|(_, button)| button)
+        .ok_or_else(|| ParseInputError(format!("unknown mouse button `{name}`")))
+    }
+}
+
+/// An unrecognized key or mouse button name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParseInputError(String);
+
+impl fmt::Display for ParseInputError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ParseInputError {}
 
 macro_rules! keys {
     ($($key:ident => $code:ident,)*) => {
@@ -113,6 +249,19 @@ macro_rules! keys {
                     $(KeyCode::$code => Some(Self::$key),)*
                     _ => None,
                 }
+            }
+        }
+
+        /// Parses a key's name, as written in [`Key`] (such as `"Up"` or `"Digit1"`), ignoring
+        /// case.
+        impl FromStr for Key {
+            type Err = ParseInputError;
+
+            fn from_str(name: &str) -> Result<Self, Self::Err> {
+                $(if name.eq_ignore_ascii_case(stringify!($key)) {
+                    return Ok(Self::$key);
+                })*
+                Err(ParseInputError(format!("unknown key `{name}`")))
             }
         }
     };
@@ -190,14 +339,28 @@ mod tests {
     }
 
     #[test]
-    fn release_all_releases_held_keys() {
+    fn release_all_releases_held_keys_and_buttons() {
         let mut input = Input::new();
         input.key_down(Key::LeftAlt);
         input.key_down(Key::Tab);
+        input.mouse_down(MouseButton::Left);
         input.end_frame();
         input.release_all();
         assert!(input.key_released(Key::LeftAlt) && input.key_released(Key::Tab));
         assert!(!input.key_held(Key::LeftAlt) && !input.key_held(Key::Tab));
+        assert!(input.mouse_released(MouseButton::Left));
+        assert!(!input.mouse_held(MouseButton::Left));
+    }
+
+    #[test]
+    fn mouse_buttons_track_like_keys() {
+        let mut input = Input::new();
+        input.mouse_down(MouseButton::Right);
+        assert!(input.mouse_pressed(MouseButton::Right) && input.mouse_held(MouseButton::Right));
+        input.end_frame();
+        input.mouse_up(MouseButton::Right);
+        assert!(input.mouse_released(MouseButton::Right));
+        assert!(!input.mouse_held(MouseButton::Right));
     }
 
     #[test]
@@ -229,5 +392,15 @@ mod tests {
         assert_eq!(Key::from_winit(KeyCode::KeyW), Some(Key::W));
         assert_eq!(Key::from_winit(KeyCode::ArrowLeft), Some(Key::Left));
         assert_eq!(Key::from_winit(KeyCode::MediaPlayPause), None);
+    }
+
+    #[test]
+    fn names_parse_ignoring_case() {
+        assert_eq!("right".parse(), Ok(Key::Right));
+        assert_eq!("DIGIT1".parse(), Ok(Key::Digit1));
+        assert_eq!("LeftShift".parse(), Ok(Key::LeftShift));
+        assert!("Shift".parse::<Key>().is_err());
+        assert_eq!("middle".parse(), Ok(MouseButton::Middle));
+        assert!("wheel".parse::<MouseButton>().is_err());
     }
 }

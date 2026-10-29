@@ -48,6 +48,21 @@ impl Screen {
         }
     }
 
+    /// Converts a point on an output of `output` physical pixels at `scale_factor`, such as the
+    /// cursor position, to canvas pixels.
+    pub fn to_canvas(&self, point: [f64; 2], output: [u32; 2], scale_factor: f64) -> [f32; 2] {
+        match self.resolution {
+            Resolution::Window => point.map(|v| (v / scale_factor) as f32),
+            Resolution::Fixed { width, height } => {
+                let viewport = viewport([width, height], output);
+                [
+                    (point[0] as f32 - viewport.x) * width as f32 / viewport.w,
+                    (point[1] as f32 - viewport.y) * height as f32 / viewport.h,
+                ]
+            }
+        }
+    }
+
     /// Renders `canvas` onto `output`, which is `output_size` physical pixels.
     pub fn render(
         &mut self,
@@ -126,6 +141,24 @@ mod tests {
     fn window_resolution_uses_logical_pixels() {
         let screen = Screen::new(Resolution::Window);
         assert_eq!(screen.canvas_size([2560, 1440], 2.0), [1280.0, 720.0]);
+    }
+
+    #[test]
+    fn output_points_map_through_the_scaling() {
+        let fixed = Screen::new(Resolution::Fixed {
+            width: 32,
+            height: 16,
+        });
+        // The canvas fills (2, 6) to (98, 54) of a 100x60 output, at 3x.
+        assert_eq!(fixed.to_canvas([2.0, 6.0], [100, 60], 1.0), [0.0, 0.0]);
+        assert_eq!(fixed.to_canvas([50.0, 30.0], [100, 60], 1.0), [16.0, 8.0]);
+        assert_eq!(fixed.to_canvas([0.0, 0.0], [100, 60], 1.0)[0], -2.0 / 3.0);
+
+        let window = Screen::new(Resolution::Window);
+        assert_eq!(
+            window.to_canvas([300.0, 150.0], [800, 600], 1.5),
+            [200.0, 100.0]
+        );
     }
 
     #[test]

@@ -7,6 +7,7 @@ pub mod graphics;
 pub mod headless;
 pub mod input;
 pub mod math;
+pub mod script;
 
 pub use app::{Game, WindowConfig, run};
 pub use context::Context;

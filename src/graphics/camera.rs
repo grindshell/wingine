@@ -38,6 +38,13 @@ impl Camera {
         )
     }
 
+    /// The world position under `point` on a canvas of `width` by `height` pixels, such as the
+    /// position under the cursor.
+    pub fn canvas_to_world(&self, point: [f32; 2], width: f32, height: f32) -> [f32; 2] {
+        let transform = self.transform(width, height);
+        [0, 1].map(|i| (point[i] + transform.offset[i]) / transform.scale)
+    }
+
     /// The world-to-canvas transform for a canvas of `width` by `height` pixels.
     pub(crate) fn transform(&self, width: f32, height: f32) -> Transform {
         let half_view = [width / self.zoom / 2.0, height / self.zoom / 2.0];
@@ -111,6 +118,20 @@ mod tests {
             .transform(40.0, 40.0)
             .apply(Rect::new(10.0, 10.0, 4.0, 4.0));
         assert_eq!(rect, Rect::new(20.0, 20.0, 8.0, 8.0));
+    }
+
+    #[test]
+    fn canvas_points_map_back_to_the_world() {
+        let camera = Camera {
+            zoom: 2.0,
+            ..Camera::new(10.0, 10.0)
+        };
+        let world = Rect::new(13.0, 7.0, 1.0, 1.0);
+        let canvas = camera.transform(40.0, 40.0).apply(world);
+        assert_eq!(
+            camera.canvas_to_world([canvas.x, canvas.y], 40.0, 40.0),
+            [13.0, 7.0]
+        );
     }
 
     #[test]

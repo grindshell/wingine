@@ -42,11 +42,13 @@ of scope until the milestone is done.
 ## Layout
 
 - `src/app.rs`: the public `run` entry point, the `Game` trait, and the winit event loop. `run`
-  takes an init closure that builds the game once the GPU is ready.
-- `src/context.rs`: `Context`, the engine services passed to games: input and texture loading.
-  Games get it in their init closure and in `Game::update`.
-- `src/input.rs`: `Input` (keyboard state per frame) and `Key`. The event loop feeds it winit
-  key events and clears per-frame presses and releases after each `update`.
+  takes an init closure that builds the game once the GPU is ready. With `WINGINE_SCRIPT` set,
+  `run` hands off to the script runner instead of opening a window.
+- `src/context.rs`: `Context`, the engine services passed to games: input, the canvas size, and
+  texture loading. Games get it in their init closure and in `Game::update`.
+- `src/input.rs`: `Input` (keyboard and mouse state per frame), `Key` and `MouseButton`. The
+  event loop feeds it winit events, maps the cursor to canvas pixels, and clears per-frame presses
+  and releases after each `update`.
 - `src/graphics/`: `Gpu` (adapter + device), `WindowSurface` (presents to the window),
   `Renderer` (wgpu pipelines), `Screen` (applies the `Resolution`), and the public drawing API:
   `Canvas` (what games draw to each frame), `Camera`, `Resolution`, `Texture`, `Sprite` and
@@ -54,10 +56,18 @@ of scope until the milestone is done.
   and consecutive quads with the same texture are batched into one draw call. A fixed resolution
   renders the canvas to an offscreen texture, then draws that texture scaled onto the output
   with the same pipeline. Shaders are WGSL files next to the code that loads them.
-- `src/headless.rs`: `Headless`, which renders a `Canvas` to an in-memory image without a window.
+- `src/headless.rs`: `Headless`, which renders a `Canvas` to an in-memory image without a window,
+  and `Simulation`, which runs a whole `Game` without a window: fixed 60 fps frames, simulated
+  keys and mouse, and screenshots on demand. All of them in a process share one GPU device, and
+  only one thread at a time may hold any (a reentrant lease): lavapipe crashes with a device per
+  thread and WARP renders wrongly with a shared one, so parallel GPU tests take turns.
+- `src/script.rs`: the scripted-run format and runner, built on `Simulation`.
 - `src/math.rs`: geometry types such as `Rect`.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
+  `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
+  `Simulation`.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
+- `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 
 ## Conventions
 
@@ -73,6 +83,8 @@ of scope until the milestone is done.
 - Textures are sampled nearest-neighbor so pixel art stays crisp.
 - Keys are physical (by position, named for US QWERTY), so WASD works on any layout. Games
   bind named actions (strings, so Lua scripts can use them too) to keys and query the actions.
+- The mouse position is in canvas pixels (through any fixed-resolution scaling and bars).
+  `Camera::canvas_to_world` converts it to world coordinates, using `Context::canvas_size`.
 - wgpu and winit types stay internal (`pub(crate)`). Games use the engine's own API.
 
 ## Commands
@@ -89,6 +101,36 @@ cargo run --example sprites
 Run `cargo fmt` and `cargo clippy --all-targets` before considering a change finished, and keep
 both clean. CI (`.github/workflows/ci.yml`) runs fmt, clippy with `-D warnings`, and `cargo test`
 on Linux and Windows.
+
+## Checking game behavior
+
+Check how a game behaves headlessly instead of opening a window and driving it by hand:
+
+- **Ad hoc:** write a script and run the game with `WINGINE_SCRIPT` pointing at it. The game
+  runs without a window, follows the script's simulated input, and saves screenshots next to the
+  script, then exits. The format is documented in `src/script.rs`:
+
+  ```text
+  screenshot shots/start.png
+  hold Right 0.5s
+  tap Up
+  click 88 72
+  wait 1s
+  resize 1900 650
+  screenshot shots/after.png
+  ```
+
+  ```bash
+  WINGINE_SCRIPT=path/to/check.txt cargo run --example sprites
+  ```
+
+  Mouse positions are canvas pixels; screenshots are window-sized, so with a fixed resolution
+  divide screenshot coordinates by the scale (and subtract the bars) to aim a click.
+- **As tests:** drive the game with `Simulation` (`tap`, `hold`, `click`, `run_for`, `game()`)
+  and assert on its state, as `examples/sprites.rs` does. Prefer this for anything worth
+  keeping, so CI catches regressions.
+
+Windowing itself (focus, minimizing, real resizes, DPI) still needs a real window.
 
 ## Screenshot tests
 

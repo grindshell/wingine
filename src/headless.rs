@@ -1,10 +1,16 @@
-//! Rendering without a window, for screenshot tests and offline rendering.
+//! Rendering and running games without a window: for screenshot tests, for testing game behavior
+//! with simulated input, and for offline rendering.
 
-use std::sync::mpsc;
+use std::{
+    path::Path,
+    sync::{Condvar, Mutex, PoisonError, mpsc},
+    thread::{self, ThreadId},
+};
 
 use crate::{
-    Context, Error, Result,
+    Context, Error, Game, Result, WindowConfig,
     graphics::{Canvas, Resolution, gpu::Gpu, renderer::Renderer, screen::Screen},
+    input::{Key, MouseButton},
 };
 
 /// Format of headless render targets. sRGB, matching what the window surface is viewed as.
@@ -15,22 +21,29 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// The GPU adapter is chosen as for a window, including wgpu's environment variable overrides
 /// (`WGPU_BACKEND`, `WGPU_ADAPTER_NAME`, `WGPU_POWER_PREF`). Software adapters such as WARP and
 /// lavapipe work, which lets this run on machines without a GPU.
+///
+/// Every `Headless` in a process shares one GPU device, and only one thread at a time can have
+/// any: creating one waits until other threads have dropped theirs. Software adapters render
+/// wrongly or crash when used from several threads at once, so this keeps parallel tests
+/// reliable.
 pub struct Headless {
     ctx: Context,
     screen: Screen,
     canvas: Canvas,
+    /// Declared last so it's released after the GPU resources above are dropped.
+    _lease: GpuLease,
 }
 
 impl Headless {
     pub fn new() -> Result<Self> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let gpu = pollster::block_on(Gpu::new(instance, None))?;
+        let lease = GpuLease::acquire();
+        let gpu = shared_gpu()?;
         let renderer = Renderer::new(&gpu.device, &gpu.queue, FORMAT);
         Ok(Self {
             ctx: Context::new(gpu, renderer),
             screen: Screen::new(Resolution::Window),
             canvas: Canvas::new(),
+            _lease: lease,
         })
     }
 
@@ -63,10 +76,20 @@ impl Headless {
         height: u32,
         draw: impl FnOnce(&mut Canvas),
     ) -> Result<Image> {
-        let [canvas_width, canvas_height] = self.screen.canvas_size([width, height], 1.0);
-        self.canvas.begin(canvas_width, canvas_height);
-        draw(&mut self.canvas);
+        self.draw([width, height], draw);
+        self.capture([width, height])
+    }
 
+    /// Records a frame on the canvas, sized for an `output`-sized frame.
+    fn draw(&mut self, output: [u32; 2], draw: impl FnOnce(&mut Canvas)) {
+        let [width, height] = self.screen.canvas_size(output, 1.0);
+        self.canvas.begin(width, height);
+        draw(&mut self.canvas);
+    }
+
+    /// Renders the recorded canvas onto an `output`-sized frame and reads it back.
+    fn capture(&mut self, output: [u32; 2]) -> Result<Image> {
+        let [width, height] = output;
         let Context { gpu, renderer, .. } = &mut self.ctx;
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("headless frame"),
@@ -92,6 +115,230 @@ impl Headless {
             [width, height],
         );
         read_texture(gpu, &texture)
+    }
+}
+
+/// Runs a [`Game`] without a window, driven by simulated input: for tests of game behavior, and
+/// for scripted runs (see the `WINGINE_SCRIPT` variable in [`run`](crate::run)).
+///
+/// Frames only advance when asked to, each by exactly [`Simulation::FRAME_TIME`], so runs are
+/// deterministic. Input takes effect on the next frame, as events from a window would: for
+/// example, a key held down is pressed on the next frame and held until released.
+///
+/// Like [`Headless`], only one thread at a time can have simulations.
+pub struct Simulation<G> {
+    /// Declared before `headless`, so the game's GPU resources drop while it still holds the GPU.
+    game: G,
+    headless: Headless,
+    /// The virtual window's size, in physical pixels.
+    output: [u32; 2],
+    /// Whether the canvas holds a frame drawn at the current output size.
+    drawn: bool,
+    frames: u64,
+}
+
+impl<G> Simulation<G> {
+    /// Seconds of game time each frame advances: 60 frames per second.
+    pub const FRAME_TIME: f32 = 1.0 / 60.0;
+}
+
+impl<G: Game> Simulation<G> {
+    /// Starts the game built by `init`, as [`run`](crate::run) would with `config`. The virtual
+    /// window is `config.width` by `config.height` physical pixels, with a scale factor of 1.
+    pub fn new(
+        config: &WindowConfig,
+        init: impl FnOnce(&mut Context) -> Result<G>,
+    ) -> Result<Self> {
+        let mut headless = Headless::new()?;
+        headless.set_resolution(config.resolution);
+        let output = [config.width, config.height];
+        headless.ctx.canvas_size = headless.screen.canvas_size(output, 1.0);
+        let game = init(&mut headless.ctx)?;
+        Ok(Self {
+            headless,
+            game,
+            output,
+            drawn: false,
+            frames: 0,
+        })
+    }
+
+    pub fn game(&self) -> &G {
+        &self.game
+    }
+
+    pub fn game_mut(&mut self) -> &mut G {
+        &mut self.game
+    }
+
+    pub fn context(&mut self) -> &mut Context {
+        &mut self.headless.ctx
+    }
+
+    /// Name and backend of the GPU adapter rendering screenshots, for diagnostics.
+    pub fn adapter_name(&self) -> String {
+        self.headless.adapter_name()
+    }
+
+    /// Frames run so far.
+    pub fn frame_count(&self) -> u64 {
+        self.frames
+    }
+
+    /// Runs one frame: updates the game, then draws it.
+    pub fn step(&mut self) {
+        let Self {
+            headless,
+            game,
+            output,
+            ..
+        } = self;
+        headless.ctx.canvas_size = headless.screen.canvas_size(*output, 1.0);
+        game.update(&mut headless.ctx, Self::FRAME_TIME);
+        headless.ctx.input.end_frame();
+        headless.draw(*output, |canvas| game.draw(canvas));
+        self.drawn = true;
+        self.frames += 1;
+    }
+
+    pub fn run_frames(&mut self, frames: u32) {
+        for _ in 0..frames {
+            self.step();
+        }
+    }
+
+    /// Runs `seconds` of game time, rounded to whole frames.
+    pub fn run_for(&mut self, seconds: f32) {
+        self.run_frames((seconds / Self::FRAME_TIME).round() as u32);
+    }
+
+    pub fn key_down(&mut self, key: Key) {
+        self.headless.ctx.input.key_down(key);
+    }
+
+    pub fn key_up(&mut self, key: Key) {
+        self.headless.ctx.input.key_up(key);
+    }
+
+    /// Presses `key`, runs one frame, and releases it.
+    pub fn tap(&mut self, key: Key) {
+        self.key_down(key);
+        self.step();
+        self.key_up(key);
+    }
+
+    /// Holds `key` down for `seconds` of game time.
+    pub fn hold(&mut self, key: Key, seconds: f32) {
+        self.key_down(key);
+        self.run_for(seconds);
+        self.key_up(key);
+    }
+
+    /// Moves the cursor to `x`, `y` in canvas pixels.
+    pub fn move_mouse(&mut self, x: f32, y: f32) {
+        self.headless.ctx.input.set_mouse_position(Some([x, y]));
+    }
+
+    pub fn mouse_down(&mut self, button: MouseButton) {
+        self.headless.ctx.input.mouse_down(button);
+    }
+
+    pub fn mouse_up(&mut self, button: MouseButton) {
+        self.headless.ctx.input.mouse_up(button);
+    }
+
+    /// Moves the cursor to `x`, `y` in canvas pixels, presses `button`, runs one frame, and
+    /// releases it.
+    pub fn click(&mut self, button: MouseButton, x: f32, y: f32) {
+        self.move_mouse(x, y);
+        self.mouse_down(button);
+        self.step();
+        self.mouse_up(button);
+    }
+
+    /// Resizes the virtual window to `width` by `height` physical pixels.
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.output = [width, height];
+        self.drawn = false;
+    }
+
+    /// Renders the latest frame as the window would show it. Before the first frame, or after a
+    /// resize, the game draws again first, without updating.
+    pub fn screenshot(&mut self) -> Result<Image> {
+        if !self.drawn {
+            let Self {
+                headless,
+                game,
+                output,
+                ..
+            } = self;
+            headless.draw(*output, |canvas| game.draw(canvas));
+            self.drawn = true;
+        }
+        self.headless.capture(self.output)
+    }
+}
+
+/// The device shared by every [`Headless`] in the process.
+///
+/// Creating a device is slow on software adapters, and Mesa's lavapipe intermittently crashes
+/// when a process uses several at once, as parallel tests would.
+fn shared_gpu() -> Result<Gpu> {
+    static GPU: Mutex<Option<Gpu>> = Mutex::new(None);
+    // A panic while creating the device leaves nothing behind, so a poisoned lock is still usable.
+    let mut shared = GPU.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(gpu) = &*shared {
+        return Ok(gpu.clone());
+    }
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let gpu = pollster::block_on(Gpu::new(instance, None))?;
+    *shared = Some(gpu.clone());
+    Ok(gpu)
+}
+
+/// Use of the GPU by one thread at a time, held by each [`Headless`] for its lifetime.
+///
+/// Software adapters misbehave when a process renders from several threads at once, as parallel
+/// tests do: lavapipe crashes with a device per thread, and WARP renders wrong results with a
+/// shared device. So headless rendering runs on one thread at a time; other threads wait for the
+/// lease. A thread can hold several leases, so it can use several `Headless`es at once.
+struct GpuLease(());
+
+struct Leases {
+    holder: Option<ThreadId>,
+    count: usize,
+}
+
+static LEASES: Mutex<Leases> = Mutex::new(Leases {
+    holder: None,
+    count: 0,
+});
+static LEASE_RELEASED: Condvar = Condvar::new();
+
+impl GpuLease {
+    fn acquire() -> Self {
+        let this_thread = thread::current().id();
+        let mut leases = LEASES.lock().unwrap_or_else(PoisonError::into_inner);
+        while leases.holder.is_some_and(|holder| holder != this_thread) {
+            leases = LEASE_RELEASED
+                .wait(leases)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        leases.holder = Some(this_thread);
+        leases.count += 1;
+        Self(())
+    }
+}
+
+impl Drop for GpuLease {
+    fn drop(&mut self) {
+        let mut leases = LEASES.lock().unwrap_or_else(PoisonError::into_inner);
+        leases.count -= 1;
+        if leases.count == 0 {
+            leases.holder = None;
+            LEASE_RELEASED.notify_all();
+        }
     }
 }
 
@@ -177,5 +424,22 @@ impl Image {
 
     pub fn into_pixels(self) -> Vec<u8> {
         self.pixels
+    }
+
+    /// Saves the image as a PNG file.
+    pub fn save_png(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        image::save_buffer_with_format(
+            path,
+            &self.pixels,
+            self.width,
+            self.height,
+            image::ExtendedColorType::Rgba8,
+            image::ImageFormat::Png,
+        )
+        .map_err(|source| Error::SaveImage {
+            path: path.to_owned(),
+            source,
+        })
     }
 }

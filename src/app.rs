@@ -14,7 +14,7 @@ use crate::{
     graphics::{
         Canvas, Resolution, gpu::Gpu, renderer::Renderer, screen::Screen, surface::WindowSurface,
     },
-    input::Key,
+    input::{Key, MouseButton},
 };
 
 /// Longest frame time passed to [`Game::update`], so a stall (dragging the window, a breakpoint,
@@ -59,11 +59,19 @@ impl Default for WindowConfig {
 ///
 /// `init` builds the game once the window and GPU are ready, so it can load assets through the
 /// [`Context`]. An error from `init` closes the window and is returned from `run`.
+///
+/// If the `WINGINE_SCRIPT` environment variable names a script file, the game runs that script
+/// headlessly instead of opening a window: see [`headless::Simulation`](crate::headless::Simulation)
+/// and the script format in the `script` module docs.
 pub fn run<G, F>(config: WindowConfig, init: F) -> Result<()>
 where
     G: Game,
     F: FnOnce(&mut Context) -> Result<G>,
 {
+    if let Some(script) = std::env::var_os(crate::script::ENV_VAR) {
+        return crate::script::run(&config, init, std::path::Path::new(&script));
+    }
+
     let event_loop = EventLoop::new()?;
     // Frames are driven by requesting a redraw after each one, paced by vsync. Waiting (rather
     // than polling) lets the loop sleep when no frame is wanted, e.g. while minimized.
@@ -125,7 +133,23 @@ where
                 is_synthetic,
                 ..
             } => state.key_event(&event, is_synthetic),
-            // Key releases aren't delivered while unfocused, so treat every key as released.
+            WindowEvent::CursorMoved { position, .. } => {
+                state.cursor = Some([position.x, position.y])
+            }
+            WindowEvent::CursorLeft { .. } => state.cursor = None,
+            WindowEvent::MouseInput {
+                state: button_state,
+                button,
+                ..
+            } => {
+                if let Some(button) = MouseButton::from_winit(button) {
+                    match button_state {
+                        ElementState::Pressed => state.ctx.input.mouse_down(button),
+                        ElementState::Released => state.ctx.input.mouse_up(button),
+                    }
+                }
+            }
+            // Releases aren't delivered while unfocused, so treat every key and button as released.
             WindowEvent::Focused(false) => state.ctx.input.release_all(),
             WindowEvent::RedrawRequested => state.frame(),
             _ => {}
@@ -141,6 +165,8 @@ struct State<G> {
     canvas: Canvas,
     game: G,
     last_frame: Instant,
+    /// Cursor position in physical window pixels, while it is over the window.
+    cursor: Option<[f64; 2]>,
 }
 
 impl<G: Game> State<G> {
@@ -175,6 +201,7 @@ impl<G: Game> State<G> {
             canvas: Canvas::new(),
             game,
             last_frame: Instant::now(),
+            cursor: None,
         })
     }
 
@@ -201,15 +228,22 @@ impl<G: Game> State<G> {
             return;
         }
 
+        let output = [size.width, size.height];
+        let scale_factor = self.window.scale_factor();
+        // Mapped every frame, since resizing moves the canvas under a still cursor.
+        let mouse_position = self
+            .cursor
+            .map(|cursor| self.screen.to_canvas(cursor, output, scale_factor));
+        self.ctx.input.set_mouse_position(mouse_position);
+        let [width, height] = self.screen.canvas_size(output, scale_factor);
+        self.ctx.canvas_size = [width, height];
+
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(MAX_FRAME_TIME);
         self.last_frame = now;
         self.game.update(&mut self.ctx, dt);
         self.ctx.input.end_frame();
 
-        let [width, height] = self
-            .screen
-            .canvas_size([size.width, size.height], self.window.scale_factor());
         self.canvas.begin(width, height);
         self.game.draw(&mut self.canvas);
 

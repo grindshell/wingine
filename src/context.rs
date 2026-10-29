@@ -6,11 +6,12 @@ use crate::{
     input::Input,
 };
 
-/// Engine services available to a game: input and asset loading.
+/// Engine services available to a game: input, the canvas size, and asset loading.
 pub struct Context {
     pub(crate) gpu: Gpu,
     pub(crate) renderer: Renderer,
     pub(crate) input: Input,
+    pub(crate) canvas_size: [f32; 2],
 }
 
 impl Context {
@@ -19,17 +20,24 @@ impl Context {
             gpu,
             renderer,
             input: Input::new(),
+            canvas_size: [0.0, 0.0],
         }
     }
 
-    /// Keyboard state for the current frame.
+    /// Keyboard and mouse state for the current frame.
     pub fn input(&self) -> &Input {
         &self.input
     }
 
-    /// Keyboard state, for binding actions.
+    /// Keyboard and mouse state, for binding actions.
     pub fn input_mut(&mut self) -> &mut Input {
         &mut self.input
+    }
+
+    /// Width and height of the canvas this frame will be drawn on, in canvas pixels. Zero
+    /// before the first frame.
+    pub fn canvas_size(&self) -> [f32; 2] {
+        self.canvas_size
     }
 
     /// Loads a PNG file into a texture.
