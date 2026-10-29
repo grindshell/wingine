@@ -4,19 +4,21 @@
 //! the way. Face the house and press Space, Enter or E to read the note on its door.
 //!
 //! The note and the bat circling the house are scripted in Luau, in `examples/sprites.luau`.
+//! Music loops in the background, text blips as it appears, and walking into things thuds.
 //!
 //! Run with `cargo run --example sprites`. The tileset is Kenney's 1-bit Pack
 //! (<https://kenney.nl/assets/1-bit-pack>, CC0). Its sprites are white on transparent, so they are
-//! tinted when drawn.
+//! tinted when drawn. The music and sounds in `examples/sounds` were synthesized for this example.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use wingine::{
     Context, Game, WindowConfig,
+    audio::{Audio, Sound},
     graphics::{Camera, Canvas, Color, Font, Resolution, Sprite, SpriteSheet, TextLayout},
     grid::{Direction, GridMover},
     input::{Key, MouseButton},
-    lua::{Scripts, TaskId},
+    lua::{Scripts, TaskId, mlua},
     math::Rect,
     tilemap::{Tile, Tilemap, Tileset},
 };
@@ -26,6 +28,12 @@ const TILESET: &str = concat!(
     "/examples/kenney_1-bit-pack_transparent-packed.png"
 );
 const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/sprites.luau");
+const SOUNDS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/sounds/");
+const MUSIC_VOLUME: f32 = 0.5;
+/// Text blips every this many glyphs as it's revealed.
+const GLYPHS_PER_BLIP: usize = 3;
+/// Seconds between thuds while walking into something.
+const BUMP_SECONDS: f32 = 0.3;
 /// Lets scripts make the scene's functions wait, in Luau.
 const SCRIPT_API: &str = "
 function say(text: string)
@@ -93,7 +101,15 @@ struct Scene {
     scripts: Scripts,
     /// The script the hero set off, such as reading the note. The hero waits while it runs.
     event: Option<TaskId>,
+    sounds: Sounds,
+    /// Seconds until walking into something can thud again.
+    bump_cooldown: f32,
     time: f32,
+}
+
+struct Sounds {
+    blip: Sound,
+    bump: Sound,
 }
 
 /// The parts of the scene that scripts change, through the functions `register_api` gives them.
@@ -101,6 +117,8 @@ struct Shared {
     /// Text being read, which stops the hero until it's closed.
     dialogue: Option<Dialogue>,
     bat: GridMover,
+    /// Sounds scripts have asked for, to play on the scene's next update.
+    sounds: Vec<Sound>,
 }
 
 struct Dialogue {
@@ -169,14 +187,26 @@ impl Scene {
         let sheet = SpriteSheet::new(ctx.load_texture(TILESET)?, TILE, TILE);
         let hero = sheet.sprite(27, 0);
         let font = ctx.default_font().clone();
+        let sound = |name: &str| Sound::load(format!("{SOUNDS}{name}.wav"));
+        let sounds = Sounds {
+            blip: sound("blip")?,
+            bump: sound("bump")?,
+        };
+        let script_sounds = HashMap::from([("chime".to_owned(), sound("chime")?)]);
+
         let shared = Rc::new(RefCell::new(Shared {
             dialogue: None,
             bat: GridMover::new(BAT_START, BAT_STEP_SECONDS),
+            sounds: Vec::new(),
         }));
         let mut scripts = Scripts::new()?;
-        register_api(&scripts, &shared, &font)?;
+        register_api(&scripts, &shared, &font, script_sounds)?;
         scripts.load(SCRIPT)?;
         scripts.spawn("bat", ())?;
+
+        let audio = ctx.audio();
+        audio.set_music_volume(MUSIC_VOLUME);
+        audio.play_music(format!("{SOUNDS}music.ogg"), 1.0)?;
 
         Ok(Self {
             map: build_map(&sheet),
@@ -196,8 +226,17 @@ impl Scene {
             shared,
             scripts,
             event: None,
+            sounds,
+            bump_cooldown: 0.0,
             time: 0.0,
         })
+    }
+
+    /// Plays the sounds scripts have asked for since this was last called.
+    fn play_script_sounds(&self, audio: &mut Audio) {
+        for sound in self.shared.borrow_mut().sounds.drain(..) {
+            audio.play(&sound);
+        }
     }
 
     /// Whether the hero stands still, facing the house.
@@ -227,10 +266,12 @@ impl Scene {
 impl Game for Scene {
     fn update(&mut self, ctx: &mut Context, dt: f32) {
         self.time += dt;
+        self.bump_cooldown = (self.bump_cooldown - dt).max(0.0);
         // Scripts run first, so what they ask for this frame shows this frame.
         if let Err(err) = self.scripts.update(dt) {
             log::error!("{err}");
         }
+        self.play_script_sounds(ctx.audio());
         self.shared.borrow_mut().bat.update(dt);
 
         let input = ctx.input();
@@ -240,13 +281,29 @@ impl Game for Scene {
             let tile = self.map.world_to_tile(world);
             self.map.contains(tile).then_some(tile)
         });
+        let interact = input.pressed("interact");
+        let click = input.mouse_pressed(MouseButton::Left);
+        let direction_where = |test: &dyn Fn(&str) -> bool| {
+            DIRECTIONS
+                .iter()
+                .find(|(action, _)| test(action))
+                .map(|&(_, direction)| direction)
+        };
+        let held = direction_where(&|action| input.held(action));
+        // A tap shorter than a frame is pressed but never held, so presses count too.
+        let pressed = direction_where(&|action| input.pressed(action));
+        let audio = ctx.audio();
 
         // While reading, presses reveal the rest of the text, then close it.
         let mut shared = self.shared.borrow_mut();
         if let Some(dialogue) = &mut shared.dialogue {
             let total = dialogue.layout.glyph_count() as f32;
-            if !(input.pressed("interact") || input.mouse_pressed(MouseButton::Left)) {
+            if !(interact || click) {
+                let blips = dialogue.shown as usize / GLYPHS_PER_BLIP;
                 dialogue.shown = (dialogue.shown + dt * REVEAL_RATE).min(total);
+                if dialogue.shown as usize / GLYPHS_PER_BLIP > blips {
+                    audio.play(&self.sounds.blip);
+                }
             } else if !dialogue.is_complete() {
                 dialogue.shown = total;
             } else {
@@ -264,28 +321,19 @@ impl Game for Scene {
         {
             return;
         }
-        if input.pressed("interact") && self.facing_the_house() {
+        if interact && self.facing_the_house() {
             self.hero.target = None;
             match self.scripts.spawn("read_note", ()) {
                 Ok(event) => self.event = Some(event),
                 Err(err) => log::error!("{err}"),
             }
+            self.play_script_sounds(audio);
             return;
         }
 
-        if input.mouse_pressed(MouseButton::Left) {
+        if click {
             self.hero.target = self.hovered;
         }
-
-        let direction_where = |test: &dyn Fn(&str) -> bool| {
-            DIRECTIONS
-                .iter()
-                .find(|(action, _)| test(action))
-                .map(|&(_, direction)| direction)
-        };
-        let held = direction_where(&|action| input.held(action));
-        // A tap shorter than a frame is pressed but never held, so presses count too.
-        let pressed = direction_where(&|action| input.pressed(action));
 
         let (hero, map) = (&mut self.hero, &self.map);
         // The keyboard takes over from a clicked target.
@@ -315,7 +363,12 @@ impl Game for Scene {
             Direction::Right => hero.facing_left = false,
             Direction::Up | Direction::Down => {}
         }
-        hero.mover.step(direction, |tile| map.is_solid(tile));
+        let stepped = hero.mover.step(direction, |tile| map.is_solid(tile));
+        // Walking into something thuds, but only now and then while the key is held.
+        if !stepped && held.or(pressed).is_some() && self.bump_cooldown == 0.0 {
+            audio.play(&self.sounds.bump);
+            self.bump_cooldown = BUMP_SECONDS;
+        }
         if hero.target == Some(hero.mover.tile()) {
             hero.target = None;
         }
@@ -392,11 +445,13 @@ impl Game for Scene {
 }
 
 /// Gives scripts the scene's functions, which change it through `shared`. They're documented for
-/// script authors at the top of `sprites.luau`.
+/// script authors at the top of `sprites.luau`. `sounds` are the sounds scripts can play, by
+/// name.
 fn register_api(
     scripts: &Scripts,
     shared: &Rc<RefCell<Shared>>,
     font: &Font,
+    sounds: HashMap<String, Sound>,
 ) -> wingine::Result<()> {
     let (state, font) = (Rc::clone(shared), font.clone());
     scripts.set_function("show_text", move |_, text: String| {
@@ -415,6 +470,14 @@ fn register_api(
     scripts.set_function("bat_fly", move |_, direction: Direction| {
         // Bats fly over trees and houses alike.
         state.borrow_mut().bat.step(direction, |_| false);
+        Ok(())
+    })?;
+    let state = Rc::clone(shared);
+    scripts.set_function("play_sound", move |_, name: String| {
+        let sound = sounds
+            .get(&name)
+            .ok_or_else(|| mlua::Error::runtime(format!("there's no sound called `{name}`")))?;
+        state.borrow_mut().sounds.push(sound.clone());
         Ok(())
     })?;
     scripts.load_source("sprites API", SCRIPT_API)
@@ -665,6 +728,49 @@ mod tests {
         simulation.tap(Key::Space);
         assert!(shown(&simulation).is_none());
         assert!(!event_running(&simulation));
+    }
+
+    #[test]
+    fn music_plays_from_the_start() {
+        let mut simulation = simulation();
+        simulation.run_for(0.5);
+        assert!(simulation.context().audio().music_playing());
+    }
+
+    #[test]
+    fn walking_into_the_house_thuds() {
+        let mut simulation = simulation();
+        face_the_house(&mut simulation);
+        let key = match simulation.game().hero.mover.facing() {
+            Direction::Up => Key::W,
+            Direction::Down => Key::S,
+            Direction::Left => Key::A,
+            Direction::Right => Key::D,
+        };
+        assert_eq!(simulation.context().audio().sounds_playing(), 0);
+        simulation.tap(key);
+        assert_eq!(simulation.context().audio().sounds_playing(), 1);
+    }
+
+    #[test]
+    fn reading_the_note_chimes_and_text_blips() {
+        let mut simulation = simulation();
+        face_the_house(&mut simulation);
+        simulation.tap(Key::Space);
+        assert_eq!(
+            simulation.context().audio().sounds_playing(),
+            1,
+            "the script's chime"
+        );
+        // Wait for the chime to end, then the text blips as it appears.
+        simulation.run_for(0.5);
+        let blips = (0..10)
+            .map(|_| {
+                simulation.step();
+                simulation.context().audio().sounds_playing()
+            })
+            .max();
+        assert_eq!(blips, Some(1));
     }
 
     #[test]

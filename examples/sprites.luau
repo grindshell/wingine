@@ -6,8 +6,10 @@
 --
 --   say(text)           shows text in the dialogue box, and waits until the player closes it
 --   bat_fly(direction)  starts the bat flying one tile "up", "down", "left" or "right"
+--   play_sound(name)    plays a sound effect: "chime"
 
 function read_note()
+    play_sound("chime")
     say("A note on the door reads: “Gone to find the key. Don’t wait up!”")
     say("A bat circles overhead… perhaps it knows where the key went.")
 end

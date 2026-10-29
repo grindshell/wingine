@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-/// Errors from starting the engine, loading or saving files, headless rendering, Luau scripts, or
-/// scripted runs.
+/// Errors from starting the engine, loading or saving files, audio, headless rendering, Luau
+/// scripts, or scripted runs.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("event loop error: {0}")]
@@ -26,6 +26,13 @@ pub enum Error {
         path: PathBuf,
         source: image::ImageError,
     },
+    #[error("failed to load audio {}: {source}", .path.display())]
+    LoadAudio {
+        path: PathBuf,
+        source: kira::sound::FromFileError,
+    },
+    #[error("failed to play audio: {0}")]
+    PlayAudio(String),
     #[error("failed to read {}: {source}", .path.display())]
     ReadFile {
         path: PathBuf,

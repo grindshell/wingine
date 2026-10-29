@@ -33,10 +33,11 @@ of scope until the milestone is done.
 
 - Rust edition 2024.
 - Target platforms: desktop only (Windows, macOS, Linux).
-- `kira` is not yet in `Cargo.toml`; add it when audio work starts.
-- `wgpu`, `winit` and `mlua` change their APIs substantially between releases. Check the version
-  pinned in `Cargo.toml` and that version's docs on docs.rs rather than relying on memory of older
-  APIs.
+- `wgpu`, `winit`, `mlua` and `kira` change their APIs substantially between releases. Check the
+  version pinned in `Cargo.toml` and that version's docs on docs.rs rather than relying on memory
+  of older APIs.
+- `kira` is built with only the WAV and OGG Vorbis decoders. Its output, `cpal`, links against
+  ALSA on Linux, so building there needs `libasound2-dev` (CI installs it).
 - Scripts are **Luau**, not standard Lua 5.x. Luau has its own syntax additions (type annotations,
   compound assignment, `continue`, generalized `for ... in t`) and a sandboxed standard library.
 - `mlua` builds Luau from C++ source, so building needs a C++ compiler (MSVC on Windows, `g++` or
@@ -47,8 +48,14 @@ of scope until the milestone is done.
 - `src/app.rs`: the public `run` entry point, the `Game` trait, and the winit event loop. `run`
   takes an init closure that builds the game once the GPU is ready. With `WINGINE_SCRIPT` set,
   `run` hands off to the script runner instead of opening a window.
-- `src/context.rs`: `Context`, the engine services passed to games: input, the canvas size, the
-  built-in font, and texture loading. Games get it in their init closure and in `Game::update`.
+- `src/context.rs`: `Context`, the engine services passed to games: input, audio, the canvas
+  size, the built-in font, and texture loading. Games get it in their init closure and in
+  `Game::update`.
+- `src/audio.rs`: `Audio` (kira's mixer, with separate sound-effect and music tracks) and
+  `Sound`. Sound effects are decoded into memory when loaded; music streams from its file and
+  loops, crossfading when it changes. Without a sound device, and always headless, audio plays
+  to a silent mixer that the engine advances by game time each frame, so sounds still start and
+  finish on schedule and tests can check them (`sounds_playing`, `music_playing`).
 - `src/input.rs`: `Input` (keyboard and mouse state per frame), `Key` and `MouseButton`. The
   event loop feeds it winit events, maps the cursor to canvas pixels, and clears per-frame presses
   and releases after each `update`.
@@ -88,7 +95,8 @@ of scope until the milestone is done.
 - `src/math.rs`: geometry types such as `Rect`.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
   `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
-  `Simulation`, and its events and NPC are scripted in `sprites.luau`.
+  `Simulation`, and its events and NPC are scripted in `sprites.luau`. Its sounds and music in
+  `examples/sounds/` were synthesized for it.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 
@@ -118,6 +126,9 @@ of scope until the milestone is done.
   that `wait_until` it's done.
 - Script errors don't stop the game: a failing task stops, the rest carry on, and `update`
   returns the error to log.
+- Volumes are linear (1 is as recorded, 0 is silent) and converted to kira's decibels inside
+  `Audio`. Failing to play a sound effect (too many at once) logs a warning rather than
+  returning an error; loading and music return errors.
 - Keys are physical (by position, named for US QWERTY), so WASD works on any layout. Games
   bind named actions (strings, so Lua scripts can use them too) to keys and query the actions.
 - The mouse position is in canvas pixels (through any fixed-resolution scaling and bars).
@@ -170,7 +181,9 @@ Check how a game behaves headlessly instead of opening a window and driving it b
   and assert on its state, as `examples/sprites.rs` does. Prefer this for anything worth
   keeping, so CI catches regressions.
 
-Windowing itself (focus, minimizing, real resizes, DPI) still needs a real window.
+Windowing itself (focus, minimizing, real resizes, DPI) still needs a real window. Audio in these
+runs is silent; `cargo test -- --ignored` runs a check that plays (muted) through the real sound
+device.
 
 ## Screenshot tests
 

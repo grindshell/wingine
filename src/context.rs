@@ -2,30 +2,38 @@ use std::path::Path;
 
 use crate::{
     Error, Result,
+    audio::Audio,
     graphics::{Font, Texture, gpu::Gpu, renderer::Renderer},
     input::Input,
 };
 
-/// Engine services available to a game: input, the canvas size, the built-in font, and asset
-/// loading.
+/// Engine services available to a game: input, audio, the canvas size, the built-in font, and
+/// asset loading.
 pub struct Context {
     pub(crate) gpu: Gpu,
     pub(crate) renderer: Renderer,
     pub(crate) input: Input,
+    pub(crate) audio: Audio,
     pub(crate) canvas_size: [f32; 2],
     default_font: Font,
 }
 
 impl Context {
-    pub(crate) fn new(gpu: Gpu, renderer: Renderer) -> Self {
+    pub(crate) fn new(gpu: Gpu, renderer: Renderer, audio: Audio) -> Self {
         let default_font = Font::built_in(&renderer, &gpu.device, &gpu.queue);
         Self {
             gpu,
             renderer,
             input: Input::new(),
+            audio,
             canvas_size: [0.0, 0.0],
             default_font,
         }
+    }
+
+    /// Sound effects and music. Silent when running headless.
+    pub fn audio(&mut self) -> &mut Audio {
+        &mut self.audio
     }
 
     /// The built-in pixel font: printable ASCII and a little typographic punctuation, with

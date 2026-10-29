@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 bytemuck = { version = "1.25.2", features = ["derive"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+# Only the formats the engine documents: WAV (PCM) and OGG Vorbis.
+kira = { version = "0.12.6", default-features = false, features = ["cpal", "ogg", "vorbis", "wav", "pcm"] }
 log = "0.4.34"
 # `error-send` keeps `wingine::Error` `Send + Sync` when it wraps Lua errors.
 mlua = { version = "0.12.2", features = ["luau-jit", "error-send"] }

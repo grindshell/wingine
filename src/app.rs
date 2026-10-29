@@ -11,6 +11,7 @@ use winit::{
 
 use crate::{
     Context, Error, Result,
+    audio::Audio,
     graphics::{
         Canvas, Resolution, gpu::Gpu, renderer::Renderer, screen::Screen, surface::WindowSurface,
     },
@@ -190,7 +191,7 @@ impl<G: Game> State<G> {
         let gpu = pollster::block_on(Gpu::new(instance, Some(&surface)))?;
         let surface = WindowSurface::new(&gpu, window.clone(), surface);
         let renderer = Renderer::new(&gpu.device, &gpu.queue, surface.view_format());
-        let mut ctx = Context::new(gpu, renderer);
+        let mut ctx = Context::new(gpu, renderer, Audio::new());
         let game = init(&mut ctx)?;
 
         Ok(Self {
@@ -243,6 +244,7 @@ impl<G: Game> State<G> {
         self.last_frame = now;
         self.game.update(&mut self.ctx, dt);
         self.ctx.input.end_frame();
+        self.ctx.audio.advance(dt);
 
         self.canvas.begin(width, height);
         self.game.draw(&mut self.canvas);

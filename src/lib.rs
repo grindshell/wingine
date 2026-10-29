@@ -1,6 +1,7 @@
 //! Wingine: a 2D-first desktop game engine.
 
 mod app;
+pub mod audio;
 mod context;
 mod error;
 pub mod graphics;

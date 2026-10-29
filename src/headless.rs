@@ -9,6 +9,7 @@ use std::{
 
 use crate::{
     Context, Error, Game, Result, WindowConfig,
+    audio::Audio,
     graphics::{Canvas, Resolution, gpu::Gpu, renderer::Renderer, screen::Screen},
     input::{Key, MouseButton},
 };
@@ -40,7 +41,7 @@ impl Headless {
         let gpu = shared_gpu()?;
         let renderer = Renderer::new(&gpu.device, &gpu.queue, FORMAT);
         Ok(Self {
-            ctx: Context::new(gpu, renderer),
+            ctx: Context::new(gpu, renderer, Audio::silent()),
             screen: Screen::new(Resolution::Window),
             canvas: Canvas::new(),
             _lease: lease,
@@ -196,6 +197,7 @@ impl<G: Game> Simulation<G> {
         headless.ctx.canvas_size = headless.screen.canvas_size(*output, 1.0);
         game.update(&mut headless.ctx, Self::FRAME_TIME);
         headless.ctx.input.end_frame();
+        headless.ctx.audio.advance(Self::FRAME_TIME);
         headless.draw(*output, |canvas| game.draw(canvas));
         self.drawn = true;
         self.frames += 1;
