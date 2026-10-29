@@ -44,8 +44,8 @@ of scope until the milestone is done.
 - `src/app.rs`: the public `run` entry point, the `Game` trait, and the winit event loop. `run`
   takes an init closure that builds the game once the GPU is ready. With `WINGINE_SCRIPT` set,
   `run` hands off to the script runner instead of opening a window.
-- `src/context.rs`: `Context`, the engine services passed to games: input, the canvas size, and
-  texture loading. Games get it in their init closure and in `Game::update`.
+- `src/context.rs`: `Context`, the engine services passed to games: input, the canvas size, the
+  built-in font, and texture loading. Games get it in their init closure and in `Game::update`.
 - `src/input.rs`: `Input` (keyboard and mouse state per frame), `Key` and `MouseButton`. The
   event loop feeds it winit events, maps the cursor to canvas pixels, and clears per-frame presses
   and releases after each `update`.
@@ -56,6 +56,12 @@ of scope until the milestone is done.
   and consecutive quads with the same texture are batched into one draw call. A fixed resolution
   renders the canvas to an offscreen texture, then draws that texture scaled onto the output
   with the same pipeline. Shaders are WGSL files next to the code that loads them.
+- `src/graphics/font.rs` and `default_font.rs`: `Font` (glyphs packed into one texture, with
+  their metrics) and `TextLayout`. `Font::layout` wraps text between words to a width, and
+  `Canvas::draw_text_layout` draws a range of its glyphs, which is how dialogue reveals text
+  without words jumping lines. The built-in pixel font is authored in `default_font.rs` as rows of
+  `#` and `.`, and built into a texture when the `Context` is created. Layout logic is separate
+  from the texture (`Metrics`), so its unit tests don't need a GPU.
 - `src/tilemap.rs`: `Tilemap`, a grid of cells in layers, built from a `Tileset` of `Tile`s
   (a sprite, a tint, and whether it's solid). Layers draw in order, culled to what the canvas
   shows, and `draw_layer` lets games draw characters between them. `is_solid` is the collision
@@ -89,6 +95,9 @@ of scope until the milestone is done.
   representable), with the map's top-left corner at the world origin. A `GridMover` occupies its
   destination tile from the start of a step. Movement asks a `blocked` closure whether it may
   enter a tile, so games can combine `Tilemap::is_solid` with their own rules, such as NPCs.
+- Text positions are the top-left of the first line, rounded to whole units so pixel fonts stay
+  crisp. Measured widths run to the edge of the ink, not the trailing advance, so centering is
+  exact.
 - `Color` values are sRGB, as authored. The renderer converts them to linear space, and the
   surface is viewed through an sRGB format so blending happens in linear space. Textures are
   uploaded as sRGB for the same reason.

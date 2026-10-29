@@ -1,8 +1,10 @@
-use std::ops::Range;
+use std::ops::{Bound, Range, RangeBounds};
 
 use bytemuck::{Pod, Zeroable};
 
-use super::{Camera, Color, Sprite, Texture, camera::Transform};
+use super::{
+    Camera, Color, Font, Sprite, TextLayout, Texture, camera::Transform, font::PlacedGlyph,
+};
 use crate::math::Rect;
 
 #[repr(C)]
@@ -102,6 +104,45 @@ impl Canvas {
         self.push_quad(Some(sprite.texture()), dest, sprite.uv_bounds(), tint);
     }
 
+    /// Draws `text` in `font` with its top-left corner at `position`, without wrapping; `\n`
+    /// starts a new line. The position is rounded to whole units, so pixel fonts stay crisp.
+    pub fn draw_text(&mut self, font: &Font, text: &str, position: [f32; 2], color: Color) {
+        let origin = position.map(f32::round);
+        font.place_glyphs(text, |glyph| {
+            self.push_glyph(font.texture(), glyph, origin, color);
+        });
+    }
+
+    /// Draws the glyphs of `layout` in the range `glyphs` (`..` for all of them), with the
+    /// layout's top-left corner at `position`, rounded as for [`Canvas::draw_text`]. Drawing a
+    /// growing range, such as `..shown`, reveals text a little at a time. The range is cut to the
+    /// glyphs there are.
+    pub fn draw_text_layout(
+        &mut self,
+        layout: &TextLayout,
+        glyphs: impl RangeBounds<usize>,
+        position: [f32; 2],
+        color: Color,
+    ) {
+        let origin = position.map(f32::round);
+        let range = clamp_range(glyphs, layout.glyph_count());
+        for glyph in &layout.glyphs()[range] {
+            self.push_glyph(layout.font().texture(), *glyph, origin, color);
+        }
+    }
+
+    fn push_glyph(
+        &mut self,
+        texture: &Texture,
+        glyph: PlacedGlyph,
+        [x, y]: [f32; 2],
+        color: Color,
+    ) {
+        let rect = glyph.rect;
+        let dest = Rect::new(x + rect.x, y + rect.y, rect.w, rect.h);
+        self.push_quad(Some(texture), dest, glyph.uv, color);
+    }
+
     fn push_quad(
         &mut self,
         texture: Option<&Texture>,
@@ -134,6 +175,22 @@ impl Canvas {
         }));
         self.indices.extend([0, 1, 2, 0, 2, 3].map(|i| base + i));
     }
+}
+
+/// `range` cut to fit `0..len`.
+fn clamp_range(range: impl RangeBounds<usize>, len: usize) -> Range<usize> {
+    let start = match range.start_bound() {
+        Bound::Included(&start) => start,
+        Bound::Excluded(&start) => start.saturating_add(1),
+        Bound::Unbounded => 0,
+    };
+    let end = match range.end_bound() {
+        Bound::Included(&end) => end.saturating_add(1),
+        Bound::Excluded(&end) => end,
+        Bound::Unbounded => len,
+    };
+    let end = end.min(len);
+    start.min(end)..end
 }
 
 fn same_texture(a: Option<&Texture>, b: Option<&Texture>) -> bool {
@@ -188,6 +245,15 @@ mod tests {
             ..Camera::new(100.0, 50.0)
         }));
         assert_eq!(canvas.visible_area(), Rect::new(95.0, 47.5, 10.0, 5.0));
+    }
+
+    #[test]
+    fn ranges_are_cut_to_fit() {
+        assert_eq!(clamp_range(.., 5), 0..5);
+        assert_eq!(clamp_range(..3, 5), 0..3);
+        assert_eq!(clamp_range(..9, 5), 0..5);
+        assert_eq!(clamp_range(2..=3, 5), 2..4);
+        assert_eq!(clamp_range(7.., 5), 5..5);
     }
 
     #[test]

@@ -2,26 +2,36 @@ use std::path::Path;
 
 use crate::{
     Error, Result,
-    graphics::{Texture, gpu::Gpu, renderer::Renderer},
+    graphics::{Font, Texture, gpu::Gpu, renderer::Renderer},
     input::Input,
 };
 
-/// Engine services available to a game: input, the canvas size, and asset loading.
+/// Engine services available to a game: input, the canvas size, the built-in font, and asset
+/// loading.
 pub struct Context {
     pub(crate) gpu: Gpu,
     pub(crate) renderer: Renderer,
     pub(crate) input: Input,
     pub(crate) canvas_size: [f32; 2],
+    default_font: Font,
 }
 
 impl Context {
     pub(crate) fn new(gpu: Gpu, renderer: Renderer) -> Self {
+        let default_font = Font::built_in(&renderer, &gpu.device, &gpu.queue);
         Self {
             gpu,
             renderer,
             input: Input::new(),
             canvas_size: [0.0, 0.0],
+            default_font,
         }
+    }
+
+    /// The built-in pixel font: printable ASCII and a little typographic punctuation, with
+    /// capitals 7 pixels tall and lines 10 pixels apart. Characters it lacks draw as `?`.
+    pub fn default_font(&self) -> &Font {
+        &self.default_font
     }
 
     /// Keyboard and mouse state for the current frame.

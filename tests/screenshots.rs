@@ -268,6 +268,46 @@ fn tilemap() {
     assert_screenshot(&headless, "tilemap", frame);
 }
 
+/// The built-in font: every glyph, a scaled title, text wrapped to fit a box, and a layout only
+/// partly revealed.
+#[test]
+fn text() {
+    let mut headless = headless();
+    let font = headless.context().default_font().clone();
+    let wrapped = font.layout(
+        "Wrapped to 90 pixels… with “quotes” — and an unbreakably-long-word.",
+        Some(90.0),
+    );
+    let revealed = font.layout("Half of this\nis hidden.", None);
+    let frame = headless
+        .render(200, 128, |canvas| {
+            canvas.clear(Color::rgb8(0x20, 0x20, 0x30));
+            let title = Color::rgb8(0xf0, 0xc0, 0x30);
+            canvas.draw_text(&font.scaled(2.0), "Wingine", [4.0, 2.0], title);
+            canvas.draw_text(
+                &font,
+                " !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~\n\
+                 0123456789 …–—‘’“”\n\
+                 ABCDEFGHIJKLMNOPQRSTUVWXYZ\n\
+                 abcdefghijklmnopqrstuvwxyz",
+                [4.0, 22.0],
+                Color::WHITE,
+            );
+
+            let [width, height] = wrapped.size();
+            let panel = Rect::new(4.0, 66.0, width + 8.0, height + 6.0);
+            canvas.fill_rect(panel, Color::rgb8(0x10, 0x10, 0x60));
+            canvas.draw_text_layout(&wrapped, .., [8.0, 69.0], Color::WHITE);
+
+            let shown = revealed.glyph_count() / 2;
+            let blue = Color::rgb8(0x80, 0xd0, 0xff);
+            // Fractional positions round to whole pixels.
+            canvas.draw_text_layout(&revealed, ..shown, [120.4, 69.6], blue);
+        })
+        .unwrap();
+    assert_screenshot(&headless, "text", frame);
+}
+
 fn headless() -> Headless {
     Headless::new().expect(
         "screenshot tests need a GPU adapter. Without a GPU, install a software one: \

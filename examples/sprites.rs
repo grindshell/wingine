@@ -1,7 +1,7 @@
 //! A small top-down map built from a 16x16 tileset, drawn at a fixed 256x144 resolution and scaled
 //! up to the window. Walk the hero around with the arrow keys or WASD (holding a direction keeps
 //! walking), or click a tile to walk toward it. The camera follows, and trees and the house block
-//! the way.
+//! the way. Face the house and press Space, Enter or E to read the note on its door.
 //!
 //! Run with `cargo run --example sprites`. The tileset is Kenney's 1-bit Pack
 //! (<https://kenney.nl/assets/1-bit-pack>, CC0). Its sprites are white on transparent, so they are
@@ -9,7 +9,7 @@
 
 use wingine::{
     Context, Game, WindowConfig,
-    graphics::{Camera, Canvas, Color, Resolution, Sprite, SpriteSheet},
+    graphics::{Camera, Canvas, Color, Font, Resolution, Sprite, SpriteSheet, TextLayout},
     grid::{Direction, GridMover},
     input::{Key, MouseButton},
     math::Rect,
@@ -42,6 +42,14 @@ const DIRECTIONS: [(&str, Direction); 4] = [
     ("right", Direction::Right),
 ];
 
+const NOTE: &str = "A note on the door reads: “Gone to find the key. Don’t wait up!” \
+                    A bat circles overhead… perhaps it knows where the key went.";
+/// Glyphs of dialogue revealed per second.
+const REVEAL_RATE: f32 = 45.0;
+/// The dialogue box spans the canvas, 4 pixels in from each side.
+const DIALOGUE_WIDTH: f32 = 248.0;
+const DIALOGUE_PADDING: f32 = 6.0;
+
 const BACKGROUND: Color = Color::rgb8(0x1b, 0x26, 0x1e);
 const GRASS: Color = Color::rgb8(0x3e, 0x6b, 0x3f);
 const TREE: Color = Color::rgb8(0x6a, 0xa8, 0x4f);
@@ -52,9 +60,13 @@ const HEART: Color = Color::rgb8(0xe0, 0x4a, 0x4a);
 const HUD_PANEL: Color = Color::rgba(0.0, 0.0, 0.0, 0.6);
 /// Blending is in linear space, where a little white brightens dark colors a lot.
 const HOVER: Color = Color::rgba(1.0, 1.0, 1.0, 0.06);
+const DIALOGUE_BORDER: Color = Color::rgb8(0xf2, 0xd3, 0xab);
+const DIALOGUE_PANEL: Color = Color::rgb8(0x14, 0x18, 0x2c);
+const TEXT: Color = Color::rgb8(0xf4, 0xf0, 0xe8);
 
 struct Scene {
     map: Tilemap,
+    font: Font,
     hero_right: Sprite,
     hero_left: Sprite,
     bat: Sprite,
@@ -63,7 +75,21 @@ struct Scene {
     hero: Hero,
     /// The map tile under the cursor.
     hovered: Option<[i32; 2]>,
+    /// Text being read, which stops the hero until it's closed.
+    dialogue: Option<Dialogue>,
     time: f32,
+}
+
+struct Dialogue {
+    layout: TextLayout,
+    /// Glyphs shown so far, counting up as the text is revealed.
+    shown: f32,
+}
+
+impl Dialogue {
+    fn is_complete(&self) -> bool {
+        self.shown >= self.layout.glyph_count() as f32
+    }
 }
 
 struct Hero {
@@ -115,11 +141,13 @@ impl Scene {
         input.bind("down", [Key::Down, Key::S]);
         input.bind("left", [Key::Left, Key::A]);
         input.bind("right", [Key::Right, Key::D]);
+        input.bind("interact", [Key::Space, Key::Enter, Key::E]);
 
         let sheet = SpriteSheet::new(ctx.load_texture(TILESET)?, TILE, TILE);
         let hero = sheet.sprite(27, 0);
         Ok(Self {
             map: build_map(&sheet),
+            font: ctx.default_font().clone(),
             hero_left: hero.clone().flipped_x(),
             hero_right: hero,
             bat: sheet.sprite(26, 8),
@@ -132,8 +160,15 @@ impl Scene {
                 facing_left: false,
             },
             hovered: None,
+            dialogue: None,
             time: 0.0,
         })
+    }
+
+    /// Whether the hero stands still, facing the house.
+    fn facing_the_house(&self) -> bool {
+        let mover = &self.hero.mover;
+        !mover.is_moving() && mover.facing().neighbor(mover.tile()) == HOUSE_TILE
     }
 
     /// The hero's position in world pixels, snapped to whole pixels so it doesn't jitter against
@@ -165,6 +200,29 @@ impl Game for Scene {
             let tile = self.map.world_to_tile(world);
             self.map.contains(tile).then_some(tile)
         });
+
+        // While reading, presses reveal the rest of the text, then close it.
+        if let Some(dialogue) = &mut self.dialogue {
+            let total = dialogue.layout.glyph_count() as f32;
+            if !(input.pressed("interact") || input.mouse_pressed(MouseButton::Left)) {
+                dialogue.shown = (dialogue.shown + dt * REVEAL_RATE).min(total);
+            } else if !dialogue.is_complete() {
+                dialogue.shown = total;
+            } else {
+                self.dialogue = None;
+            }
+            return;
+        }
+        if input.pressed("interact") && self.facing_the_house() {
+            let text_width = DIALOGUE_WIDTH - DIALOGUE_PADDING * 2.0;
+            self.dialogue = Some(Dialogue {
+                layout: self.font.layout(NOTE, Some(text_width)),
+                shown: 0.0,
+            });
+            self.hero.target = None;
+            return;
+        }
+
         if input.mouse_pressed(MouseButton::Left) {
             self.hero.target = self.hovered;
         }
@@ -249,6 +307,33 @@ impl Game for Scene {
             };
             let dest = Rect::new(4.0 + i as f32 * TILE_SIZE, 4.0, TILE_SIZE, TILE_SIZE);
             canvas.draw_sprite(heart, dest, HEART);
+        }
+
+        if let Some(dialogue) = &self.dialogue {
+            let height = dialogue.layout.size()[1] + DIALOGUE_PADDING + 2.0;
+            let x = (canvas.width() - DIALOGUE_WIDTH) / 2.0;
+            let panel = Rect::new(x, canvas.height() - 4.0 - height, DIALOGUE_WIDTH, height);
+            canvas.fill_rect(panel, DIALOGUE_BORDER);
+            let inside = Rect::new(panel.x + 1.0, panel.y + 1.0, panel.w - 2.0, panel.h - 2.0);
+            canvas.fill_rect(inside, DIALOGUE_PANEL);
+            let text = [panel.x + DIALOGUE_PADDING, panel.y + DIALOGUE_PADDING - 1.0];
+            let shown = dialogue.shown as usize;
+            canvas.draw_text_layout(&dialogue.layout, ..shown, text, TEXT);
+        } else if self.facing_the_house() {
+            let prompt = "Space: read the note";
+            let [width, height] = self.font.measure(prompt);
+            let position = [
+                ((canvas.width() - width) / 2.0).round(),
+                canvas.height() - height - 4.0,
+            ];
+            let backing = Rect::new(
+                position[0] - 3.0,
+                position[1] - 2.0,
+                width + 6.0,
+                height + 2.0,
+            );
+            canvas.fill_rect(backing, HUD_PANEL);
+            canvas.draw_text(&self.font, prompt, position, TEXT);
         }
     }
 }
@@ -417,6 +502,76 @@ mod tests {
             (0..2).all(|i| (position[i] - expected[i]).abs() < 1e-3),
             "at {position:?}, expected {expected:?}"
         );
+    }
+
+    /// Stands the hero still beside the house, facing it.
+    fn face_the_house(simulation: &mut Simulation<Scene>) {
+        let scene = simulation.game_mut();
+        let side = Direction::ALL
+            .into_iter()
+            .find(|side| !scene.map.is_solid(side.neighbor(HOUSE_TILE)))
+            .expect("the house can be reached");
+        scene.hero.mover.place(side.neighbor(HOUSE_TILE));
+        scene.hero.mover.face(side.opposite());
+    }
+
+    fn shown(simulation: &Simulation<Scene>) -> Option<(f32, usize)> {
+        let dialogue = simulation.game().dialogue.as_ref()?;
+        Some((dialogue.shown, dialogue.layout.glyph_count()))
+    }
+
+    #[test]
+    fn reading_the_note_reveals_it_then_closes() {
+        let mut simulation = simulation();
+        face_the_house(&mut simulation);
+        simulation.tap(Key::Space);
+        assert_eq!(shown(&simulation).map(|(shown, _)| shown), Some(0.0));
+
+        simulation.run_for(0.5);
+        let (shown_so_far, total) = shown(&simulation).unwrap();
+        assert!(
+            shown_so_far > 0.0 && shown_so_far < total as f32,
+            "partly revealed: {shown_so_far} of {total}"
+        );
+        assert!(
+            simulation
+                .game()
+                .dialogue
+                .as_ref()
+                .unwrap()
+                .layout
+                .line_count()
+                > 1
+        );
+
+        // The next press shows the rest, and the one after closes it.
+        simulation.tap(Key::Enter);
+        assert_eq!(shown(&simulation), Some((total as f32, total)));
+        simulation.tap(Key::E);
+        assert_eq!(shown(&simulation), None);
+    }
+
+    #[test]
+    fn the_hero_stays_put_while_reading() {
+        let mut simulation = simulation();
+        face_the_house(&mut simulation);
+        let tile = simulation.game().hero.mover.tile();
+        simulation.tap(Key::Space);
+        for key in [Key::Up, Key::Down, Key::Left, Key::Right] {
+            simulation.hold(key, 0.3);
+        }
+        assert_eq!(simulation.game().hero.mover.tile(), tile);
+        assert!(simulation.game().dialogue.is_some());
+    }
+
+    #[test]
+    fn theres_nothing_to_read_facing_away() {
+        let mut simulation = simulation();
+        face_the_house(&mut simulation);
+        let mover = &mut simulation.game_mut().hero.mover;
+        mover.face(mover.facing().opposite());
+        simulation.tap(Key::Space);
+        assert!(simulation.game().dialogue.is_none());
     }
 
     #[test]
