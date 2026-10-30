@@ -9,10 +9,10 @@
 -- Run with `cargo run -- examples/pong`.
 
 local opponent = require("./opponent")
-local window = require("./window")
+local conf = require("./conf")
 
-local WIDTH = window.resolution.width
-local HEIGHT = window.resolution.height
+local WIDTH = conf.resolution.width
+local HEIGHT = conf.resolution.height
 
 local MUSIC_VOLUME = 0.4
 -- How far sounds pan toward the side of the field they happen on: 1 is all the way.

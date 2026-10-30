@@ -24,8 +24,8 @@ const VILLAGE_ARRIVAL: [i32; 2] = [20, 1];
 const SEAL_STONE: [i32; 2] = [12, 4];
 
 fn simulation() -> Simulation<LuauGame> {
-    let config = runtime::config(GAME).expect("window settings load");
-    Simulation::new(&config, |ctx| LuauGame::load(ctx, GAME)).expect("game starts")
+    let config = runtime::config(GAME).expect("settings load");
+    Simulation::new(&config.window, |ctx| LuauGame::load(ctx, GAME)).expect("game starts")
 }
 
 /// The value of the Luau `expression`, such as `"rpg.quest"`.

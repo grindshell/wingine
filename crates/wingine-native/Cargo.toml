@@ -1,0 +1,8 @@
+[package]
+name = "wingine-native"
+version = "0.1.0"
+edition = "2024"
+description = "Native libraries for Wingine's Luau runtime, written in Rust"
+
+[dependencies]
+wingine-abi = { path = "../wingine-abi" }

@@ -30,6 +30,7 @@ as physics engines, networking, editors or 3D pipelines.
 | Windowing | `winit` | Window creation, event loop, raw input   |
 | Audio     | `kira`  | Music and sound effects                  |
 | Scripting | `mlua`  | Luau, with the `luau-jit` feature        |
+| Native libraries | `libloading` | Loads them, and never unloads them |
 
 - Rust edition 2024.
 - Target platforms: desktop only (Windows, macOS, Linux).
@@ -93,11 +94,22 @@ as physics engines, networking, editors or 3D pipelines.
   The built-ins `wait`, `wait_until`, `spawn` and `print` are documented at the top of the file.
   Its unit tests don't need a GPU.
 - `src/runtime/`: games written entirely in Luau, run from a folder holding `main.luau` and an
-  optional `window.luau` of window settings. `LuauGame` is the `Game` that runs one, and the
-  engine's API for it is the global tables `graphics`, `input`, `audio`, `tilemap` and `grid`,
-  one file each. The module docs are the reference for script authors; the engine types those
-  tables hand out (sprites, animations, tilemaps, grid movers, text layouts) are userdata, documented with
-  their methods in `src/lua.rs`.
+  optional `conf.luau` of settings: the window's, and the native libraries to load. `LuauGame`
+  is the `Game` that runs one, and the engine's API for it is the global tables `graphics`,
+  `input`, `audio`, `tilemap` and `grid`, one file each. The module docs are the reference for
+  script authors; the engine types those tables hand out (sprites, animations, tilemaps, grid
+  movers, text layouts) are userdata, documented with their methods in `src/lua.rs`.
+- `src/runtime/native.rs`: native libraries, compiled Rust that adds a global table of functions
+  and classes to a Luau game, and hooks before and after its `update` and `draw`. Each is
+  registered once per process and never unloaded, and each game that loads one gets the
+  library's state of its own. Games load them from their `native` folder; tests link them in
+  with `runtime::link_library`. The engine's side of the ABI is the `HOST` table of functions.
+- `crates/wingine-abi/`: the C ABI between the engine and native libraries: `#[repr(C)]` types,
+  the library's descriptor and the engine's `Host` table, versioned by `ABI_MAJOR` and
+  `ABI_MINOR`. Its crate docs give the rules both sides follow.
+- `crates/wingine-native/`: the crate native libraries are written with, which wraps the ABI:
+  the `Library` and `Class` traits, a `Registry` for functions, methods and hooks, argument and
+  result conversions, and `export!`. Libraries depend on it alone, never on `wingine`.
 - `src/main.rs`: the `wingine` executable, which runs a Luau game: `cargo run -- examples/pong`.
 - `examples/rpg/`: the milestone's RPG, written entirely in Luau. Maps in `maps/` are rows of
   symbols, which `world.luau` turns into tiles with descriptions; examining any cell shows its
@@ -120,13 +132,17 @@ as physics engines, networking, editors or 3D pipelines.
   `examples/sounds/` were synthesized for `sprites`; `pong` and `rpg` have copies of the ones
   they use, and `rpg` a copy of the tileset. `rpg/strides.png` is another copy with its people
   and creatures mid-stride (raised a pixel on stretched legs), the frame characters show for the
-  first half of each step.
+  first half of each step. `native-particles/` is a native library, a `cdylib` built as
+  `particles`, which `tests/native.rs` builds and loads.
 - `README.md`: the project's overview, with a screenshot of each example in `docs/screenshots/`.
   They were taken headlessly at 640x360 (768x432 for `sprites`, so its 256x144 canvas scales
   without bars); retake them when an example changes how it looks.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders.
+- `tests/native.rs`: tests for native libraries, most of them linked into the test. One builds
+  `native-particles` with a nested `cargo build` into a target folder of its own and loads it
+  from a file.
 - `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
   expressions such as `pong.ball.vx`.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest.
@@ -173,6 +189,13 @@ as physics engines, networking, editors or 3D pipelines.
   `Canvas` while it draws, through `Lua::scope` (`lend`, `with_context` and `with_canvas` in
   `src/runtime/mod.rs`). Called at any other time, they fail with a Lua error rather than
   reaching stale state. Each frame runs `update(dt)`, then resumes tasks, then `draw()`.
+- Native libraries reach the engine only through the ABI's function pointers, and get the same
+  lent services scripts do: a library function called from `draw` gets the canvas, not the
+  context. Hooks run in the order libraries are listed, before and after `update` (and its
+  tasks) and `draw`; hooks after `draw` draw in canvas pixels. Errors cross the ABI as strings,
+  set with `set_error` before returning `Status::ERROR`, and the helper crate catches panics so
+  they never unwind into the engine. Change the ABI only by adding to the end of `Host` and
+  bumping `ABI_MINOR`; anything else bumps `ABI_MAJOR`.
 
 ## Commands
 

@@ -23,8 +23,8 @@ const SERVE_DELAY: f32 = 1.0;
 const RESTING_BALL: [f64; 4] = [160.0, 90.0, 0.0, 0.0];
 
 fn simulation() -> Simulation<LuauGame> {
-    let config = runtime::config(GAME).expect("window settings load");
-    Simulation::new(&config, |ctx| LuauGame::load(ctx, GAME)).expect("game starts")
+    let config = runtime::config(GAME).expect("settings load");
+    Simulation::new(&config.window, |ctx| LuauGame::load(ctx, GAME)).expect("game starts")
 }
 
 /// The value of the Luau `expression`, such as `"pong.ball.vx"`.

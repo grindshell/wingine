@@ -1,3 +1,8 @@
+[workspace]
+members = ["crates/wingine-abi", "crates/wingine-native", "examples/native-particles"]
+# `cargo build`, `test` and `clippy` cover the whole workspace, not just the engine.
+default-members = [".", "crates/wingine-abi", "crates/wingine-native", "examples/native-particles"]
+
 [package]
 name = "wingine"
 version = "0.1.0"
@@ -8,16 +13,20 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 # Only the formats the engine documents: WAV (PCM) and OGG Vorbis.
 kira = { version = "0.12.6", default-features = false, features = ["cpal", "ogg", "vorbis", "wav", "pcm"] }
+libloading = "0.8.9"
 log = "0.4.34"
 # `error-send` keeps `wingine::Error` `Send + Sync` when it wraps Lua errors.
 mlua = { version = "0.12.2", features = ["luau-jit", "error-send"] }
 pollster = "1.0.1"
 thiserror = "2.0.21"
 wgpu = "30.0.1"
+wingine-abi = { path = "crates/wingine-abi" }
 winit = "0.30"
 
 [dev-dependencies]
 env_logger = "0.11.11"
+# Native libraries for the runtime's tests, linked into them rather than loaded from files.
+wingine-native = { path = "crates/wingine-native" }
 
 # Runs games written in Luau: `cargo run -- examples/pong`.
 [[bin]]

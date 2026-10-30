@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 /// Errors from starting the engine, loading or saving files, audio, headless rendering, Luau
-/// scripts, or scripted runs.
+/// scripts, native libraries, or scripted runs.
 ///
 /// Errors from winit and wgpu are boxed, so their types stay out of the engine's API.
 #[derive(Debug, Error)]
@@ -47,6 +47,9 @@ pub enum Error {
     Lua(#[from] mlua::Error),
     #[error("script {}: {message}", .path.display())]
     Script { path: PathBuf, message: String },
+    /// A native library failed to load, or one of its hooks failed.
+    #[error("native library `{name}`: {message}")]
+    NativeLibrary { name: String, message: String },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

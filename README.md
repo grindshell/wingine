@@ -102,12 +102,12 @@ square, and a translucent panel drawn over both.
 
 ### In Luau
 
-A Luau game is a folder with a `main.luau` script and, optionally, a `window.luau` of window
-settings. The script's top level runs once to set the game up. Then each frame the engine calls
-its global `update(dt)` and `draw()` functions.
+A Luau game is a folder with a `main.luau` script and, optionally, a `conf.luau` of settings.
+The script's top level runs once to set the game up. Then each frame the engine calls its global
+`update(dt)` and `draw()` functions.
 
 ```lua
--- window.luau
+-- conf.luau
 return { title = "Hello", resolution = { width = 320, height = 180 } }
 ```
 
@@ -138,6 +138,28 @@ Run it with `cargo run -- path/to/folder`. The engine's API is the global tables
 [`src/runtime/mod.rs`](src/runtime/mod.rs), and the types they hand out, such as sprites,
 animations and tilemaps, in [`src/lua.rs`](src/lua.rs). Run `cargo doc --open` to browse the
 same docs.
+
+#### Native libraries
+
+Code that needs to be compiled can live in a native library: a Rust `cdylib` written with the
+[`wingine-native`](crates/wingine-native) crate, which adds a global table of functions and
+classes to the game, and can hook in before and after each `update` and `draw`. A game lists the
+libraries it loads in its `conf.luau`, and keeps them in its `native` folder:
+
+```lua
+-- conf.luau
+return { libraries = { "particles" } } -- native/particles.dll, libparticles.so or .dylib
+```
+
+```lua
+-- main.luau
+local sparks = particles.new_emitter("#f2c14e")
+sparks:burst(160, 90, 24)
+```
+
+[`examples/native-particles`](examples/native-particles/src/lib.rs) is that library. Unlike
+scripts, native libraries aren't sandboxed: a game that loads one runs it with the player's full
+permissions.
 
 ### In Rust
 

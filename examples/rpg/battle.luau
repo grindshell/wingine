@@ -10,13 +10,13 @@ local dialogue = require("./dialogue")
 local foes = require("./foes")
 local items = require("./items")
 local ui = require("./ui")
-local window = require("./window")
+local conf = require("./conf")
 local world = require("./world")
 
 local battle = {}
 
-local WIDTH = window.resolution.width
-local HEIGHT = window.resolution.height
+local WIDTH = conf.resolution.width
+local HEIGHT = conf.resolution.height
 
 -- Fighters are drawn this many times their size in the world.
 local SCALE = 4

@@ -24,7 +24,7 @@ local characters = require("./characters")
 local dialogue = require("./dialogue")
 local items = require("./items")
 local story = require("./story")
-local window = require("./window")
+local conf = require("./conf")
 local world = require("./world")
 
 local MAPS = {
@@ -32,8 +32,8 @@ local MAPS = {
     shrine = require("./maps/shrine"),
 }
 
-local WIDTH = window.resolution.width
-local HEIGHT = window.resolution.height
+local WIDTH = conf.resolution.width
+local HEIGHT = conf.resolution.height
 local TILE = world.TILE
 
 -- Where the game begins, and where the player wakes up after losing a battle: beside the elder.

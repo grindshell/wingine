@@ -1,4 +1,4 @@
--- The window's settings, which the engine reads before the game starts. The game's modules use
+-- The game's settings, which the engine reads before the game starts. The game's modules use
 -- the resolution to lay out the screen.
 return {
     title = "Wingine - rpg",

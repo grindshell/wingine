@@ -37,8 +37,8 @@ const SMALL_WINDOW: &str =
     "return { width = 20, height = 20, resolution = { width = 20, height = 20 } }";
 
 fn simulation(folder: &Path) -> Simulation<LuauGame> {
-    let config = runtime::config(folder).expect("window settings load");
-    Simulation::new(&config, |ctx| LuauGame::load(ctx, folder)).expect("game starts")
+    let config = runtime::config(folder).expect("settings load");
+    Simulation::new(&config.window, |ctx| LuauGame::load(ctx, folder)).expect("game starts")
 }
 
 /// The value of the Luau `expression` in the game.
@@ -61,46 +61,50 @@ fn pixel(image: &Image, x: u32, y: u32) -> [u8; 4] {
 }
 
 #[test]
-fn window_settings_come_from_window_luau() {
+fn settings_come_from_conf_luau() {
     let folder = game(
-        "window_settings",
+        "settings",
         &[(
-            "window.luau",
+            "conf.luau",
             "return {
                 title = 'Settings',
                 width = 640,
                 height = 480,
                 resizable = false,
                 resolution = { width = 160, height = 120 },
+                libraries = { 'physics', 'particle_fx' },
             }",
         )],
     );
     let config = runtime::config(&folder).unwrap();
-    assert_eq!(config.title, "Settings");
-    assert_eq!([config.width, config.height], [640, 480]);
-    assert!(!config.resizable);
+    let window = &config.window;
+    assert_eq!(window.title, "Settings");
+    assert_eq!([window.width, window.height], [640, 480]);
+    assert!(!window.resizable);
     assert_eq!(
-        config.resolution,
+        window.resolution,
         Resolution::Fixed {
             width: 160,
             height: 120
         }
     );
+    assert_eq!(config.libraries, ["physics", "particle_fx"]);
 }
 
 #[test]
-fn without_window_settings_the_title_is_the_folders_name() {
+fn without_settings_the_title_is_the_folders_name() {
     let folder = game("untitled", &[("main.luau", "")]);
     let config = runtime::config(&folder).unwrap();
-    assert_eq!(config.title, "untitled");
-    assert_eq!(config.resolution, Resolution::Window);
+    assert_eq!(config.window.title, "untitled");
+    assert_eq!(config.window.resolution, Resolution::Window);
+    assert!(config.libraries.is_empty());
 }
 
 #[test]
-fn unknown_or_invalid_window_settings_are_errors() {
+fn unknown_or_invalid_settings_are_errors() {
     let folder = game(
         "misspelled_setting",
-        &[("window.luau", "return { titel = 'x' }")],
+        &[("conf.luau", "return { titel = 'x' }")],
     );
     let err = runtime::config(&folder).unwrap_err().to_string();
     assert!(
@@ -111,12 +115,19 @@ fn unknown_or_invalid_window_settings_are_errors() {
     let folder = game(
         "empty_resolution",
         &[(
-            "window.luau",
+            "conf.luau",
             "return { resolution = { width = 0, height = 10 } }",
         )],
     );
     let err = runtime::config(&folder).unwrap_err().to_string();
     assert!(err.contains("must be at least 1"), "{err}");
+
+    let folder = game(
+        "library_path",
+        &[("conf.luau", "return { libraries = { '../physics' } }")],
+    );
+    let err = runtime::config(&folder).unwrap_err().to_string();
+    assert!(err.contains("`../physics` is not a library name"), "{err}");
 }
 
 #[test]
@@ -124,7 +135,7 @@ fn update_and_tasks_run_each_frame_and_draw_draws() {
     let folder = game(
         "frames",
         &[
-            ("window.luau", SMALL_WINDOW),
+            ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
                 "frames = 0
@@ -221,7 +232,7 @@ fn an_error_stops_the_game_and_shows_it() {
     let folder = game(
         "failing_update",
         &[
-            ("window.luau", SMALL_WINDOW),
+            ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
                 "frames = 0
@@ -366,7 +377,7 @@ fn sprites_load_from_sheets_and_draw() {
     let folder = game(
         "sprites",
         &[
-            ("window.luau", SMALL_WINDOW),
+            ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
                 "local sheet = graphics.load_sprite_sheet('art/sheet.png', 1, 1)
@@ -409,7 +420,7 @@ fn animations_show_their_frames_in_turn() {
     let folder = game(
         "animations",
         &[
-            ("window.luau", SMALL_WINDOW),
+            ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
                 "local sheet = graphics.load_sprite_sheet('sheet.png', 1, 1)
@@ -481,7 +492,7 @@ fn tilemaps_hold_tiles_in_layers_and_draw_them() {
         "tilemaps",
         &[
             (
-                "window.luau",
+                "conf.luau",
                 "return { width = 30, height = 20, resolution = { width = 30, height = 20 } }",
             ),
             (
@@ -676,7 +687,7 @@ fn text_layouts_reveal_their_glyphs() {
     let folder = game(
         "text_layouts",
         &[
-            ("window.luau", SMALL_WINDOW),
+            ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
                 "local font = graphics.default_font()
@@ -733,7 +744,7 @@ fn the_camera_stays_inside_its_bounds() {
     let folder = game(
         "camera_bounds",
         &[
-            ("window.luau", SMALL_WINDOW),
+            ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
                 "function draw()

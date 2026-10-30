@@ -1,4 +1,4 @@
--- The window's settings, which the engine reads before the game starts. `main.luau` uses the
+-- The game's settings, which the engine reads before the game starts. `main.luau` uses the
 -- resolution as the size of the field.
 return {
     title = "Wingine - pong",

@@ -1234,6 +1234,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "native-particles"
+version = "0.1.0"
+dependencies = [
+ "wingine-native",
+]
+
+[[package]]
 name = "ndk"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3098,12 +3105,26 @@ dependencies = [
  "env_logger",
  "image",
  "kira",
+ "libloading",
  "log",
  "mlua",
  "pollster",
  "thiserror 2.0.21",
  "wgpu",
+ "wingine-abi",
+ "wingine-native",
  "winit",
+]
+
+[[package]]
+name = "wingine-abi"
+version = "0.1.0"
+
+[[package]]
+name = "wingine-native"
+version = "0.1.0"
+dependencies = [
+ "wingine-abi",
 ]
 
 [[package]]

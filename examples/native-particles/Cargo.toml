@@ -1,0 +1,17 @@
+[package]
+name = "native-particles"
+version = "0.1.0"
+edition = "2024"
+description = "An example native library for Wingine's Luau runtime: bursts of particles"
+publish = false
+
+[lib]
+# Built as `particles.dll`, `libparticles.so` or `libparticles.dylib`, for a game's `native`
+# folder.
+name = "particles"
+crate-type = ["cdylib"]
+test = false
+doctest = false
+
+[dependencies]
+wingine-native = { path = "../../crates/wingine-native" }

@@ -8,8 +8,8 @@
 //! and `print` work as described in the [`lua`](crate::lua) module, which also lists how engine
 //! types such as colors and keys are written in Luau.
 //!
-//! The window's settings come from an optional `window.luau` that returns a table. Every setting
-//! is optional:
+//! The game's settings come from an optional `conf.luau` that returns a table, which the engine
+//! reads before the game starts. Every setting is optional:
 //!
 //! ```lua
 //! return {
@@ -19,8 +19,17 @@
 //!     resizable = true,
 //!     -- A fixed canvas size, scaled up by whole numbers. By default, the canvas is the window.
 //!     resolution = { width = 320, height = 180 },
+//!     -- Native libraries to load, in order, from the game's `native` folder.
+//!     libraries = { "particles" },
 //! }
 //! ```
+//!
+//! Native libraries are compiled code written in Rust with the `wingine-native` crate. Each is
+//! loaded from the game's `native` folder, named as the platform names libraries:
+//! `particles.dll` on Windows, `libparticles.so` on Linux and `libparticles.dylib` on macOS. Once
+//! loaded, a library stays loaded until the program ends. It adds a global table of its own,
+//! named by the library, before `main.luau` runs. Unlike scripts, a library isn't sandboxed: a
+//! game that lists one runs it with the player's full permissions.
 //!
 //! Scripts `require` other scripts by their path relative to the script, such as
 //! `require("./opponent")`. Files the engine loads, such as sounds and images, are relative to
@@ -111,9 +120,15 @@ mod audio;
 mod graphics;
 mod grid;
 mod input;
+mod native;
 mod tilemap;
 
 use std::{fs, path::Path};
+
+use wingine_abi::Phase;
+
+use native::Natives;
+pub use native::link_library;
 
 use crate::{
     Context, Error, Game, Result, WindowConfig,
@@ -129,17 +144,28 @@ const CANVAS: &str = "wingine.canvas";
 /// Runs the Luau game in `folder` until its window is closed. See the [module docs](self).
 pub fn run(folder: impl AsRef<Path>) -> Result<()> {
     let folder = folder.as_ref();
-    crate::run(config(folder)?, |ctx| LuauGame::load(ctx, folder))
+    crate::run(config(folder)?.window, |ctx| LuauGame::load(ctx, folder))
 }
 
-/// The window settings of the game in `folder`, from its `window.luau` if it has one.
-pub fn config(folder: impl AsRef<Path>) -> Result<WindowConfig> {
+/// A Luau game's settings, from its `conf.luau`.
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub window: WindowConfig,
+    /// The names of the native libraries to load, in order.
+    pub libraries: Vec<String>,
+}
+
+/// The settings of the game in `folder`, from its `conf.luau` if it has one.
+pub fn config(folder: impl AsRef<Path>) -> Result<Config> {
     let folder = folder.as_ref();
-    let mut config = WindowConfig {
-        title: folder_name(folder).unwrap_or_else(|| WindowConfig::default().title),
-        ..Default::default()
+    let mut config = Config {
+        window: WindowConfig {
+            title: folder_name(folder).unwrap_or_else(|| WindowConfig::default().title),
+            ..Default::default()
+        },
+        libraries: Vec::new(),
     };
-    let path = folder.join("window.luau");
+    let path = folder.join("conf.luau");
     if !path.is_file() {
         return Ok(config);
     }
@@ -164,22 +190,32 @@ pub fn config(folder: impl AsRef<Path>) -> Result<WindowConfig> {
 }
 
 fn apply_setting(
-    config: &mut WindowConfig,
+    config: &mut Config,
     lua: &mlua::Lua,
     name: &str,
     value: mlua::Value,
 ) -> mlua::Result<()> {
+    let window = &mut config.window;
     match name {
-        "title" => config.title = lua.unpack(value)?,
-        "width" => config.width = positive(lua.unpack(value)?)?,
-        "height" => config.height = positive(lua.unpack(value)?)?,
-        "resizable" => config.resizable = lua.unpack(value)?,
+        "title" => window.title = lua.unpack(value)?,
+        "width" => window.width = positive(lua.unpack(value)?)?,
+        "height" => window.height = positive(lua.unpack(value)?)?,
+        "resizable" => window.resizable = lua.unpack(value)?,
         "resolution" => {
             let size: mlua::Table = lua.unpack(value)?;
-            config.resolution = Resolution::Fixed {
+            window.resolution = Resolution::Fixed {
                 width: positive(size.get("width")?)?,
                 height: positive(size.get("height")?)?,
             };
+        }
+        "libraries" => {
+            let names: Vec<String> = lua.unpack(value)?;
+            if let Some(name) = names.iter().find(|name| !native::is_library_name(name)) {
+                return Err(mlua::Error::runtime(format!(
+                    "`{name}` is not a library name: use only letters, digits, `_` and `-`"
+                )));
+            }
+            config.libraries = names;
         }
         _ => return Err(mlua::Error::runtime("unknown setting")),
     }
@@ -201,6 +237,7 @@ fn folder_name(folder: &Path) -> Option<String> {
 /// A game written in Luau, loaded from its folder.
 pub struct LuauGame {
     scripts: Scripts,
+    natives: Natives,
     /// For showing an error.
     font: Font,
     /// The error that stopped the game, if one has.
@@ -208,9 +245,11 @@ pub struct LuauGame {
 }
 
 impl LuauGame {
-    /// Loads the game in `folder`, running its `main.luau`.
+    /// Loads the game in `folder`: the native libraries its `conf.luau` lists, then its
+    /// `main.luau`.
     pub fn load(ctx: &mut Context, folder: impl AsRef<Path>) -> Result<Self> {
         let folder = folder.as_ref();
+        let libraries = config(folder)?.libraries;
         let scripts = Scripts::new()?;
         let lua = scripts.lua();
         let font = ctx.default_font().clone();
@@ -220,9 +259,11 @@ impl LuauGame {
         globals.set("audio", audio::module(lua, folder)?)?;
         globals.set("tilemap", tilemap::module(lua)?)?;
         globals.set("grid", grid::module(lua)?)?;
+        let natives = Natives::load(lua, ctx, folder, &libraries)?;
         lend(lua, CONTEXT, ctx, || scripts.load(folder.join("main.luau")))?;
         Ok(Self {
             scripts,
+            natives,
             font,
             error: None,
         })
@@ -263,32 +304,50 @@ impl Game for LuauGame {
         if self.error.is_some() {
             return;
         }
-        let lua = self.scripts.lua().clone();
-        // Tasks started before this frame, such as while the game loaded, resume in it. Those
-        // `update` starts have run until they first waited, and resume from the next frame.
-        self.scripts.adopt_spawned();
-        let result = lend(&lua, CONTEXT, ctx, || {
-            self.callback("update", dt)?;
-            if let Err(err) = self.scripts.resume_tasks(dt) {
-                log::error!("{err}");
-            }
-            Ok(())
-        });
-        if let Err(err) = result {
+        if let Err(err) = self.run_update(ctx, dt) {
             self.stop(err);
         }
     }
 
     fn draw(&mut self, canvas: &mut Canvas) {
-        if self.error.is_none() {
-            let lua = self.scripts.lua().clone();
-            if let Err(err) = lend(&lua, CANVAS, canvas, || self.callback("draw", ())) {
-                self.stop(err);
-            }
+        if self.error.is_none()
+            && let Err(err) = self.run_draw(canvas)
+        {
+            self.stop(err);
         }
         if let Some(err) = &self.error {
             draw_error(canvas, &self.font, err);
         }
+    }
+}
+
+impl LuauGame {
+    /// Runs the libraries' hooks before `update`, the script's `update` and its tasks, then the
+    /// hooks after.
+    fn run_update(&mut self, ctx: &mut Context, dt: f32) -> Result<()> {
+        self.natives.update(Phase::BEFORE, ctx, dt)?;
+        let lua = self.scripts.lua().clone();
+        // Tasks started before this frame, such as while the game loaded, resume in it. Those
+        // `update` starts have run until they first waited, and resume from the next frame.
+        self.scripts.adopt_spawned();
+        lend(&lua, CONTEXT, ctx, || {
+            self.callback("update", dt)?;
+            if let Err(err) = self.scripts.resume_tasks(dt) {
+                log::error!("{err}");
+            }
+            Ok(())
+        })?;
+        self.natives.update(Phase::AFTER, ctx, dt)
+    }
+
+    /// Runs the libraries' hooks before `draw`, the script's `draw`, then the hooks after, which
+    /// draw in canvas pixels whatever camera the script left set.
+    fn run_draw(&mut self, canvas: &mut Canvas) -> Result<()> {
+        self.natives.draw(Phase::BEFORE, canvas)?;
+        let lua = self.scripts.lua().clone();
+        lend(&lua, CANVAS, canvas, || self.callback("draw", ()))?;
+        canvas.set_camera(None);
+        self.natives.draw(Phase::AFTER, canvas)
     }
 }
 

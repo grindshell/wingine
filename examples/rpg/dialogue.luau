@@ -4,12 +4,12 @@
 -- and down pick one first.
 
 local ui = require("./ui")
-local window = require("./window")
+local conf = require("./conf")
 
 local dialogue = {}
 
-local WIDTH = window.resolution.width
-local HEIGHT = window.resolution.height
+local WIDTH = conf.resolution.width
+local HEIGHT = conf.resolution.height
 
 -- Glyphs revealed per second, and how often text blips as it appears.
 local REVEAL_RATE = 45

@@ -27,14 +27,14 @@ fn main() -> ExitCode {
     }
 }
 
-/// Logs to standard error: whatever scripts print, the engine's warnings, and errors from
-/// anywhere.
+/// Logs to standard error: whatever scripts and native libraries print, the engine's warnings,
+/// and errors from anywhere.
 struct Logger;
 
 impl log::Log for Logger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
         let target = metadata.target();
-        let level = if target == "lua" {
+        let level = if target == "lua" || target == "native" {
             log::Level::Info
         } else if target.starts_with("wingine") {
             log::Level::Warn
