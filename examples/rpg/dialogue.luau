@@ -37,6 +37,8 @@ type Box = {
     -- Glyphs shown so far, counting up as the text is revealed.
     shown: number,
     choices: { string }?,
+    -- The choice the cancel key picks, if it picks one.
+    cancel: number?,
     -- The highlighted choice, then the one picked.
     selected: number,
     closed: boolean,
@@ -47,13 +49,14 @@ type Box = {
 -- The open box, if any.
 dialogue.box = nil :: Box?
 
-local function open(text: string, speaker: string?, choices: { string }?): Box
+local function open(text: string, speaker: string?, choices: { string }?, cancel: number?): Box
     local box = {
         text = text,
         speaker = speaker,
         layout = font:layout(text, WIDTH - MARGIN * 2 - PADDING * 2),
         shown = 0,
         choices = choices,
+        cancel = cancel,
         selected = 1,
         closed = false,
         idle = 0,
@@ -71,9 +74,10 @@ function dialogue.say(text: string, speaker: string?)
 end
 
 -- Shows `text` and `choices`, and waits for the player to pick one. Returns its number. The
--- cancel key picks the last choice, so it should be the one that backs out.
-function dialogue.ask(text: string, choices: { string }, speaker: string?): number
-    local box = open(text, speaker, choices)
+-- cancel key picks the last choice, so it should be the one that backs out, unless `cancel` is
+-- false, when the cancel key does nothing.
+function dialogue.ask(text: string, choices: { string }, speaker: string?, cancel: false?): number
+    local box = open(text, speaker, choices, if cancel == false then nil else #choices)
     wait_until(function()
         return box.closed
     end)
@@ -116,8 +120,8 @@ function dialogue.update(dt: number)
             box.selected = (box.selected - 2) % count + 1
         elseif input.pressed("down") then
             box.selected = box.selected % count + 1
-        elseif input.pressed("cancel") then
-            box.selected = count
+        elseif input.pressed("cancel") and box.cancel then
+            box.selected = box.cancel
             close(box)
             return
         end

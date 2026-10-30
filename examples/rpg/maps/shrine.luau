@@ -33,4 +33,24 @@ return {
     exits = {
         { at = { 12, 19 }, to = "village", arrive = { 20, 1 }, facing = "down" },
     },
+    -- Creatures from `foes.luau` that roam here during the hunt. They fight the player on
+    -- catching them: standing beside them.
+    foes = {
+        {
+            foe = "bat",
+            at = { 8, 12 },
+            facing = "right",
+            route = {
+                "right", "right", "right", "right", "right", "right", 1,
+                "left", "left", "left", "left", "left", "left", 1,
+            },
+        },
+        {
+            foe = "wisp",
+            at = { 6, 10 },
+            route = { "down", "down", 1.5, "up", "up", 1.5 },
+        },
+        -- Guarding the seal stone.
+        { foe = "gloamfang", at = { 12, 6 }, facing = "down" },
+    },
 }

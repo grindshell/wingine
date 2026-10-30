@@ -4,9 +4,11 @@
 -- A map draws its level as rows of characters, one per cell, which `LEGEND` turns into a kind
 -- of ground and, on top of it, an optional object. Every kind has a description, which the
 -- player reads by examining a cell. Maps can also have places, cells with a description or an
--- event of their own; exits, cells that lead to another map; and characters.
+-- event of their own; exits, cells that lead to another map; characters; and foes, creatures
+-- from `foes.luau` that the game adds while they're about.
 
 local characters = require("./characters")
+local foes = require("./foes")
 
 local world = {}
 
@@ -274,7 +276,8 @@ for name, kind in KINDS do
     local variants = {}
     for i, at in kind.sprites do
         local sprite = at and world.sprite(at[1], at[2])
-        variants[i] = sprite and tileset:add({ sprite = sprite, tint = kind.tint, solid = kind.solid })
+        local tile = { sprite = sprite, tint = kind.tint, solid = kind.solid }
+        variants[i] = sprite and tileset:add(tile)
     end
     tiles[name] = variants
     if kind.fill then
@@ -319,6 +322,9 @@ export type Level = {
     exits: { [string]: any },
     -- Everyone on the level, the player included while they're here.
     characters: { characters.Character },
+    -- The map's foes, and which of them, by number, have been beaten.
+    foes: { any },
+    defeated: { [number]: boolean },
 }
 
 -- Sets the ground in cell `column`, `row` to the kind `name`.
@@ -349,6 +355,26 @@ function world.replace(level: Level, from: string, to: string?)
     end
 end
 
+-- Puts a character on the level, as `options` from a map describe it, and sets it wandering if
+-- it has a route.
+local function place(level: Level, options): characters.Character
+    local character = characters.new({
+        name = options.name,
+        sprite = world.sprite(options.sprite[1], options.sprite[2]),
+        tint = options.tint,
+        tile = options.at,
+        facing = options.facing,
+        talk = options.talk,
+        text = options.text,
+        route = options.route,
+    })
+    table.insert(level.characters, character)
+    if character.route then
+        spawn(world.wander, level, character)
+    end
+    return character
+end
+
 -- The level that `data`, a map from `maps/`, describes.
 function world.build(data): Level
     local rows = data.rows
@@ -366,6 +392,8 @@ function world.build(data): Level
         places = {},
         exits = {},
         characters = {},
+        foes = data.foes or {},
+        defeated = {},
     }
     for r, line in rows do
         local row = r - 1
@@ -390,22 +418,64 @@ function world.build(data): Level
         level.exits[key(exit.at[1], exit.at[2])] = exit
     end
     for _, options in data.characters or {} do
-        local character = characters.new({
-            name = options.name,
-            sprite = world.sprite(options.sprite[1], options.sprite[2]),
-            tint = options.tint,
-            tile = options.at,
-            facing = options.facing,
-            talk = options.talk,
-            text = options.text,
-            route = options.route,
-        })
-        table.insert(level.characters, character)
-        if character.route then
-            spawn(world.wander, level, character)
-        end
+        place(level, options)
     end
     return level
+end
+
+-- Puts the level's foes that haven't been beaten, and aren't here already, on the map.
+function world.add_foes(level: Level)
+    for number, options in level.foes do
+        local here = false
+        for _, character in level.characters do
+            here = here or character.foe_number == number
+        end
+        if not level.defeated[number] and not here then
+            local kind = foes[options.foe]
+                or error(`there's no kind of creature called {options.foe}`)
+            local character = place(level, {
+                name = kind.title,
+                sprite = kind.sprite,
+                tint = kind.tint,
+                at = options.at,
+                facing = options.facing,
+                route = options.route,
+            })
+            character.foe = options.foe
+            character.foe_number = number
+        end
+    end
+end
+
+-- Takes `character`, one of the level's foes, off the map for good.
+function world.defeat(level: Level, character: characters.Character)
+    level.defeated[character.foe_number :: number] = true
+    character.removed = true
+    world.remove(level, character)
+end
+
+-- Takes every foe on the level off the map for good.
+function world.clear_foes(level: Level)
+    for _, character in table.clone(level.characters) do
+        if character.foe then
+            world.defeat(level, character)
+        end
+    end
+end
+
+-- A foe standing next to `character`, ready to fight, if there is one. Foes the player got away
+-- from leave them be until `now` reaches their `calm_until`.
+function world.foe_beside(level: Level, character: characters.Character, now: number)
+    local column, row = character.mover:tile()
+    for _, other in level.characters do
+        local c, r = other.mover:tile()
+        local beside = math.abs(c - column) + math.abs(r - row) == 1
+        local calm = now < (other.calm_until or 0)
+        if other.foe and beside and not other.mover:is_moving() and not calm then
+            return other
+        end
+    end
+    return nil
 end
 
 function world.add(level: Level, character: characters.Character)
@@ -476,24 +546,28 @@ function world.blocker(level: Level, character)
     end
 end
 
--- Walks `character` along its route over and over, as a task. It stops while the player talks
--- to it, and waits for its way to clear when someone's in it. Characters only move while the
--- player is on their level, so it waits out the player's visits elsewhere too.
+-- Walks `character` along its route over and over, as a task, until it's taken off the map. It
+-- stops while the player talks to it, and waits for its way to clear when someone's in it.
+-- Characters only move while the player is on their level, so it waits out the player's visits
+-- elsewhere too.
 function world.wander(level: Level, character: characters.Character)
     local blocked = world.blocker(level, character)
     local function ready(): boolean
-        return not character.talking and not character.mover:is_moving()
+        return character.removed or not character.talking and not character.mover:is_moving()
     end
-    while true do
+    while not character.removed do
         for _, move in character.route or {} do
             if type(move) == "number" then
                 wait(move)
             else
                 wait_until(ready)
-                while not characters.step(character, move, blocked) do
+                while not character.removed and not characters.step(character, move, blocked) do
                     wait(0.5)
                     wait_until(ready)
                 end
+            end
+            if character.removed then
+                return
             end
         end
     end

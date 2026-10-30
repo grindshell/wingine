@@ -22,8 +22,17 @@ export type Character = {
     text: string?,
     -- Directions to walk and seconds to wait, in a loop, if it wanders.
     route: { string | number }?,
-    -- Whether the player is talking to it, which stops it wandering.
+    -- Whether the player is talking to it, which stops it wandering. Fights count.
     talking: boolean,
+    -- For a creature from `foes.luau`: its kind, its number among its map's foes, and when it
+    -- will fight again after the player got away from it.
+    foe: string?,
+    foe_number: number?,
+    calm_until: number?,
+    -- Whether it has noticed the player, which shows above it.
+    alert: boolean?,
+    -- Whether it's been taken off the map for good.
+    removed: boolean?,
 }
 
 -- A character standing on `options.tile`. `options` has the fields of `Character` that don't
