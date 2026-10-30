@@ -1,23 +1,27 @@
 -- A top-down RPG, written entirely in Luau. Walk with the arrow keys or WASD; holding a direction
--- keeps walking. Press Space, Enter or E to examine whatever is in front of you, or to talk.
+-- keeps walking. Press Space, Enter or E to examine whatever is in front of you, or to talk, and
+-- Tab or I to open your bag. Escape or Backspace backs out of menus.
 --
 -- The elder of Mossbrook asks you to check on the Stone Shrine, on the hill north of the
 -- village. What you find there sets creatures loose on the hill, and you fight them one on one,
 -- turn by turn, when they catch you. Beaten, you wake up back in the village; the village well
--- restores you.
+-- restores you. Coins from battles, and from poking around, buy gear at the village shop.
 --
 -- The world and its maps are in `world.luau` and `maps/`, the people in `characters.luau`, the
 -- dialogue box in `dialogue.luau`, and conversations and events in `story.luau`. Battles are in
--- `battle.luau`, against the creatures in `foes.luau`, and what the player carries is in
--- `items.luau`. The game's state is in the global table `rpg`, where tests can see it.
+-- `battle.luau`, against the creatures in `foes.luau`. What the player carries is in
+-- `items.luau`, the shop in `shop.luau`, and the bag in `bag.luau`. The game's state is in the
+-- global table `rpg`, where tests can see it.
 --
 -- Run with `cargo run -- examples/rpg`. The tileset is Kenney's 1-bit Pack
 -- (<https://kenney.nl/assets/1-bit-pack>, CC0). Its sprites are white on transparent, so they're
 -- tinted when drawn.
 
+local bag = require("./bag")
 local battle = require("./battle")
 local characters = require("./characters")
 local dialogue = require("./dialogue")
+local items = require("./items")
 local story = require("./story")
 local window = require("./window")
 local world = require("./world")
@@ -76,9 +80,11 @@ input.bind("left", { "Left", "A" })
 input.bind("right", { "Right", "D" })
 input.bind("interact", { "Space", "Enter", "E" })
 input.bind("cancel", { "Escape", "Backspace" })
+input.bind("menu", { "Tab", "I" })
 
 local bump = audio.load("sounds/bump.wav")
 local blip = audio.load("sounds/blip.wav")
+local chime = audio.load("sounds/chime.wav")
 audio.set_music_volume(MUSIC_VOLUME)
 
 local font = graphics.default_font()
@@ -98,11 +104,14 @@ rpg = {
     }),
     -- How far the quest has got: see `story.luau`.
     quest = "start",
-    -- The player's stats in battle, and their hit points, which last from battle to battle.
+    -- The player's stats in battle, before their gear's bonuses, and their hit points, which
+    -- last from battle to battle.
     stats = STATS,
     hp = STATS.max_hp,
-    -- How many of each item the player carries, by name: see `items.luau`.
+    -- How many of each item the player carries, and the gear they've equipped in each slot, by
+    -- name: see `items.luau`.
     items = {} :: { [string]: number },
+    equipped = {} :: { [string]: string },
     coins = 0,
     -- How many events are running, such as conversations. The player waits for them.
     busy = 0,
@@ -119,6 +128,7 @@ rpg = {
     time = 0,
     dialogue = dialogue,
     battle = battle,
+    bag = bag,
 }
 
 -- Puts the player on the map `name`, building its level the first time, on cell `at`, facing
@@ -200,7 +210,7 @@ local function encounter(character: characters.Character)
     fade_to(1, FADE_SECONDS)
     battle.close()
     if outcome == "lost" then
-        rpg.hp = rpg.stats.max_hp
+        rpg.hp = items.stats().max_hp
         enter(REVIVE.map, REVIVE.at, REVIVE.facing)
     elseif outcome == "won" then
         world.defeat(level, character)
@@ -252,6 +262,18 @@ local function interaction(): string?
     return nil
 end
 
+-- Finds what's hidden at `place`, on `level`, as the player examines it for the first time.
+local function find(level: world.Level, place)
+    local found = place.find
+    level.found[place] = true
+    rpg.coins += found.coins or 0
+    if found.item then
+        items.give(found.item)
+    end
+    audio.play(chime, { speed = 1.5 })
+    dialogue.say(found.text)
+end
+
 -- Talks to whoever is in front of the player, or examines the cell there.
 local function interact()
     local level = rpg.level :: world.Level
@@ -265,7 +287,10 @@ local function interact()
         return
     end
     local place = world.place_at(level, column, row)
-    if place and place.event then
+    if place and place.find and not level.found[place] then
+        run_event(find, level, place)
+        return
+    elseif place and place.event then
         run_event(story.events[place.event], place)
         return
     end
@@ -344,6 +369,8 @@ function update(dt: number)
         run_event(encounter, foe)
     elseif input.pressed("interact") then
         interact()
+    elseif input.pressed("menu") then
+        run_event(bag.visit)
     else
         walk()
     end
@@ -357,11 +384,15 @@ local function label(text: string, x: number, y: number, color)
 end
 
 local function draw_hud()
+    -- The bag shows the player's stats in its own panel.
+    if bag.open then
+        return
+    end
     label(OBJECTIVES[rpg.quest], 5, 4, TEXT)
 
     if SHOW_STATS[rpg.quest] then
         -- Hit points and coins, in the top-right corner.
-        local stats = `HP {rpg.hp}/{rpg.stats.max_hp}   {rpg.coins} coins`
+        local stats = `HP {rpg.hp}/{items.stats().max_hp}   {rpg.coins} coins`
         label(stats, WIDTH - 5 - font:measure(stats), 4, TEXT)
     end
 
@@ -421,6 +452,7 @@ function draw()
         draw_world()
     end
     battle.draw()
+    bag.draw()
     dialogue.draw()
     if rpg.fade > 0 then
         graphics.fill_rect(0, 0, WIDTH, HEIGHT, { r = 0, g = 0, b = 0, a = rpg.fade })

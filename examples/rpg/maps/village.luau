@@ -32,14 +32,33 @@ return {
         "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
         "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
     },
-    -- Cells with descriptions of their own, or events from `story.events`.
+    -- Cells with descriptions of their own, events from `story.events`, or coins or an item to
+    -- find the first time they're examined, and what's said then.
     places = {
         {
             at = { 21, 3 },
             text = "The signpost reads: “North: Shrine Hill. Mind the path at night.”",
         },
         { at = { 27, 10 }, text = "“Mossbrook Goods: tools, rope and remedies.” It's shut today." },
-        { at = { 6, 5 }, text = "Your cottage. It's too nice a day to stay indoors." },
+        {
+            at = { 6, 5 },
+            text = "Your cottage. It's too nice a day to stay indoors.",
+            find = {
+                coins = 10,
+                text = "Your cottage. You duck inside for your savings, from the jar by the door: "
+                    .. "10 coins.",
+            },
+        },
+        {
+            at = { 15, 9 },
+            text = "A thick bush, heavy with berries. They look sour.",
+            find = { coins = 5, text = "Something glints in the bush. You fish out 5 coins." },
+        },
+        {
+            at = { 17, 10 },
+            text = "A bench, worn smooth by years of gossip.",
+            find = { coins = 3, text = "Someone's left 3 coins on the bench. Finders keepers." },
+        },
         { at = { 20, 10 }, event = "well" },
     },
     -- Cells that lead to another map, arriving on a cell there facing a direction.
@@ -69,6 +88,14 @@ return {
                 "right", "right", "right", "right", "right", 2,
                 "left", "left", "left", "left", "left", 2,
             },
+        },
+        {
+            name = "Hazel",
+            sprite = { 26, 1 },
+            tint = "#e8a0b0",
+            at = { 25, 10 },
+            facing = "down",
+            talk = "hazel",
         },
         {
             name = "Pip",

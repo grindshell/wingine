@@ -29,6 +29,23 @@ return {
     },
     places = {
         { at = { 12, 4 }, event = "seal_stone" },
+        {
+            at = { 15, 5 },
+            text = "Small bones, picked clean.",
+            find = {
+                item = "swift_feather",
+                text = "Among the bones lies a grey feather, light as air. You take the Swift "
+                    .. "Feather.",
+            },
+        },
+        {
+            at = { 11, 9 },
+            text = "A dead tree, grey and leafless.",
+            find = {
+                item = "herb",
+                text = "A herb grows among the dead tree's roots. You pick it.",
+            },
+        },
     },
     exits = {
         { at = { 12, 19 }, to = "village", arrive = { 20, 1 }, facing = "down" },

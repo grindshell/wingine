@@ -6,6 +6,8 @@
 -- until they tell the elder; then "done".
 
 local dialogue = require("./dialogue")
+local items = require("./items")
+local shop = require("./shop")
 local world = require("./world")
 
 local story = {
@@ -16,8 +18,20 @@ local story = {
 }
 
 local ELDER = "Elder Rowan"
+local HAZEL = "Hazel"
 -- Herbs the elder gives the player for the hunt.
 local HERBS = 3
+-- What Hazel's shop sells, once it's open for the hunt.
+local STOCK = {
+    "herb",
+    "tonic",
+    "oak_staff",
+    "wooden_shield",
+    "swift_feather",
+    "ward_charm",
+    "iron_sword",
+    "bronze_shield",
+}
 -- What plays at the shrine once its chimes ring again.
 local SHRINE_MUSIC = "sounds/music.ogg"
 
@@ -32,6 +46,7 @@ local function voice(speaker: string?): (string) -> ()
 end
 
 local elder = voice(ELDER)
+local hazel = voice(HAZEL)
 local maple = voice("Maple")
 local pip = voice("Pip")
 local narrate = voice(nil)
@@ -46,7 +61,7 @@ function story.talk.elder()
         local answer = dialogue.ask(
             "Would you climb the hill and see what's become of the shrine?",
             { "I'll go.", "Not yet." },
-            ELDER
+            { speaker = ELDER }
         )
         if answer == 1 then
             rpg.quest = "accepted"
@@ -68,13 +83,14 @@ function story.talk.elder()
             "Whatever the stone held is loose, and its brood will be crawling all over the hill "
                 .. "by now."
         )
-        rpg.items.herb = (rpg.items.herb or 0) + HERBS
+        rpg.items.herb = items.count("herb") + HERBS
         rpg.quest = "hunt"
         narrate(`Elder Rowan gives you {HERBS} herbs.`)
         elder(
             "Eat one if you're hurt. Drive those creatures off the hill, and find what broke the "
                 .. "seal."
         )
+        elder("And see Hazel at the shop. Her cart's back from the city, with gear for you.")
     elseif rpg.quest == "hunt" then
         elder("The creatures are on Shrine Hill. If you're hurt, drink from the well first.")
     elseif rpg.quest == "cleared" then
@@ -96,6 +112,15 @@ function story.talk.maple()
     end
 end
 
+-- Hazel keeps Mossbrook Goods, which opens once the hunt is on.
+function story.talk.hazel()
+    if rpg.quest == "start" or rpg.quest == "accepted" or rpg.quest == "seen_shrine" then
+        hazel("Sorry, love, we're shut. My cart's still on its way back from the city.")
+    else
+        shop.visit(STOCK, HAZEL)
+    end
+end
+
 function story.talk.pip()
     if rpg.quest == "start" then
         pip("The ducks won't go near the north end of the pond lately. I think they're scared.")
@@ -107,8 +132,8 @@ end
 -- After the player loses a battle, and wakes up beside the elder.
 function story.revived()
     elder("Easy now. Maple found you at the foot of the hill and carried you home.")
-    if (rpg.items.herb or 0) == 0 then
-        rpg.items.herb = 1
+    if items.count("herb") == 0 then
+        items.give("herb")
         elder("You're out of herbs, too. Here, take one of mine.")
     end
     elder("Get your strength back, then try again. The creatures won't have gone anywhere.")
@@ -132,8 +157,9 @@ end
 
 -- Drinking from the village well restores the player.
 function story.events.well()
-    if rpg.hp < rpg.stats.max_hp then
-        rpg.hp = rpg.stats.max_hp
+    local max_hp = items.stats().max_hp
+    if rpg.hp < max_hp then
+        rpg.hp = max_hp
         audio.play(chime, { speed = 1.5 })
         narrate("You drink from the well. The cold water clears your head and restores you.")
     else

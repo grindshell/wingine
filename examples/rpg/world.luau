@@ -3,9 +3,9 @@
 --
 -- A map draws its level as rows of characters, one per cell, which `LEGEND` turns into a kind
 -- of ground and, on top of it, an optional object. Every kind has a description, which the
--- player reads by examining a cell. Maps can also have places, cells with a description or an
--- event of their own; exits, cells that lead to another map; characters; and foes, creatures
--- from `foes.luau` that the game adds while they're about.
+-- player reads by examining a cell. Maps can also have places, cells with a description, an
+-- event, or something to find of their own; exits, cells that lead to another map; characters;
+-- and foes, creatures from `foes.luau` that the game adds while they're about.
 
 local characters = require("./characters")
 local foes = require("./foes")
@@ -149,7 +149,7 @@ local KINDS: { [string]: Kind } = {
         sprites = { { 5, 20 } },
         tint = "#e0a050",
         solid = true,
-        text = "Mossbrook Goods. A note on the door says: “Closed for restocking. Back soon!”",
+        text = "Mossbrook Goods, the village shop. Hazel keeps it stocked with all sorts.",
     },
     sign = {
         sprites = { { 0, 7 } },
@@ -325,6 +325,8 @@ export type Level = {
     -- The map's foes, and which of them, by number, have been beaten.
     foes: { any },
     defeated: { [number]: boolean },
+    -- The places whose hidden things the player has found.
+    found: { [any]: boolean },
 }
 
 -- Sets the ground in cell `column`, `row` to the kind `name`.
@@ -394,6 +396,7 @@ function world.build(data): Level
         characters = {},
         foes = data.foes or {},
         defeated = {},
+        found = {},
     }
     for r, line in rows do
         local row = r - 1

@@ -628,8 +628,11 @@ fn herbs_heal_and_go_first() {
     choose(&mut simulation, 2);
     assert_eq!(menu(&simulation), "Use which item?");
     assert_eq!(
-        eval::<String>(&simulation, "rpg.dialogue.box.choices[1]"),
-        "Herb x3"
+        eval::<(String, String)>(
+            &simulation,
+            "rpg.dialogue.box.choices[1], rpg.dialogue.box.details[1]"
+        ),
+        ("Herb".to_owned(), "x3".to_owned())
     );
     choose(&mut simulation, 1);
     let pages = read(&mut simulation);
@@ -688,6 +691,254 @@ fn the_player_can_run_from_creatures_but_not_from_gloamfang() {
     // The bat leaves the player be for a while, though they're side by side.
     run_for(&mut simulation, 1.0);
     assert!(eval::<bool>(&simulation, "rpg.battle.state == nil"));
+}
+
+/// Picks the choice labeled `label` from the menu that's open.
+fn choose_labeled(simulation: &mut Simulation<LuauGame>, label: &str) {
+    let choices: Vec<String> = eval(simulation, "rpg.dialogue.box.choices");
+    let number = choices
+        .iter()
+        .position(|choice| choice == label)
+        .unwrap_or_else(|| panic!("no choice {label} in {choices:?}"));
+    choose(simulation, number + 1);
+}
+
+fn choices(simulation: &Simulation<LuauGame>) -> Vec<String> {
+    eval(simulation, "rpg.dialogue.box.choices")
+}
+
+const HAZEL: [i32; 2] = [25, 10];
+
+/// Talks to Hazel from below, and reads up to the first question, if she asks one.
+fn talk_to_hazel(simulation: &mut Simulation<LuauGame>) -> Vec<String> {
+    place_player(simulation, [HAZEL[0], HAZEL[1] + 1], "up");
+    simulation.tap(Key::Space);
+    read(simulation)
+}
+
+/// Opens the shop during the hunt with `coins` to spend, up to its first menu.
+fn open_shop(simulation: &mut Simulation<LuauGame>, coins: u32) {
+    exec(
+        simulation,
+        &format!("rpg.quest = 'hunt' rpg.coins = {coins}"),
+    );
+    talk_to_hazel(simulation);
+    assert!(menu(simulation).starts_with("What can I do for you?"));
+}
+
+fn count(simulation: &Simulation<LuauGame>, item: &str) -> u32 {
+    eval(simulation, &format!("rpg.items.{item} or 0"))
+}
+
+fn equipped(simulation: &Simulation<LuauGame>, slot: &str) -> Option<String> {
+    eval(simulation, &format!("rpg.equipped.{slot}"))
+}
+
+#[test]
+fn hazel_keeps_the_shop_shut_until_the_hunt() {
+    let mut simulation = simulation();
+    let pages = talk_to_hazel(&mut simulation);
+    assert!(pages[0].contains("we're shut"), "{pages:?}");
+    assert_eq!(dialogue(&simulation), None);
+
+    open_shop(&mut simulation, 0);
+    assert_eq!(choices(&simulation), ["Buy", "Sell", "Leave"]);
+    choose_labeled(&mut simulation, "Leave");
+    read(&mut simulation);
+    assert_eq!(eval::<i32>(&simulation, "rpg.busy"), 0, "the visit is over");
+}
+
+#[test]
+fn buying_gear_spends_coins_and_offers_to_equip_it() {
+    let mut simulation = simulation();
+    open_shop(&mut simulation, 25);
+    choose_labeled(&mut simulation, "Buy");
+    assert!(menu(&simulation).ends_with("You have 25 coins."));
+    // Prices sit beside each item, and the highlighted item's note says what it does.
+    simulation.tap(Key::Space);
+    for _ in 0..2 {
+        simulation.tap(Key::Down);
+    }
+    let (detail, note): (String, String) = eval(
+        &simulation,
+        "rpg.dialogue.box.details[3], rpg.dialogue.box.notes[rpg.dialogue.box.selected]",
+    );
+    assert_eq!(detail, "10");
+    assert!(note.contains("Attack +2."), "{note}");
+    simulation.tap(Key::Enter);
+    assert_eq!(menu(&simulation), "The Oak Staff? That'll be 10 coins.");
+    choose_labeled(&mut simulation, "Buy it");
+    read(&mut simulation);
+    assert_eq!(menu(&simulation), "Equip the Oak Staff now?");
+    choose_labeled(&mut simulation, "Equip it");
+    read(&mut simulation);
+
+    assert_eq!(eval::<u32>(&simulation, "rpg.coins"), 15);
+    assert_eq!(count(&simulation, "oak_staff"), 1);
+    assert_eq!(
+        equipped(&simulation, "weapon").as_deref(),
+        Some("oak_staff")
+    );
+    assert!(
+        menu(&simulation).ends_with("You have 15 coins."),
+        "back to buying"
+    );
+}
+
+#[test]
+fn the_shop_turns_away_the_player_who_cant_pay() {
+    let mut simulation = simulation();
+    open_shop(&mut simulation, 5);
+    choose_labeled(&mut simulation, "Buy");
+    choose_labeled(&mut simulation, "Oak Staff");
+    let pages = read(&mut simulation);
+    assert!(pages[0].contains("a little short"), "{pages:?}");
+    assert_eq!(eval::<u32>(&simulation, "rpg.coins"), 5);
+    assert_eq!(count(&simulation, "oak_staff"), 0);
+}
+
+#[test]
+fn selling_pays_half_but_not_for_gear_in_use() {
+    let mut simulation = simulation();
+    exec(
+        &simulation,
+        "rpg.items.herb = 3 rpg.items.oak_staff = 1 rpg.equipped.weapon = 'oak_staff'",
+    );
+    open_shop(&mut simulation, 0);
+    choose_labeled(&mut simulation, "Sell");
+    assert_eq!(choices(&simulation), ["Herb", "Oak Staff", "Back"]);
+    assert_eq!(
+        eval::<Vec<String>>(&simulation, "rpg.dialogue.box.details"),
+        ["2", "5"]
+    );
+    choose_labeled(&mut simulation, "Herb");
+    assert_eq!(menu(&simulation), "I'll give you 2 coins for your Herb.");
+    choose_labeled(&mut simulation, "Sell it");
+    read(&mut simulation);
+    assert_eq!(eval::<u32>(&simulation, "rpg.coins"), 2);
+    assert_eq!(count(&simulation, "herb"), 2);
+
+    choose_labeled(&mut simulation, "Oak Staff");
+    let pages = read(&mut simulation);
+    assert!(pages[0].contains("Take it off first"), "{pages:?}");
+    assert_eq!(count(&simulation, "oak_staff"), 1);
+}
+
+#[test]
+fn the_bag_changes_gear() {
+    let mut simulation = simulation();
+    exec(
+        &simulation,
+        "rpg.items.oak_staff = 1 rpg.items.wooden_shield = 1 rpg.items.ward_charm = 1",
+    );
+    simulation.tap(Key::Tab);
+    assert!(eval::<bool>(&simulation, "rpg.bag.open"));
+    assert_eq!(menu(&simulation), "Your bag.");
+    choose_labeled(&mut simulation, "Gear");
+    assert_eq!(choices(&simulation), ["Weapon", "Shield", "Charm", "Back"]);
+    choose_labeled(&mut simulation, "Weapon");
+    assert_eq!(choices(&simulation), ["Oak Staff", "Nothing", "Back"]);
+    choose_labeled(&mut simulation, "Oak Staff");
+    assert_eq!(
+        equipped(&simulation, "weapon").as_deref(),
+        Some("oak_staff")
+    );
+    assert_eq!(
+        eval::<Vec<String>>(&simulation, "rpg.dialogue.box.details"),
+        ["Oak Staff", "—", "—"]
+    );
+
+    // A charm that raises max HP doesn't heal, and taking it off lowers hit points to fit.
+    choose_labeled(&mut simulation, "Charm");
+    choose_labeled(&mut simulation, "Ward Charm");
+    assert_eq!(eval::<u32>(&simulation, "rpg.hp"), 36);
+    exec(&simulation, "rpg.hp = 46");
+    choose_labeled(&mut simulation, "Charm");
+    choose_labeled(&mut simulation, "Nothing");
+    assert_eq!(equipped(&simulation, "charm"), None);
+    assert_eq!(eval::<u32>(&simulation, "rpg.hp"), 36);
+
+    // Backing out twice closes the bag.
+    simulation.tap(Key::Space);
+    simulation.tap(Key::Escape);
+    simulation.tap(Key::Space);
+    simulation.tap(Key::Escape);
+    assert_eq!(dialogue(&simulation), None);
+    assert!(!eval::<bool>(&simulation, "rpg.bag.open"));
+    assert_eq!(eval::<i32>(&simulation, "rpg.busy"), 0);
+}
+
+#[test]
+fn herbs_can_be_used_from_the_bag() {
+    let mut simulation = simulation();
+    exec(&simulation, "rpg.hp = 10 rpg.items.herb = 1");
+    simulation.tap(Key::I);
+    choose_labeled(&mut simulation, "Items");
+    choose_labeled(&mut simulation, "Herb");
+    let pages = read(&mut simulation);
+    assert_eq!(pages[0], "You used a Herb and recovered 15 HP.");
+    assert_eq!(eval::<u32>(&simulation, "rpg.hp"), 25);
+    assert_eq!(count(&simulation, "herb"), 0);
+    assert_eq!(pages[1], "You don't have anything to use.");
+    assert_eq!(menu(&simulation), "Your bag.");
+}
+
+#[test]
+fn examining_things_turns_up_coins_and_items() {
+    let mut simulation = simulation();
+    // The player's cottage, with their savings inside.
+    place_player(&simulation, [6, 6], "up");
+    simulation.tap(Key::Space);
+    let pages = read(&mut simulation);
+    assert!(pages[0].contains("10 coins"), "{pages:?}");
+    assert_eq!(eval::<u32>(&simulation, "rpg.coins"), 10);
+    simulation.tap(Key::Space);
+    let pages = read(&mut simulation);
+    assert!(pages[0].contains("too nice a day"), "only once: {pages:?}");
+    assert_eq!(eval::<u32>(&simulation, "rpg.coins"), 10);
+
+    // A feather among the bones at the shrine.
+    climb_to_the_shrine(&mut simulation);
+    place_player(&simulation, [15, 6], "up");
+    simulation.tap(Key::Space);
+    read(&mut simulation);
+    assert_eq!(count(&simulation, "swift_feather"), 1);
+}
+
+#[test]
+fn gear_counts_in_battle() {
+    let mut simulation = simulation();
+    hunt(&mut simulation);
+    exec(
+        &simulation,
+        "rpg.items.oak_staff = 1 rpg.items.ward_charm = 1
+        rpg.equipped.weapon = 'oak_staff' rpg.equipped.charm = 'ward_charm'",
+    );
+    meet(&mut simulation, "Shade Bat");
+    let (attack, max_hp): (u32, u32) = eval(
+        &simulation,
+        "rpg.battle.state.player.attack, rpg.battle.state.player.max_hp",
+    );
+    assert_eq!((attack, max_hp), (8, 46));
+    attack_with_strike(&mut simulation);
+    // 8 power, 8 attack against 3 defense, halved.
+    assert_eq!(battle_hp(&simulation), (32, 3));
+}
+
+#[test]
+fn battles_only_offer_things_to_use() {
+    let mut simulation = simulation();
+    hunt(&mut simulation);
+    exec(&simulation, "rpg.items.oak_staff = 1");
+    meet(&mut simulation, "Shade Bat");
+    choose_labeled(&mut simulation, "Item");
+    assert_eq!(choices(&simulation), ["Herb", "Back"]);
+}
+
+/// Picks Strike from the battle menu, and reads what happens up to the next menu.
+fn attack_with_strike(simulation: &mut Simulation<LuauGame>) {
+    attack(simulation);
+    read(simulation);
 }
 
 #[test]

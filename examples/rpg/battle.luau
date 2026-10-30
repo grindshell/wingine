@@ -4,7 +4,7 @@
 --
 -- `battle.fight` runs a battle as part of a task and returns how it ended, leaving the battle on
 -- screen until `battle.close`, so the game can fade away from it. The player's hit points, items
--- and coins are in `rpg`, and change as the battle goes.
+-- and coins are in `rpg`, and change as the battle goes. Their stats include their gear's.
 
 local dialogue = require("./dialogue")
 local foes = require("./foes")
@@ -207,8 +207,8 @@ end
 
 -- The player uses one of the item `name`.
 local function use_item(state: State, name: string)
-    local item = items.kinds[name]
-    rpg.items[name] -= 1
+    local item = items.kind(name)
+    items.take(name)
     say(`You used a {item.name}.`)
     if item.heal then
         local player = state.player
@@ -223,7 +223,8 @@ end
 -- running away.
 local function choose_action(): { move: foes.Move?, item: string?, run: boolean? }
     while true do
-        local choice = dialogue.ask("What will you do?", { "Fight", "Item", "Run" }, nil, false)
+        local actions = { "Fight", "Item", "Run" }
+        local choice = dialogue.ask("What will you do?", actions, { cancel = false })
         if choice == 1 then
             local names = {}
             for i, move in MOVES do
@@ -235,16 +236,21 @@ local function choose_action(): { move: foes.Move?, item: string?, run: boolean?
                 return { move = MOVES[picked] }
             end
         elseif choice == 2 then
-            local owned = items.owned(rpg.items)
+            local owned = items.owned(function(item)
+                return item.heal ~= nil
+            end)
             if #owned == 0 then
                 say("You don't have anything to use.")
             else
-                local names = {}
+                local names, counts, notes = {}, {}, {}
                 for i, name in owned do
-                    names[i] = `{items.kinds[name].name} x{rpg.items[name]}`
+                    names[i] = items.kind(name).name
+                    counts[i] = `x{items.count(name)}`
+                    notes[i] = items.describe(name)
                 end
                 table.insert(names, "Back")
-                local picked = dialogue.ask("Use which item?", names)
+                local options = { details = counts, notes = notes }
+                local picked = dialogue.ask("Use which item?", names, options)
                 if picked <= #owned then
                     return { item = owned[picked] }
                 end
@@ -284,8 +290,8 @@ local function win(state: State): string
     rpg.coins += kind.coins
     say(`You found {kind.coins} coins.`)
     if kind.drops then
-        rpg.items[kind.drops] = (rpg.items[kind.drops] or 0) + 1
-        say(`It left behind a {items.kinds[kind.drops].name}.`)
+        items.give(kind.drops)
+        say(`It left behind a {items.kind(kind.drops).name}.`)
     end
     return "won"
 end
@@ -355,7 +361,7 @@ function battle.fight(kind: string): string
         foe_sprite = world.sprite(foe_kind.sprite[1], foe_kind.sprite[2]):flipped_x(),
         phase = "flash",
         time = 0,
-        player = fighter("you", "your", rpg.stats, rpg.hp),
+        player = fighter("you", "your", items.stats(), rpg.hp),
         foe = fighter(foe_kind.called, `{foe_kind.called}'s`, foe_kind, foe_kind.hp),
     }
     battle.state = state

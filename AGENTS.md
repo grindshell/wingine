@@ -103,8 +103,10 @@ of scope until the milestone is done.
   `dialogue.luau` the dialogue box, whose `say` and `ask` wait for the player. `battle.luau` runs
   one-on-one, turn-based battles against the creatures in `foes.luau`, which maps place and
   which fight when the player stands beside them; its messages and menus go through the dialogue
-  box, and tests make its dice predictable by replacing `battle.roll`. The game's state is the
-  global `rpg`.
+  box, and tests make its dice predictable by replacing `battle.roll`. `items.luau` holds things
+  to use and gear, whose bonuses `items.stats` adds to the player's; `shop.luau` buys and sells
+  them, and `bag.luau` (the menu key) equips gear and uses items. The game's state is the global
+  `rpg`.
 - `src/script.rs`: scripted runs, which drive a game with simulated input from a text file
   (unrelated to Luau scripts), built on `Simulation`.
 - `src/math.rs`: geometry types such as `Rect`.
