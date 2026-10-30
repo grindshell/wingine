@@ -54,6 +54,8 @@ local FADE_SECONDS = 0.25
 local BANNER_SECONDS = 2.5
 local BANNER_FADE = 0.5
 local MUSIC_VOLUME = 0.5
+-- Seconds music takes to crossfade between maps.
+local MUSIC_FADE = 1
 -- Movement actions, which are also the directions they walk in, checked in this order.
 local DIRECTIONS = { "up", "down", "left", "right" }
 -- What to do next, at each stage of the quest.
@@ -65,8 +67,8 @@ local OBJECTIVES = {
     cleared = "Tell Elder Rowan the shrine is safe.",
     done = "To be continued…",
 }
--- The stages of the quest at which the player's hit points and coins show.
-local SHOW_STATS = { hunt = true, cleared = true, done = true }
+-- The stage of the quest from which the player's hit points and coins show.
+local SHOW_STATS = "hunt"
 
 local BACKGROUND = "#101418"
 local HERO = "#f2d3ab"
@@ -123,8 +125,6 @@ rpg = {
     fade = 0,
     -- The map's name, shown on arriving, and when it started showing.
     banner = nil :: { text: string, start: number }?,
-    -- The music playing, if any.
-    music = nil :: string?,
     time = 0,
     dialogue = dialogue,
     battle = battle,
@@ -151,14 +151,7 @@ local function enter(name: string, at: { number }, facing: string)
     end
     rpg.queued = nil
     rpg.banner = { text = level.title, start = rpg.time }
-    if level.music ~= rpg.music then
-        if level.music then
-            audio.play_music(level.music, 1)
-        else
-            audio.stop_music(1)
-        end
-        rpg.music = level.music or nil
-    end
+    world.play_music(level, MUSIC_FADE)
 end
 
 -- Starts `f(...)` as a task, such as a conversation. The player waits until it's done.
@@ -195,15 +188,17 @@ end
 local function encounter(character: characters.Character)
     local level = rpg.level :: world.Level
     character.talking = true
-    characters.face(character, grid.opposite(rpg.player.mover:facing()))
+    -- It may have come up beside the player, so they turn to face each other.
+    characters.face_toward(character, rpg.player)
+    characters.face_toward(rpg.player, character)
     character.alert = true
     audio.play(blip, { speed = 0.5 })
     wait(ALERT_SECONDS)
     character.alert = false
+    -- `battle.fight` takes itself off the screen if it fails.
     local ok, outcome = pcall(battle.fight, character.foe)
     character.talking = false
     if not ok then
-        battle.close()
         error(outcome, 0)
     end
 
@@ -229,7 +224,7 @@ end
 local function talk(character: characters.Character)
     run_event(function()
         character.talking = true
-        characters.face(character, grid.opposite(rpg.player.mover:facing()))
+        characters.face_toward(character, rpg.player)
         local ok, err = pcall(function()
             if character.talk then
                 story.talk[character.talk](character)
@@ -390,7 +385,7 @@ local function draw_hud()
     end
     label(OBJECTIVES[rpg.quest], 5, 4, TEXT)
 
-    if SHOW_STATS[rpg.quest] then
+    if story.reached(SHOW_STATS) then
         -- Hit points and coins, in the top-right corner.
         local stats = `HP {rpg.hp}/{items.stats().max_hp}   {rpg.coins} coins`
         label(stats, WIDTH - 5 - font:measure(stats), 4, TEXT)

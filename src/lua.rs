@@ -47,7 +47,8 @@
 //!   its ID, a number. A [`Tile`] is a table `{ sprite, tint, solid }`, where `tint` defaults to
 //!   white and `solid` to false.
 //! - A [`Tilemap`] is userdata. Cells are a column and a row, counting from 0 at the top-left,
-//!   and layers are the numbers `map:add_layer()` returns. Its methods are `map:add_layer()`,
+//!   and layers are the numbers `map:add_layer()` returns. A map holds at most 16,777,216 cells
+//!   across all its layers (2048 by 2048 with 4 layers). Its methods are `map:add_layer()`,
 //!   `map:layer_count()`, `map:size()` (its columns and rows), `map:get(layer, column, row)` (a
 //!   tile ID, or `nil` for an empty cell), `map:set(layer, column, row, tile)` (with `nil` to
 //!   empty the cell), `map:contains(column, row)`, `map:is_solid(column, row)`, `map:bounds()`
@@ -56,10 +57,10 @@
 //! - A [`GridMover`] is userdata with `mover:tile()`, `mover:position()` (in tiles, between two
 //!   during a step), `mover:facing()`, `mover:face(direction)`, `mover:is_moving()`,
 //!   `mover:step_time()`, `mover:set_step_time(seconds)`, `mover:place(column, row)`,
-//!   `mover:update(dt)` and `mover:step(direction, blocked)`. `blocked` is an optional function
-//!   that takes the column and row the mover would step onto and returns whether it's blocked;
-//!   the mover isn't borrowed while it runs, so it may look at the mover too. `step` returns
-//!   whether a step started.
+//!   `mover:update(dt)` (where `dt` is 0 or more seconds) and `mover:step(direction, blocked)`.
+//!   `blocked` is an optional function that takes the column and row the mover would step onto
+//!   and returns whether it's blocked; the mover isn't borrowed while it runs, so it may look at
+//!   the mover too. `step` returns whether a step started.
 //!
 //! Scripts are [Luau](https://luau.org), not standard Lua 5.x, and run in Luau's sandbox: the
 //! standard library and built-ins are read-only, and the globals a script defines are seen by the
@@ -509,9 +510,28 @@ impl mlua::UserData for Tileset {
     }
 }
 
+/// The most cells a map made by scripts may hold, across all its layers, so a script asking for
+/// an enormous map gets an error rather than exhausting memory.
+const MAX_TILEMAP_CELLS: u64 = 1 << 24;
+
+/// Fails unless a map `columns` by `rows` with `layers` layers fits in [`MAX_TILEMAP_CELLS`].
+pub(crate) fn check_tilemap_size(columns: u32, rows: u32, layers: usize) -> mlua::Result<()> {
+    let cells = u64::from(columns) * u64::from(rows) * layers as u64;
+    if cells > MAX_TILEMAP_CELLS {
+        return Err(mlua::Error::runtime(format!(
+            "a {columns}x{rows} map with {layers} layers has {cells} cells, more than the \
+             {MAX_TILEMAP_CELLS} a map can hold"
+        )));
+    }
+    Ok(())
+}
+
 impl mlua::UserData for Tilemap {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method_mut("add_layer", |_, map, ()| Ok(map.add_layer()));
+        methods.add_method_mut("add_layer", |_, map, ()| {
+            check_tilemap_size(map.columns(), map.rows(), map.layer_count() + 1)?;
+            Ok(map.add_layer())
+        });
         methods.add_method("layer_count", |_, map, ()| Ok(map.layer_count()));
         methods.add_method("size", |_, map, ()| Ok((map.columns(), map.rows())));
         methods.add_method("get", |_, map, (layer, column, row): (usize, i32, i32)| {
@@ -595,6 +615,10 @@ impl mlua::UserData for GridMover {
             Ok(())
         });
         methods.add_method_mut("update", |_, mover, dt: f32| {
+            if !(dt.is_finite() && dt >= 0.0) {
+                let message = format!("dt must be a number of seconds, 0 or more, not {dt}");
+                return Err(mlua::Error::runtime(message));
+            }
             mover.update(dt);
             Ok(())
         });

@@ -3,6 +3,7 @@
 -- input: the interact key shows the rest of the text, then closes the box, and with choices, up
 -- and down pick one first.
 
+local ui = require("./ui")
 local window = require("./window")
 
 local dialogue = {}
@@ -24,12 +25,6 @@ local BLINK_SECONDS = 0.4
 local DETAIL_GAP = 12
 -- How wide the panel with the highlighted choice's note is.
 local NOTE_WIDTH = 132
-
-local BORDER = "#f2d3ab"
-local PANEL = "#14182c"
-local TEXT = "#f4f0e8"
-local SPEAKER = "#f2c14e"
-local CHOICE = "#8a92b8"
 
 local font = graphics.default_font()
 local blip = audio.load("sounds/blip.wav")
@@ -157,12 +152,6 @@ function dialogue.update(dt: number)
     end
 end
 
--- Draws a panel with a border.
-local function panel(x: number, y: number, width: number, height: number)
-    graphics.fill_rect(x, y, width, height, BORDER)
-    graphics.fill_rect(x + 1, y + 1, width - 2, height - 2, PANEL)
-end
-
 -- Draws the box's choices in a panel whose bottom-right corner is at `right`, `bottom`, and the
 -- highlighted choice's note beside them.
 local function draw_choices(box: Box, choices: { string }, right: number, bottom: number)
@@ -177,14 +166,14 @@ local function draw_choices(box: Box, choices: { string }, right: number, bottom
     local width = widest + PADDING * 2 + 8
     local height = #choices * line_height + PADDING * 2 - 2
     local left, top = right - width, bottom - height
-    panel(left, top, width, height)
+    ui.panel(left, top, width, height)
     for i, choice in choices do
         local line_top = top + PADDING - 1 + (i - 1) * line_height
         local selected = i == box.selected
         if selected then
-            graphics.draw_text(font, ">", left + PADDING, line_top, SPEAKER)
+            graphics.draw_text(font, ">", left + PADDING, line_top, ui.HIGHLIGHT)
         end
-        local color = if selected then TEXT else CHOICE
+        local color = if selected then ui.TEXT else ui.DIM
         graphics.draw_text(font, choice, left + PADDING + 8, line_top, color)
         local detail = details[i]
         if detail then
@@ -202,8 +191,8 @@ local function draw_choices(box: Box, choices: { string }, right: number, bottom
         end
         local note_height = layout:line_count() * line_height + PADDING * 2 - 2
         local note_left = left - NOTE_WIDTH - 1
-        panel(note_left, top, NOTE_WIDTH, note_height)
-        graphics.draw_text_layout(layout, note_left + PADDING, top + PADDING - 1, TEXT)
+        ui.panel(note_left, top, NOTE_WIDTH, note_height)
+        graphics.draw_text_layout(layout, note_left + PADDING, top + PADDING - 1, ui.TEXT)
     end
 end
 
@@ -217,13 +206,13 @@ function dialogue.draw()
     local width = WIDTH - MARGIN * 2
     local height = lines * line_height + PADDING * 2 - 2
     local x, y = MARGIN, HEIGHT - MARGIN - height
-    panel(x, y, width, height)
-    graphics.draw_text_layout(box.layout, x + PADDING, y + PADDING - 1, TEXT, box.shown)
+    ui.panel(x, y, width, height)
+    graphics.draw_text_layout(box.layout, x + PADDING, y + PADDING - 1, ui.TEXT, box.shown)
 
     if box.speaker then
         local name_width = font:measure(box.speaker)
-        panel(x, y - line_height - 1, name_width + PADDING * 2, line_height + 2)
-        graphics.draw_text(font, box.speaker, x + PADDING, y - line_height + 1, SPEAKER)
+        ui.panel(x, y - line_height - 1, name_width + PADDING * 2, line_height + 2)
+        graphics.draw_text(font, box.speaker, x + PADDING, y - line_height + 1, ui.HIGHLIGHT)
     end
 
     local complete = box.shown >= box.layout:glyph_count()
@@ -235,9 +224,9 @@ function dialogue.draw()
     elseif box.idle % (BLINK_SECONDS * 2) < BLINK_SECONDS then
         -- A little arrow in the corner, saying there's more to read.
         local right, bottom = x + width - PADDING, y + height - PADDING + 1
-        graphics.fill_rect(right - 5, bottom - 3, 5, 1, BORDER)
-        graphics.fill_rect(right - 4, bottom - 2, 3, 1, BORDER)
-        graphics.fill_rect(right - 3, bottom - 1, 1, 1, BORDER)
+        graphics.fill_rect(right - 5, bottom - 3, 5, 1, ui.BORDER)
+        graphics.fill_rect(right - 4, bottom - 2, 3, 1, ui.BORDER)
+        graphics.fill_rect(right - 3, bottom - 1, 1, 1, ui.BORDER)
     end
 end
 

@@ -15,7 +15,16 @@ local story = {
     talk = {},
     -- Events, run when the player examines a place that has one, which is passed in.
     events = {},
+    -- The stages of the quest, in order.
+    STAGES = { "start", "accepted", "seen_shrine", "hunt", "cleared", "done" },
 }
+
+-- Whether the quest has reached `stage`, or gone past it.
+function story.reached(stage: string): boolean
+    local wanted = table.find(story.STAGES, stage) or error(`there's no stage called {stage}`)
+    local now = table.find(story.STAGES, rpg.quest) or error(`the quest is at {rpg.quest}`)
+    return now >= wanted
+end
 
 local ELDER = "Elder Rowan"
 local HAZEL = "Hazel"
@@ -32,9 +41,6 @@ local STOCK = {
     "iron_sword",
     "bronze_shield",
 }
--- What plays at the shrine once its chimes ring again.
-local SHRINE_MUSIC = "sounds/music.ogg"
-
 local chime = audio.load("sounds/chime.wav")
 
 -- A function that says text in the dialogue box as `speaker`, waiting for the player to close
@@ -103,9 +109,9 @@ function story.talk.elder()
 end
 
 function story.talk.maple()
-    if rpg.quest == "cleared" or rpg.quest == "done" then
+    if story.reached("cleared") then
         maple("Were those chimes I heard last night? It's good to hear them again.")
-    elseif rpg.quest == "seen_shrine" or rpg.quest == "hunt" then
+    elseif story.reached("seen_shrine") then
         maple("You went up the hill? You look like you've seen a ghost.")
     else
         maple("Lovely morning for a walk! Though it's been awfully quiet at night lately.")
@@ -114,7 +120,7 @@ end
 
 -- Hazel keeps Mossbrook Goods, which opens once the hunt is on.
 function story.talk.hazel()
-    if rpg.quest == "start" or rpg.quest == "accepted" or rpg.quest == "seen_shrine" then
+    if not story.reached("hunt") then
         hazel("Sorry, love, we're shut. My cart's still on its way back from the city.")
     else
         shop.visit(STOCK, HAZEL)
@@ -150,9 +156,9 @@ function story.defeated(kind: string)
     audio.play(chime)
     narrate("A breeze stirs the shrine's wind chimes… and, for the first time in days, they ring.")
     narrate("The other creatures scatter into the trees. Shrine Hill is quiet again.")
-    shrine.music = SHRINE_MUSIC
-    audio.play_music(SHRINE_MUSIC, 2)
-    rpg.music = SHRINE_MUSIC
+    -- The hill hums the village's tune again.
+    shrine.music = rpg.levels.village.music
+    world.play_music(shrine, 2)
 end
 
 -- Drinking from the village well restores the player.
@@ -168,7 +174,7 @@ function story.events.well()
 end
 
 function story.events.seal_stone()
-    if rpg.quest == "cleared" or rpg.quest == "done" then
+    if story.reached("cleared") then
         narrate("The halves of the seal stone have drawn back together. A hairline crack remains.")
     elseif rpg.quest == "accepted" then
         audio.play(chime, { speed = 0.5 })

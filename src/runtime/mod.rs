@@ -51,14 +51,16 @@
 //!   the first frame.
 //! - `graphics.default_font()` returns the built-in pixel font.
 //! - `graphics.load_sprite_sheet(path, tile_width, tile_height)` loads a PNG divided into a grid
-//!   of sprites `tile_width` by `tile_height` texels, starting at its top-left corner.
+//!   of sprites `tile_width` by `tile_height` texels, starting at its top-left corner. Each image
+//!   is read once; loading it again, even divided differently, reuses it.
 //!
 //! `tilemap`, for building maps of tiles, anywhere:
 //!
 //! - `tilemap.new_tileset(tile_width, tile_height)` returns an empty tileset of tiles
 //!   `tile_width` by `tile_height` world units, which are canvas pixels without a camera.
 //! - `tilemap.new(tileset, columns, rows)` returns a map `columns` by `rows` tiles in size,
-//!   with no layers yet, built from a copy of `tileset`.
+//!   with no layers yet, built from a copy of `tileset`. Maps hold at most 16,777,216 cells
+//!   across all their layers.
 //!
 //! `grid`, for walking from tile to tile, anywhere:
 //!

@@ -1,12 +1,16 @@
 //! The `graphics` table, for drawing.
 
-use std::path::Path;
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use mlua::{Lua, Table, UserDataRef};
 
 use super::{CANVAS, with_canvas, with_context, with_lent};
 use crate::{
-    graphics::{Camera, Canvas, Color, Font, Sprite, SpriteSheet, TextLayout},
+    graphics::{Camera, Canvas, Color, Font, Sprite, SpriteSheet, TextLayout, Texture},
     lua::check_layer,
     math::Rect,
     tilemap::Tilemap,
@@ -124,6 +128,8 @@ pub(super) fn module(lua: &Lua, folder: &Path, default_font: Font) -> mlua::Resu
         lua.create_function(move |_, ()| Ok(default_font.clone()))?,
     )?;
     let root = folder.to_owned();
+    // Each image is loaded once, and shared by every sheet made from it.
+    let textures: RefCell<HashMap<PathBuf, Texture>> = RefCell::default();
     graphics.set(
         "load_sprite_sheet",
         lua.create_function(
@@ -133,8 +139,17 @@ pub(super) fn module(lua: &Lua, folder: &Path, default_font: Font) -> mlua::Resu
                     return Err(mlua::Error::runtime(message));
                 }
                 let path = root.join(path);
-                let texture = with_context(lua, |ctx| ctx.load_texture(path))?
-                    .map_err(mlua::Error::external)?;
+                // Through the context even when cached, so this works at the same times either
+                // way.
+                let texture = with_context(lua, |ctx| -> crate::Result<Texture> {
+                    if let Some(texture) = textures.borrow().get(&path) {
+                        return Ok(texture.clone());
+                    }
+                    let texture = ctx.load_texture(&path)?;
+                    textures.borrow_mut().insert(path, texture.clone());
+                    Ok(texture)
+                })?
+                .map_err(mlua::Error::external)?;
                 Ok(SpriteSheet::new(texture, tile_width, tile_height))
             },
         )?,

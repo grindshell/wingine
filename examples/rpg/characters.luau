@@ -69,6 +69,20 @@ function characters.face(character: Character, direction: string)
     end
 end
 
+-- Turns `character` to face `other`, along whichever axis they're further apart on.
+function characters.face_toward(character: Character, other: Character)
+    local column, row = character.mover:tile()
+    local other_column, other_row = other.mover:tile()
+    local dx, dy = other_column - column, other_row - row
+    if dx == 0 and dy == 0 then
+        return
+    elseif math.abs(dx) >= math.abs(dy) then
+        characters.face(character, if dx > 0 then "right" else "left")
+    else
+        characters.face(character, if dy > 0 then "down" else "up")
+    end
+end
+
 -- Turns toward `direction` and starts walking a tile that way, unless `blocked` says it can't.
 -- Returns whether it started.
 function characters.step(character: Character, direction: string, blocked): boolean

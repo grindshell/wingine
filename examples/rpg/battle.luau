@@ -9,6 +9,7 @@
 local dialogue = require("./dialogue")
 local foes = require("./foes")
 local items = require("./items")
+local ui = require("./ui")
 local window = require("./window")
 local world = require("./world")
 
@@ -55,9 +56,6 @@ local SKY = "#141a2c"
 local GROUND = "#24301f"
 local PLATFORM = "#1a2417"
 local FLASH = "#f4f0e8"
-local BORDER = "#f2d3ab"
-local PANEL = "#14182c"
-local TEXT = "#f4f0e8"
 local BAR_EMPTY = "#2c3048"
 local HEALTHY = "#5fc35a"
 local HURT = "#e8c040"
@@ -95,7 +93,6 @@ type Fighter = {
 }
 
 type State = {
-    kind: string,
     foe_kind: foes.Foe,
     -- The foe's sprite, facing the player.
     foe_sprite: any,
@@ -205,23 +202,20 @@ local function act(user: Fighter, target: Fighter, move: foes.Move)
     end
 end
 
--- The player uses one of the item `name`.
+-- The player uses one of the item `name`, which `choose_action` checked will do some good.
 local function use_item(state: State, name: string)
-    local item = items.kind(name)
+    local player = state.player
+    local healed = items.healing(name, player.hp, player.max_hp)
     items.take(name)
-    say(`You used a {item.name}.`)
-    if item.heal then
-        local player = state.player
-        local healed = math.min(item.heal, player.max_hp - player.hp)
-        player.hp += healed
-        wait_until(settled)
-        say(`You recovered {healed} HP.`)
-    end
+    say(`You used a {items.kind(name).name}.`)
+    player.hp += healed
+    wait_until(settled)
+    say(`You recovered {healed} HP.`)
 end
 
 -- Asks the player what to do this turn, until they settle on something: a move, an item or
 -- running away.
-local function choose_action(): { move: foes.Move?, item: string?, run: boolean? }
+local function choose_action(state: State): { move: foes.Move?, item: string?, run: boolean? }
     while true do
         local actions = { "Fight", "Item", "Run" }
         local choice = dialogue.ask("What will you do?", actions, { cancel = false })
@@ -236,22 +230,19 @@ local function choose_action(): { move: foes.Move?, item: string?, run: boolean?
                 return { move = MOVES[picked] }
             end
         elseif choice == 2 then
-            local owned = items.owned(function(item)
-                return item.heal ~= nil
-            end)
+            local owned = items.usable()
             if #owned == 0 then
                 say("You don't have anything to use.")
             else
-                local names, counts, notes = {}, {}, {}
-                for i, name in owned do
-                    names[i] = items.kind(name).name
-                    counts[i] = `x{items.count(name)}`
-                    notes[i] = items.describe(name)
-                end
-                table.insert(names, "Back")
-                local options = { details = counts, notes = notes }
-                local picked = dialogue.ask("Use which item?", names, options)
-                if picked <= #owned then
+                local choices, options = items.menu(owned, items.count_detail)
+                table.insert(choices, "Back")
+                local picked = dialogue.ask("Use which item?", choices, options)
+                local player = state.player
+                if picked > #owned then
+                    continue
+                elseif items.healing(owned[picked], player.hp, player.max_hp) == 0 then
+                    say("You're not hurt.")
+                else
                     return { item = owned[picked] }
                 end
             end
@@ -299,7 +290,7 @@ end
 -- Plays a turn, and returns how the battle ended if it did.
 local function turn(state: State): string?
     local player, foe = state.player, state.foe
-    local action = choose_action()
+    local action = choose_action(state)
     if action.run then
         if state.foe_kind.boss then
             say("There's no running from this fight!")
@@ -356,7 +347,6 @@ end
 function battle.fight(kind: string): string
     local foe_kind = foes[kind] or error(`there's no kind of creature called {kind}`)
     local state: State = {
-        kind = kind,
         foe_kind = foe_kind,
         foe_sprite = world.sprite(foe_kind.sprite[1], foe_kind.sprite[2]):flipped_x(),
         phase = "flash",
@@ -400,21 +390,16 @@ function battle.update(dt: number)
     end
 end
 
-local function panel(x: number, y: number, width: number, height: number)
-    graphics.fill_rect(x, y, width, height, BORDER)
-    graphics.fill_rect(x + 1, y + 1, width - 2, height - 2, PANEL)
-end
-
 -- A fighter's name and hit points, in a panel. The player's shows the numbers too.
 local function draw_panel(fighter: Fighter, name: string, at, numbers: boolean)
-    panel(at.x, at.y, at.width, PANEL_HEIGHT)
-    graphics.draw_text(font, name, at.x + 6, at.y + 4, TEXT)
+    ui.panel(at.x, at.y, at.width, PANEL_HEIGHT)
+    graphics.draw_text(font, name, at.x + 6, at.y + 4, ui.TEXT)
     if numbers then
         local text = `{math.ceil(fighter.shown_hp)}/{fighter.max_hp}`
         local width = font:measure(text)
-        graphics.draw_text(font, text, at.x + at.width - 6 - width, at.y + 4, TEXT)
+        graphics.draw_text(font, text, at.x + at.width - 6 - width, at.y + 4, ui.TEXT)
     end
-    graphics.draw_text(font, "HP", at.x + 6, at.y + 16, TEXT)
+    graphics.draw_text(font, "HP", at.x + 6, at.y + 16, ui.TEXT)
     local bar_x, bar_y, bar_width = at.x + 22, at.y + 19, at.width - 28
     local share = fighter.shown_hp / fighter.max_hp
     local color = if share > 0.5 then HEALTHY elseif share > 0.2 then HURT else CRITICAL

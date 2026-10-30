@@ -105,8 +105,9 @@ of scope until the milestone is done.
   which fight when the player stands beside them; its messages and menus go through the dialogue
   box, and tests make its dice predictable by replacing `battle.roll`. `items.luau` holds things
   to use and gear, whose bonuses `items.stats` adds to the player's; `shop.luau` buys and sells
-  them, and `bag.luau` (the menu key) equips gear and uses items. The game's state is the global
-  `rpg`.
+  them, and `bag.luau` (the menu key) equips gear and uses items. `ui.luau` holds the panels'
+  shared look. `story.reached(stage)` compares quest stages, which run in the order of
+  `story.STAGES`. The game's state is the global `rpg`.
 - `src/script.rs`: scripted runs, which drive a game with simulated input from a text file
   (unrelated to Luau scripts), built on `Simulation`.
 - `src/math.rs`: geometry types such as `Rect`.

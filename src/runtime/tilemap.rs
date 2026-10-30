@@ -2,7 +2,10 @@
 
 use mlua::{Lua, Table, UserDataRef};
 
-use crate::tilemap::{Tilemap, Tileset};
+use crate::{
+    lua::check_tilemap_size,
+    tilemap::{Tilemap, Tileset},
+};
 
 pub(super) fn module(lua: &Lua) -> mlua::Result<Table> {
     let tilemap = lua.create_table()?;
@@ -19,6 +22,8 @@ pub(super) fn module(lua: &Lua) -> mlua::Result<Table> {
         "new",
         lua.create_function(
             |_, (tileset, columns, rows): (UserDataRef<Tileset>, u32, u32)| {
+                // Fail now, rather than at the first layer, for a map too big for even one.
+                check_tilemap_size(columns, rows, 1)?;
                 Ok(Tilemap::new(tileset.clone(), columns, rows))
             },
         )?,

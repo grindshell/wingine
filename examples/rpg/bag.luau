@@ -4,6 +4,7 @@
 
 local dialogue = require("./dialogue")
 local items = require("./items")
+local ui = require("./ui")
 
 local bag = {}
 
@@ -13,10 +14,7 @@ local PANEL_X, PANEL_Y = 4, 4
 local NAMES_WIDTH = 52
 local NOTHING = "—"
 
-local BORDER = "#f2d3ab"
-local PANEL = "#14182c"
-local TEXT = "#f4f0e8"
-local LABEL = "#8a92b8"
+-- Stats raised by gear.
 local RAISED = "#8fd16a"
 
 local font = graphics.default_font()
@@ -49,16 +47,13 @@ local function change_gear()
         local owned = items.owned(function(item)
             return item.slot == slot
         end)
-        local choices, details, notes = {}, {}, {}
-        for i, name in owned do
-            choices[i] = items.kind(name).name
-            details[i] = if rpg.equipped[slot] == name then "on" else ""
-            notes[i] = items.describe(name)
-        end
+        local choices, options = items.menu(owned, function(name)
+            return if rpg.equipped[slot] == name then "on" else ""
+        end)
         table.insert(choices, "Nothing")
         table.insert(choices, "Back")
         local question = `Equip which {string.lower(items.SLOT_NAMES[slot])}?`
-        local which = dialogue.ask(question, choices, { details = details, notes = notes })
+        local which = dialogue.ask(question, choices, options)
         if which <= #owned then
             items.equip(owned[which])
         elseif which == #owned + 1 then
@@ -70,34 +65,25 @@ end
 -- Lets the player use items, until they go back.
 local function use_items()
     while true do
-        local owned = items.owned(function(item)
-            return item.heal ~= nil
-        end)
+        local owned = items.usable()
         if #owned == 0 then
             dialogue.say("You don't have anything to use.")
             return
         end
-        local choices, counts, notes = {}, {}, {}
-        for i, name in owned do
-            choices[i] = items.kind(name).name
-            counts[i] = `x{items.count(name)}`
-            notes[i] = items.describe(name)
-        end
+        local choices, options = items.menu(owned, items.count_detail)
         table.insert(choices, "Back")
-        local picked = dialogue.ask("Use which item?", choices, { details = counts, notes = notes })
+        local picked = dialogue.ask("Use which item?", choices, options)
         if picked > #owned then
             return
         end
         local name = owned[picked]
-        local item = items.kind(name)
-        local max_hp = items.stats().max_hp
-        if rpg.hp >= max_hp then
+        local healed = items.healing(name, rpg.hp, items.stats().max_hp)
+        if healed == 0 then
             dialogue.say("You're not hurt.")
         else
             items.take(name)
-            local healed = math.min(item.heal :: number, max_hp - rpg.hp)
             rpg.hp += healed
-            dialogue.say(`You used a {item.name} and recovered {healed} HP.`)
+            dialogue.say(`You used a {items.kind(name).name} and recovered {healed} HP.`)
         end
     end
 end
@@ -150,12 +136,11 @@ function bag.draw()
     local line_height = font:line_height()
     local width = NAMES_WIDTH + widest + PADDING * 2
     local height = #lines * line_height + PADDING * 2 - 2
-    graphics.fill_rect(PANEL_X, PANEL_Y, width, height, BORDER)
-    graphics.fill_rect(PANEL_X + 1, PANEL_Y + 1, width - 2, height - 2, PANEL)
+    ui.panel(PANEL_X, PANEL_Y, width, height)
     for i, entry in lines do
         local y = PANEL_Y + PADDING - 1 + (i - 1) * line_height
-        graphics.draw_text(font, entry.name, PANEL_X + PADDING, y, LABEL)
-        local color = if entry.raised then RAISED else TEXT
+        graphics.draw_text(font, entry.name, PANEL_X + PADDING, y, ui.DIM)
+        local color = if entry.raised then RAISED else ui.TEXT
         graphics.draw_text(font, entry.value, PANEL_X + PADDING + NAMES_WIDTH, y, color)
     end
 end

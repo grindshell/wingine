@@ -359,7 +359,7 @@ end
 
 -- Puts a character on the level, as `options` from a map describe it, and sets it wandering if
 -- it has a route.
-local function place(level: Level, options): characters.Character
+local function put_character(level: Level, options): characters.Character
     local character = characters.new({
         name = options.name,
         sprite = world.sprite(options.sprite[1], options.sprite[2]),
@@ -421,9 +421,27 @@ function world.build(data): Level
         level.exits[key(exit.at[1], exit.at[2])] = exit
     end
     for _, options in data.characters or {} do
-        place(level, options)
+        put_character(level, options)
     end
     return level
+end
+
+-- The music playing, if any.
+local playing: string? = nil
+
+-- Plays the level's music, crossfading from whatever was playing over `fade` seconds, unless
+-- it's playing already. A level without music fades to silence.
+function world.play_music(level: Level, fade: number)
+    local music = level.music or nil
+    if music == playing then
+        return
+    end
+    if music then
+        audio.play_music(music, fade)
+    else
+        audio.stop_music(fade)
+    end
+    playing = music
 end
 
 -- Puts the level's foes that haven't been beaten, and aren't here already, on the map.
@@ -436,7 +454,7 @@ function world.add_foes(level: Level)
         if not level.defeated[number] and not here then
             local kind = foes[options.foe]
                 or error(`there's no kind of creature called {options.foe}`)
-            local character = place(level, {
+            local character = put_character(level, {
                 name = kind.title,
                 sprite = kind.sprite,
                 tint = kind.tint,

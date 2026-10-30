@@ -114,6 +114,37 @@ function items.owned(filter: ((Item) -> boolean)?): { string }
     return owned
 end
 
+-- The names of the items the player has that they can use, such as herbs.
+function items.usable(): { string }
+    return items.owned(function(item)
+        return item.heal ~= nil
+    end)
+end
+
+-- Choices for a menu of the items `names`, and options for `dialogue.ask` that show each one's
+-- `detail`, such as its price, and a note on what it does. Callers add their own last choices,
+-- such as "Back".
+function items.menu(names: { string }, detail: (string) -> string)
+    local choices, details, notes = {}, {}, {}
+    for i, name in names do
+        choices[i] = items.kind(name).name
+        details[i] = detail(name)
+        notes[i] = items.describe(name)
+    end
+    return choices, { details = details, notes = notes }
+end
+
+-- A detail for `items.menu`: how many of the item the player has.
+function items.count_detail(name: string): string
+    return `x{items.count(name)}`
+end
+
+-- The hit points using the item `name` would restore to someone with `hp` of `max_hp`: none if
+-- they're unhurt.
+function items.healing(name: string, hp: number, max_hp: number): number
+    return math.max(math.min(items.kind(name).heal or 0, max_hp - hp), 0)
+end
+
 function items.count(name: string): number
     return rpg.items[name] or 0
 end

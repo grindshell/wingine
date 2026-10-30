@@ -688,9 +688,67 @@ fn the_player_can_run_from_creatures_but_not_from_gloamfang() {
     choose(&mut simulation, 3);
     assert_eq!(read(&mut simulation), ["You got away safely!"]);
     assert!(eval::<bool>(&simulation, "rpg.battle.state == nil"));
-    // The bat leaves the player be for a while, though they're side by side.
-    run_for(&mut simulation, 1.0);
-    assert!(eval::<bool>(&simulation, "rpg.battle.state == nil"));
+
+    // Held still beside the player, the bat leaves them be until it calms down, then fights
+    // again.
+    let bat = character("Shade Bat");
+    exec(&simulation, &format!("{bat}.talking = true"));
+    for _ in 0..60 {
+        if !eval::<bool>(&simulation, &format!("{bat}.mover:is_moving()")) {
+            break;
+        }
+        simulation.step();
+    }
+    let [column, row] = character_tile(&simulation, "Shade Bat");
+    place_player(&simulation, [column, row + 1], "up");
+    let calm_left: f32 = eval(&simulation, &format!("{bat}.calm_until - rpg.time"));
+    assert!(calm_left > 0.5, "still calm: {calm_left}");
+    run_for(&mut simulation, calm_left - 0.25);
+    assert_eq!(
+        eval::<i32>(&simulation, "rpg.busy"),
+        0,
+        "no fight while calm"
+    );
+    run_for(&mut simulation, 0.5);
+    assert_eq!(
+        eval::<i32>(&simulation, "rpg.busy"),
+        1,
+        "a fight once calm again"
+    );
+}
+
+#[test]
+fn items_are_kept_when_the_player_is_not_hurt() {
+    let mut simulation = simulation();
+    hunt(&mut simulation);
+    meet(&mut simulation, "Shade Bat");
+    choose(&mut simulation, 2);
+    choose(&mut simulation, 1);
+    assert_eq!(read(&mut simulation), ["You're not hurt."]);
+    assert_eq!(count(&simulation, "herb"), 3);
+    assert_eq!(
+        menu(&simulation),
+        "What will you do?",
+        "the turn isn't used up"
+    );
+    assert_eq!(battle_hp(&simulation), (36, 14));
+}
+
+#[test]
+fn a_creature_that_comes_up_beside_the_player_faces_them() {
+    let mut simulation = simulation();
+    hunt(&mut simulation);
+    // To Gloamfang's right, looking up the hill rather than at it.
+    place_player(&simulation, [13, 6], "up");
+    simulation.step();
+    let facing = |name: &str| -> String {
+        eval(&simulation, &format!("{}.mover:facing()", character(name)))
+    };
+    assert_eq!(facing("Gloamfang"), "right");
+    assert_eq!(
+        eval::<String>(&simulation, "rpg.player.mover:facing()"),
+        "left"
+    );
 }
 
 /// Picks the choice labeled `label` from the menu that's open.

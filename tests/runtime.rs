@@ -486,7 +486,9 @@ fn grid_movers_walk_from_tile_to_tile() {
             facing = mover:facing()
             neighbor = { grid.neighbor('left', 0, 0) }
             opposite = grid.opposite('up')
-            zero_step_time_fails = not pcall(function() grid.new_mover(0, 0, 0) end)",
+            zero_step_time_fails = not pcall(function() grid.new_mover(0, 0, 0) end)
+            bad_frame_times_fail = not pcall(function() mover:update(0 / 0) end)
+                and not pcall(function() mover:update(-0.1) end)",
         )],
     );
     let simulation = simulation(&folder);
@@ -506,6 +508,63 @@ fn grid_movers_walk_from_tile_to_tile() {
     );
     assert_eq!(eval::<String>(&simulation, "opposite"), "down");
     assert!(eval::<bool>(&simulation, "zero_step_time_fails"));
+    assert!(eval::<bool>(&simulation, "bad_frame_times_fail"));
+}
+
+#[test]
+fn tilemaps_too_big_to_hold_are_errors() {
+    let folder = game(
+        "huge_tilemaps",
+        &[(
+            "main.luau",
+            "local tileset = tilemap.new_tileset(1, 1)
+            local ok, err = pcall(function() tilemap.new(tileset, 100000, 100000) end)
+            too_big = tostring(err)
+            -- One layer of this fits, but not two.
+            local map = tilemap.new(tileset, 4096, 2049)
+            map:add_layer()
+            ok, err = pcall(function() map:add_layer() end)
+            second_layer = tostring(err)
+            layers = map:layer_count()",
+        )],
+    );
+    let simulation = simulation(&folder);
+    let too_big: String = eval(&simulation, "too_big");
+    assert!(too_big.contains("more than the 16777216"), "{too_big}");
+    let second_layer: String = eval(&simulation, "second_layer");
+    assert!(second_layer.contains("with 2 layers"), "{second_layer}");
+    assert_eq!(eval::<usize>(&simulation, "layers"), 1);
+}
+
+#[test]
+fn each_image_is_loaded_once() {
+    let folder = game(
+        "cached_images",
+        &[(
+            "main.luau",
+            "graphics.load_sprite_sheet('sheet.png', 1, 1)
+            function update()
+                if reload then
+                    reload = false
+                    -- The same image, divided differently.
+                    again = graphics.load_sprite_sheet('sheet.png', 2, 1)
+                end
+            end",
+        )],
+    );
+    let sheet = folder.join("sheet.png");
+    write_png(&sheet, 2, 1, &[RED, BLUE]);
+    let mut simulation = simulation(&folder);
+    // Gone from disk, it loads all the same.
+    fs::remove_file(&sheet).unwrap();
+    simulation
+        .game()
+        .scripts()
+        .load_source("test", "reload = true")
+        .unwrap();
+    simulation.step();
+    assert!(simulation.game().error().is_none());
+    assert_eq!(eval::<(u32, u32)>(&simulation, "again:size()"), (1, 1));
 }
 
 #[test]
