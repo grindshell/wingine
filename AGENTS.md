@@ -94,9 +94,10 @@ of scope until the milestone is done.
   (unrelated to Luau scripts), built on `Simulation`.
 - `src/math.rs`: geometry types such as `Rect`.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
-  `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
-  `Simulation`, and its events and NPC are scripted in `sprites.luau`. Its sounds and music in
-  `examples/sounds/` were synthesized for it.
+  `sprites` and `pong` have tests (enabled with `test = true` in `Cargo.toml`) that drive them
+  with `Simulation`. `sprites`' events and NPC are scripted in `sprites.luau`, and `pong`'s
+  computer opponent in `pong.luau`. The sounds and music in `examples/sounds/` were synthesized
+  for `sprites`, and `pong` reuses them.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 
@@ -147,6 +148,7 @@ cargo clippy --all-targets
 cargo fmt
 cargo run --example shapes
 cargo run --example sprites
+cargo run --example pong
 ```
 
 Run `cargo fmt` and `cargo clippy --all-targets` before considering a change finished, and keep

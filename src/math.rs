@@ -19,4 +19,27 @@ impl Rect {
     pub const fn bottom(&self) -> f32 {
         self.y + self.h
     }
+
+    /// Whether the two rectangles share any area. Rectangles that only touch along an edge don't
+    /// overlap.
+    pub const fn overlaps(&self, other: &Rect) -> bool {
+        self.x < other.right()
+            && other.x < self.right()
+            && self.y < other.bottom()
+            && other.y < self.bottom()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overlapping_needs_shared_area() {
+        let rect = Rect::new(0.0, 0.0, 4.0, 4.0);
+        assert!(rect.overlaps(&Rect::new(3.0, 3.0, 4.0, 4.0)));
+        assert!(rect.overlaps(&Rect::new(1.0, 1.0, 1.0, 1.0)), "inside");
+        assert!(!rect.overlaps(&Rect::new(4.0, 0.0, 4.0, 4.0)), "touching");
+        assert!(!rect.overlaps(&Rect::new(0.0, 5.0, 4.0, 4.0)));
+    }
 }

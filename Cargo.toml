@@ -19,7 +19,11 @@ winit = "0.30"
 [dev-dependencies]
 env_logger = "0.11.11"
 
-# Run the example's tests, which drive it headlessly, with `cargo test`.
+# Run the examples' tests, which drive them headlessly, with `cargo test`.
 [[example]]
 name = "sprites"
+test = true
+
+[[example]]
+name = "pong"
 test = true
