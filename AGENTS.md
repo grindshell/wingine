@@ -4,10 +4,10 @@ Wingine is a desktop game engine written in Rust, built as a library crate (`win
 primarily a **2D** engine. 3D is possible but not a focus — don't let 3D concerns drive the design
 of 2D systems, and don't build 3D features unless asked.
 
-## Current milestone
+## Milestones
 
-**Ship a tile-based, top-down RPG.** Prioritize work that moves the engine toward this goal. The
-milestone implies, roughly:
+**Done: ship a tile-based, top-down RPG.** The RPG in `examples/rpg` is that game. The milestone
+covered:
 
 - Tilemap rendering (multiple layers, tilesets) and batched sprite rendering
 - Sprite animation
@@ -19,8 +19,8 @@ milestone implies, roughly:
 - Lua-driven gameplay: NPC behavior, dialogue, events/triggers
 - Music and sound effects
 
-General-purpose features beyond this (physics engines, networking, editors, 3D pipelines) are out
-of scope until the milestone is done.
+No next milestone has been set. Until one is, ask before starting general-purpose features such
+as physics engines, networking, editors or 3D pipelines.
 
 ## Tech stack
 
@@ -121,6 +121,9 @@ of scope until the milestone is done.
   they use, and `rpg` a copy of the tileset. `rpg/strides.png` is another copy with its people
   and creatures mid-stride (raised a pixel on stretched legs), the frame characters show for the
   first half of each step.
+- `README.md`: the project's overview, with a screenshot of each example in `docs/screenshots/`.
+  They were taken headlessly at 640x360 (768x432 for `sprites`, so its 256x144 canvas scales
+  without bars); retake them when an example changes how it looks.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders.
