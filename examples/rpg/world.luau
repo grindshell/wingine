@@ -371,7 +371,8 @@ local function put_character(level: Level, options): characters.Character
         route = options.route,
     })
     table.insert(level.characters, character)
-    if character.route then
+    -- An empty route would loop forever without waiting.
+    if character.route and #character.route > 0 then
         spawn(world.wander, level, character)
     end
     return character

@@ -134,10 +134,6 @@ pub(super) fn module(lua: &Lua, folder: &Path, default_font: Font) -> mlua::Resu
         "load_sprite_sheet",
         lua.create_function(
             move |lua, (path, tile_width, tile_height): (String, u32, u32)| {
-                if tile_width == 0 || tile_height == 0 {
-                    let message = "sprite sheet tiles must be at least 1x1";
-                    return Err(mlua::Error::runtime(message));
-                }
                 let path = root.join(path);
                 // Through the context even when cached, so this works at the same times either
                 // way.
@@ -150,7 +146,7 @@ pub(super) fn module(lua: &Lua, folder: &Path, default_font: Font) -> mlua::Resu
                     Ok(texture)
                 })?
                 .map_err(mlua::Error::external)?;
-                Ok(SpriteSheet::new(texture, tile_width, tile_height))
+                SpriteSheet::try_new(texture, tile_width, tile_height).map_err(mlua::Error::runtime)
             },
         )?,
     )?;

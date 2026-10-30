@@ -63,12 +63,13 @@ pub struct Sound {
     data: StaticSoundData,
 }
 
-/// How [`Audio::play_with`] plays a sound.
+/// How [`Audio::play_with`] plays a sound. Every setting must be a finite number.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlaySettings {
     /// Linear volume: 1 is as recorded.
     pub volume: f32,
     /// Playback speed, which changes the pitch with it: 2 is twice as fast and an octave up.
+    /// Above 0.
     pub speed: f32,
     /// Stereo position, from -1 (left) through 0 (center) to 1 (right).
     pub pan: f32,
@@ -80,6 +81,20 @@ impl Default for PlaySettings {
             volume: 1.0,
             speed: 1.0,
             pan: 0.0,
+        }
+    }
+}
+
+impl PlaySettings {
+    /// What's wrong with these settings, if anything.
+    pub(crate) fn problem(&self) -> Option<String> {
+        let Self { volume, speed, pan } = *self;
+        if !(volume.is_finite() && pan.is_finite()) {
+            Some(format!("volume {volume} and pan {pan} must be numbers"))
+        } else if !(speed.is_finite() && speed > 0.0) {
+            Some(format!("speed must be a number above 0, not {speed}"))
+        } else {
+            None
         }
     }
 }
@@ -134,6 +149,11 @@ impl Audio {
 
     /// Plays `sound` once, with its volume, speed or panning changed.
     pub fn play_with(&mut self, sound: &Sound, settings: PlaySettings) {
+        // A sound at speed 0 would never end, and other values could fill the mix with NaNs.
+        if let Some(problem) = settings.problem() {
+            log::warn!("couldn't play a sound: {problem}");
+            return;
+        }
         let data = sound
             .data
             .volume(decibels(settings.volume))
@@ -289,9 +309,11 @@ fn decibels(volume: f32) -> Decibels {
     }
 }
 
+/// A tween lasting `seconds`: none for a negative number or NaN, and the longest there is for
+/// one too long for a `Duration`, such as infinity.
 fn tween(seconds: f32) -> Tween {
     Tween {
-        duration: Duration::from_secs_f32(seconds.max(0.0)),
+        duration: Duration::try_from_secs_f32(seconds.max(0.0)).unwrap_or(Duration::MAX),
         ..Default::default()
     }
 }
@@ -368,6 +390,22 @@ mod tests {
         assert!(audio.music_playing());
         audio.stop_music(0.2);
         assert!(!audio.music_playing());
+    }
+
+    #[test]
+    fn endless_fades_and_invalid_settings_do_not_panic() {
+        let mut audio = Audio::silent();
+        let music = format!("{SOUNDS}music.ogg");
+        audio.play_music(&music, f32::INFINITY).unwrap();
+        audio.stop_music(1e30);
+        audio.stop_sounds(f32::INFINITY);
+        let speed = PlaySettings {
+            speed: 0.0,
+            ..Default::default()
+        };
+        audio.play_with(&sound("chime.wav"), speed);
+        audio.advance(FRAME);
+        assert_eq!(audio.sounds_playing(), 0, "a sound that would never end");
     }
 
     /// Plays music through the sound device at zero volume, and checks the device renders it.

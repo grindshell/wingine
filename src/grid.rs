@@ -70,14 +70,18 @@ impl GridMover {
     ///
     /// If `step_time` isn't a positive number of seconds.
     pub fn new(tile: [i32; 2], step_time: f32) -> Self {
-        assert_step_time(step_time);
-        Self {
+        Self::try_new(tile, step_time).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// [`GridMover::new`], or what's wrong with `step_time`.
+    pub(crate) fn try_new(tile: [i32; 2], step_time: f32) -> Result<Self, String> {
+        Ok(Self {
             tile,
             step: None,
             facing: Direction::Down,
-            step_time,
+            step_time: check_step_time(step_time)?,
             overshoot: 0.0,
-        }
+        })
     }
 
     /// The tile it stands on, or while stepping, the tile it's stepping onto. That tile counts as
@@ -126,8 +130,14 @@ impl GridMover {
     ///
     /// If `seconds` isn't a positive number of seconds.
     pub fn set_step_time(&mut self, seconds: f32) {
-        assert_step_time(seconds);
-        self.step_time = seconds;
+        self.try_set_step_time(seconds)
+            .unwrap_or_else(|err| panic!("{err}"));
+    }
+
+    /// [`GridMover::set_step_time`], or what's wrong with `seconds`.
+    pub(crate) fn try_set_step_time(&mut self, seconds: f32) -> Result<(), String> {
+        self.step_time = check_step_time(seconds)?;
+        Ok(())
     }
 
     /// Moves straight to `tile`, ending any step under way, as when entering another map.
@@ -174,11 +184,14 @@ impl GridMover {
     }
 }
 
-fn assert_step_time(seconds: f32) {
-    assert!(
-        seconds.is_finite() && seconds > 0.0,
-        "step time must be a positive number of seconds, not {seconds}"
-    );
+/// `seconds`, if it's a step time a [`GridMover`] accepts.
+fn check_step_time(seconds: f32) -> Result<f32, String> {
+    if !(seconds.is_finite() && seconds > 0.0) {
+        return Err(format!(
+            "step time must be a positive number of seconds, not {seconds}"
+        ));
+    }
+    Ok(seconds)
 }
 
 #[cfg(test)]

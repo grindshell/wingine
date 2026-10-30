@@ -173,6 +173,16 @@ function story.events.well()
     end
 end
 
+-- The sign outside Hazel's shop, which is shut until the hunt.
+function story.events.shop_sign()
+    local sign = "“Mossbrook Goods: tools, rope and remedies.”"
+    if story.reached("hunt") then
+        narrate(`{sign} The door is propped open.`)
+    else
+        narrate(`{sign} It's shut today.`)
+    end
+end
+
 function story.events.seal_stone()
     if story.reached("cleared") then
         narrate("The halves of the seal stone have drawn back together. A hairline crack remains.")

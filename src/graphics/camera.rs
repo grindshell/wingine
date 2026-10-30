@@ -64,7 +64,10 @@ fn clamp_axis(center: f32, start: f32, length: f32, half_view: f32) -> f32 {
     if length <= half_view * 2.0 {
         start + length / 2.0
     } else {
-        center.clamp(start + half_view, start + length - half_view)
+        // Not `clamp`, which panics if a bound is NaN.
+        center
+            .max(start + half_view)
+            .min(start + length - half_view)
     }
 }
 
@@ -166,6 +169,15 @@ mod tests {
         let area = camera.visible_area(30.0, 20.0);
         assert_eq!((area.x, area.w), (-10.0, 30.0));
         assert_eq!((area.y, area.h), (40.0, 20.0));
+    }
+
+    #[test]
+    fn nan_bounds_do_not_panic() {
+        let camera = Camera {
+            bounds: Some(Rect::new(0.0, 0.0, f32::NAN, 100.0)),
+            ..Camera::new(50.0, 50.0)
+        };
+        assert_eq!(camera.visible_area(20.0, 20.0).y, 40.0);
     }
 
     #[test]

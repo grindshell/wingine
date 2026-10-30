@@ -1,4 +1,4 @@
-use crate::Result;
+use crate::{Error, Result};
 
 /// The wgpu instance and device that everything renders with. Clones share the same device.
 #[derive(Clone)]
@@ -20,11 +20,13 @@ impl Gpu {
     ) -> Result<Self> {
         let adapter =
             wgpu::util::initialize_adapter_from_env_or_default(&instance, compatible_surface)
-                .await?;
+                .await
+                .map_err(|err| Error::RequestAdapter(err.into()))?;
         log::info!("using GPU adapter: {:?}", adapter.get_info());
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
-            .await?;
+            .await
+            .map_err(|err| Error::RequestDevice(err.into()))?;
         Ok(Self {
             instance,
             adapter,

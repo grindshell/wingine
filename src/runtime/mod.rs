@@ -3,8 +3,8 @@
 //! A game is a folder with a `main.luau` script, run with the `wingine` executable
 //! (`cargo run -- path/to/game`) or [`run`]. The script's top level runs once, when the window is
 //! ready, to set the game up. Then each frame the engine calls the script's global function
-//! `update(dt)`, with the seconds since the last frame, resumes the tasks started with `spawn`,
-//! and calls `draw()`. Both functions are optional. The built-ins `wait`, `wait_until`, `spawn`
+//! `update(dt)`, with the seconds since the last frame, resumes the tasks started with `spawn`
+//! (those `update` starts, from the next frame), and calls `draw()`. Both functions are optional. The built-ins `wait`, `wait_until`, `spawn`
 //! and `print` work as described in the [`lua`](crate::lua) module, which also lists how engine
 //! types such as colors and keys are written in Luau.
 //!
@@ -47,8 +47,7 @@
 //!   is drawn next, keeping it inside `bounds`, a rect such as `map:bounds()`, if given.
 //!   `graphics.set_camera(nil)`, the default at the start of each frame, draws in canvas pixels,
 //!   as for a HUD.
-//! - `graphics.size()` returns the canvas's width and height. In a window, they're zero until
-//!   the first frame.
+//! - `graphics.size()` returns the canvas's width and height.
 //! - `graphics.default_font()` returns the built-in pixel font.
 //! - `graphics.load_sprite_sheet(path, tile_width, tile_height)` loads a PNG divided into a grid
 //!   of sprites `tile_width` by `tile_height` texels, starting at its top-left corner. Each image
@@ -260,9 +259,12 @@ impl Game for LuauGame {
             return;
         }
         let lua = self.scripts.lua().clone();
+        // Tasks started before this frame, such as while the game loaded, resume in it. Those
+        // `update` starts have run until they first waited, and resume from the next frame.
+        self.scripts.adopt_spawned();
         let result = lend(&lua, CONTEXT, ctx, || {
             self.callback("update", dt)?;
-            if let Err(err) = self.scripts.update(dt) {
+            if let Err(err) = self.scripts.resume_tasks(dt) {
                 log::error!("{err}");
             }
             Ok(())

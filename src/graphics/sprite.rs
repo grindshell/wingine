@@ -91,17 +91,25 @@ impl SpriteSheet {
     ///
     /// If either tile dimension is zero.
     pub fn new(texture: Texture, tile_width: u32, tile_height: u32) -> Self {
-        assert!(
-            tile_width > 0 && tile_height > 0,
-            "sprite sheet tiles must be at least 1x1"
-        );
-        Self {
+        Self::try_new(texture, tile_width, tile_height).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// [`SpriteSheet::new`], or what's wrong with the tile size.
+    pub(crate) fn try_new(
+        texture: Texture,
+        tile_width: u32,
+        tile_height: u32,
+    ) -> Result<Self, String> {
+        if tile_width == 0 || tile_height == 0 {
+            return Err("sprite sheet tiles must be at least 1x1".into());
+        }
+        Ok(Self {
             columns: texture.width() / tile_width,
             rows: texture.height() / tile_height,
             texture,
             tile_width,
             tile_height,
-        }
+        })
     }
 
     pub fn texture(&self) -> &Texture {
@@ -131,19 +139,25 @@ impl SpriteSheet {
     ///
     /// If the position is outside the sheet.
     pub fn sprite(&self, column: u32, row: u32) -> Sprite {
-        assert!(
-            column < self.columns && row < self.rows,
-            "sprite ({column}, {row}) is outside a {}x{} sprite sheet",
-            self.columns,
-            self.rows
-        );
+        self.try_sprite(column, row)
+            .unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// [`SpriteSheet::sprite`], or why there's no sprite there.
+    pub(crate) fn try_sprite(&self, column: u32, row: u32) -> Result<Sprite, String> {
+        if column >= self.columns || row >= self.rows {
+            return Err(format!(
+                "sprite ({column}, {row}) is outside a {}x{} sprite sheet",
+                self.columns, self.rows
+            ));
+        }
         let region = Rect::new(
             (column * self.tile_width) as f32,
             (row * self.tile_height) as f32,
             self.tile_width as f32,
             self.tile_height as f32,
         );
-        Sprite::new(self.texture.clone(), region)
+        Ok(Sprite::new(self.texture.clone(), region))
     }
 
     /// The sprite at `index`, counting left to right, then top to bottom.

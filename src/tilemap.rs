@@ -53,15 +53,19 @@ impl Tileset {
     ///
     /// If either dimension is zero.
     pub fn new(tile_width: u32, tile_height: u32) -> Self {
-        assert!(
-            tile_width > 0 && tile_height > 0,
-            "tiles must be at least 1x1"
-        );
-        Self {
+        Self::try_new(tile_width, tile_height).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// [`Tileset::new`], or what's wrong with the tile size.
+    pub(crate) fn try_new(tile_width: u32, tile_height: u32) -> Result<Self, String> {
+        if tile_width == 0 || tile_height == 0 {
+            return Err("tiles must be at least 1x1".into());
+        }
+        Ok(Self {
             tile_width,
             tile_height,
             tiles: Vec::new(),
-        }
+        })
     }
 
     /// Adds a kind of tile and returns its ID, for placing it with [`Tilemap::set`].

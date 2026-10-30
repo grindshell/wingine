@@ -13,7 +13,11 @@ use crate::{
     Context, Error, Result,
     audio::Audio,
     graphics::{
-        Canvas, Resolution, gpu::Gpu, renderer::Renderer, screen::Screen, surface::WindowSurface,
+        Canvas, Resolution,
+        gpu::Gpu,
+        renderer::Renderer,
+        screen::Screen,
+        surface::{Acquired, WindowSurface},
     },
     input::{Key, MouseButton},
 };
@@ -73,7 +77,7 @@ where
         return crate::script::run(&config, init, std::path::Path::new(&script));
     }
 
-    let event_loop = EventLoop::new()?;
+    let event_loop = EventLoop::new().map_err(|err| Error::EventLoop(err.into()))?;
     // Frames are driven by requesting a redraw after each one, paced by vsync. Waiting (rather
     // than polling) lets the loop sleep when no frame is wanted, e.g. while minimized.
     event_loop.set_control_flow(ControlFlow::Wait);
@@ -84,8 +88,29 @@ where
         state: None,
         error: None,
     };
-    event_loop.run_app(&mut app)?;
+    event_loop
+        .run_app(&mut app)
+        .map_err(|err| Error::EventLoop(err.into()))?;
     app.error.map_or(Ok(()), Err)
+}
+
+/// Runs one frame of `game`, as both the window and a [`Simulation`] do: updates it by `dt` with
+/// a canvas `canvas_size` canvas pixels in size, then has it draw on `canvas`.
+///
+/// [`Simulation`]: crate::headless::Simulation
+pub(crate) fn run_frame(
+    game: &mut impl Game,
+    ctx: &mut Context,
+    canvas: &mut Canvas,
+    canvas_size: [f32; 2],
+    dt: f32,
+) {
+    ctx.canvas_size = canvas_size;
+    game.update(ctx, dt);
+    ctx.input.end_frame();
+    ctx.audio.advance(dt);
+    canvas.begin(canvas_size[0], canvas_size[1]);
+    game.draw(canvas);
 }
 
 struct App<G, F> {
@@ -152,6 +177,8 @@ where
             }
             // Releases aren't delivered while unfocused, so treat every key and button as released.
             WindowEvent::Focused(false) => state.ctx.input.release_all(),
+            // Frames stop while the window is hidden, so they start again here.
+            WindowEvent::Occluded(false) => state.window.request_redraw(),
             WindowEvent::RedrawRequested => state.frame(),
             _ => {}
         }
@@ -180,24 +207,33 @@ impl<G: Game> State<G> {
             .with_title(&config.title)
             .with_inner_size(LogicalSize::new(config.width, config.height))
             .with_resizable(config.resizable);
-        let window = Arc::new(event_loop.create_window(attributes)?);
+        let window = event_loop
+            .create_window(attributes)
+            .map_err(|err| Error::CreateWindow(err.into()))?;
+        let window = Arc::new(window);
         let instance = wgpu::Instance::new(
             wgpu::InstanceDescriptor::new_with_display_handle(Box::new(
                 event_loop.owned_display_handle(),
             ))
             .with_env(),
         );
-        let surface = instance.create_surface(window.clone())?;
+        let surface = instance
+            .create_surface(window.clone())
+            .map_err(|err| Error::CreateSurface(err.into()))?;
         let gpu = pollster::block_on(Gpu::new(instance, Some(&surface)))?;
         let surface = WindowSurface::new(&gpu, window.clone(), surface);
         let renderer = Renderer::new(&gpu.device, &gpu.queue, surface.view_format());
         let mut ctx = Context::new(gpu, renderer, Audio::new());
+        // The game is built knowing the canvas size, as it is in a `Simulation`.
+        let screen = Screen::new(config.resolution);
+        let size = window.inner_size();
+        ctx.canvas_size = screen.canvas_size([size.width, size.height], window.scale_factor());
         let game = init(&mut ctx)?;
 
         Ok(Self {
             window,
             surface,
-            screen: Screen::new(config.resolution),
+            screen,
             ctx,
             canvas: Canvas::new(),
             game,
@@ -236,35 +272,41 @@ impl<G: Game> State<G> {
             .cursor
             .map(|cursor| self.screen.to_canvas(cursor, output, scale_factor));
         self.ctx.input.set_mouse_position(mouse_position);
-        let [width, height] = self.screen.canvas_size(output, scale_factor);
-        self.ctx.canvas_size = [width, height];
+        let canvas_size = self.screen.canvas_size(output, scale_factor);
 
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(MAX_FRAME_TIME);
         self.last_frame = now;
-        self.game.update(&mut self.ctx, dt);
-        self.ctx.input.end_frame();
-        self.ctx.audio.advance(dt);
-
-        self.canvas.begin(width, height);
-        self.game.draw(&mut self.canvas);
+        run_frame(
+            &mut self.game,
+            &mut self.ctx,
+            &mut self.canvas,
+            canvas_size,
+            dt,
+        );
 
         let Context { gpu, renderer, .. } = &mut self.ctx;
-        if let Some(frame) = self.surface.acquire_frame(gpu) {
-            let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(self.surface.view_format()),
-                ..Default::default()
-            });
-            let output_size = [frame.texture.width(), frame.texture.height()];
-            self.screen.render(
-                &gpu.device,
-                &gpu.queue,
-                renderer,
-                &self.canvas,
-                &view,
-                output_size,
-            );
-            self.surface.present(gpu, frame);
+        match self.surface.acquire_frame(gpu) {
+            Acquired::Frame(frame) => {
+                let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(self.surface.view_format()),
+                    ..Default::default()
+                });
+                let output_size = [frame.texture.width(), frame.texture.height()];
+                self.screen.render(
+                    &gpu.device,
+                    &gpu.queue,
+                    renderer,
+                    &self.canvas,
+                    &view,
+                    output_size,
+                );
+                self.surface.present(gpu, frame);
+            }
+            Acquired::Skip => {}
+            // Hidden windows aren't paced by vsync, so asking for the next frame at once would
+            // spin. `WindowEvent::Occluded(false)` asks for it instead.
+            Acquired::Occluded => return,
         }
         self.window.request_redraw();
     }

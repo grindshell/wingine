@@ -2,17 +2,14 @@
 
 use mlua::{Lua, Table};
 
-use crate::{
-    grid::{Direction, GridMover},
-    lua::step_time,
-};
+use crate::grid::{Direction, GridMover};
 
 pub(super) fn module(lua: &Lua) -> mlua::Result<Table> {
     let grid = lua.create_table()?;
     grid.set(
         "new_mover",
         lua.create_function(|_, (column, row, seconds): (i32, i32, f32)| {
-            Ok(GridMover::new([column, row], step_time(seconds)?))
+            GridMover::try_new([column, row], seconds).map_err(mlua::Error::runtime)
         })?,
     )?;
     grid.set(

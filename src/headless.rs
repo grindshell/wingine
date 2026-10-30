@@ -9,6 +9,7 @@ use std::{
 
 use crate::{
     Context, Error, Game, Result, WindowConfig,
+    app::run_frame,
     audio::Audio,
     graphics::{Canvas, Resolution, gpu::Gpu, renderer::Renderer, screen::Screen},
     input::{Key, MouseButton},
@@ -141,6 +142,11 @@ pub struct Simulation<G> {
 impl<G> Simulation<G> {
     /// Seconds of game time each frame advances: 60 frames per second.
     pub const FRAME_TIME: f32 = 1.0 / 60.0;
+
+    /// How many frames `seconds` of game time takes, to the nearest whole frame.
+    pub(crate) fn frames_in(seconds: f32) -> u32 {
+        (seconds / Self::FRAME_TIME).round() as u32
+    }
 }
 
 impl<G: Game> Simulation<G> {
@@ -194,11 +200,14 @@ impl<G: Game> Simulation<G> {
             output,
             ..
         } = self;
-        headless.ctx.canvas_size = headless.screen.canvas_size(*output, 1.0);
-        game.update(&mut headless.ctx, Self::FRAME_TIME);
-        headless.ctx.input.end_frame();
-        headless.ctx.audio.advance(Self::FRAME_TIME);
-        headless.draw(*output, |canvas| game.draw(canvas));
+        let canvas_size = headless.screen.canvas_size(*output, 1.0);
+        run_frame(
+            game,
+            &mut headless.ctx,
+            &mut headless.canvas,
+            canvas_size,
+            Self::FRAME_TIME,
+        );
         self.drawn = true;
         self.frames += 1;
     }
@@ -211,7 +220,7 @@ impl<G: Game> Simulation<G> {
 
     /// Runs `seconds` of game time, rounded to whole frames.
     pub fn run_for(&mut self, seconds: f32) {
-        self.run_frames((seconds / Self::FRAME_TIME).round() as u32);
+        self.run_frames(Self::frames_in(seconds));
     }
 
     pub fn key_down(&mut self, key: Key) {
@@ -229,10 +238,15 @@ impl<G: Game> Simulation<G> {
         self.key_up(key);
     }
 
-    /// Holds `key` down for `seconds` of game time.
+    /// Holds `key` down for `seconds` of game time, rounded to whole frames.
     pub fn hold(&mut self, key: Key, seconds: f32) {
+        self.hold_frames(key, Self::frames_in(seconds));
+    }
+
+    /// Holds `key` down for `frames` frames.
+    pub fn hold_frames(&mut self, key: Key, frames: u32) {
         self.key_down(key);
-        self.run_for(seconds);
+        self.run_frames(frames);
         self.key_up(key);
     }
 
@@ -253,6 +267,12 @@ impl<G: Game> Simulation<G> {
     /// releases it.
     pub fn click(&mut self, button: MouseButton, x: f32, y: f32) {
         self.move_mouse(x, y);
+        self.tap_mouse(button);
+    }
+
+    /// Presses `button` where the cursor is, runs one frame, and releases it, as
+    /// [`Simulation::tap`] does with a key.
+    pub fn tap_mouse(&mut self, button: MouseButton) {
         self.mouse_down(button);
         self.step();
         self.mouse_up(button);

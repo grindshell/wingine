@@ -29,8 +29,9 @@
 //! [`WindowConfig`]: crate::WindowConfig
 
 use std::{
-    fs,
+    fmt, fs,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use crate::{
@@ -82,11 +83,7 @@ pub fn run<G: Game>(
             Command::Press(key) => simulation.key_down(key),
             Command::Release(key) => simulation.key_up(key),
             Command::Tap(key) => simulation.tap(key),
-            Command::Hold(key, frames) => {
-                simulation.key_down(key);
-                simulation.run_frames(frames);
-                simulation.key_up(key);
-            }
+            Command::Hold(key, frames) => simulation.hold_frames(key, frames),
             Command::Mouse([x, y]) => simulation.move_mouse(x, y),
             Command::MouseDown(button) => simulation.mouse_down(button),
             Command::MouseUp(button) => simulation.mouse_up(button),
@@ -94,9 +91,7 @@ pub fn run<G: Game>(
                 if let Some([x, y]) = position {
                     simulation.move_mouse(x, y);
                 }
-                simulation.mouse_down(button);
-                simulation.step();
-                simulation.mouse_up(button);
+                simulation.tap_mouse(button);
             }
             Command::Resize(width, height) => simulation.resize(width, height),
             Command::Screenshot(file) => {
@@ -138,27 +133,19 @@ fn parse(source: &str) -> Result<Vec<Command>, String> {
 fn parse_command(name: &str, args: &[&str]) -> Result<Command, String> {
     let command = match (name, args) {
         ("wait", [duration]) => Command::Wait(frames(duration)?),
-        ("press", [key]) => Command::Press(key.parse().map_err(|err| format!("{err}"))?),
-        ("release", [key]) => Command::Release(key.parse().map_err(|err| format!("{err}"))?),
-        ("tap", [key]) => Command::Tap(key.parse().map_err(|err| format!("{err}"))?),
-        ("hold", [key, duration]) => Command::Hold(
-            key.parse().map_err(|err| format!("{err}"))?,
-            frames(duration)?,
-        ),
+        ("press", [key]) => Command::Press(by_name(key)?),
+        ("release", [key]) => Command::Release(by_name(key)?),
+        ("tap", [key]) => Command::Tap(by_name(key)?),
+        ("hold", [key, duration]) => Command::Hold(by_name(key)?, frames(duration)?),
         ("mouse", [x, y]) => Command::Mouse([number(x)?, number(y)?]),
-        ("mouse-down", [button]) => {
-            Command::MouseDown(button.parse().map_err(|err| format!("{err}"))?)
-        }
-        ("mouse-up", [button]) => Command::MouseUp(button.parse().map_err(|err| format!("{err}"))?),
+        ("mouse-down", [button]) => Command::MouseDown(by_name(button)?),
+        ("mouse-up", [button]) => Command::MouseUp(by_name(button)?),
         ("click", []) => Command::Click(MouseButton::Left, None),
-        ("click", [button]) => {
-            Command::Click(button.parse().map_err(|err| format!("{err}"))?, None)
-        }
+        ("click", [button]) => Command::Click(by_name(button)?, None),
         ("click", [x, y]) => Command::Click(MouseButton::Left, Some([number(x)?, number(y)?])),
-        ("click", [button, x, y]) => Command::Click(
-            button.parse().map_err(|err| format!("{err}"))?,
-            Some([number(x)?, number(y)?]),
-        ),
+        ("click", [button, x, y]) => {
+            Command::Click(by_name(button)?, Some([number(x)?, number(y)?]))
+        }
         ("resize", [width, height]) => Command::Resize(size(width)?, size(height)?),
         ("screenshot", [file]) => Command::Screenshot(PathBuf::from(file)),
         (
@@ -181,10 +168,19 @@ fn frames(duration: &str) -> Result<u32, String> {
             if !seconds.is_finite() || seconds < 0.0 {
                 return Err(invalid());
             }
-            Ok((seconds / Simulation::<()>::FRAME_TIME).round() as u32)
+            Ok(Simulation::<()>::frames_in(seconds))
         }
         None => duration.parse().map_err(|_| invalid()),
     }
+}
+
+/// Parses the name of a key or mouse button.
+fn by_name<T>(text: &str) -> Result<T, String>
+where
+    T: FromStr,
+    T::Err: fmt::Display,
+{
+    text.parse().map_err(|err: T::Err| err.to_string())
 }
 
 fn number(text: &str) -> Result<f32, String> {

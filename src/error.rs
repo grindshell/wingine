@@ -4,18 +4,20 @@ use thiserror::Error;
 
 /// Errors from starting the engine, loading or saving files, audio, headless rendering, Luau
 /// scripts, or scripted runs.
+///
+/// Errors from winit and wgpu are boxed, so their types stay out of the engine's API.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("event loop error: {0}")]
-    EventLoop(#[from] winit::error::EventLoopError),
+    EventLoop(#[source] BoxedError),
     #[error("failed to create window: {0}")]
-    CreateWindow(#[from] winit::error::OsError),
+    CreateWindow(#[source] BoxedError),
     #[error("failed to create rendering surface: {0}")]
-    CreateSurface(#[from] wgpu::CreateSurfaceError),
+    CreateSurface(#[source] BoxedError),
     #[error("no suitable GPU adapter: {0}")]
-    RequestAdapter(#[from] wgpu::RequestAdapterError),
+    RequestAdapter(#[source] BoxedError),
     #[error("failed to open GPU device: {0}")]
-    RequestDevice(#[from] wgpu::RequestDeviceError),
+    RequestDevice(#[source] BoxedError),
     #[error("failed to load image {}: {source}", .path.display())]
     LoadImage {
         path: PathBuf,
@@ -39,7 +41,7 @@ pub enum Error {
         source: std::io::Error,
     },
     #[error("failed to read a rendered frame back from the GPU: {0}")]
-    ReadFrame(#[source] Box<dyn std::error::Error + Send + Sync>),
+    ReadFrame(#[source] BoxedError),
     /// A Luau script failed to compile or raised an error.
     #[error("Luau: {0}")]
     Lua(#[from] mlua::Error),
@@ -48,3 +50,6 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// An error from a library whose types the engine doesn't expose.
+pub type BoxedError = Box<dyn std::error::Error + Send + Sync>;

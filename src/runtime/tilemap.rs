@@ -12,10 +12,7 @@ pub(super) fn module(lua: &Lua) -> mlua::Result<Table> {
     tilemap.set(
         "new_tileset",
         lua.create_function(|_, (tile_width, tile_height): (u32, u32)| {
-            if tile_width == 0 || tile_height == 0 {
-                return Err(mlua::Error::runtime("tiles must be at least 1x1"));
-            }
-            Ok(Tileset::new(tile_width, tile_height))
+            Tileset::try_new(tile_width, tile_height).map_err(mlua::Error::runtime)
         })?,
     )?;
     tilemap.set(

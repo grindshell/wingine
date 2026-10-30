@@ -17,6 +17,7 @@ const MAPLE: [i32; 2] = [24, 14];
 const GATE: [i32; 2] = [20, 2];
 const WELL: [i32; 2] = [20, 10];
 const SIGNPOST: [i32; 2] = [21, 3];
+const SHOP_SIGN: [i32; 2] = [27, 10];
 /// Where the village's north exit leads, on the shrine's map, and back.
 const SHRINE_ARRIVAL: [i32; 2] = [12, 18];
 const VILLAGE_ARRIVAL: [i32; 2] = [20, 1];
@@ -216,6 +217,21 @@ fn examining_a_cell_describes_whats_there() {
     simulation.tap(Key::Space);
     let text = dialogue(&simulation).expect("the signpost's text");
     assert!(text.contains("North: Shrine Hill"), "{text}");
+}
+
+#[test]
+fn the_shop_sign_says_whether_the_shop_is_open() {
+    let mut simulation = simulation();
+    place_player(&simulation, [SHOP_SIGN[0] - 1, SHOP_SIGN[1]], "right");
+    simulation.tap(Key::Space);
+    let text = dialogue(&simulation).expect("the sign's text");
+    assert!(text.contains("shut today"), "{text}");
+    read(&mut simulation);
+
+    exec(&simulation, "rpg.quest = 'hunt'");
+    simulation.tap(Key::Space);
+    let text = dialogue(&simulation).expect("the sign's text");
+    assert!(text.contains("propped open"), "{text}");
 }
 
 #[test]

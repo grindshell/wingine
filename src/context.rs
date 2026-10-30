@@ -52,8 +52,8 @@ impl Context {
         &mut self.input
     }
 
-    /// Width and height of the canvas this frame will be drawn on, in canvas pixels. Zero
-    /// before the first frame.
+    /// Width and height of the canvas this frame will be drawn on, in canvas pixels. While the
+    /// game is being created, the size the first frame will have.
     pub fn canvas_size(&self) -> [f32; 2] {
         self.canvas_size
     }

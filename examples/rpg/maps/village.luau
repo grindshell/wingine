@@ -39,7 +39,7 @@ return {
             at = { 21, 3 },
             text = "The signpost reads: “North: Shrine Hill. Mind the path at night.”",
         },
-        { at = { 27, 10 }, text = "“Mossbrook Goods: tools, rope and remedies.” It's shut today." },
+        { at = { 27, 10 }, event = "shop_sign" },
         {
             at = { 6, 5 },
             text = "Your cottage. It's too nice a day to stay indoors.",

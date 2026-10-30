@@ -21,7 +21,8 @@
 //!   frame. Games use it to make their own functions wait, such as dialogue that waits for the
 //!   player to close it.
 //! - `spawn(f, ...)` starts `f(...)` as a separate task, running it right away until it first
-//!   waits.
+//!   waits. If it fails, it stops like any other task: the caller carries on, and
+//!   [`Scripts::update`] returns the error.
 //! - `print(...)` logs its arguments at info level, with the target `lua`.
 //!
 //! Engine types convert to and from Lua values:
@@ -116,9 +117,13 @@ struct Task {
     thread: mlua::Thread,
 }
 
-/// Tasks started by scripts with `spawn`, until `Scripts` adds them to its own.
+/// Tasks started by scripts with `spawn`, until `Scripts` adds them to its own, and the first
+/// error from one that failed before it first waited, until `Scripts::update` returns it.
 #[derive(Default)]
-struct Spawned(Vec<mlua::Thread>);
+struct Spawned {
+    threads: Vec<mlua::Thread>,
+    error: Option<mlua::Error>,
+}
 
 impl Scripts {
     /// A VM with the built-ins and nothing else loaded.
@@ -209,12 +214,19 @@ impl Scripts {
     /// Resumes every waiting task with `dt` seconds of game time passed.
     ///
     /// A task that raises an error stops, and the other tasks carry on. The first error is
-    /// returned once every task has run.
+    /// returned once every task has run, including from tasks scripts started with `spawn`
+    /// that failed before they first waited.
     pub fn update(&mut self, dt: f32) -> Result<()> {
         // Tasks scripts started since the last update, such as while a script loaded, wait for
         // this frame like the rest.
         self.adopt_spawned();
-        let mut first_error = None;
+        self.resume_tasks(dt)
+    }
+
+    /// Resumes the tasks `update` would, apart from those scripts started since they were last
+    /// adopted, which have just run until they first waited.
+    pub(crate) fn resume_tasks(&mut self, dt: f32) -> Result<()> {
+        let mut first_error = spawned(&self.lua).error.take();
         self.tasks
             .retain(|task| match task.thread.resume::<()>(dt) {
                 Ok(()) => task.thread.status() == ThreadStatus::Resumable,
@@ -224,6 +236,7 @@ impl Scripts {
                 }
             });
         self.adopt_spawned();
+        let first_error = first_error.or_else(|| spawned(&self.lua).error.take());
         first_error.map_or(Ok(()), |err| Err(err.into()))
     }
 
@@ -263,18 +276,20 @@ impl Scripts {
         id
     }
 
-    fn adopt_spawned(&mut self) {
-        let spawned = std::mem::take(
-            &mut self
-                .lua
-                .app_data_mut::<Spawned>()
-                .expect("set when the VM is created")
-                .0,
-        );
-        for thread in spawned {
+    /// Makes the tasks scripts started with `spawn` the engine's own, to resume from the next
+    /// [`Scripts::resume_tasks`] on.
+    pub(crate) fn adopt_spawned(&mut self) {
+        let threads = std::mem::take(&mut spawned(&self.lua).threads);
+        for thread in threads {
             self.add_task(thread);
         }
     }
+}
+
+/// What scripts started with `spawn` in `lua`.
+fn spawned(lua: &mlua::Lua) -> mlua::AppDataRefMut<'_, Spawned> {
+    lua.app_data_mut::<Spawned>()
+        .expect("set when the VM is created")
 }
 
 /// The `print` built-in.
@@ -293,12 +308,15 @@ fn spawn(
     (function, args): (mlua::Function, mlua::MultiValue),
 ) -> mlua::Result<()> {
     let thread = lua.create_thread(function)?;
-    thread.resume::<()>(args)?;
-    if thread.status() == ThreadStatus::Resumable {
-        lua.app_data_mut::<Spawned>()
-            .expect("set when the VM is created")
-            .0
-            .push(thread);
+    let result = thread.resume::<()>(args);
+    let mut spawned = spawned(lua);
+    match result {
+        Ok(()) if thread.status() == ThreadStatus::Resumable => spawned.threads.push(thread),
+        Ok(()) => {}
+        // It stops like a task failing later would, rather than failing its caller.
+        Err(err) => {
+            spawned.error.get_or_insert(err);
+        }
     }
     Ok(())
 }
@@ -378,19 +396,23 @@ impl FromLua for Color {
 impl FromLua for PlaySettings {
     fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
         let defaults = Self::default();
-        match &value {
-            mlua::Value::Nil => Ok(defaults),
-            mlua::Value::Table(table) => Ok(Self {
+        let settings = match &value {
+            mlua::Value::Nil => defaults,
+            mlua::Value::Table(table) => Self {
                 volume: table
                     .get::<Option<f32>>("volume")?
                     .unwrap_or(defaults.volume),
                 speed: table.get::<Option<f32>>("speed")?.unwrap_or(defaults.speed),
                 pan: table.get::<Option<f32>>("pan")?.unwrap_or(defaults.pan),
-            }),
+            },
             _ => {
                 let message = "expected a table { volume, speed, pan }".into();
-                Err(conversion_error(&value, "PlaySettings", message))
+                return Err(conversion_error(&value, "PlaySettings", message));
             }
+        };
+        match settings.problem() {
+            Some(message) => Err(conversion_error(&value, "PlaySettings", message)),
+            None => Ok(settings),
         }
     }
 }
@@ -398,11 +420,7 @@ impl FromLua for PlaySettings {
 impl mlua::UserData for Font {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("scaled", |_, font, scale: f32| {
-            if !(scale.is_finite() && scale > 0.0) {
-                let message = format!("font scale must be a positive number, not {scale}");
-                return Err(mlua::Error::runtime(message));
-            }
-            Ok(font.scaled(scale))
+            font.try_scaled(scale).map_err(mlua::Error::runtime)
         });
         methods.add_method("measure", |_, font, text: mlua::LuaString| {
             let [width, height] = font.measure(&text.to_str()?);
@@ -476,14 +494,7 @@ impl mlua::UserData for Sprite {
 impl mlua::UserData for SpriteSheet {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("sprite", |_, sheet, (column, row): (u32, u32)| {
-            if column >= sheet.columns() || row >= sheet.rows() {
-                return Err(mlua::Error::runtime(format!(
-                    "sprite ({column}, {row}) is outside a {}x{} sprite sheet",
-                    sheet.columns(),
-                    sheet.rows()
-                )));
-            }
-            Ok(sheet.sprite(column, row))
+            sheet.try_sprite(column, row).map_err(mlua::Error::runtime)
         });
         methods.add_method("size", |_, sheet, ()| Ok((sheet.columns(), sheet.rows())));
     }
@@ -607,8 +618,9 @@ impl mlua::UserData for GridMover {
         methods.add_method("is_moving", |_, mover, ()| Ok(mover.is_moving()));
         methods.add_method("step_time", |_, mover, ()| Ok(mover.step_time()));
         methods.add_method_mut("set_step_time", |_, mover, seconds: f32| {
-            mover.set_step_time(step_time(seconds)?);
-            Ok(())
+            mover
+                .try_set_step_time(seconds)
+                .map_err(mlua::Error::runtime)
         });
         methods.add_method_mut("place", |_, mover, (column, row): (i32, i32)| {
             mover.place([column, row]);
@@ -642,15 +654,6 @@ impl mlua::UserData for GridMover {
             },
         );
     }
-}
-
-/// `seconds`, if it's a step time a [`GridMover`] accepts.
-pub(crate) fn step_time(seconds: f32) -> mlua::Result<f32> {
-    if !(seconds.is_finite() && seconds > 0.0) {
-        let message = format!("step time must be a positive number of seconds, not {seconds}");
-        return Err(mlua::Error::runtime(message));
-    }
-    Ok(seconds)
 }
 
 /// Converts a string to `T` by parsing it, for engine types scripts refer to by name.
@@ -827,6 +830,21 @@ mod tests {
     }
 
     #[test]
+    fn a_task_failing_as_it_starts_does_not_fail_its_caller() {
+        let mut scripts = scripts(
+            "function parent() spawn(function() error('broken') end) tick() wait() tick() end",
+        );
+        let count = counter(&scripts);
+        let parent = scripts.spawn("parent", ()).unwrap();
+        assert_eq!(count.get(), 1, "the parent carried on");
+        let err = scripts.update(FRAME).unwrap_err();
+        assert!(err.to_string().contains("broken"), "{err}");
+        assert_eq!(count.get(), 2);
+        assert!(!scripts.is_running(parent));
+        scripts.update(FRAME).unwrap();
+    }
+
+    #[test]
     fn cancelled_tasks_stop() {
         let mut scripts = scripts("function run() while true do tick() wait() end end");
         let count = counter(&scripts);
@@ -858,11 +876,14 @@ mod tests {
 
     #[test]
     fn syntax_errors_name_the_file_and_line() {
-        let directory = std::env::temp_dir().join("wingine-lua-tests");
+        // Named for this process, so test runs from other checkouts don't share it.
+        let directory =
+            std::env::temp_dir().join(format!("wingine-lua-tests-{}", std::process::id()));
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("broken.luau");
         fs::write(&path, "function ok() end\nfunction broken(\n").unwrap();
         let err = Scripts::new().unwrap().load(&path).unwrap_err();
+        fs::remove_dir_all(&directory).unwrap();
         assert!(err.to_string().contains("broken.luau:"), "{err}");
     }
 
@@ -953,5 +974,13 @@ mod tests {
             }
         );
         assert!(convert::<PlaySettings>("1").is_err());
+        for invalid in [
+            "{ speed = 0 }",
+            "{ speed = -1 }",
+            "{ volume = math.huge }",
+            "{ pan = 0/0 }",
+        ] {
+            assert!(convert::<PlaySettings>(invalid).is_err(), "{invalid}");
+        }
     }
 }

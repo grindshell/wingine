@@ -18,8 +18,8 @@ use wingine::{
 /// Writes a game made of `files`, each a path in the game's folder and its contents, to a fresh
 /// folder named after `test`.
 fn game(test: &str, files: &[(&str, &str)]) -> PathBuf {
-    let folder = std::env::temp_dir()
-        .join("wingine-runtime-tests")
+    let folder = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("runtime-tests")
         .join(test);
     if folder.exists() {
         fs::remove_dir_all(&folder).unwrap();
@@ -167,6 +167,53 @@ fn update_and_tasks_run_each_frame_and_draw_draws() {
     let image = simulation.screenshot().unwrap();
     assert_eq!(pixel(&image, 5, 5), [0, 0, 255, 255]);
     assert_eq!(pixel(&image, 15, 15), [255, 0, 0, 255]);
+}
+
+#[test]
+fn tasks_started_in_update_resume_on_the_next_frame() {
+    let folder = game(
+        "spawn_in_update",
+        &[(
+            "main.luau",
+            "frames = 0
+            resumed_on = nil
+            function update()
+                frames += 1
+                if frames == 2 then
+                    spawn(function()
+                        wait()
+                        resumed_on = frames
+                    end)
+                end
+            end",
+        )],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.run_frames(2);
+    assert_eq!(eval::<Option<u32>>(&simulation, "resumed_on"), None);
+    simulation.step();
+    assert_eq!(eval::<Option<u32>>(&simulation, "resumed_on"), Some(3));
+}
+
+#[test]
+fn a_task_failing_as_it_starts_does_not_stop_the_game() {
+    let folder = game(
+        "spawn_failing",
+        &[(
+            "main.luau",
+            "frames = 0
+            function update()
+                frames += 1
+                if frames == 1 then
+                    spawn(function() error('lost the map') end)
+                end
+            end",
+        )],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.run_frames(3);
+    assert!(simulation.game().error().is_none());
+    assert_eq!(eval::<u32>(&simulation, "frames"), 3);
 }
 
 #[test]

@@ -16,4 +16,4 @@ pub mod tilemap;
 
 pub use app::{Game, WindowConfig, run};
 pub use context::Context;
-pub use error::{Error, Result};
+pub use error::{BoxedError, Error, Result};

@@ -139,14 +139,18 @@ impl Font {
     ///
     /// If `scale` isn't a positive number.
     pub fn scaled(&self, scale: f32) -> Self {
-        assert!(
-            scale.is_finite() && scale > 0.0,
-            "font scale must be a positive number, not {scale}"
-        );
-        Self {
+        self.try_scaled(scale).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// [`Font::scaled`], or what's wrong with `scale`.
+    pub(crate) fn try_scaled(&self, scale: f32) -> Result<Self, String> {
+        if !(scale.is_finite() && scale > 0.0) {
+            return Err(format!("font scale must be a positive number, not {scale}"));
+        }
+        Ok(Self {
             data: Arc::clone(&self.data),
             scale: self.scale * scale,
-        }
+        })
     }
 
     /// Lays out `text` to draw with [`Canvas::draw_text_layout`](super::Canvas::draw_text_layout).
@@ -222,17 +226,16 @@ impl Metrics {
                     cursor.pen += spaces;
                 }
                 spaces = 0.0;
-                // Only a word too long for any line breaks between characters.
-                let breakable = word_ink > max_width;
+                // Only a word that doesn't fit even where a line starts breaks between
+                // characters: one too long for any line, or one after leading spaces.
+                let breakable = cursor.pen + word_ink > max_width;
                 for c in word.chars().filter(|c| !c.is_control()) {
                     let Some(glyph) = self.glyph(c) else {
                         continue;
                     };
                     let bounds = scale_rect(glyph.bounds, scale);
-                    if breakable
-                        && !cursor.line_is_empty()
-                        && cursor.pen + bounds.right() > max_width
-                    {
+                    // Something is on the line, leading spaces at least, so it can wrap.
+                    if breakable && cursor.pen > 0.0 && cursor.pen + bounds.right() > max_width {
                         cursor.new_line();
                     }
                     if glyph.has_ink() {
@@ -447,6 +450,16 @@ mod tests {
         );
         assert_eq!(size, [7.0, 18.0]);
         assert_eq!(lines, 3);
+    }
+
+    #[test]
+    fn leading_spaces_do_not_push_words_past_the_width() {
+        // "ab" is 7 wide, but 11 after the leading spaces.
+        let (rects, size, lines) = lay_out("  ab", Some(8.0));
+        let positions: Vec<[f32; 2]> = rects.iter().map(|r| [r.x, r.y]).collect();
+        assert_eq!(positions, [[4.0, 0.0], [0.0, 6.0]]);
+        assert_eq!(size, [7.0, 12.0]);
+        assert_eq!(lines, 2);
     }
 
     #[test]

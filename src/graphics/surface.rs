@@ -4,6 +4,17 @@ use winit::{dpi::PhysicalSize, window::Window};
 
 use super::gpu::Gpu;
 
+/// What [`WindowSurface::acquire_frame`] got.
+pub(crate) enum Acquired {
+    /// The texture to draw the frame on.
+    Frame(wgpu::SurfaceTexture),
+    /// Nothing this time: skip the frame and draw the next.
+    Skip,
+    /// Nothing while the window is hidden. Only macOS reports this, where winit sends
+    /// `WindowEvent::Occluded(false)` once the window can be seen again.
+    Occluded,
+}
+
 /// The surface that presents rendered frames to the game window.
 pub(crate) struct WindowSurface {
     window: Arc<Window>,
@@ -15,7 +26,14 @@ impl WindowSurface {
     /// Configures `surface`, which must have been created for `window` from `gpu`'s instance.
     pub fn new(gpu: &Gpu, window: Arc<Window>, surface: wgpu::Surface<'static>) -> Self {
         // The adapter was chosen to be compatible with this surface, so it supports some format.
-        let format = surface.get_capabilities(&gpu.adapter).formats[0];
+        // The first is preferred, but it may have no sRGB view, as a 10-bit or float format
+        // doesn't, and colors would then be written without being encoded.
+        let formats = surface.get_capabilities(&gpu.adapter).formats;
+        let format = formats
+            .iter()
+            .copied()
+            .find(|format| format.add_srgb_suffix().is_srgb())
+            .unwrap_or(formats[0]);
         let size = window.inner_size();
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -52,19 +70,20 @@ impl WindowSurface {
         self.surface.configure(&gpu.device, &self.config);
     }
 
-    /// Acquires the next surface texture, or `None` if this frame should be skipped.
-    pub fn acquire_frame(&mut self, gpu: &Gpu) -> Option<wgpu::SurfaceTexture> {
+    /// Acquires the next surface texture, if there's one to draw.
+    pub fn acquire_frame(&mut self, gpu: &Gpu) -> Acquired {
         match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture) => Some(texture),
-            wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => None,
+            wgpu::CurrentSurfaceTexture::Success(texture) => Acquired::Frame(texture),
+            wgpu::CurrentSurfaceTexture::Occluded => Acquired::Occluded,
+            wgpu::CurrentSurfaceTexture::Timeout => Acquired::Skip,
             wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
                 drop(texture);
                 self.surface.configure(&gpu.device, &self.config);
-                None
+                Acquired::Skip
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&gpu.device, &self.config);
-                None
+                Acquired::Skip
             }
             wgpu::CurrentSurfaceTexture::Validation => {
                 unreachable!("no error scope is registered, so validation errors panic")
@@ -77,7 +96,7 @@ impl WindowSurface {
                     }
                     Err(err) => log::error!("failed to recreate lost surface: {err}"),
                 }
-                None
+                Acquired::Skip
             }
         }
     }
