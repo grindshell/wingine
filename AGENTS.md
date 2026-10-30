@@ -90,16 +90,24 @@ of scope until the milestone is done.
   as tasks (`spawn`): coroutines that `update` resumes once a frame with the frame's duration.
   The built-ins `wait`, `wait_until`, `spawn` and `print` are documented at the top of the file.
   Its unit tests don't need a GPU.
+- `src/runtime/`: games written entirely in Luau, run from a folder holding `main.luau` and an
+  optional `window.luau` of window settings. `LuauGame` is the `Game` that runs one, and the
+  engine's API for it is the global tables `graphics`, `input` and `audio`, one file each. The
+  module docs are the reference for script authors.
+- `src/main.rs`: the `wingine` executable, which runs a Luau game: `cargo run -- examples/pong`.
 - `src/script.rs`: scripted runs, which drive a game with simulated input from a text file
   (unrelated to Luau scripts), built on `Simulation`.
 - `src/math.rs`: geometry types such as `Rect`.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
-  `sprites` and `pong` have tests (enabled with `test = true` in `Cargo.toml`) that drive them
-  with `Simulation`. `sprites`' events and NPC are scripted in `sprites.luau`, and `pong`'s
-  computer opponent in `pong.luau`. The sounds and music in `examples/sounds/` were synthesized
-  for `sprites`, and `pong` reuses them.
+  `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
+  `Simulation`, and its events and NPC are scripted in `sprites.luau`. `pong/` is a game written
+  entirely in Luau, with its computer opponent in `opponent.luau`. The sounds and music in
+  `examples/sounds/` were synthesized for `sprites`; `pong` has copies of the ones it uses.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
+- `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders.
+- `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
+  expressions such as `pong.ball.vx`.
 
 ## Conventions
 
@@ -136,8 +144,13 @@ of scope until the milestone is done.
   `Camera::canvas_to_world` converts it to world coordinates, using `Context::canvas_size`.
 - wgpu and winit types stay internal (`pub(crate)`). Games use the engine's own API. `mlua` is
   the exception: `wingine::lua` re-exports it, since registering functions and converting values
-  is its API. Engine types scripts use implement `FromLua`/`IntoLua` in `src/lua.rs` (`Direction`
-  is a string such as `"up"`).
+  is its API. Engine types scripts use implement `FromLua`/`IntoLua` or `UserData` in
+  `src/lua.rs` (`Direction` is a string such as `"up"`, `Color` a hex string such as
+  `"#f2c14e"`, and `Font` userdata with methods).
+- The Luau runtime lends its functions the `Context` while the game loads and updates, and the
+  `Canvas` while it draws, through `Lua::scope` (`lend`, `with_context` and `with_canvas` in
+  `src/runtime/mod.rs`). Called at any other time, they fail with a Lua error rather than
+  reaching stale state. Each frame runs `update(dt)`, then resumes tasks, then `draw()`.
 
 ## Commands
 
@@ -148,7 +161,7 @@ cargo clippy --all-targets
 cargo fmt
 cargo run --example shapes
 cargo run --example sprites
-cargo run --example pong
+cargo run -- examples/pong
 ```
 
 Run `cargo fmt` and `cargo clippy --all-targets` before considering a change finished, and keep
@@ -175,12 +188,14 @@ Check how a game behaves headlessly instead of opening a window and driving it b
 
   ```bash
   WINGINE_SCRIPT=path/to/check.txt cargo run --example sprites
+  WINGINE_SCRIPT=path/to/check.txt cargo run -- examples/pong
   ```
 
   Mouse positions are canvas pixels; screenshots are window-sized, so with a fixed resolution
   divide screenshot coordinates by the scale (and subtract the bars) to aim a click.
 - **As tests:** drive the game with `Simulation` (`tap`, `hold`, `click`, `run_for`, `game()`)
-  and assert on its state, as `examples/sprites.rs` does. Prefer this for anything worth
+  and assert on its state, as `examples/sprites.rs` does. For a Luau game, evaluate Luau
+  expressions against its state, as `tests/pong.rs` does. Prefer this for anything worth
   keeping, so CI catches regressions.
 
 Windowing itself (focus, minimizing, real resizes, DPI) still needs a real window. Audio in these

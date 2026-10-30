@@ -19,11 +19,14 @@ winit = "0.30"
 [dev-dependencies]
 env_logger = "0.11.11"
 
+# Runs games written in Luau: `cargo run -- examples/pong`.
+[[bin]]
+name = "wingine"
+path = "src/main.rs"
+# Its docs would overwrite the library's, which has the same name.
+doc = false
+
 # Run the examples' tests, which drive them headlessly, with `cargo test`.
 [[example]]
 name = "sprites"
-test = true
-
-[[example]]
-name = "pong"
 test = true

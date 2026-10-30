@@ -24,8 +24,18 @@
 //!   waits.
 //! - `print(...)` logs its arguments at info level, with the target `lua`.
 //!
-//! Engine types convert to and from Lua values: a [`Direction`] is one of the strings `"up"`,
-//! `"down"`, `"left"` or `"right"`.
+//! Engine types convert to and from Lua values:
+//!
+//! - A [`Direction`] is one of the strings `"up"`, `"down"`, `"left"` or `"right"`.
+//! - A [`Key`] or [`MouseButton`] is its name, such as `"Space"` or `"left"`, in any case.
+//! - A [`Color`] is a hex string such as `"#f2c14e"`, with an optional alpha byte
+//!   (`"#00000080"`), or a table `{ r, g, b, a }` of components from 0 to 1, where `a` defaults
+//!   to 1.
+//! - [`PlaySettings`] are a table with any of `volume`, `speed` and `pan`; the rest, or all of
+//!   them for `nil`, keep their defaults.
+//! - A [`Font`] is userdata with the methods `font:scaled(scale)`, `font:measure(text)` (its
+//!   width and height) and `font:line_height()`, and a [`Sound`] is userdata with
+//!   `sound:duration()`, in seconds.
 //!
 //! Scripts are [Luau](https://luau.org), not standard Lua 5.x, and run in Luau's sandbox: the
 //! standard library and built-ins are read-only, and the globals a script defines are seen by the
@@ -33,12 +43,18 @@
 //!
 //! The engine re-exports [`mlua`], which games use to register functions and convert values.
 
-use std::{fs, path::Path};
+use std::{fmt, fs, path::Path, str::FromStr};
 
 pub use mlua;
 use mlua::{ErrorContext, FromLua, FromLuaMulti, IntoLua, IntoLuaMulti, thread::ThreadStatus};
 
-use crate::{Error, Result, grid::Direction};
+use crate::{
+    Error, Result,
+    audio::{PlaySettings, Sound},
+    graphics::{Color, Font},
+    grid::Direction,
+    input::{Key, MouseButton},
+};
 
 /// Built-ins written in Luau, defined before the sandbox makes the globals read-only. Each frame,
 /// `update` resumes waiting tasks with the frame's duration, which `coroutine.yield` returns.
@@ -168,6 +184,9 @@ impl Scripts {
     /// A task that raises an error stops, and the other tasks carry on. The first error is
     /// returned once every task has run.
     pub fn update(&mut self, dt: f32) -> Result<()> {
+        // Tasks scripts started since the last update, such as while a script loaded, wait for
+        // this frame like the rest.
+        self.adopt_spawned();
         let mut first_error = None;
         self.tasks
             .retain(|task| match task.thread.resume::<()>(dt) {
@@ -291,6 +310,120 @@ impl FromLua for Direction {
     }
 }
 
+impl FromLua for Key {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        from_name(&value, "Key")
+    }
+}
+
+impl FromLua for MouseButton {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        from_name(&value, "MouseButton")
+    }
+}
+
+impl FromLua for Color {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        match &value {
+            mlua::Value::String(hex) => {
+                let hex = hex.to_str()?;
+                parse_hex(&hex).ok_or_else(|| {
+                    let message =
+                        format!(r##"`{hex}` is not a color like "#f2c14e" or "#00000080""##);
+                    conversion_error(&value, "Color", message)
+                })
+            }
+            mlua::Value::Table(table) => Ok(Color::rgba(
+                table.get("r")?,
+                table.get("g")?,
+                table.get("b")?,
+                table.get::<Option<f32>>("a")?.unwrap_or(1.0),
+            )),
+            _ => {
+                let message =
+                    r##"expected a hex string such as "#f2c14e", or a table { r, g, b, a }"##;
+                Err(conversion_error(&value, "Color", message.into()))
+            }
+        }
+    }
+}
+
+impl FromLua for PlaySettings {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        let defaults = Self::default();
+        match &value {
+            mlua::Value::Nil => Ok(defaults),
+            mlua::Value::Table(table) => Ok(Self {
+                volume: table
+                    .get::<Option<f32>>("volume")?
+                    .unwrap_or(defaults.volume),
+                speed: table.get::<Option<f32>>("speed")?.unwrap_or(defaults.speed),
+                pan: table.get::<Option<f32>>("pan")?.unwrap_or(defaults.pan),
+            }),
+            _ => {
+                let message = "expected a table { volume, speed, pan }".into();
+                Err(conversion_error(&value, "PlaySettings", message))
+            }
+        }
+    }
+}
+
+impl mlua::UserData for Font {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("scaled", |_, font, scale: f32| {
+            if !(scale.is_finite() && scale > 0.0) {
+                let message = format!("font scale must be a positive number, not {scale}");
+                return Err(mlua::Error::runtime(message));
+            }
+            Ok(font.scaled(scale))
+        });
+        methods.add_method("measure", |_, font, text: mlua::LuaString| {
+            let [width, height] = font.measure(&text.to_str()?);
+            Ok((width, height))
+        });
+        methods.add_method("line_height", |_, font, ()| Ok(font.line_height()));
+    }
+}
+
+impl mlua::UserData for Sound {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("duration", |_, sound, ()| Ok(sound.duration()));
+    }
+}
+
+/// Converts a string to `T` by parsing it, for engine types scripts refer to by name.
+fn from_name<T>(value: &mlua::Value, to: &str) -> mlua::Result<T>
+where
+    T: FromStr,
+    T::Err: fmt::Display,
+{
+    let mlua::Value::String(name) = value else {
+        return Err(conversion_error(value, to, "expected a name".into()));
+    };
+    name.to_str()?
+        .parse()
+        .map_err(|err: T::Err| conversion_error(value, to, err.to_string()))
+}
+
+fn conversion_error(value: &mlua::Value, to: &str, message: String) -> mlua::Error {
+    mlua::Error::FromLuaConversionError {
+        from: value.type_name(),
+        to: to.into(),
+        message: Some(message),
+    }
+}
+
+/// Parses a color written `#rrggbb` or `#rrggbbaa`.
+fn parse_hex(text: &str) -> Option<Color> {
+    let digits = text.strip_prefix('#')?;
+    if !matches!(digits.len(), 6 | 8) || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(&digits[i * 2..i * 2 + 2], 16).ok();
+    let alpha = if digits.len() == 8 { byte(3)? } else { 255 };
+    Some(Color::rgba8(byte(0)?, byte(1)?, byte(2)?, alpha))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{cell::Cell, rc::Rc};
@@ -401,6 +534,19 @@ mod tests {
     }
 
     #[test]
+    fn tasks_spawned_while_loading_resume_on_the_next_update() {
+        let mut scripts = Scripts::new().unwrap();
+        let count = counter(&scripts);
+        scripts
+            .load_source("test", "spawn(function() tick() wait() tick() end)")
+            .unwrap();
+        assert_eq!(count.get(), 1);
+        scripts.update(FRAME).unwrap();
+        assert_eq!(count.get(), 2, "resumed on the first update");
+        assert_eq!(scripts.task_count(), 0, "finished");
+    }
+
+    #[test]
     fn a_failing_task_stops_and_the_others_carry_on() {
         let mut scripts = scripts(
             "function fail() wait() error(\"broken\") end
@@ -491,5 +637,59 @@ mod tests {
         assert_eq!(turned, Direction::Left);
         assert_eq!(scripts.call::<String>("turn", Direction::Up).unwrap(), "up");
         assert!(scripts.call::<Direction>("turn", "north").is_err());
+    }
+
+    /// Converts the Luau `expression` to `T`.
+    fn convert<T: FromLua>(expression: &str) -> mlua::Result<T> {
+        let scripts = Scripts::new().unwrap();
+        scripts.lua().load(format!("return {expression}")).eval()
+    }
+
+    #[test]
+    fn keys_and_buttons_are_names() {
+        assert_eq!(convert::<Key>("'space'").unwrap(), Key::Space);
+        assert_eq!(convert::<MouseButton>("'Left'").unwrap(), MouseButton::Left);
+        let err = convert::<Key>("'Shift'").unwrap_err();
+        assert!(err.to_string().contains("unknown key `Shift`"), "{err}");
+        assert!(convert::<Key>("32").is_err());
+    }
+
+    #[test]
+    fn colors_are_hex_strings_or_tables() {
+        assert_eq!(
+            convert::<Color>("'#f2c14e'").unwrap(),
+            Color::rgb8(0xf2, 0xc1, 0x4e)
+        );
+        assert_eq!(
+            convert::<Color>("'#00000080'").unwrap(),
+            Color::rgba8(0, 0, 0, 0x80)
+        );
+        assert_eq!(
+            convert::<Color>("{ r = 1, g = 0.5, b = 0 }").unwrap(),
+            Color::rgb(1.0, 0.5, 0.0)
+        );
+        assert_eq!(
+            convert::<Color>("{ r = 0, g = 0, b = 0, a = 0.25 }").unwrap(),
+            Color::rgba(0.0, 0.0, 0.0, 0.25)
+        );
+        for invalid in ["'f2c14e'", "'#f2c14'", "'#+2c14e'", "'red'", "3"] {
+            assert!(convert::<Color>(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn play_settings_default_what_they_leave_out() {
+        assert_eq!(
+            convert::<PlaySettings>("nil").unwrap(),
+            PlaySettings::default()
+        );
+        assert_eq!(
+            convert::<PlaySettings>("{ pan = -0.5 }").unwrap(),
+            PlaySettings {
+                pan: -0.5,
+                ..Default::default()
+            }
+        );
+        assert!(convert::<PlaySettings>("1").is_err());
     }
 }

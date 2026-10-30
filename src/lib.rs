@@ -10,6 +10,7 @@ pub mod headless;
 pub mod input;
 pub mod lua;
 pub mod math;
+pub mod runtime;
 pub mod script;
 pub mod tilemap;
 
