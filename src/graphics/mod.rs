@@ -1,5 +1,6 @@
 //! 2D drawing.
 
+mod animation;
 mod camera;
 mod canvas;
 mod color;
@@ -12,6 +13,7 @@ mod sprite;
 pub(crate) mod surface;
 mod texture;
 
+pub use animation::Animation;
 pub use camera::Camera;
 pub use canvas::Canvas;
 pub use color::Color;

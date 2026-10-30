@@ -184,6 +184,41 @@ fn a_tap_walks_one_tile() {
     assert!(!eval::<bool>(&simulation, "rpg.player.mover:is_moving()"));
 }
 
+/// The number of the frame of its walk the player shows, or 0 while standing still.
+fn walk_frame(simulation: &Simulation<LuauGame>) -> u32 {
+    eval(
+        simulation,
+        "if rpg.player.mover:is_moving() \
+         then rpg.player.walk:frame_index(rpg.player.walk_time) else 0",
+    )
+}
+
+#[test]
+fn walking_strides_then_stands_on_each_tile() {
+    let mut simulation = simulation();
+    // Three open tiles up to the gate.
+    place_player(&simulation, [GATE[0], GATE[1] + 4], "up");
+    simulation.key_down(Key::W);
+    let mut frames: Vec<u32> = (0..20)
+        .map(|_| {
+            simulation.step();
+            walk_frame(&simulation)
+        })
+        .collect();
+    simulation.key_up(Key::W);
+    assert_eq!(frames[0], 1, "a step starts mid-stride");
+    assert!(
+        !frames.contains(&0),
+        "walking on doesn't stop between tiles"
+    );
+    frames.dedup();
+    assert!(frames.starts_with(&[1, 2, 1, 2]), "{frames:?}");
+
+    run_for(&mut simulation, 0.5);
+    assert_eq!(walk_frame(&simulation), 0);
+    assert_eq!(eval::<f32>(&simulation, "rpg.player.walk_time"), 0.0);
+}
+
 #[test]
 fn the_shut_gate_blocks_the_way_north() {
     let mut simulation = simulation();

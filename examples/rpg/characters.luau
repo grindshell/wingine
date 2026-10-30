@@ -8,9 +8,16 @@ local STEP_TIME = 0.3
 
 export type Character = {
     name: string,
+    -- The sprite it stands still as.
     sprite: any,
     -- The sprite mirrored, for facing left.
     sprite_left: any,
+    -- The animation it walks with, if it has one, and mirrored. It shows a frame mid-stride, then
+    -- the standing sprite, over each tile.
+    walk: any?,
+    walk_left: any?,
+    -- Seconds it's been walking without stopping, for its animation.
+    walk_time: number,
     tint: string,
     mover: any,
     facing_left: boolean,
@@ -36,17 +43,25 @@ export type Character = {
 }
 
 -- A character standing on `options.tile`. `options` has the fields of `Character` that don't
--- change, apart from `sprite_left`, and the tile, the way it faces, and how long it takes to
--- walk a tile.
+-- change, apart from `sprite_left` and its walk, and the tile, the way it faces, how long it
+-- takes to walk a tile, and the sprite it shows mid-stride, if it has one.
 function characters.new(options): Character
     local column, row = options.tile[1], options.tile[2]
     local facing = options.facing or "down"
+    local step_time = options.step_time or STEP_TIME
+    local walk = nil
+    if options.stride then
+        walk = graphics.new_animation({ options.stride, options.sprite }, step_time / 2)
+    end
     local character = {
         name = options.name,
         sprite = options.sprite,
         sprite_left = options.sprite:flipped_x(),
+        walk = walk,
+        walk_left = walk and walk:flipped_x(),
+        walk_time = 0,
         tint = options.tint,
-        mover = grid.new_mover(column, row, options.step_time or STEP_TIME),
+        mover = grid.new_mover(column, row, step_time),
         facing_left = false,
         home_facing = facing,
         talk = options.talk,
@@ -56,6 +71,17 @@ function characters.new(options): Character
     }
     characters.face(character, facing)
     return character
+end
+
+-- Moves the character on by `dt` seconds. Its walk carries on from step to step, and starts over
+-- once it stops.
+function characters.update(character: Character, dt: number)
+    if character.mover:is_moving() then
+        character.walk_time += dt
+    else
+        character.walk_time = 0
+    end
+    character.mover:update(dt)
 end
 
 -- Turns to face `direction`. Sprites face right, and are mirrored to face left; facing up or
@@ -103,8 +129,18 @@ function characters.position(character: Character, map): (number, number)
     return math.round(x), math.round(y)
 end
 
+-- The sprite the character shows now: a frame of its walk while it's walking, and otherwise the
+-- one it stands still as.
+function characters.sprite(character: Character)
+    local walk = if character.facing_left then character.walk_left else character.walk
+    if walk and character.mover:is_moving() then
+        return walk:frame(character.walk_time)
+    end
+    return if character.facing_left then character.sprite_left else character.sprite
+end
+
 function characters.draw(character: Character, map)
-    local sprite = if character.facing_left then character.sprite_left else character.sprite
+    local sprite = characters.sprite(character)
     local x, y = characters.position(character, map)
     graphics.draw_sprite(sprite, x, y, character.tint)
 end

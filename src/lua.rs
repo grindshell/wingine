@@ -44,6 +44,14 @@
 //! - A [`SpriteSheet`] is userdata with `sheet:sprite(column, row)`, counting from 0 at the
 //!   top-left, and `sheet:size()`, its columns and rows. A [`Sprite`] has `sprite:size()`, in
 //!   texels, and `sprite:flipped_x()` and `sprite:flipped_y()`, which return mirrored copies.
+//! - An [`Animation`] is userdata. It doesn't keep time: scripts keep the seconds it has been
+//!   playing and pass them in. Its methods are `animation:frame(time)` (the sprite showing then),
+//!   `animation:frame_index(time)` (that frame's number, counting from 1 like the table of frames
+//!   it was made from), `animation:frame_count()`, `animation:duration()` (seconds to show every
+//!   frame once), `animation:is_finished(time)` (whether one that plays once is over; one that
+//!   loops never is), and `animation:once()`, `animation:flipped_x()` and
+//!   `animation:flipped_y()`, which return copies that play once and hold the last frame, or
+//!   have mirrored frames.
 //! - A [`Tileset`] is userdata with `tileset:add(tile)`, which adds a kind of tile and returns
 //!   its ID, a number. A [`Tile`] is a table `{ sprite, tint, solid }`, where `tint` defaults to
 //!   white and `solid` to false.
@@ -77,7 +85,7 @@ use mlua::{ErrorContext, FromLua, FromLuaMulti, IntoLua, IntoLuaMulti, thread::T
 use crate::{
     Error, Result,
     audio::{PlaySettings, Sound},
-    graphics::{Color, Font, Sprite, SpriteSheet, TextLayout},
+    graphics::{Animation, Color, Font, Sprite, SpriteSheet, TextLayout},
     grid::{Direction, GridMover},
     input::{Key, MouseButton},
     math::Rect,
@@ -497,6 +505,31 @@ impl mlua::UserData for SpriteSheet {
             sheet.try_sprite(column, row).map_err(mlua::Error::runtime)
         });
         methods.add_method("size", |_, sheet, ()| Ok((sheet.columns(), sheet.rows())));
+    }
+}
+
+impl mlua::UserData for Animation {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("frame", |_, animation, time: f32| {
+            Ok(animation.frame(time).clone())
+        });
+        methods.add_method("frame_index", |_, animation, time: f32| {
+            Ok(animation.frame_index(time) + 1)
+        });
+        methods.add_method("frame_count", |_, animation, ()| {
+            Ok(animation.frames().len())
+        });
+        methods.add_method("duration", |_, animation, ()| Ok(animation.duration()));
+        methods.add_method("is_finished", |_, animation, time: f32| {
+            Ok(animation.is_finished(time))
+        });
+        methods.add_method("once", |_, animation, ()| Ok(animation.clone().once()));
+        methods.add_method("flipped_x", |_, animation, ()| {
+            Ok(animation.clone().flipped_x())
+        });
+        methods.add_method("flipped_y", |_, animation, ()| {
+            Ok(animation.clone().flipped_y())
+        });
     }
 }
 

@@ -15,7 +15,8 @@
 --
 -- Run with `cargo run -- examples/rpg`. The tileset is Kenney's 1-bit Pack
 -- (<https://kenney.nl/assets/1-bit-pack>, CC0). Its sprites are white on transparent, so they're
--- tinted when drawn.
+-- tinted when drawn. `strides.png` is a copy with its people and creatures mid-stride, for
+-- walking.
 
 local bag = require("./bag")
 local battle = require("./battle")
@@ -100,6 +101,7 @@ rpg = {
     player = characters.new({
         name = "you",
         sprite = world.sprite(27, 0),
+        stride = world.stride(27, 0),
         tint = HERO,
         tile = START.at,
         step_time = STEP_TIME,
@@ -337,7 +339,7 @@ function update(dt: number)
     end
     local level = rpg.level :: world.Level
     for _, character in level.characters do
-        character.mover:update(dt)
+        characters.update(character, dt)
     end
     if dialogue.is_open() then
         dialogue.update(dt)

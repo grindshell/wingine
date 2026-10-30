@@ -28,8 +28,9 @@
 //!
 //! The engine's API is in five global tables:
 //!
-//! `graphics`, for drawing in `draw`. `graphics.size` and `graphics.default_font` work anywhere,
-//! and `graphics.load_sprite_sheet` while the game loads and in `update`.
+//! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.default_font` and
+//! `graphics.new_animation` work anywhere, and `graphics.load_sprite_sheet` while the game loads
+//! and in `update`.
 //!
 //! - `graphics.clear(color)` fills the canvas with `color`, discarding anything drawn so far.
 //! - `graphics.fill_rect(x, y, width, height, color)`
@@ -52,6 +53,10 @@
 //! - `graphics.load_sprite_sheet(path, tile_width, tile_height)` loads a PNG divided into a grid
 //!   of sprites `tile_width` by `tile_height` texels, starting at its top-left corner. Each image
 //!   is read once; loading it again, even divided differently, reuses it.
+//! - `graphics.new_animation(frames, frame_time)` returns an animation that shows each sprite in
+//!   the list `frames` for `frame_time` seconds, then starts over. Draw it with
+//!   `graphics.draw_sprite(animation:frame(time), x, y)`, where `time` is how long it has been
+//!   playing.
 //!
 //! `tilemap`, for building maps of tiles, anywhere:
 //!

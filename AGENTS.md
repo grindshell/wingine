@@ -61,8 +61,10 @@ of scope until the milestone is done.
   and releases after each `update`.
 - `src/graphics/`: `Gpu` (adapter + device), `WindowSurface` (presents to the window),
   `Renderer` (wgpu pipelines), `Screen` (applies the `Resolution`), and the public drawing API:
-  `Canvas` (what games draw to each frame), `Camera`, `Resolution`, `Texture`, `Sprite` and
-  `SpriteSheet`. All quads go through one textured pipeline; solid fills use a 1x1 white texture,
+  `Canvas` (what games draw to each frame), `Camera`, `Resolution`, `Texture`, `Sprite`,
+  `SpriteSheet` and `Animation`. An animation doesn't keep time: games keep how long it has played
+  and ask it for the frame to draw, so one animation can be shared. All quads go through one
+  textured pipeline; solid fills use a 1x1 white texture,
   and consecutive quads with the same texture are batched into one draw call. A fixed resolution
   renders the canvas to an offscreen texture, then draws that texture scaled onto the output
   with the same pipeline. Shaders are WGSL files next to the code that loads them.
@@ -94,7 +96,7 @@ of scope until the milestone is done.
   optional `window.luau` of window settings. `LuauGame` is the `Game` that runs one, and the
   engine's API for it is the global tables `graphics`, `input`, `audio`, `tilemap` and `grid`,
   one file each. The module docs are the reference for script authors; the engine types those
-  tables hand out (sprites, tilemaps, grid movers, text layouts) are userdata, documented with
+  tables hand out (sprites, animations, tilemaps, grid movers, text layouts) are userdata, documented with
   their methods in `src/lua.rs`.
 - `src/main.rs`: the `wingine` executable, which runs a Luau game: `cargo run -- examples/pong`.
 - `examples/rpg/`: the milestone's RPG, written entirely in Luau. Maps in `maps/` are rows of
@@ -116,7 +118,9 @@ of scope until the milestone is done.
   `Simulation`, and its events and NPC are scripted in `sprites.luau`. `pong/` is a game written
   entirely in Luau, with its computer opponent in `opponent.luau`. The sounds and music in
   `examples/sounds/` were synthesized for `sprites`; `pong` and `rpg` have copies of the ones
-  they use, and `rpg` a copy of the tileset.
+  they use, and `rpg` a copy of the tileset. `rpg/strides.png` is another copy with its people
+  and creatures mid-stride (raised a pixel on stretched legs), the frame characters show for the
+  first half of each step.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders.

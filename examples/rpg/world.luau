@@ -17,9 +17,18 @@ local TILE = world.TILE
 
 local sheet = graphics.load_sprite_sheet("kenney_1-bit-pack.png", TILE, TILE)
 
+-- The tileset again, with its people and creatures mid-stride: raised a pixel on stretched legs.
+-- The rest is unchanged, so anything else walks without a stride.
+local strides = graphics.load_sprite_sheet("strides.png", TILE, TILE)
+
 -- The sprite at `column`, `row` of the tileset.
 function world.sprite(column: number, row: number)
     return sheet:sprite(column, row)
+end
+
+-- The sprite at `column`, `row` of the tileset, mid-stride.
+function world.stride(column: number, row: number)
+    return strides:sprite(column, row)
 end
 
 -- A sprite that's solid white, for the color under ground tiles.
@@ -363,6 +372,7 @@ local function put_character(level: Level, options): characters.Character
     local character = characters.new({
         name = options.name,
         sprite = world.sprite(options.sprite[1], options.sprite[2]),
+        stride = world.stride(options.sprite[1], options.sprite[2]),
         tint = options.tint,
         tile = options.at,
         facing = options.facing,

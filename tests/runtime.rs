@@ -405,6 +405,63 @@ fn sprites_load_from_sheets_and_draw() {
 }
 
 #[test]
+fn animations_show_their_frames_in_turn() {
+    let folder = game(
+        "animations",
+        &[
+            ("window.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "local sheet = graphics.load_sprite_sheet('sheet.png', 1, 1)
+                local red, blue = sheet:sprite(0, 0), sheet:sprite(1, 0)
+                blink = graphics.new_animation({ red, blue, red }, 0.25)
+                once = blink:once()
+                mirrored = blink:flipped_x():flipped_y()
+                no_frames_fail = not pcall(graphics.new_animation, {}, 0.25)
+                no_time_fails = not pcall(graphics.new_animation, { red }, 0)
+                local time = 0
+
+                function update(dt)
+                    time += dt
+                end
+
+                function draw()
+                    graphics.draw_sprite(blink:frame(time), 0, 0)
+                end",
+            ),
+        ],
+    );
+    write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
+
+    let mut simulation = simulation(&folder);
+    let indices = "blink:frame_index(0), blink:frame_index(0.3), blink:frame_index(0.6), \
+                   blink:frame_index(0.8)";
+    assert_eq!(
+        eval::<(u32, u32, u32, u32)>(&simulation, indices),
+        (1, 2, 3, 1)
+    );
+    assert_eq!(eval::<u32>(&simulation, "once:frame_index(10)"), 3);
+    assert_eq!(
+        eval::<(u32, f32)>(&simulation, "blink:frame_count(), blink:duration()"),
+        (3, 0.75)
+    );
+    assert_eq!(eval::<u32>(&simulation, "mirrored:frame_count()"), 3);
+    assert!(eval::<bool>(
+        &simulation,
+        "once:is_finished(0.75) and not once:is_finished(0.7) and not blink:is_finished(100)"
+    ));
+    assert!(eval::<bool>(
+        &simulation,
+        "no_frames_fail and no_time_fails"
+    ));
+
+    simulation.step();
+    assert_eq!(pixel(&simulation.screenshot().unwrap(), 0, 0), RED);
+    simulation.run_for(0.3);
+    assert_eq!(pixel(&simulation.screenshot().unwrap(), 0, 0), BLUE);
+}
+
+#[test]
 fn sprite_sheets_only_load_while_the_game_loads_or_updates() {
     let folder = game(
         "sprites_in_draw",

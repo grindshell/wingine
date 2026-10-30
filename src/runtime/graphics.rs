@@ -10,7 +10,7 @@ use mlua::{Lua, Table, UserDataRef};
 
 use super::{CANVAS, with_canvas, with_context, with_lent};
 use crate::{
-    graphics::{Camera, Canvas, Color, Font, Sprite, SpriteSheet, TextLayout, Texture},
+    graphics::{Animation, Camera, Canvas, Color, Font, Sprite, SpriteSheet, TextLayout, Texture},
     lua::check_layer,
     math::Rect,
     tilemap::Tilemap,
@@ -126,6 +126,13 @@ pub(super) fn module(lua: &Lua, folder: &Path, default_font: Font) -> mlua::Resu
     graphics.set(
         "default_font",
         lua.create_function(move |_, ()| Ok(default_font.clone()))?,
+    )?;
+    graphics.set(
+        "new_animation",
+        lua.create_function(|_, (frames, frame_time): (Vec<UserDataRef<Sprite>>, f32)| {
+            let frames = frames.iter().map(|sprite| Sprite::clone(sprite)).collect();
+            Animation::try_new(frames, frame_time).map_err(mlua::Error::runtime)
+        })?,
     )?;
     let root = folder.to_owned();
     // Each image is loaded once, and shared by every sheet made from it.
