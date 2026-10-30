@@ -23,23 +23,53 @@
 //! ```
 //!
 //! Scripts `require` other scripts by their path relative to the script, such as
-//! `require("./opponent")`. Files the engine loads, such as sounds, are relative to the game's
-//! folder.
+//! `require("./opponent")`. Files the engine loads, such as sounds and images, are relative to
+//! the game's folder.
 //!
-//! The engine's API is in three global tables:
+//! The engine's API is in five global tables:
 //!
-//! `graphics`, for drawing in `draw`. `graphics.size` and `graphics.default_font` work anywhere.
+//! `graphics`, for drawing in `draw`. `graphics.size` and `graphics.default_font` work anywhere,
+//! and `graphics.load_sprite_sheet` while the game loads and in `update`.
 //!
 //! - `graphics.clear(color)` fills the canvas with `color`, discarding anything drawn so far.
 //! - `graphics.fill_rect(x, y, width, height, color)`
+//! - `graphics.draw_sprite(sprite, x, y, tint, width, height)` draws `sprite` with its top-left
+//!   corner at `x`, `y`, its colors multiplied by `tint` (white, unchanged, by default), and
+//!   stretched to `width` by `height` (its own size by default).
 //! - `graphics.draw_text(font, text, x, y, color)` draws `text` with its top-left corner at `x`,
 //!   `y`, rounded to whole pixels.
-//! - `graphics.set_camera(x, y)` centers the view on world position `x`, `y` for whatever is drawn
-//!   next. `graphics.set_camera(nil)`, the default at the start of each frame, draws in canvas
-//!   pixels, as for a HUD.
+//! - `graphics.draw_text_layout(layout, x, y, color, glyphs)` draws text laid out with
+//!   `font:layout`, as `draw_text` does. With `glyphs`, it draws only that many of the layout's
+//!   glyphs, rounded down, so drawing a growing number reveals the text a little at a time.
+//! - `graphics.draw_tilemap(map, layer)` draws one layer of `map`, or all of them in order
+//!   without a layer. Only the cells the canvas shows are drawn.
+//! - `graphics.set_camera(x, y, bounds)` centers the view on world position `x`, `y` for whatever
+//!   is drawn next, keeping it inside `bounds`, a rect such as `map:bounds()`, if given.
+//!   `graphics.set_camera(nil)`, the default at the start of each frame, draws in canvas pixels,
+//!   as for a HUD.
 //! - `graphics.size()` returns the canvas's width and height. In a window, they're zero until
 //!   the first frame.
 //! - `graphics.default_font()` returns the built-in pixel font.
+//! - `graphics.load_sprite_sheet(path, tile_width, tile_height)` loads a PNG divided into a grid
+//!   of sprites `tile_width` by `tile_height` texels, starting at its top-left corner.
+//!
+//! `tilemap`, for building maps of tiles, anywhere:
+//!
+//! - `tilemap.new_tileset(tile_width, tile_height)` returns an empty tileset of tiles
+//!   `tile_width` by `tile_height` world units, which are canvas pixels without a camera.
+//! - `tilemap.new(tileset, columns, rows)` returns a map `columns` by `rows` tiles in size,
+//!   with no layers yet, built from a copy of `tileset`.
+//!
+//! `grid`, for walking from tile to tile, anywhere:
+//!
+//! - `grid.new_mover(column, row, step_time)` returns a mover standing on a tile and facing
+//!   down, which takes `step_time` seconds to walk to the next. Each frame, call
+//!   `mover:update(dt)`, then `mover:step(direction, blocked)` to start the next step once it
+//!   isn't moving. A step that starts as another ends picks up the time left over, so walking
+//!   keeps an even pace.
+//! - `grid.neighbor(direction, column, row)` returns the column and row of the next tile in
+//!   `direction`.
+//! - `grid.opposite(direction)`
 //!
 //! `input`, while the game loads and in `update`:
 //!
@@ -73,7 +103,9 @@
 
 mod audio;
 mod graphics;
+mod grid;
 mod input;
+mod tilemap;
 
 use std::{fs, path::Path};
 
@@ -177,9 +209,11 @@ impl LuauGame {
         let lua = scripts.lua();
         let font = ctx.default_font().clone();
         let globals = lua.globals();
-        globals.set("graphics", graphics::module(lua, font.clone())?)?;
+        globals.set("graphics", graphics::module(lua, folder, font.clone())?)?;
         globals.set("input", input::module(lua)?)?;
         globals.set("audio", audio::module(lua, folder)?)?;
+        globals.set("tilemap", tilemap::module(lua)?)?;
+        globals.set("grid", grid::module(lua)?)?;
         lend(lua, CONTEXT, ctx, || scripts.load(folder.join("main.luau")))?;
         Ok(Self {
             scripts,

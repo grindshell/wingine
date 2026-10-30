@@ -35,7 +35,7 @@ impl Tile {
 
 /// Identifies a tile in a [`Tileset`], as returned by [`Tileset::add`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TileId(u32);
+pub struct TileId(pub(crate) u32);
 
 /// The kinds of tile a [`Tilemap`] is built from, all the same size.
 #[derive(Clone, Debug)]

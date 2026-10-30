@@ -31,11 +31,35 @@
 //! - A [`Color`] is a hex string such as `"#f2c14e"`, with an optional alpha byte
 //!   (`"#00000080"`), or a table `{ r, g, b, a }` of components from 0 to 1, where `a` defaults
 //!   to 1.
+//! - A [`Rect`] is a table `{ x, y, width, height }`.
 //! - [`PlaySettings`] are a table with any of `volume`, `speed` and `pan`; the rest, or all of
 //!   them for `nil`, keep their defaults.
 //! - A [`Font`] is userdata with the methods `font:scaled(scale)`, `font:measure(text)` (its
-//!   width and height) and `font:line_height()`, and a [`Sound`] is userdata with
-//!   `sound:duration()`, in seconds.
+//!   width and height), `font:line_height()` and `font:layout(text, max_width)`, which lays text
+//!   out once to draw a little at a time, wrapping it to `max_width` if given. The
+//!   [`TextLayout`] it returns has `layout:size()`, `layout:glyph_count()` and
+//!   `layout:line_count()`.
+//! - A [`Sound`] is userdata with `sound:duration()`, in seconds.
+//! - A [`SpriteSheet`] is userdata with `sheet:sprite(column, row)`, counting from 0 at the
+//!   top-left, and `sheet:size()`, its columns and rows. A [`Sprite`] has `sprite:size()`, in
+//!   texels, and `sprite:flipped_x()` and `sprite:flipped_y()`, which return mirrored copies.
+//! - A [`Tileset`] is userdata with `tileset:add(tile)`, which adds a kind of tile and returns
+//!   its ID, a number. A [`Tile`] is a table `{ sprite, tint, solid }`, where `tint` defaults to
+//!   white and `solid` to false.
+//! - A [`Tilemap`] is userdata. Cells are a column and a row, counting from 0 at the top-left,
+//!   and layers are the numbers `map:add_layer()` returns. Its methods are `map:add_layer()`,
+//!   `map:layer_count()`, `map:size()` (its columns and rows), `map:get(layer, column, row)` (a
+//!   tile ID, or `nil` for an empty cell), `map:set(layer, column, row, tile)` (with `nil` to
+//!   empty the cell), `map:contains(column, row)`, `map:is_solid(column, row)`, `map:bounds()`
+//!   (the world area it covers), `map:tile_to_world(column, row)` and
+//!   `map:world_to_tile(x, y)`.
+//! - A [`GridMover`] is userdata with `mover:tile()`, `mover:position()` (in tiles, between two
+//!   during a step), `mover:facing()`, `mover:face(direction)`, `mover:is_moving()`,
+//!   `mover:step_time()`, `mover:set_step_time(seconds)`, `mover:place(column, row)`,
+//!   `mover:update(dt)` and `mover:step(direction, blocked)`. `blocked` is an optional function
+//!   that takes the column and row the mover would step onto and returns whether it's blocked;
+//!   the mover isn't borrowed while it runs, so it may look at the mover too. `step` returns
+//!   whether a step started.
 //!
 //! Scripts are [Luau](https://luau.org), not standard Lua 5.x, and run in Luau's sandbox: the
 //! standard library and built-ins are read-only, and the globals a script defines are seen by the
@@ -51,9 +75,11 @@ use mlua::{ErrorContext, FromLua, FromLuaMulti, IntoLua, IntoLuaMulti, thread::T
 use crate::{
     Error, Result,
     audio::{PlaySettings, Sound},
-    graphics::{Color, Font},
-    grid::Direction,
+    graphics::{Color, Font, Sprite, SpriteSheet, TextLayout},
+    grid::{Direction, GridMover},
     input::{Key, MouseButton},
+    math::Rect,
+    tilemap::{Tile, TileId, Tilemap, Tileset},
 };
 
 /// Built-ins written in Luau, defined before the sandbox makes the globals read-only. Each frame,
@@ -382,6 +408,23 @@ impl mlua::UserData for Font {
             Ok((width, height))
         });
         methods.add_method("line_height", |_, font, ()| Ok(font.line_height()));
+        methods.add_method(
+            "layout",
+            |_, font, (text, max_width): (mlua::LuaString, Option<f32>)| {
+                Ok(font.layout(&text.to_str()?, max_width))
+            },
+        );
+    }
+}
+
+impl mlua::UserData for TextLayout {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("size", |_, layout, ()| {
+            let [width, height] = layout.size();
+            Ok((width, height))
+        });
+        methods.add_method("glyph_count", |_, layout, ()| Ok(layout.glyph_count()));
+        methods.add_method("line_count", |_, layout, ()| Ok(layout.line_count()));
     }
 }
 
@@ -389,6 +432,201 @@ impl mlua::UserData for Sound {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("duration", |_, sound, ()| Ok(sound.duration()));
     }
+}
+
+impl IntoLua for Rect {
+    fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
+        let table = lua.create_table()?;
+        table.set("x", self.x)?;
+        table.set("y", self.y)?;
+        table.set("width", self.w)?;
+        table.set("height", self.h)?;
+        Ok(mlua::Value::Table(table))
+    }
+}
+
+impl FromLua for Rect {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        match &value {
+            mlua::Value::Table(table) => Ok(Rect::new(
+                table.get("x")?,
+                table.get("y")?,
+                table.get("width")?,
+                table.get("height")?,
+            )),
+            _ => {
+                let message = "expected a table { x, y, width, height }".into();
+                Err(conversion_error(&value, "Rect", message))
+            }
+        }
+    }
+}
+
+impl mlua::UserData for Sprite {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("size", |_, sprite, ()| {
+            Ok((sprite.width(), sprite.height()))
+        });
+        methods.add_method("flipped_x", |_, sprite, ()| Ok(sprite.clone().flipped_x()));
+        methods.add_method("flipped_y", |_, sprite, ()| Ok(sprite.clone().flipped_y()));
+    }
+}
+
+impl mlua::UserData for SpriteSheet {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("sprite", |_, sheet, (column, row): (u32, u32)| {
+            if column >= sheet.columns() || row >= sheet.rows() {
+                return Err(mlua::Error::runtime(format!(
+                    "sprite ({column}, {row}) is outside a {}x{} sprite sheet",
+                    sheet.columns(),
+                    sheet.rows()
+                )));
+            }
+            Ok(sheet.sprite(column, row))
+        });
+        methods.add_method("size", |_, sheet, ()| Ok((sheet.columns(), sheet.rows())));
+    }
+}
+
+impl FromLua for Tile {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        let mlua::Value::Table(table) = &value else {
+            let message = "expected a table { sprite, tint, solid }".into();
+            return Err(conversion_error(&value, "Tile", message));
+        };
+        let sprite: mlua::UserDataRef<Sprite> = table.get("sprite")?;
+        Ok(Tile {
+            tint: table.get::<Option<Color>>("tint")?.unwrap_or(Color::WHITE),
+            solid: table.get::<Option<bool>>("solid")?.unwrap_or(false),
+            ..Tile::new(sprite.clone())
+        })
+    }
+}
+
+impl mlua::UserData for Tileset {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method_mut("add", |_, tileset, tile: Tile| Ok(tileset.add(tile).0));
+    }
+}
+
+impl mlua::UserData for Tilemap {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method_mut("add_layer", |_, map, ()| Ok(map.add_layer()));
+        methods.add_method("layer_count", |_, map, ()| Ok(map.layer_count()));
+        methods.add_method("size", |_, map, ()| Ok((map.columns(), map.rows())));
+        methods.add_method("get", |_, map, (layer, column, row): (usize, i32, i32)| {
+            check_layer(map, layer)?;
+            Ok(map.get(layer, [column, row]).map(|id| id.0))
+        });
+        methods.add_method_mut(
+            "set",
+            |_, map, (layer, column, row, tile): (usize, i32, i32, Option<u32>)| {
+                check_layer(map, layer)?;
+                if !map.contains([column, row]) {
+                    return Err(mlua::Error::runtime(format!(
+                        "tile ({column}, {row}) is outside a {}x{} map",
+                        map.columns(),
+                        map.rows()
+                    )));
+                }
+                if let Some(id) = tile
+                    && id as usize >= map.tileset().len()
+                {
+                    return Err(mlua::Error::runtime(format!(
+                        "the map's tileset has no tile {id}"
+                    )));
+                }
+                map.set(layer, [column, row], tile.map(TileId));
+                Ok(())
+            },
+        );
+        methods.add_method("contains", |_, map, (column, row): (i32, i32)| {
+            Ok(map.contains([column, row]))
+        });
+        methods.add_method("is_solid", |_, map, (column, row): (i32, i32)| {
+            Ok(map.is_solid([column, row]))
+        });
+        methods.add_method("bounds", |_, map, ()| Ok(map.bounds()));
+        methods.add_method("tile_to_world", |_, map, (column, row): (f32, f32)| {
+            let [x, y] = map.tile_to_world([column, row]);
+            Ok((x, y))
+        });
+        methods.add_method("world_to_tile", |_, map, (x, y): (f32, f32)| {
+            let [column, row] = map.world_to_tile([x, y]);
+            Ok((column, row))
+        });
+    }
+}
+
+/// Fails unless `map` has a layer `layer`.
+pub(crate) fn check_layer(map: &Tilemap, layer: usize) -> mlua::Result<()> {
+    if layer >= map.layer_count() {
+        let layers = map.layer_count();
+        return Err(mlua::Error::runtime(format!(
+            "there's no layer {layer} in a map of {layers} layers"
+        )));
+    }
+    Ok(())
+}
+
+impl mlua::UserData for GridMover {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("tile", |_, mover, ()| {
+            let [column, row] = mover.tile();
+            Ok((column, row))
+        });
+        methods.add_method("position", |_, mover, ()| {
+            let [x, y] = mover.position();
+            Ok((x, y))
+        });
+        methods.add_method("facing", |_, mover, ()| Ok(mover.facing()));
+        methods.add_method_mut("face", |_, mover, direction: Direction| {
+            mover.face(direction);
+            Ok(())
+        });
+        methods.add_method("is_moving", |_, mover, ()| Ok(mover.is_moving()));
+        methods.add_method("step_time", |_, mover, ()| Ok(mover.step_time()));
+        methods.add_method_mut("set_step_time", |_, mover, seconds: f32| {
+            mover.set_step_time(step_time(seconds)?);
+            Ok(())
+        });
+        methods.add_method_mut("place", |_, mover, (column, row): (i32, i32)| {
+            mover.place([column, row]);
+            Ok(())
+        });
+        methods.add_method_mut("update", |_, mover, dt: f32| {
+            mover.update(dt);
+            Ok(())
+        });
+        // `blocked` runs while the mover isn't borrowed, so it can look at this mover too.
+        methods.add_function(
+            "step",
+            |_, (this, direction, blocked): (mlua::AnyUserData, Direction, Option<mlua::Function>)| {
+                let next = {
+                    let mover = this.borrow::<GridMover>()?;
+                    if mover.is_moving() {
+                        return Ok(false);
+                    }
+                    direction.neighbor(mover.tile())
+                };
+                let is_blocked = match blocked {
+                    Some(blocked) => blocked.call::<bool>((next[0], next[1]))?,
+                    None => false,
+                };
+                let mut mover = this.borrow_mut::<GridMover>()?;
+                Ok(mover.step(direction, |_| is_blocked))
+            },
+        );
+    }
+}
+
+/// `seconds`, if it's a step time a [`GridMover`] accepts.
+pub(crate) fn step_time(seconds: f32) -> mlua::Result<f32> {
+    if !(seconds.is_finite() && seconds > 0.0) {
+        let message = format!("step time must be a positive number of seconds, not {seconds}");
+        return Err(mlua::Error::runtime(message));
+    }
+    Ok(seconds)
 }
 
 /// Converts a string to `T` by parsing it, for engine types scripts refer to by name.

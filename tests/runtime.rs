@@ -303,6 +303,292 @@ fn fonts_measure_and_scale() {
     assert!(eval::<bool>(&simulation, "zero_scale_fails"));
 }
 
+/// Writes a PNG `width` by `height` pixels to `path`, with `pixels` row by row.
+fn write_png(path: &Path, width: u32, height: u32, pixels: &[[u8; 4]]) {
+    let image = image::RgbaImage::from_raw(width, height, pixels.concat()).unwrap();
+    image.save(path).unwrap();
+}
+
+const RED: [u8; 4] = [255, 0, 0, 255];
+const BLUE: [u8; 4] = [0, 0, 255, 255];
+const WHITE: [u8; 4] = [255, 255, 255, 255];
+const BLACK: [u8; 4] = [0, 0, 0, 255];
+
+#[test]
+fn sprites_load_from_sheets_and_draw() {
+    let folder = game(
+        "sprites",
+        &[
+            ("window.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "local sheet = graphics.load_sprite_sheet('art/sheet.png', 1, 1)
+                columns, rows = sheet:size()
+                local red, blue = sheet:sprite(0, 0), sheet:sprite(1, 0)
+                width, height = blue:size()
+                outside_fails = not pcall(function() sheet:sprite(2, 0) end)
+                empty_tiles_fail = not pcall(function()
+                    graphics.load_sprite_sheet('art/sheet.png', 0, 1)
+                end)
+
+                function draw()
+                    graphics.clear('#000000')
+                    -- Stretched, then at its own size, mirrored and tinted.
+                    graphics.draw_sprite(blue, 0, 0, nil, 10, 20)
+                    graphics.draw_sprite(red:flipped_x(), 12, 0, '#ffffff')
+                end",
+            ),
+        ],
+    );
+    fs::create_dir_all(folder.join("art")).unwrap();
+    write_png(&folder.join("art/sheet.png"), 2, 1, &[RED, BLUE]);
+
+    let mut simulation = simulation(&folder);
+    assert_eq!(eval::<(u32, u32)>(&simulation, "columns, rows"), (2, 1));
+    assert_eq!(eval::<(f32, f32)>(&simulation, "width, height"), (1.0, 1.0));
+    assert!(eval::<bool>(&simulation, "outside_fails"));
+    assert!(eval::<bool>(&simulation, "empty_tiles_fail"));
+
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&image, 9, 19), BLUE);
+    assert_eq!(pixel(&image, 10, 19), BLACK);
+    assert_eq!(pixel(&image, 12, 0), RED);
+    assert_eq!(pixel(&image, 13, 0), BLACK);
+}
+
+#[test]
+fn sprite_sheets_only_load_while_the_game_loads_or_updates() {
+    let folder = game(
+        "sprites_in_draw",
+        &[(
+            "main.luau",
+            "function draw() graphics.load_sprite_sheet('sheet.png', 1, 1) end",
+        )],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    assert!(stopped_with(&simulation).contains("not in `draw`"));
+}
+
+#[test]
+fn tilemaps_hold_tiles_in_layers_and_draw_them() {
+    let folder = game(
+        "tilemaps",
+        &[
+            (
+                "window.luau",
+                "return { width = 30, height = 20, resolution = { width = 30, height = 20 } }",
+            ),
+            (
+                "main.luau",
+                "local white = graphics.load_sprite_sheet('white.png', 1, 1):sprite(0, 0)
+                local tileset = tilemap.new_tileset(10, 10)
+                local grass = tileset:add({ sprite = white, tint = '#ff0000' })
+                local wall = tileset:add({ sprite = white, tint = '#0000ff', solid = true })
+                map = tilemap.new(tileset, 3, 2)
+                ground = map:add_layer()
+                walls = map:add_layer()
+                for row = 0, 1 do
+                    for column = 0, 2 do
+                        map:set(ground, column, row, grass)
+                    end
+                end
+                map:set(walls, 1, 0, wall)
+                map:set(walls, 2, 1, wall)
+                map:set(walls, 2, 1, nil)
+
+                function fails(f)
+                    local ok, err = pcall(f)
+                    return if ok then nil else tostring(err)
+                end
+                outside = fails(function() map:set(ground, 3, 0, grass) end)
+                no_tile = fails(function() map:set(ground, 0, 0, 7) end)
+                no_layer = fails(function() map:get(2, 0, 0) end)
+
+                only_ground = false
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.draw_tilemap(map, if only_ground then ground else nil)
+                end",
+            ),
+        ],
+    );
+    write_png(&folder.join("white.png"), 1, 1, &[WHITE]);
+
+    let mut simulation = simulation(&folder);
+    let check = |expression: &str| eval::<bool>(&simulation, expression);
+    assert!(check(
+        "map:get(walls, 1, 0) ~= nil and map:get(walls, 2, 1) == nil"
+    ));
+    assert!(check("map:is_solid(1, 0) and not map:is_solid(2, 1)"));
+    assert!(check("map:is_solid(-1, 0) and not map:contains(-1, 0)"));
+    assert_eq!(eval::<(u32, u32)>(&simulation, "map:size()"), (3, 2));
+    assert_eq!(eval::<usize>(&simulation, "map:layer_count()"), 2);
+    let bounds: (f32, f32, f32, f32) = eval(
+        &simulation,
+        "map:bounds().x, map:bounds().y, map:bounds().width, map:bounds().height",
+    );
+    assert_eq!(bounds, (0.0, 0.0, 30.0, 20.0));
+    assert_eq!(
+        eval::<(i32, i32)>(&simulation, "map:world_to_tile(15, 19.5)"),
+        (1, 1)
+    );
+    assert_eq!(
+        eval::<(f32, f32)>(&simulation, "map:tile_to_world(1.5, 1)"),
+        (15.0, 10.0)
+    );
+    for (name, message) in [
+        ("outside", "tile (3, 0) is outside a 3x2 map"),
+        ("no_tile", "the map's tileset has no tile 7"),
+        ("no_layer", "there's no layer 2 in a map of 2 layers"),
+    ] {
+        let err: String = eval(&simulation, name);
+        assert!(err.contains(message), "{name}: {err}");
+    }
+
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&image, 15, 5), BLUE, "the wall, over the ground");
+    assert_eq!(pixel(&image, 25, 15), RED);
+    simulation
+        .game()
+        .scripts()
+        .load_source("test", "only_ground = true")
+        .unwrap();
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&image, 15, 5), RED);
+}
+
+#[test]
+fn grid_movers_walk_from_tile_to_tile() {
+    let folder = game(
+        "grid_movers",
+        &[(
+            "main.luau",
+            "local mover = grid.new_mover(2, 2, 0.5)
+            started = mover:step('right')
+            column, row = mover:tile()
+            mover:update(0.25)
+            x, y = mover:position()
+            moving = mover:is_moving()
+            mover:update(0.25)
+            arrived = not mover:is_moving()
+
+            -- The blocked function sees where the mover would go, and may look at the mover.
+            blocked_step = mover:step('up', function(c, r)
+                checked = { c, r }
+                local mc, mr = mover:tile()
+                from = { mc, mr }
+                return true
+            end)
+            facing = mover:facing()
+            neighbor = { grid.neighbor('left', 0, 0) }
+            opposite = grid.opposite('up')
+            zero_step_time_fails = not pcall(function() grid.new_mover(0, 0, 0) end)",
+        )],
+    );
+    let simulation = simulation(&folder);
+    assert!(eval::<bool>(&simulation, "started"));
+    assert_eq!(eval::<(i32, i32)>(&simulation, "column, row"), (3, 2));
+    assert_eq!(eval::<(f32, f32)>(&simulation, "x, y"), (2.5, 2.0));
+    assert!(eval::<bool>(&simulation, "moving and arrived"));
+    assert!(!eval::<bool>(&simulation, "blocked_step"));
+    assert_eq!(
+        eval::<(i32, i32, i32, i32)>(&simulation, "checked[1], checked[2], from[1], from[2]"),
+        (3, 1, 3, 2)
+    );
+    assert_eq!(eval::<String>(&simulation, "facing"), "up", "turned");
+    assert_eq!(
+        eval::<(i32, i32)>(&simulation, "neighbor[1], neighbor[2]"),
+        (-1, 0)
+    );
+    assert_eq!(eval::<String>(&simulation, "opposite"), "down");
+    assert!(eval::<bool>(&simulation, "zero_step_time_fails"));
+}
+
+#[test]
+fn text_layouts_reveal_their_glyphs() {
+    let folder = game(
+        "text_layouts",
+        &[
+            ("window.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "local font = graphics.default_font()
+                -- Just too narrow for the text on one line.
+                max_width = font:measure('Hi there') - 1
+                layout = font:layout('Hi there', max_width)
+                lines = layout:line_count()
+                glyphs = layout:glyph_count()
+                width, height = layout:size()
+                line_height = font:line_height()
+                shown = 0
+
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.draw_text_layout(layout, 0, 0, '#ffffff', shown)
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    assert_eq!(eval::<usize>(&simulation, "lines"), 2, "wrapped");
+    assert_eq!(
+        eval::<usize>(&simulation, "glyphs"),
+        7,
+        "spaces don't count"
+    );
+    let (width, height): (f32, f32) = eval(&simulation, "width, height");
+    assert!(width <= eval::<f32>(&simulation, "max_width"));
+    assert_eq!(height, 2.0 * eval::<f32>(&simulation, "line_height"));
+
+    let lit = |simulation: &mut Simulation<LuauGame>| {
+        simulation.step();
+        let image = simulation.screenshot().unwrap();
+        image.pixels().chunks(4).filter(|p| p[0] > 0).count()
+    };
+    assert_eq!(lit(&mut simulation), 0, "none shown");
+    simulation
+        .game()
+        .scripts()
+        .load_source("test", "shown = 1.9")
+        .unwrap();
+    let one = lit(&mut simulation);
+    simulation
+        .game()
+        .scripts()
+        .load_source("test", "shown = nil")
+        .unwrap();
+    let all = lit(&mut simulation);
+    assert!(0 < one && one < all, "{one} of {all}");
+}
+
+#[test]
+fn the_camera_stays_inside_its_bounds() {
+    let folder = game(
+        "camera_bounds",
+        &[
+            ("window.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "function draw()
+                    graphics.clear('#000000')
+                    -- Centered on the world's corner, the view would show half off the world.
+                    graphics.set_camera(0, 0, { x = 0, y = 0, width = 40, height = 40 })
+                    graphics.fill_rect(0, 0, 2, 2, '#ff0000')
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&image, 1, 1), RED);
+    assert_eq!(pixel(&image, 11, 11), BLACK);
+}
+
 #[test]
 fn games_that_fail_to_load_are_errors() {
     let config = wingine::WindowConfig::default();

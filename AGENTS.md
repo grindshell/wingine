@@ -92,9 +92,16 @@ of scope until the milestone is done.
   Its unit tests don't need a GPU.
 - `src/runtime/`: games written entirely in Luau, run from a folder holding `main.luau` and an
   optional `window.luau` of window settings. `LuauGame` is the `Game` that runs one, and the
-  engine's API for it is the global tables `graphics`, `input` and `audio`, one file each. The
-  module docs are the reference for script authors.
+  engine's API for it is the global tables `graphics`, `input`, `audio`, `tilemap` and `grid`,
+  one file each. The module docs are the reference for script authors; the engine types those
+  tables hand out (sprites, tilemaps, grid movers, text layouts) are userdata, documented with
+  their methods in `src/lua.rs`.
 - `src/main.rs`: the `wingine` executable, which runs a Luau game: `cargo run -- examples/pong`.
+- `examples/rpg/`: the milestone's RPG, written entirely in Luau. Maps in `maps/` are rows of
+  symbols, which `world.luau` turns into tiles with descriptions; examining any cell shows its
+  description. `story.luau` holds conversations and events, which maps refer to by name, and
+  `dialogue.luau` the dialogue box, whose `say` and `ask` wait for the player. The game's state
+  is the global `rpg`.
 - `src/script.rs`: scripted runs, which drive a game with simulated input from a text file
   (unrelated to Luau scripts), built on `Simulation`.
 - `src/math.rs`: geometry types such as `Rect`.
@@ -102,12 +109,14 @@ of scope until the milestone is done.
   `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
   `Simulation`, and its events and NPC are scripted in `sprites.luau`. `pong/` is a game written
   entirely in Luau, with its computer opponent in `opponent.luau`. The sounds and music in
-  `examples/sounds/` were synthesized for `sprites`; `pong` has copies of the ones it uses.
+  `examples/sounds/` were synthesized for `sprites`; `pong` and `rpg` have copies of the ones
+  they use, and `rpg` a copy of the tileset.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders.
 - `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
   expressions such as `pong.ball.vx`.
+- `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest.
 
 ## Conventions
 
@@ -162,6 +171,7 @@ cargo fmt
 cargo run --example shapes
 cargo run --example sprites
 cargo run -- examples/pong
+cargo run -- examples/rpg
 ```
 
 Run `cargo fmt` and `cargo clippy --all-targets` before considering a change finished, and keep
