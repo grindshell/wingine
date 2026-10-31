@@ -1,0 +1,490 @@
+//! Writing scene files, in one canonical layout.
+//!
+//! The layout is fixed, so writing the same scene always gives the same text, and changing one
+//! thing changes few lines: every field of a node or sheet on a line of its own, in a fixed order,
+//! and fields at their defaults left out. Lists of plain values, such as a cell or tags, stay on
+//! one line. Indents are four spaces, and every field ends with a comma.
+
+use std::fmt::Write;
+
+use super::file::{FORMAT, KindDef, NodeDef, SceneFile, SheetDef, Value};
+use crate::graphics::Color;
+
+/// `scene` as the text of a scene file, or why it can't be written: only finite numbers can.
+pub(super) fn write(scene: &SceneFile) -> Result<String, String> {
+    let mut writer = Writer::default();
+    writer.out.push_str("return ");
+    writer.open();
+    writer.field("format", &FORMAT.to_string());
+    if !scene.sheets.is_empty() {
+        writer.key("sheets");
+        writer.open();
+        for (name, sheet) in &scene.sheets {
+            writer.key(name);
+            writer.sheet(sheet);
+            writer.end_field();
+        }
+        writer.close();
+        writer.end_field();
+    }
+    if !scene.props.is_empty() {
+        writer.key("props");
+        writer
+            .map(&scene.props)
+            .map_err(|err| format!("the scene's props: {err}"))?;
+        writer.end_field();
+    }
+    writer.children(&scene.children, "")?;
+    writer.close();
+    writer.out.push('\n');
+    Ok(writer.out)
+}
+
+#[derive(Default)]
+struct Writer {
+    out: String,
+    depth: usize,
+}
+
+impl Writer {
+    /// Starts a table whose entries go on lines of their own.
+    fn open(&mut self) {
+        self.out.push_str("{\n");
+        self.depth += 1;
+    }
+
+    fn close(&mut self) {
+        self.depth -= 1;
+        self.indent();
+        self.out.push('}');
+    }
+
+    fn indent(&mut self) {
+        for _ in 0..self.depth {
+            self.out.push_str("    ");
+        }
+    }
+
+    /// Starts a field: its key, then its value goes next.
+    fn key(&mut self, key: &str) {
+        self.indent();
+        if is_identifier(key) {
+            self.out.push_str(key);
+        } else {
+            self.out.push('[');
+            self.out.push_str(&quoted(key));
+            self.out.push(']');
+        }
+        self.out.push_str(" = ");
+    }
+
+    fn end_field(&mut self) {
+        self.out.push_str(",\n");
+    }
+
+    /// A field whose value is `value`, written already.
+    fn field(&mut self, key: &str, value: &str) {
+        self.key(key);
+        self.out.push_str(value);
+        self.end_field();
+    }
+
+    fn number_field(&mut self, key: &str, value: f32) -> Result<(), String> {
+        let value = single(value, key)?;
+        self.field(key, &value);
+        Ok(())
+    }
+
+    fn pair_field(&mut self, key: &str, [x, y]: [f32; 2]) -> Result<(), String> {
+        let value = format!("{{ {}, {} }}", single(x, key)?, single(y, key)?);
+        self.field(key, &value);
+        Ok(())
+    }
+
+    fn sheet(&mut self, sheet: &SheetDef) {
+        self.open();
+        self.field("path", &quoted(&sheet.path));
+        self.field("tile_width", &sheet.tile_width.to_string());
+        self.field("tile_height", &sheet.tile_height.to_string());
+        self.close();
+    }
+
+    /// The `children` field of the node at `parent`, or of the scene for `""`, if it has any.
+    fn children(&mut self, children: &[NodeDef], parent: &str) -> Result<(), String> {
+        if children.is_empty() {
+            return Ok(());
+        }
+        self.key("children");
+        self.open();
+        for child in children {
+            let path = if parent.is_empty() {
+                child.name.clone()
+            } else {
+                format!("{parent}/{}", child.name)
+            };
+            self.indent();
+            self.node(child, &path)?;
+            self.end_field();
+        }
+        self.close();
+        self.end_field();
+        Ok(())
+    }
+
+    fn node(&mut self, node: &NodeDef, path: &str) -> Result<(), String> {
+        let at = |err: String| format!("node `{path}`: {err}");
+        self.open();
+        self.field("name", &quoted(&node.name));
+        self.field("kind", &quoted(node.kind.name()));
+        let numbers = [
+            ("x", node.x, 0.0),
+            ("y", node.y, 0.0),
+            ("rotation", node.rotation, 0.0),
+            ("scale_x", node.scale_x, 1.0),
+            ("scale_y", node.scale_y, 1.0),
+        ];
+        for (key, value, default) in numbers {
+            if value != default {
+                self.number_field(key, value).map_err(at)?;
+            }
+        }
+        if !node.visible {
+            self.field("visible", "false");
+        }
+        self.kind(&node.kind).map_err(at)?;
+        if !node.tags.is_empty() {
+            let tags: Vec<String> = node.tags.iter().map(|tag| quoted(tag)).collect();
+            self.field("tags", &format!("{{ {} }}", tags.join(", ")));
+        }
+        if !node.props.is_empty() {
+            self.key("props");
+            self.map(&node.props)
+                .map_err(|err| at(format!("props: {err}")))?;
+            self.end_field();
+        }
+        self.children(&node.children, path)?;
+        self.close();
+        Ok(())
+    }
+
+    /// The fields of what a node holds, in a fixed order: what it shows, its size, its pivot,
+    /// then its color.
+    fn kind(&mut self, kind: &KindDef) -> Result<(), String> {
+        match kind {
+            KindDef::Node => {}
+            KindDef::Sprite(sprite) => {
+                self.field("sheet", &quoted(&sprite.sheet));
+                let [column, row] = sprite.cell;
+                self.field("cell", &format!("{{ {column}, {row} }}"));
+                if let Some([width, height]) = sprite.size {
+                    self.number_field("width", width)?;
+                    self.number_field("height", height)?;
+                }
+                self.pivot(sprite.pivot)?;
+                self.color("tint", sprite.tint);
+            }
+            KindDef::Rect(rect) => {
+                self.number_field("width", rect.size[0])?;
+                self.number_field("height", rect.size[1])?;
+                self.pivot(rect.pivot)?;
+                self.color("color", rect.color);
+            }
+            KindDef::Text(text) => {
+                self.field("text", &quoted(&text.text));
+                if text.font_scale != 1.0 {
+                    self.number_field("font_scale", text.font_scale)?;
+                }
+                if let Some(wrap) = text.wrap {
+                    self.number_field("wrap", wrap)?;
+                }
+                self.pivot(text.pivot)?;
+                self.color("color", text.color);
+            }
+            KindDef::Area(area) => {
+                self.number_field("width", area.size[0])?;
+                self.number_field("height", area.size[1])?;
+                self.pivot(area.pivot)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn pivot(&mut self, pivot: [f32; 2]) -> Result<(), String> {
+        if pivot != [0.0, 0.0] {
+            self.pair_field("pivot", pivot)?;
+        }
+        Ok(())
+    }
+
+    /// A color field, as a hex string, unless it's white, the default.
+    fn color(&mut self, key: &str, color: Color) {
+        let bytes = color.to_rgba8();
+        if bytes == Color::WHITE.to_rgba8() {
+            return;
+        }
+        let [r, g, b, a] = bytes;
+        let mut hex = format!("#{r:02x}{g:02x}{b:02x}");
+        if a != 255 {
+            write!(hex, "{a:02x}").unwrap();
+        }
+        self.field(key, &quoted(&hex));
+    }
+
+    /// A table with strings for keys, in the order of its keys.
+    fn map<'a>(
+        &mut self,
+        map: impl IntoIterator<Item = (&'a String, &'a Value)>,
+    ) -> Result<(), String> {
+        let mut entries = map.into_iter().peekable();
+        if entries.peek().is_none() {
+            self.out.push_str("{}");
+            return Ok(());
+        }
+        self.open();
+        for (key, value) in entries {
+            self.key(key);
+            self.value(value).map_err(|err| format!("`{key}`: {err}"))?;
+            self.end_field();
+        }
+        self.close();
+        Ok(())
+    }
+
+    fn value(&mut self, value: &Value) -> Result<(), String> {
+        match value {
+            Value::Bool(value) => self.out.push_str(if *value { "true" } else { "false" }),
+            Value::Number(number) => {
+                if !number.is_finite() {
+                    return Err(format!(
+                        "{number} can't be written: scene files hold only finite numbers"
+                    ));
+                }
+                write!(self.out, "{number}").unwrap();
+            }
+            Value::String(string) => self.out.push_str(&quoted(string)),
+            Value::List(items) if items.is_empty() => self.out.push_str("{}"),
+            Value::List(items) => {
+                let plain = items
+                    .iter()
+                    .all(|item| !matches!(item, Value::List(_) | Value::Map(_)));
+                if plain {
+                    self.out.push_str("{ ");
+                    for (i, item) in items.iter().enumerate() {
+                        if i > 0 {
+                            self.out.push_str(", ");
+                        }
+                        self.value(item)
+                            .map_err(|err| format!("item {}: {err}", i + 1))?;
+                    }
+                    self.out.push_str(" }");
+                } else {
+                    self.open();
+                    for (i, item) in items.iter().enumerate() {
+                        self.indent();
+                        self.value(item)
+                            .map_err(|err| format!("item {}: {err}", i + 1))?;
+                        self.end_field();
+                    }
+                    self.close();
+                }
+            }
+            Value::Map(map) => self.map(map)?,
+        }
+        Ok(())
+    }
+}
+
+/// `value` written so Luau reads it back as the same `f32`, if it's finite.
+fn single(value: f32, field: &str) -> Result<String, String> {
+    if !value.is_finite() {
+        return Err(format!(
+            "`{field}` is {value}, which can't be written: scene files hold only finite numbers"
+        ));
+    }
+    // The shortest decimal that reads back as `value`. Luau reads it as an `f64`, and rounding
+    // that to an `f32` gives `value` again: an `f64` has more than twice the precision.
+    Ok(format!("{value}"))
+}
+
+/// `text` as a Luau string literal, in double quotes.
+fn quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_ascii_control() => write!(out, "\\x{:02x}", c as u32).unwrap(),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Whether `key` can be written bare, as `key = value`, rather than as `["key"] = value`.
+fn is_identifier(key: &str) -> bool {
+    const KEYWORDS: [&str; 22] = [
+        "and", "break", "continue", "do", "else", "elseif", "end", "false", "for", "function",
+        "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until",
+        "while",
+    ];
+    let mut chars = key.chars();
+    let starts = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    starts && chars.all(|c| c.is_ascii_alphanumeric() || c == '_') && !KEYWORDS.contains(&key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::{Props, RectDef, SpriteDef};
+
+    /// A scene in its canonical layout.
+    const CANONICAL: &str = r##"return {
+    format = 1,
+    sheets = {
+        tiles = {
+            path = "tiles.png",
+            tile_width = 16,
+            tile_height = 16,
+        },
+    },
+    props = {
+        music = "garden.ogg",
+    },
+    children = {
+        {
+            name = "mill",
+            kind = "sprite",
+            x = 120,
+            y = 80.5,
+            rotation = -0.1,
+            sheet = "tiles",
+            cell = { 3, 20 },
+            pivot = { 8, 16 },
+            tint = "#d8b070",
+            tags = { "building", "solid" },
+            children = {
+                {
+                    name = "sails",
+                    kind = "node",
+                    y = -12,
+                    visible = false,
+                },
+            },
+        },
+        {
+            name = "sign",
+            kind = "area",
+            width = 16,
+            height = 8,
+            props = {
+                route = { "left", 2, true },
+                text = "“Mind the gap,” it says.\n\tSigned, \"the miller\"",
+                where = {
+                    ["end"] = 3,
+                    ["the mill"] = {
+                        { 1, 2 },
+                        {},
+                    },
+                },
+            },
+        },
+    },
+}
+"##;
+
+    fn parse(source: &str) -> SceneFile {
+        SceneFile::parse(source, "test.scene.luau").unwrap()
+    }
+
+    #[test]
+    fn writing_a_canonical_file_gives_it_back() {
+        let scene = parse(CANONICAL);
+        assert_eq!(scene.to_luau().unwrap(), CANONICAL);
+    }
+
+    #[test]
+    fn reading_what_is_written_gives_the_same_scene() {
+        let scene = parse(
+            "return { format = 1, children = {
+                { name = 'a', kind = 'rect', width = 0.1, height = 1e-7, x = 123456.789,
+                  rotation = 3.14159, color = { r = 0.5, g = 0.25, b = 1, a = 0.3 } },
+                { name = 'b', kind = 'text', text = '\\0\\1 bell\\a', wrap = 64, font_scale = 3 },
+            } }",
+        );
+        let written = scene.to_luau().unwrap();
+        let again = parse(&written);
+        assert_eq!(again, scene);
+        assert_eq!(again.to_luau().unwrap(), written, "the same bytes");
+    }
+
+    #[test]
+    fn scenes_built_in_rust_write_and_read_back() {
+        let mut mill = NodeDef::new(
+            "mill",
+            KindDef::Sprite(SpriteDef {
+                sheet: "tiles".into(),
+                cell: [1, 2],
+                size: Some([32.0, 32.0]),
+                pivot: [0.5, 0.25],
+                tint: Color::rgba8(1, 2, 3, 4),
+            }),
+        );
+        mill.scale_x = 2.0;
+        mill.tags = vec!["while".into()];
+        mill.children.push(NodeDef::new(
+            "floor",
+            KindDef::Rect(RectDef {
+                size: [8.0, 8.0],
+                pivot: [0.0, 0.0],
+                color: Color::BLACK,
+            }),
+        ));
+        let mut props = Props::new();
+        props.insert("for".into(), Value::Number(-0.5));
+        let scene = SceneFile {
+            sheets: [(
+                "tiles".to_owned(),
+                SheetDef {
+                    path: "tiles.png".into(),
+                    tile_width: 8,
+                    tile_height: 8,
+                },
+            )]
+            .into(),
+            props,
+            children: vec![mill],
+        };
+        let written = scene.to_luau().unwrap();
+        assert!(written.contains("[\"for\"] = -0.5,"), "{written}");
+        assert_eq!(parse(&written), scene);
+    }
+
+    #[test]
+    fn numbers_that_are_not_finite_cannot_be_written() {
+        let mut node = NodeDef::new("spinning", KindDef::Node);
+        node.rotation = f32::INFINITY;
+        let scene = SceneFile {
+            children: vec![node],
+            ..SceneFile::default()
+        };
+        let err = scene.to_luau().unwrap_err().to_string();
+        assert!(err.contains("node `spinning`: `rotation` is inf"), "{err}");
+    }
+
+    #[test]
+    fn keys_are_bare_when_they_can_be() {
+        assert!(is_identifier("tile_width"));
+        assert!(is_identifier("_x1"));
+        assert!(!is_identifier("1x"));
+        assert!(!is_identifier("the mill"));
+        assert!(!is_identifier("end"));
+        assert!(!is_identifier(""));
+    }
+}

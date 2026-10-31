@@ -73,6 +73,23 @@
 //!   `blocked` is an optional function that takes the column and row the mover would step onto
 //!   and returns whether it's blocked; the mover isn't borrowed while it runs, so it may look at
 //!   the mover too. `step` returns whether a step started.
+//! - A [`SceneNode`] is userdata for a node of a [`Scene`], which every node of the scene shares;
+//!   two of the same node are `==`. Finding nodes: `node:name()`, `node:kind()` (`"node"`,
+//!   `"sprite"`, `"rect"`, `"text"` or `"area"`), `node:path()` (the names from the root, joined
+//!   by `/`), `node:find(path)` (the node `path` leads to from this one, or `nil`),
+//!   `node:tagged(tag)` (this node and those inside it with the tag, in draw order),
+//!   `node:parent()`, `node:children()`, `node:tags()`, `node:has_tag(tag)` and `node:props()`
+//!   (a copy of its props, as a table). Placing them, within their parents:
+//!   `node:position()`, `node:set_position(x, y)`, `node:rotation()`,
+//!   `node:set_rotation(angle)`, `node:scale()`, `node:set_scale(x, y)` (`y` is `x` if left
+//!   out), `node:world_position()` (its origin in the scene's coordinates),
+//!   `node:is_visible()` and `node:set_visible(visible)`; numbers must be finite. What they
+//!   cover: `node:size()`, `node:set_size(width, height)` (sprites, rects and areas),
+//!   `node:bounds()` (a `Rect` in the scene's coordinates, or `nil` for a plain node) and
+//!   `node:contains(x, y)`. What they show: `node:set_sprite(sprite)`, `node:set_tint(tint)`
+//!   (sprites), `node:set_color(color)` (rects and text), `node:text()` and
+//!   `node:set_text(text)` (text). Using one of these on a node of a kind without it is an
+//!   error.
 //!
 //! Scripts are [Luau](https://luau.org), not standard Lua 5.x, and run in Luau's sandbox: the
 //! standard library and built-ins are read-only, and the globals a script defines are seen by the
@@ -82,7 +99,7 @@
 //!
 //! The engine re-exports [`mlua`], which games use to register functions and convert values.
 
-use std::{fmt, fs, path::Path, str::FromStr};
+use std::{cell::RefCell, fmt, fs, path::Path, rc::Rc, str::FromStr};
 
 pub use mlua;
 use mlua::{ErrorContext, FromLua, FromLuaMulti, IntoLua, IntoLuaMulti, thread::ThreadStatus};
@@ -94,6 +111,9 @@ use crate::{
     grid::{Direction, GridMover},
     input::{Key, MouseButton},
     math::Rect,
+    scene::{
+        AreaNode, Kind, NodeId, Props, RectNode, Scene, SpriteNode, TextNode, Value, a_node_of,
+    },
     tilemap::{Tile, TileId, Tilemap, Tileset},
 };
 
@@ -660,6 +680,277 @@ pub(crate) fn check_layer(map: &Tilemap, layer: usize) -> mlua::Result<()> {
         )));
     }
     Ok(())
+}
+
+/// A node of a [`Scene`], as scripts hold it: the scene, shared with every other node of it that
+/// scripts hold, and which node it is. `scene.load` hands scripts a scene's root, and its methods
+/// lead to the rest.
+#[derive(Clone)]
+pub struct SceneNode {
+    scene: Rc<RefCell<Scene>>,
+    id: NodeId,
+}
+
+impl SceneNode {
+    /// The root of `scene`, which becomes shared by every node scripts reach from it.
+    pub fn root(scene: Scene) -> Self {
+        let id = scene.root();
+        Self::new(Rc::new(RefCell::new(scene)), id)
+    }
+
+    /// The node `id` of `scene`.
+    pub fn new(scene: Rc<RefCell<Scene>>, id: NodeId) -> Self {
+        Self { scene, id }
+    }
+
+    pub fn scene(&self) -> &Rc<RefCell<Scene>> {
+        &self.scene
+    }
+
+    pub fn id(&self) -> NodeId {
+        self.id
+    }
+
+    /// Another node of the same scene.
+    fn at(&self, id: NodeId) -> Self {
+        Self::new(Rc::clone(&self.scene), id)
+    }
+
+    /// Runs `f` with the scene and which node this is.
+    pub(crate) fn read<R>(&self, f: impl FnOnce(&Scene, NodeId) -> R) -> mlua::Result<R> {
+        let scene = self
+            .scene
+            .try_borrow()
+            .map_err(|_| mlua::Error::runtime("the scene is being changed"))?;
+        Ok(f(&scene, self.id))
+    }
+
+    /// Runs `f` with the scene to change, and which node this is.
+    fn write<R>(&self, f: impl FnOnce(&mut Scene, NodeId) -> R) -> mlua::Result<R> {
+        let mut scene = self
+            .scene
+            .try_borrow_mut()
+            .map_err(|_| mlua::Error::runtime("the scene is in use"))?;
+        Ok(f(&mut scene, self.id))
+    }
+
+    /// Runs `f` with the node's kind, which must be one that has `what`, such as `"a tint"`.
+    fn write_kind<R>(&self, what: &str, f: impl FnOnce(&mut Kind) -> Option<R>) -> mlua::Result<R> {
+        self.write(|scene, id| {
+            let described = describe_node(scene, id);
+            let kind = scene.node_mut(id).kind_mut();
+            let is = a_node_of(kind.name());
+            f(kind).ok_or_else(|| {
+                mlua::Error::runtime(format!("{described} is {is}, which has no {what}"))
+            })
+        })?
+    }
+}
+
+/// How errors name a node: by its path, or as the root.
+fn describe_node(scene: &Scene, id: NodeId) -> String {
+    if id == scene.root() {
+        "the scene's root".into()
+    } else {
+        format!("node `{}`", scene.path(id))
+    }
+}
+
+/// Fails unless every one of `numbers` is finite, which positions and the like must be so the
+/// scene can be drawn, and written.
+fn check_finite(numbers: &[f32], what: &str) -> mlua::Result<()> {
+    if numbers.iter().all(|n| n.is_finite()) {
+        Ok(())
+    } else {
+        let message = format!("{what} must be finite, not {numbers:?}");
+        Err(mlua::Error::runtime(message))
+    }
+}
+
+impl mlua::UserData for SceneNode {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("name", |_, node, ()| {
+            node.read(|scene, id| scene.node(id).name().to_owned())
+        });
+        methods.add_method("kind", |_, node, ()| {
+            node.read(|scene, id| scene.node(id).kind().name())
+        });
+        methods.add_method("path", |_, node, ()| node.read(|scene, id| scene.path(id)));
+        methods.add_method("parent", |_, node, ()| {
+            let parent = node.read(|scene, id| scene.node(id).parent())?;
+            Ok(parent.map(|parent| node.at(parent)))
+        });
+        methods.add_method("children", |_, node, ()| {
+            let children = node.read(|scene, id| scene.node(id).children().to_vec())?;
+            Ok(children
+                .into_iter()
+                .map(|child| node.at(child))
+                .collect::<Vec<_>>())
+        });
+        methods.add_method("find", |_, node, path: String| {
+            let found = node.read(|scene, id| scene.find(id, &path))?;
+            Ok(found.map(|found| node.at(found)))
+        });
+        methods.add_method("tagged", |_, node, tag: String| {
+            let found = node.read(|scene, id| scene.tagged(id, &tag))?;
+            Ok(found.into_iter().map(|id| node.at(id)).collect::<Vec<_>>())
+        });
+        methods.add_method("position", |_, node, ()| {
+            let [x, y] = node.read(|scene, id| scene.node(id).position())?;
+            Ok((x, y))
+        });
+        methods.add_method("set_position", |_, node, (x, y): (f32, f32)| {
+            check_finite(&[x, y], "a position")?;
+            node.write(|scene, id| scene.node_mut(id).set_position([x, y]))
+        });
+        methods.add_method("rotation", |_, node, ()| {
+            node.read(|scene, id| scene.node(id).rotation())
+        });
+        methods.add_method("set_rotation", |_, node, rotation: f32| {
+            check_finite(&[rotation], "a rotation")?;
+            node.write(|scene, id| scene.node_mut(id).set_rotation(rotation))
+        });
+        methods.add_method("scale", |_, node, ()| {
+            let [x, y] = node.read(|scene, id| scene.node(id).scale())?;
+            Ok((x, y))
+        });
+        methods.add_method("set_scale", |_, node, (x, y): (f32, Option<f32>)| {
+            let y = y.unwrap_or(x);
+            check_finite(&[x, y], "a scale")?;
+            node.write(|scene, id| scene.node_mut(id).set_scale([x, y]))
+        });
+        methods.add_method("world_position", |_, node, ()| {
+            let [x, y] = node.read(|scene, id| scene.transform(id).apply([0.0, 0.0]))?;
+            Ok((x, y))
+        });
+        methods.add_method("is_visible", |_, node, ()| {
+            node.read(|scene, id| scene.node(id).is_visible())
+        });
+        methods.add_method("set_visible", |_, node, visible: bool| {
+            node.write(|scene, id| scene.node_mut(id).set_visible(visible))
+        });
+        methods.add_method("tags", |_, node, ()| {
+            node.read(|scene, id| scene.node(id).tags().to_vec())
+        });
+        methods.add_method("has_tag", |_, node, tag: String| {
+            node.read(|scene, id| scene.node(id).has_tag(&tag))
+        });
+        methods.add_method("props", |lua, node, ()| {
+            node.read(|scene, id| props_table(lua, scene.node(id).props()))?
+        });
+        methods.add_method("bounds", |_, node, ()| {
+            node.read(|scene, id| scene.bounds(id))
+        });
+        methods.add_method("contains", |_, node, (x, y): (f32, f32)| {
+            node.read(|scene, id| scene.contains(id, [x, y]))
+        });
+        methods.add_method("size", |_, node, ()| {
+            let rect = node.read(|scene, id| {
+                scene.node(id).rect().ok_or_else(|| {
+                    let described = describe_node(scene, id);
+                    let is = a_node_of(scene.node(id).kind().name());
+                    mlua::Error::runtime(format!("{described} is {is}, which has no size"))
+                })
+            })??;
+            Ok((rect.w, rect.h))
+        });
+        methods.add_method("set_size", |_, node, (width, height): (f32, f32)| {
+            check_finite(&[width, height], "a size")?;
+            node.write_kind("size it can change", |kind| {
+                match kind {
+                    Kind::Sprite(SpriteNode { size, .. })
+                    | Kind::Rect(RectNode { size, .. })
+                    | Kind::Area(AreaNode { size, .. }) => *size = [width, height],
+                    _ => return None,
+                }
+                Some(())
+            })
+        });
+        methods.add_method(
+            "set_sprite",
+            |_, node, sprite: mlua::UserDataRef<Sprite>| {
+                node.write_kind("sprite", |kind| match kind {
+                    Kind::Sprite(node) => {
+                        node.sprite = Sprite::clone(&sprite);
+                        Some(())
+                    }
+                    _ => None,
+                })
+            },
+        );
+        methods.add_method("set_tint", |_, node, tint: Color| {
+            node.write_kind("tint", |kind| match kind {
+                Kind::Sprite(node) => {
+                    node.tint = tint;
+                    Some(())
+                }
+                _ => None,
+            })
+        });
+        methods.add_method("set_color", |_, node, color: Color| {
+            node.write_kind("color", |kind| {
+                match kind {
+                    Kind::Rect(RectNode { color: c, .. })
+                    | Kind::Text(TextNode { color: c, .. }) => {
+                        *c = color;
+                    }
+                    _ => return None,
+                }
+                Some(())
+            })
+        });
+        methods.add_method("text", |_, node, ()| {
+            node.write_kind("text", |kind| match kind {
+                Kind::Text(text) => Some(text.text().to_owned()),
+                _ => None,
+            })
+        });
+        methods.add_method("set_text", |_, node, text: mlua::LuaString| {
+            let text = text.to_str()?.to_owned();
+            node.write_kind("text", |kind| match kind {
+                Kind::Text(node) => {
+                    node.set_text(text);
+                    Some(())
+                }
+                _ => None,
+            })
+        });
+        methods.add_meta_method(mlua::MetaMethod::Eq, |_, node, other: mlua::AnyUserData| {
+            Ok(other
+                .borrow::<SceneNode>()
+                .is_ok_and(|other| Rc::ptr_eq(&node.scene, &other.scene) && node.id == other.id))
+        });
+        methods.add_meta_method(mlua::MetaMethod::ToString, |_, node, ()| {
+            node.read(|scene, id| format!("SceneNode({})", describe_node(scene, id)))
+        });
+    }
+}
+
+/// `props` as a Luau table.
+fn props_table(lua: &mlua::Lua, props: &Props) -> mlua::Result<mlua::Table> {
+    let table = lua.create_table_with_capacity(0, props.len())?;
+    for (name, value) in props {
+        table.set(name.as_str(), value)?;
+    }
+    Ok(table)
+}
+
+impl IntoLua for &Value {
+    fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
+        match self {
+            Value::Bool(value) => Ok(mlua::Value::Boolean(*value)),
+            Value::Number(number) => Ok(mlua::Value::Number(*number)),
+            Value::String(string) => string.as_str().into_lua(lua),
+            Value::List(items) => {
+                let table = lua.create_table_with_capacity(items.len(), 0)?;
+                for item in items {
+                    table.raw_push(item)?;
+                }
+                Ok(mlua::Value::Table(table))
+            }
+            Value::Map(map) => props_table(lua, map).map(mlua::Value::Table),
+        }
+    }
 }
 
 impl mlua::UserData for GridMover {

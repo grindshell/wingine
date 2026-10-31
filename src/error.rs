@@ -40,6 +40,17 @@ pub enum Error {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("failed to write {}: {source}", .path.display())]
+    WriteFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    /// A scene file couldn't be read, or what it describes couldn't be loaded.
+    #[error("scene {}: {message}", .path.display())]
+    Scene { path: PathBuf, message: String },
+    /// A scene couldn't be written as a scene file.
+    #[error("failed to write a scene: {0}")]
+    WriteScene(String),
     #[error("failed to read a rendered frame back from the GPU: {0}")]
     ReadFrame(#[source] BoxedError),
     /// A Luau script failed to compile or raised an error.

@@ -5,7 +5,7 @@ use bytemuck::{Pod, Zeroable};
 use super::{
     Camera, Color, Font, Sprite, TextLayout, Texture, camera::Transform, font::PlacedGlyph,
 };
-use crate::math::Rect;
+use crate::math::{Affine, Rect};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -121,6 +121,34 @@ impl Canvas {
         }
         let corners = rotated_corners(self.transform.apply(dest), angle);
         self.push_quad(Some(sprite.texture()), corners, sprite.uv_bounds(), tint);
+    }
+
+    /// Draws `sprite` stretched to fill `rect`, then moved by `transform`, with its colors
+    /// multiplied by `tint`. `transform` turns, scales or mirrors the sprite about the origin of
+    /// `rect`'s coordinates, so a sprite turning about its middle has its middle there: for a
+    /// 16x16 sprite, `rect` is `Rect::new(-8.0, -8.0, 16.0, 16.0)`.
+    pub fn draw_sprite_transformed(
+        &mut self,
+        sprite: &Sprite,
+        rect: Rect,
+        transform: Affine,
+        tint: Color,
+    ) {
+        let corners = self.transformed_corners(rect, transform);
+        self.push_quad(Some(sprite.texture()), corners, sprite.uv_bounds(), tint);
+    }
+
+    /// Fills `rect` moved by `transform`, as [`Canvas::draw_sprite_transformed`] places a sprite.
+    pub fn fill_rect_transformed(&mut self, rect: Rect, transform: Affine, color: Color) {
+        let corners = self.transformed_corners(rect, transform);
+        self.push_quad(None, corners, ([0.0, 0.0], [1.0, 1.0]), color);
+    }
+
+    /// The corners of `rect` moved by `transform`, in canvas pixels.
+    fn transformed_corners(&self, rect: Rect, transform: Affine) -> [[f32; 2]; 4] {
+        transform
+            .corners(rect)
+            .map(|corner| self.transform.apply_point(corner))
     }
 
     /// Draws `text` in `font` with its top-left corner at `position`, without wrapping; `\n`

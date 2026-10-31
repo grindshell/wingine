@@ -45,7 +45,7 @@
 //! `require("./opponent")`. Files the engine loads, such as sounds and images, are relative to
 //! the game's folder.
 //!
-//! The engine's API is in five global tables:
+//! The engine's API is in six global tables:
 //!
 //! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.color`, `graphics.default_font`,
 //! `graphics.frame_stats` and `graphics.new_animation` work anywhere, and
@@ -66,6 +66,9 @@
 //!   glyphs, rounded down, so drawing a growing number reveals the text a little at a time.
 //! - `graphics.draw_tilemap(map, layer)` draws one layer of `map`, or all of them in order
 //!   without a layer. Only the cells the canvas shows are drawn.
+//! - `graphics.draw_scene(node)` draws a node of a scene and every node inside it, each before
+//!   its children, where they are in the scene. Hidden nodes don't draw, nor what's inside them,
+//!   and nothing is drawn where it's off the canvas.
 //! - `graphics.set_camera(x, y, bounds)` centers the view on world position `x`, `y` for whatever
 //!   is drawn next, keeping it inside `bounds`, a rect such as `map:bounds()`, if given.
 //!   `graphics.set_camera(nil)`, the default at the start of each frame, draws in canvas pixels,
@@ -107,6 +110,11 @@
 //!   `direction`.
 //! - `grid.opposite(direction)`
 //!
+//! `scene`, for loading [scenes](crate::scene), while the game loads and in `update`:
+//!
+//! - `scene.load(path)` loads the scene file at `path` and the images it names, and returns the
+//!   scene's root node. Each file is read once, and each load returns a copy of its own.
+//!
 //! `input`, while the game loads and in `update`:
 //!
 //! - `input.bind(action, keys)` binds an action, such as `"jump"`, to a list of keys, such as
@@ -142,9 +150,17 @@ mod graphics;
 mod grid;
 mod input;
 mod native;
+mod scene;
 mod tilemap;
 
-use std::{cell::Cell, fs, path::Path, ptr, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+    ptr,
+    rc::Rc,
+};
 
 use wingine_abi::Phase;
 
@@ -153,7 +169,7 @@ pub use native::link_library;
 
 use crate::{
     Context, Error, Game, Result, WindowConfig,
-    graphics::{Canvas, Color, Font, Resolution},
+    graphics::{Canvas, Color, Font, Resolution, Texture},
     lua::{Scripts, mlua},
 };
 
@@ -317,13 +333,16 @@ impl LuauGame {
         let lua = scripts.lua();
         let lent = Lent::default();
         let font = ctx.default_font().clone();
+        let textures = Textures::default();
         let globals = lua.globals();
-        let graphics = graphics::module(lua, &lent, folder, font.clone())?;
+        let graphics = graphics::module(lua, &lent, folder, textures.clone(), font.clone())?;
         globals.set("graphics", graphics)?;
         globals.set("input", input::module(lua, &lent)?)?;
         globals.set("audio", audio::module(lua, &lent, folder)?)?;
         globals.set("tilemap", tilemap::module(lua)?)?;
         globals.set("grid", grid::module(lua)?)?;
+        let scene = scene::module(lua, &lent, folder.to_owned(), textures)?;
+        globals.set("scene", scene)?;
         let natives = Natives::load(lua, &lent, ctx, folder, &libraries)?;
         lent.lend(ctx, || scripts.load(folder.join("main.luau")))?;
         Ok(Self {
@@ -430,6 +449,23 @@ fn draw_error(canvas: &mut Canvas, font: &Font, err: &Error) {
     let width = (canvas.width() - MARGIN * 2.0).max(MARGIN);
     let layout = font.layout(&text, Some(width));
     canvas.draw_text_layout(&layout, .., [MARGIN, MARGIN], Color::WHITE);
+}
+
+/// The images a game has loaded, by path, so each is read once however many sprite sheets and
+/// scenes use it.
+#[derive(Clone, Default)]
+struct Textures(Rc<RefCell<HashMap<PathBuf, Texture>>>);
+
+impl Textures {
+    /// The image at `path`, loading it if it hasn't been.
+    fn load(&self, ctx: &mut Context, path: PathBuf) -> Result<Texture> {
+        if let Some(texture) = self.0.borrow().get(&path) {
+            return Ok(texture.clone());
+        }
+        let texture = ctx.load_texture(&path)?;
+        self.0.borrow_mut().insert(path, texture.clone());
+        Ok(texture)
+    }
 }
 
 /// What the engine lends its Luau functions while scripts may use it: the context while the game

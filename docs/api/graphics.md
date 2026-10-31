@@ -8,7 +8,7 @@ that starts the frame cleared to black. Drawing functions work only in `draw`.
 - [Drawing](#drawing): [`clear`](#graphicsclear), [`fill_rect`](#graphicsfill_rect),
   [`draw_sprite`](#graphicsdraw_sprite), [`draw_sprite_rotated`](#graphicsdraw_sprite_rotated),
   [`draw_text`](#graphicsdraw_text), [`draw_text_layout`](#graphicsdraw_text_layout),
-  [`draw_tilemap`](#graphicsdraw_tilemap)
+  [`draw_tilemap`](#graphicsdraw_tilemap), [`draw_scene`](#graphicsdraw_scene)
 - [The camera](#the-camera): [`set_camera`](#graphicsset_camera)
 - [The canvas and frames](#the-canvas-and-frames): [`size`](#graphicssize),
   [`color`](#graphicscolor), [`frame_stats`](#graphicsframe_stats)
@@ -142,6 +142,31 @@ but under treetops:
 graphics.draw_tilemap(map, 0) -- the ground
 draw_characters()
 graphics.draw_tilemap(map, 1) -- treetops and roofs
+```
+
+### `graphics.draw_scene`
+
+```lua
+graphics.draw_scene(node: SceneNode)
+```
+
+Draws `node` and every node inside it, each before its children, where they are in their
+[scene](scene.md): moved, turned and stretched by every node they're inside. Hidden nodes, and
+nodes inside hidden ones, don't draw, and nothing is drawn where it's off the canvas. Pass a
+scene's root, from [`scene.load`](scene.md#sceneload), to draw the whole scene.
+
+The scene's coordinates are the ones drawing uses: canvas pixels, or with a
+[camera](#graphicsset_camera) set, the world's.
+
+```lua
+local level = scene.load("level.scene.luau")
+
+function draw()
+    graphics.set_camera(player_x, player_y)
+    graphics.draw_scene(level:find("world"))
+    graphics.set_camera(nil)
+    graphics.draw_scene(level:find("hud"))
+end
 ```
 
 ## The camera

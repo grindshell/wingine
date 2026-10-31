@@ -20,6 +20,9 @@ library written in Rust, which [fits 3.4 times as many](#luau-and-rust-compared)
   where each frame's time goes.
 - **Tilemaps** with layers and tilesets, culled to the view, and a **camera** that follows the
   player and stays inside the map.
+- **Scenes**: trees of sprites, rectangles, text and areas laid out in files of plain Luau data,
+  which tools can write as well as people. Nodes turn and stretch about pivots, carrying what's
+  inside them along, and games find them by path or tag.
 - **Grid movement** from tile to tile, with tile collision.
 - **Sprite animation**, such as walk cycles.
 - **Text** in a built-in pixel font, wrapped to a width and revealed a little at a time for
@@ -55,6 +58,7 @@ The first build takes a little longer while Luau compiles.
 | [RPG](#rpg) | Luau | `cargo run -- examples/rpg` |
 | [Shmup](#shmup) | Luau | `cargo run --release -- examples/shmup` |
 | [Pong](#pong) | Luau | `cargo run -- examples/pong` |
+| [Garden](#garden) | Luau, around a scene file | `cargo run -- examples/garden` |
 | [Sprites](#sprites) | Rust, with Luau scripts | `cargo run --example sprites` |
 | [Shapes](#shapes) | Rust | `cargo run --example shapes` |
 
@@ -167,6 +171,20 @@ first to 5 points wins.
 
 Move your paddle, on the left, with W and S, the arrow keys or the mouse. Press Space or click to
 serve. Hits get faster and blip higher as a rally goes on, and sounds pan to where they happen.
+
+### Garden
+
+[`examples/garden`](examples/garden) is a garden around a windmill, laid out in a scene file,
+[`garden.scene.luau`](examples/garden/garden.scene.luau), which the game's short script loads and
+brings to life. The file is plain data, in the layout the engine writes scenes in, as a tool would
+leave it.
+
+![The windmill's sails turning over the garden](docs/screenshots/garden.png)
+
+Walk with the arrow keys or WASD, and stand beside something to read about it. The mill's sails
+are a node holding four arms and cloths, which turn together as the script turns the node; the
+birds circle the same way. Things tagged `solid` are in the player's way, and areas tagged `note`
+carry the text they show. See [Scenes](docs/scenes.md).
 
 ### Sprites
 

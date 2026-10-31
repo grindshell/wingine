@@ -28,16 +28,21 @@ Read these in order the first time:
 3. [Running games](running-games.md): running a game, reading its errors and output, checking it
    without a window, and measuring how fast it runs.
 
+When a game's levels, screens or characters are laid out rather than coded:
+
+4. [Scenes](scenes.md): scene files, trees of sprites, rectangles, text and areas that a game
+   loads, finds its way around, and draws.
+
 When a game needs compiled code:
 
-4. [Native libraries](native-libraries.md): what they are, how the engine loads them, and when
+5. [Native libraries](native-libraries.md): what they are, how the engine loads them, and when
    they're worth it.
-5. [Native library quick start](native-quick-start.md): build one, load it into a game, and call
+6. [Native library quick start](native-quick-start.md): build one, load it into a game, and call
    it from Luau.
 
 And to look things up:
 
-6. [API reference](api/README.md): every table, function and type scripts use, the built-ins
+7. [API reference](api/README.md): every table, function and type scripts use, the built-ins
    such as `wait` and `spawn`, and the `wingine-native` crate for native libraries.
 
 ## Examples
@@ -49,6 +54,7 @@ The repository's examples are complete games, and the best place to see how the 
 | [`examples/pong`](../examples/pong) | A small game in one script and a module: input, sound, music, text, a camera that shakes |
 | [`examples/rpg`](../examples/rpg) | A top-down RPG: tilemaps, grid movement, animation, dialogue, menus and turn-based battles |
 | [`examples/shmup`](../examples/shmup) | A bullet hell at a fixed update rate, with an optional native library for its bullets |
+| [`examples/garden`](../examples/garden) | A garden laid out in a scene file: nodes found by path and tag, turned together, and areas for collision and notes |
 | [`examples/native-particles`](../examples/native-particles/src/lib.rs) | A small native library: functions, a class and hooks |
 | [`examples/native-danmaku`](../examples/native-danmaku/src/lib.rs) | The shmup's bullets in Rust, drawn with one call per kind of bullet |
 

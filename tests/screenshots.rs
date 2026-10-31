@@ -15,7 +15,8 @@ use image::{Rgba, RgbaImage};
 use wingine::{
     graphics::{Camera, Color, Resolution, SpriteSheet},
     headless::{Headless, Image},
-    math::Rect,
+    math::{Affine, Rect},
+    scene::{Scene, SceneFile},
     tilemap::{Tile, Tilemap, Tileset},
 };
 
@@ -141,6 +142,120 @@ fn rotated_sprites() {
         })
         .unwrap();
     assert_screenshot(&headless, "rotated_sprites", frame);
+}
+
+/// Sprites and a fill placed by transforms: a sprite standing on its feet and tipped over about
+/// them, one mirrored and one turned upside down about their middles, one doubled inside a parent
+/// turned a quarter, a translucent fill turned off the pixel grid, and a sprite through a zoomed
+/// camera.
+///
+/// Every sprite is drawn at one texel per pixel or larger, on whole pixels, so no pixel's center
+/// lands on the edge between two texels.
+#[test]
+fn transformed_sprites() {
+    use std::f32::consts::{FRAC_PI_2, PI};
+
+    let mut headless = headless();
+    let sheet = SpriteSheet::new(headless.context().load_texture(TILESET).unwrap(), 16, 16);
+    let hero = sheet.sprite(27, 0);
+    let frame = headless
+        .render(128, 64, |canvas| {
+            canvas.clear(Color::rgb8(0x1b, 0x26, 0x1e));
+            // The middle of its feet at the origin.
+            let feet = Rect::new(-8.0, -16.0, 16.0, 16.0);
+            let standing = Affine::from_translation([12.0, 20.0]);
+            canvas.draw_sprite_transformed(&hero, feet, standing, Color::WHITE);
+            let fallen = Affine::from_parts([12.0, 44.0], FRAC_PI_2, [1.0, 1.0]);
+            canvas.draw_sprite_transformed(&hero, feet, fallen, Color::WHITE);
+
+            let middle = Rect::new(-8.0, -8.0, 16.0, 16.0);
+            let mirrored = Affine::from_parts([40.0, 12.0], 0.0, [-1.0, 1.0]);
+            canvas.draw_sprite_transformed(&hero, middle, mirrored, Color::RED);
+            let upside_down = Affine::from_parts([40.0, 44.0], PI, [1.0, 1.0]);
+            canvas.draw_sprite_transformed(&hero, middle, upside_down, Color::GREEN);
+
+            // The parent's x axis points down, so the child stands on its side, 32x32.
+            let parent = Affine::from_parts([96.0, 32.0], FRAC_PI_2, [1.0, 1.0]);
+            let child = Affine::from_parts([0.0, 0.0], 0.0, [2.0, 2.0]);
+            let tint = Color::rgb8(0x80, 0xd0, 0xff);
+            canvas.draw_sprite_transformed(&hero, middle, parent * child, tint);
+
+            let turned = Affine::from_parts([66.3, 32.2], 0.5, [1.0, 1.0]);
+            let fill = Color::rgba(1.0, 0.8, 0.2, 0.75);
+            canvas.fill_rect_transformed(Rect::new(-6.0, -3.0, 12.0, 6.0), turned, fill);
+
+            // World units are two canvas pixels, with the world's origin at the canvas's.
+            canvas.set_camera(Some(Camera {
+                zoom: 2.0,
+                ..Camera::new(32.0, 16.0)
+            }));
+            let small = Rect::new(0.0, 0.0, 8.0, 8.0);
+            let corner = Affine::from_translation([56.0, 24.0]);
+            canvas.draw_sprite_transformed(&hero, small, corner, Color::WHITE);
+        })
+        .unwrap();
+    assert_screenshot(&headless, "transformed_sprites", frame);
+}
+
+/// A scene read from a scene file: a windmill whose sails, rects, turn about a hub off the pixel
+/// grid, a sprite mirrored about its feet, text whose parent turns but which only moves, a hidden
+/// node whose child doesn't draw, and an area, which never draws.
+#[test]
+fn scene() {
+    let source = r##"return {
+        format = 1,
+        sheets = { tiles = { path = "tiles.png", tile_width = 16, tile_height = 16 } },
+        children = {
+            { name = "ground", kind = "rect", y = 48, width = 128, height = 16, color = "#2a3d2c" },
+            {
+                name = "mill", kind = "sprite", x = 24, y = 48, sheet = "tiles", cell = { 0, 1 },
+                pivot = { 8, 16 }, tint = "#d8b070",
+                children = {
+                    {
+                        name = "sails", kind = "node", y = -12, rotation = 0.3,
+                        children = {
+                            { name = "1", kind = "rect", width = 2, height = 10, pivot = { 1, 10 } },
+                            { name = "2", kind = "rect", width = 2, height = 10, pivot = { 1, 10 }, rotation = 1.5707964 },
+                            { name = "3", kind = "rect", width = 2, height = 10, pivot = { 1, 10 }, rotation = 3.1415927 },
+                            { name = "4", kind = "rect", width = 2, height = 10, pivot = { 1, 10 }, rotation = -1.5707964 },
+                        },
+                    },
+                },
+            },
+            {
+                name = "hero", kind = "sprite", x = 56, y = 48, scale_x = -1, sheet = "tiles",
+                cell = { 27, 0 }, pivot = { 8, 16 }, tint = "#f2d3ab",
+            },
+            {
+                name = "labels", kind = "node", x = 72, y = 8, rotation = 0.5,
+                children = {
+                    { name = "title", kind = "text", text = "Mill", x = 4, pivot = { 0, 4 }, color = "#f2c14e" },
+                },
+            },
+            {
+                name = "hidden", kind = "node", visible = false,
+                children = {
+                    { name = "red", kind = "rect", x = 96, y = 32, width = 16, height = 16, color = "#ff0000" },
+                },
+            },
+            { name = "zone", kind = "area", x = 96, y = 32, width = 16, height = 16 },
+        },
+    }"##;
+    let mut headless = headless();
+    let file = SceneFile::parse(source, "scene.scene.luau").unwrap();
+    let ctx = headless.context();
+    let font = ctx.default_font().clone();
+    let scene = Scene::new(&file, "scene.scene.luau", &font, |_| {
+        ctx.load_texture(TILESET)
+    })
+    .unwrap();
+    let frame = headless
+        .render(128, 64, |canvas| {
+            canvas.clear(Color::rgb8(0x1b, 0x26, 0x1e));
+            scene.draw(canvas);
+        })
+        .unwrap();
+    assert_screenshot(&headless, "scene", frame);
 }
 
 /// Solid fills and sprites interleaved, so batches switch texture several times. Draw order must

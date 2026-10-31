@@ -93,6 +93,13 @@ impl Transform {
         )
     }
 
+    pub fn apply_point(&self, [x, y]: [f32; 2]) -> [f32; 2] {
+        [
+            x * self.scale - self.offset[0],
+            y * self.scale - self.offset[1],
+        ]
+    }
+
     /// The area that lands on a canvas of `width` by `height` pixels, in the coordinates this
     /// transform maps from.
     pub fn visible_area(&self, width: f32, height: f32) -> Rect {

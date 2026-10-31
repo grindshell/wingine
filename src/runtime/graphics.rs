@@ -1,18 +1,14 @@
 //! The `graphics` table, for drawing.
 
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::path::Path;
 
 use mlua::{Lua, Table, UserDataRef};
 
-use super::Lent;
+use super::{Lent, Textures};
 use crate::{
     FrameStats,
-    graphics::{Animation, Camera, Canvas, Color, Font, Sprite, SpriteSheet, TextLayout, Texture},
-    lua::{check_layer, packed_color},
+    graphics::{Animation, Camera, Canvas, Color, Font, Sprite, SpriteSheet, TextLayout},
+    lua::{SceneNode, check_layer, packed_color},
     math::Rect,
     tilemap::Tilemap,
 };
@@ -29,11 +25,12 @@ type RotatedSpriteArgs = (
     Option<f32>,
 );
 
-/// The table, loading files relative to `folder`.
+/// The table, loading files relative to `folder`, and images through `textures`.
 pub(super) fn module(
     lua: &Lua,
     lent: &Lent,
     folder: &Path,
+    textures: Textures,
     default_font: Font,
 ) -> mlua::Result<Table> {
     let graphics = lua.create_table()?;
@@ -131,6 +128,12 @@ pub(super) fn module(
             },
         )?
     })?;
+    graphics.set("draw_scene", {
+        let lent = lent.clone();
+        lua.create_function(move |_, node: UserDataRef<SceneNode>| {
+            node.read(|scene, id| lent.canvas(|canvas| scene.draw_node(canvas, id)))?
+        })?
+    })?;
     graphics.set("set_camera", {
         let lent = lent.clone();
         lua.create_function(
@@ -194,22 +197,13 @@ pub(super) fn module(
     graphics.set("load_sprite_sheet", {
         let lent = lent.clone();
         let root = folder.to_owned();
-        // Each image is loaded once, and shared by every sheet made from it.
-        let textures: RefCell<HashMap<PathBuf, Texture>> = RefCell::default();
         lua.create_function(
             move |_, (path, tile_width, tile_height): (String, u32, u32)| {
                 let path = root.join(path);
-                // Through the context even when cached, so this works at the same times either
-                // way.
+                // Through the context even when loaded already, so this works at the same times
+                // either way.
                 let texture = lent
-                    .context(|ctx| -> crate::Result<Texture> {
-                        if let Some(texture) = textures.borrow().get(&path) {
-                            return Ok(texture.clone());
-                        }
-                        let texture = ctx.load_texture(&path)?;
-                        textures.borrow_mut().insert(path, texture.clone());
-                        Ok(texture)
-                    })?
+                    .context(|ctx| textures.load(ctx, path))?
                     .map_err(mlua::Error::external)?;
                 SpriteSheet::try_new(texture, tile_width, tile_height).map_err(mlua::Error::runtime)
             },

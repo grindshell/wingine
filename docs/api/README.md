@@ -1,6 +1,6 @@
 # API reference
 
-Scripts reach the engine through five global tables, a few built-in functions, and the objects
+Scripts reach the engine through six global tables, a few built-in functions, and the objects
 those hand out:
 
 | Page | What it covers |
@@ -11,6 +11,7 @@ those hand out:
 | [`audio`](audio.md) | Sound effects, music and volume |
 | [`tilemap`](tilemap.md) | Tilesets and maps of tiles in layers |
 | [`grid`](grid.md) | Characters that walk from tile to tile |
+| [`scene`](scene.md) | Scenes loaded from scene files, and their nodes |
 | [`wingine-native`](native.md) | The Rust crate native libraries are written with |
 
 The engine's tables are read-only. Luau's standard library is there too, in its sandboxed form:
@@ -44,13 +45,13 @@ time raises an error saying when it works.
 
 - **Drawing** works only in `draw`: `graphics.clear`, `graphics.fill_rect`, `graphics.draw_sprite`,
   `graphics.draw_sprite_rotated`, `graphics.draw_text`, `graphics.draw_text_layout`,
-  `graphics.draw_tilemap` and `graphics.set_camera`.
+  `graphics.draw_tilemap`, `graphics.draw_scene` and `graphics.set_camera`.
 - **The keyboard, mouse and sound** work while the game loads (the top level of `main.luau` and
   the modules it requires) and in `update` and the tasks it resumes: everything in `input`, and
-  everything in `audio` but `audio.load`. So does `graphics.load_sprite_sheet`.
+  everything in `audio` but `audio.load`. So do `graphics.load_sprite_sheet` and `scene.load`.
 - **Everything else** works any time: `graphics.size`, `graphics.color`,
   `graphics.default_font`, `graphics.frame_stats`, `graphics.new_animation`, `audio.load`,
-  `tilemap`, `grid`, and the methods of every object.
+  `tilemap`, `grid`, and the methods of every object, scene nodes included.
 
 ## Values
 

@@ -11,6 +11,7 @@ my-game/
 ├── player.luau        modules that main.luau requires
 ├── enemies/
 │   └── bat.luau
+├── level.scene.luau   scenes, laid out as data (see Scenes)
 ├── sprites.png        images, sounds and music, wherever the game likes
 ├── sounds/
 │   ├── jump.wav

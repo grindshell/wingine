@@ -85,6 +85,9 @@ covers:
 - Docs for scene files and their API, screenshot tests for the new drawing, and round-trip tests
   of the writer
 
+Done so far: the format and drawing, shown by `examples/garden`. That's everything above but
+tilemap and instance nodes, anchors and text alignment, clips, and adding and removing nodes.
+
 Ask before starting features outside the current milestone, and especially general-purpose ones
 such as physics engines, networking, editors or 3D pipelines.
 
@@ -137,7 +140,9 @@ such as physics engines, networking, editors or 3D pipelines.
   `Canvas` (what games draw to each frame), `Camera`, `Resolution`, `Texture`, `Sprite`,
   `SpriteSheet` and `Animation`. An animation doesn't keep time: games keep how long it has played
   and ask it for the frame to draw, so one animation can be shared. Rotated sprites turn about the
-  center of their destination, on the CPU as quads are recorded. All quads go through one
+  center of their destination, on the CPU as quads are recorded, and transformed sprites and fills
+  (`draw_sprite_transformed`, `fill_rect_transformed`) are placed by an `Affine` the same way,
+  which is how scenes draw. All quads go through one
   textured pipeline; solid fills use a 1x1 white texture,
   and consecutive quads with the same texture are batched into one draw call. Vertices are 20
   bytes, their colors sRGB bytes that the vertex shader converts to linear space, and every quad
@@ -176,9 +181,20 @@ such as physics engines, networking, editors or 3D pipelines.
   load, any of them optional (skipped if there's no such library, but an error if it's there and
   fails to load). `LuauGame`
   is the `Game` that runs one, and the engine's API for it is the global tables `graphics`,
-  `input`, `audio`, `tilemap` and `grid`, one file each. The module docs are the reference for
-  script authors; the engine types those tables hand out (sprites, animations, tilemaps, grid
-  movers, text layouts) are userdata, documented with their methods in `src/lua.rs`.
+  `input`, `audio`, `tilemap`, `grid` and `scene`, one file each. The module docs are the
+  reference for script authors; the engine types those tables hand out (sprites, animations,
+  tilemaps, grid movers, text layouts, scene nodes) are userdata, documented with their methods in
+  `src/lua.rs`. Sprite sheets and scenes share one cache of images (`Textures`), so each is read
+  once.
+- `src/scene/`: scenes. `SceneFile` is what a scene file holds (`NodeDef`s, `SheetDef`s and props
+  of `Value`s): `file.rs` reads one by running it as Luau in an empty environment and converting
+  the table it returns, with errors naming the node's path, and `writer.rs` writes one in the
+  canonical layout. The module docs are the format's reference. `Scene` is a scene loaded to
+  play: its nodes in a `Vec`, each after its parent, with `NodeId`s for indices, each keeping its
+  local `Affine` up to date as it moves. Drawing walks the tree, composing transforms from parent
+  to child; text only translates. Scripts hold nodes as `lua::SceneNode`, an
+  `Rc<RefCell<Scene>>` and a `NodeId`, so every node of a scene shares it. Live scenes' tests are
+  in `tests/scene.rs` and need a GPU; the format's are unit tests that don't.
 - `src/runtime/native.rs`: native libraries, compiled Rust that adds a global table of functions
   and classes to a Luau game, and hooks before and after its `update` and `draw`. Each is
   registered once per process and never unloaded, and each game that loads one gets the
@@ -226,13 +242,19 @@ such as physics engines, networking, editors or 3D pipelines.
 - `src/script.rs`: scripted runs, which drive a game with simulated input from a text file
   (unrelated to Luau scripts), built on `Simulation`. Their `benchmark` command renders every
   frame for a while and reports how long frames took.
-- `src/math.rs`: geometry types such as `Rect`.
+- `examples/garden/`: a garden around a windmill, laid out in `garden.scene.luau`, which
+  `main.luau` loads and plays: it turns the mill's sails and a flock of birds (nodes whose
+  children turn with them), walks the player, which waddles and mirrors about its feet, stops it
+  at nodes tagged `solid`, and shows the `text` of areas tagged `note`. The scene file is in the
+  canonical layout, as an editor would write it, and `tests/garden.rs` checks it stays so: after
+  editing it, write it again with `SceneFile::write`. The game's state is the global `garden`.
+- `src/math.rs`: geometry types: `Rect`, and `Affine`, a 2D transform that composes with `*`.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
   `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
   `Simulation`, and its events and NPC are scripted in `sprites.luau`. `pong/` is a game written
   entirely in Luau, with its computer opponent in `opponent.luau`. The sounds and music in
   `examples/sounds/` were synthesized for `sprites`; `pong`, `rpg` and `shmup` have copies of
-  the ones they use, and `rpg` and `shmup` copies of the tileset. `shmup/bullets.png` was drawn
+  the ones they use, and `rpg`, `shmup` and `garden` copies of the tileset. `shmup/bullets.png` was drawn
   pixel by pixel for it: pellets, orbs and rice in eight colors, the hitbox, and the player's
   shot. `rpg/strides.png` is another copy with its people
   and creatures mid-stride (raised a pixel on stretched legs), the frame characters show for the
@@ -247,19 +269,23 @@ such as physics engines, networking, editors or 3D pipelines.
   `step` and `collide` with `os.clock`. Measure them again on the same machine, a Ryzen 7 5800X
   with an RTX 3080, after changes that could move them.
 - `docs/`: the user docs for making games in Luau: a quick start, a game's folder and frame,
-  running and checking games, native libraries with a quick start, and in `docs/api/` a
+  running and checking games, scenes, native libraries with a quick start, and in `docs/api/` a
   reference for every table, function and type scripts use, and for `wingine-native`. They
-  restate the module docs (`src/runtime/mod.rs`, `src/lua.rs`, `crates/wingine-native`) for game
-  authors, so change them together. Check their examples by running them headlessly.
+  restate the module docs (`src/runtime/mod.rs`, `src/lua.rs`, `src/scene/mod.rs`,
+  `crates/wingine-native`) for game authors, so change them together. Check their examples by
+  running them headlessly.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders.
+- `tests/scene.rs`: tests for scenes loaded to play: finding nodes, transforms, hit testing.
 - `tests/native.rs`: tests for native libraries, most of them linked into the test. One builds
   `native-particles` with a nested `cargo build` into a target folder of its own and loads it
   from a file.
 - `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
   expressions such as `pong.ball.vx`.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest.
+- `tests/garden.rs`: tests for the `garden` example, the same way, and that its scene file is in
+  the canonical layout.
 - `tests/shmup.rs`: tests for the `shmup` example, the same way: the player, the bullet systems
   through `shmup.bullets`, spell cards, clearing the stage with cheats, the same seed firing the
   same bullets, and the stress test. They run copies of the game in `target/tmp`, one with the
@@ -352,6 +378,7 @@ cargo run --example shapes
 cargo run --example sprites
 cargo run -- examples/pong
 cargo run -- examples/rpg
+cargo run -- examples/garden
 cargo run --release -- examples/shmup
 cargo build --release -p native-danmaku
 cargo bench

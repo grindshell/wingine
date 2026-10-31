@@ -629,6 +629,207 @@ fn sprite_sheets_only_load_while_the_game_loads_or_updates() {
     assert!(stopped_with(&simulation).contains("not in `draw`"));
 }
 
+/// A room: a floor, an arm turned a quarter holding a blue hand, and a door.
+const ROOM: &str = r##"return {
+    format = 1,
+    sheets = { colors = { path = "sheet.png", tile_width = 1, tile_height = 1 } },
+    props = { title = "Room" },
+    children = {
+        { name = "floor", kind = "rect", y = 16, width = 20, height = 4, color = "#00ff00" },
+        {
+            name = "arm", kind = "node", x = 10, y = 10, rotation = 1.5707964,
+            children = {
+                {
+                    name = "hand", kind = "sprite", x = 4, sheet = "colors", cell = { 1, 0 },
+                    width = 2, height = 2, pivot = { 1, 1 }, tags = { "held" },
+                    props = { weight = 3, names = { "a", "b" } },
+                },
+            },
+        },
+        { name = "door", kind = "area", width = 4, height = 4, tags = { "held" } },
+    },
+}"##;
+
+#[test]
+fn scenes_load_and_their_nodes_are_found() {
+    let folder = game(
+        "scenes",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            ("room.scene.luau", ROOM),
+            (
+                "main.luau",
+                "room = scene.load('room.scene.luau')
+                again = scene.load('room.scene.luau')
+                hand = room:find('arm/hand')",
+            ),
+        ],
+    );
+    write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
+    let simulation = simulation(&folder);
+    assert_eq!(eval::<String>(&simulation, "room:props().title"), "Room");
+    assert_eq!(
+        eval::<(String, String, String)>(&simulation, "hand:name(), hand:kind(), hand:path()"),
+        ("hand".into(), "sprite".into(), "arm/hand".into())
+    );
+    assert_eq!(
+        eval::<(f64, String)>(&simulation, "hand:props().weight, hand:props().names[2]"),
+        (3.0, "b".into())
+    );
+    assert_eq!(
+        eval::<(f32, f32)>(&simulation, "hand:world_position()"),
+        (10.0, 14.0),
+        "4 along the arm, which points down"
+    );
+    assert_eq!(eval::<(f32, f32)>(&simulation, "hand:size()"), (2.0, 2.0));
+    assert!(eval::<bool>(
+        &simulation,
+        "room:find('arm/hand') == hand and room:tagged('held')[1] == hand
+         and #room:tagged('held') == 2 and again:find('arm/hand') ~= hand
+         and room:find('nothing') == nil and hand:parent():name() == 'arm'
+         and #room:children() == 3 and hand:has_tag('held') and hand:tags()[1] == 'held'"
+    ));
+    assert!(eval::<String>(&simulation, "tostring(hand)").contains("arm/hand"));
+    assert!(eval::<bool>(
+        &simulation,
+        "room:find('door'):contains(1, 1) and not room:find('door'):contains(5, 5)
+         and room:find('door'):bounds().width == 4 and room:bounds() == nil"
+    ));
+}
+
+#[test]
+fn scenes_draw_and_change() {
+    let folder = game(
+        "scenes_draw",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            ("room.scene.luau", ROOM),
+            (
+                "main.luau",
+                "room = scene.load('room.scene.luau')
+                red = graphics.load_sprite_sheet('sheet.png', 1, 1):sprite(0, 0)
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.draw_scene(room)
+                end",
+            ),
+        ],
+    );
+    write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&image, 0, 19), [0, 255, 0, 255]);
+    // The hand covers (9, 13) to (11, 15).
+    assert_eq!(pixel(&image, 9, 13), BLUE);
+    assert_eq!(pixel(&image, 10, 14), BLUE);
+    assert_eq!(pixel(&image, 8, 13), BLACK);
+
+    let exec = |code: &str| {
+        let scripts = simulation.game().scripts();
+        scripts.load_source("test", code).unwrap();
+    };
+    exec(
+        "room:find('arm'):set_rotation(0)
+         room:find('arm/hand'):set_sprite(red)
+         room:find('floor'):set_color('#0000ff')
+         room:find('floor'):set_size(10, 4)",
+    );
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    // 4 along the arm, which now points right: (13, 9) to (15, 11).
+    assert_eq!(pixel(&image, 13, 9), RED);
+    assert_eq!(pixel(&image, 9, 13), BLACK);
+    assert_eq!(pixel(&image, 0, 19), BLUE);
+    assert_eq!(pixel(&image, 10, 19), BLACK);
+
+    let scripts = simulation.game().scripts();
+    scripts
+        .load_source("test", "room:find('arm'):set_visible(false)")
+        .unwrap();
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&image, 13, 9), BLACK);
+}
+
+#[test]
+fn scene_nodes_refuse_what_they_do_not_have() {
+    let folder = game(
+        "scene_errors",
+        &[
+            ("room.scene.luau", ROOM),
+            ("main.luau", "room = scene.load('room.scene.luau')"),
+        ],
+    );
+    write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
+    let simulation = simulation(&folder);
+    let error = |code: &str| -> String {
+        eval(
+            &simulation,
+            &format!("tostring(select(2, pcall(function() {code} end)))"),
+        )
+    };
+    let err = error("room:find('floor'):set_tint('#ff0000')");
+    assert!(
+        err.contains("node `floor` is a rect node, which has no tint"),
+        "{err}"
+    );
+    let err = error("room:size()");
+    assert!(
+        err.contains("the scene's root is a plain node, which has no size"),
+        "{err}"
+    );
+    let err = error("room:find('door'):set_position(0/0, 0)");
+    assert!(err.contains("must be finite"), "{err}");
+    let err = error("room:find('door'):text()");
+    assert!(
+        err.contains("node `door` is an area node, which has no text"),
+        "{err}"
+    );
+}
+
+#[test]
+fn scenes_only_load_while_the_game_loads_or_updates() {
+    let folder = game(
+        "scenes_in_draw",
+        &[
+            ("room.scene.luau", ROOM),
+            (
+                "main.luau",
+                "function draw() scene.load('room.scene.luau') end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    assert!(stopped_with(&simulation).contains("not in `draw`"));
+}
+
+#[test]
+fn scene_errors_name_the_file_and_node() {
+    let folder = game(
+        "scene_broken",
+        &[
+            (
+                "broken.scene.luau",
+                &ROOM.replace("cell = { 1, 0 }", "cell = { 1, 0 }, colour = 'red'"),
+            ),
+            ("main.luau", "scene.load('broken.scene.luau')"),
+        ],
+    );
+    write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
+    let config = runtime::config(&folder).unwrap();
+    let err = Simulation::new(&config.window, |ctx| LuauGame::load(ctx, &folder))
+        .err()
+        .expect("the scene fails to load");
+    let message = err.to_string();
+    assert!(message.contains("broken.scene.luau"), "{message}");
+    assert!(
+        message.contains("node `arm/hand`: a sprite node has no field `colour`"),
+        "{message}"
+    );
+}
+
 #[test]
 fn tilemaps_hold_tiles_in_layers_and_draw_them() {
     let folder = game(
