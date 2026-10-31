@@ -223,10 +223,8 @@ end
 ```
 
 Run it with `cargo run -- path/to/folder`. The engine's API is the global tables `graphics`,
-`input`, `audio`, `tilemap` and `grid`. They are documented in
-[`src/runtime/mod.rs`](src/runtime/mod.rs), and the types they hand out, such as sprites,
-animations and tilemaps, in [`src/lua.rs`](src/lua.rs). Run `cargo doc --open` to browse the
-same docs.
+`input`, `audio`, `tilemap` and `grid`. [The docs](docs/README.md) cover making a game in Luau,
+from a quick start to native libraries, with a reference to every function and type scripts use.
 
 #### Native libraries
 

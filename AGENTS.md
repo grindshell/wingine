@@ -208,6 +208,11 @@ general-purpose ones such as physics engines, networking, editors or 3D pipeline
   its benchmark's CSV against the quad count; the split of the update time was measured by timing
   `step` and `collide` with `os.clock`. Measure them again on the same machine, a Ryzen 7 5800X
   with an RTX 3080, after changes that could move them.
+- `docs/`: the user docs for making games in Luau: a quick start, a game's folder and frame,
+  running and checking games, native libraries with a quick start, and in `docs/api/` a
+  reference for every table, function and type scripts use, and for `wingine-native`. They
+  restate the module docs (`src/runtime/mod.rs`, `src/lua.rs`, `crates/wingine-native`) for game
+  authors, so change them together. Check their examples by running them headlessly.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders.
