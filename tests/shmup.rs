@@ -376,17 +376,29 @@ fn bullets_leaving_the_field_are_removed() {
 }
 
 #[test]
-fn bullets_that_cannot_spawn_are_errors() {
+fn bullets_that_cannot_be_are_errors() {
     for system in SYSTEMS {
         let simulation = simulation_with(system);
-        for (args, expected) in [
-            ("99, 0, 0, 0, 0".to_owned(), "there's no bullet kind 99"),
+        for (call, expected) in [
             (
-                format!("{PELLET}, 0, 0, 0, 10, 1, 0, 0, 0, 50, 20"),
+                "spawn(99, 0, 0, 0, 0)".to_owned(),
+                "there's no bullet kind 99",
+            ),
+            (
+                format!("spawn({PELLET}, 0, 0, 0, 10, 1, 0, 0, 0, 50, 20)"),
                 "min_speed is more than max_speed",
             ),
+            (
+                "add(99, 0, 0, 0, 0, 0, 0, 0, 0, false)".to_owned(),
+                "there's no bullet kind 99",
+            ),
+            (
+                format!("add({PELLET}, 0, 0, 0, 10, 0, 0, 50, 20, false)"),
+                "min_speed is more than max_speed",
+            ),
+            ("bullet(1)".to_owned(), "there's no bullet 1"),
         ] {
-            let err = exec_error(&simulation, &format!("shmup.bullets.spawn({args})"));
+            let err = exec_error(&simulation, &format!("shmup.bullets.{call}"));
             assert!(err.contains(expected), "{system}: {err}");
         }
         assert_eq!(bullets(&simulation), 0, "{system}");
@@ -595,9 +607,16 @@ fn the_same_seed_fires_the_same_bullets() {
 }
 
 /// What a game with its bullets in `system` does from the `practice` given to `shmup.start`,
-/// shooting with `damage` and weaving from side to side, with a player who can't be hit: every
-/// bullet's position each second, and the score and graze at the end.
-fn play(system: &str, practice: &str, damage: u32, seconds: u32) -> (Vec<Vec<[f64; 2]>>, u64, u32) {
+/// shooting with `damage` and weaving from side to side, with a player who can't be hit, and
+/// pressing Tab at the start of each of the seconds in `switches`: every bullet's position each
+/// second, and the score and graze at the end.
+fn play(
+    system: &str,
+    practice: &str,
+    damage: u32,
+    seconds: u32,
+    switches: &[u32],
+) -> (Vec<Vec<[f64; 2]>>, u64, u32) {
     let mut simulation = simulation_with(system);
     exec(
         &simulation,
@@ -617,7 +636,12 @@ fn play(system: &str, practice: &str, damage: u32, seconds: u32) -> (Vec<Vec<[f6
         };
         simulation.key_up(from);
         simulation.key_down(to);
-        for _ in 0..60 {
+        let mut frames = 60;
+        if switches.contains(&second) {
+            simulation.tap(Key::Tab);
+            frames -= 1;
+        }
+        for _ in 0..frames {
             step(&mut simulation);
         }
         seconds_of_bullets.push(positions(&simulation));
@@ -631,8 +655,8 @@ fn play(system: &str, practice: &str, damage: u32, seconds: u32) -> (Vec<Vec<[f6
 fn both_systems_fire_the_same_bullets() {
     // The stage's fairies, and the boss's attacks.
     for (practice, damage, seconds) in [("nil", 1, 30), ("'boss'", 10, 40)] {
-        let (luau, luau_score, luau_graze) = play("Luau", practice, damage, seconds);
-        let (native, native_score, native_graze) = play("native", practice, damage, seconds);
+        let (luau, luau_score, luau_graze) = play("Luau", practice, damage, seconds, &[]);
+        let (native, native_score, native_graze) = play("native", practice, damage, seconds, &[]);
         for (second, (luau, native)) in luau.iter().zip(&native).enumerate() {
             // Exactly the same, since their arithmetic is.
             assert!(
@@ -696,20 +720,53 @@ fn both_systems_draw_bullets_alike() {
     assert_eq!(different, 0, "pixels differ");
 }
 
+/// Everything about a bullet, as `system.bullet` returns it.
+type Snapshot = (u32, f64, f64, f64, f64, f64, f64, f64, f64, bool);
+
+/// Everything about every bullet, in the system's order.
+fn snapshots(simulation: &Simulation<LuauGame>) -> Vec<Snapshot> {
+    (1..=bullets(simulation))
+        .map(|i| eval(simulation, &format!("shmup.bullets.bullet({i})")))
+        .collect()
+}
+
 #[test]
-fn tab_switches_the_bullet_system() {
+fn tab_switches_systems_and_they_take_over_the_bullets() {
     let mut simulation = quiet_game("Luau");
-    spawn(&simulation, &format!("{PELLET}, 100, 100, 0, 0, 5, 0.1"));
+    // A fan of bullets, speeding up and turning, which graze a point below them.
+    spawn(
+        &simulation,
+        &format!("{PELLET}, 100, 100, 1, 10, 5, 0.1, 5, 0.5, 0, 50"),
+    );
+    let graze = "select(2, shmup.bullets.collide(100, 110, 2, 16))";
+    assert_eq!(eval::<u32>(&simulation, graze), 5);
+    let before = snapshots(&simulation);
+    assert!(before.iter().all(|bullet| bullet.9), "grazed");
+
+    // Paused, so that bullets don't move as the key is pressed.
+    exec(&simulation, "shmup.paused = true");
     simulation.tap(Key::Tab);
     assert_eq!(eval::<String>(&simulation, "shmup.system"), "native");
     assert!(eval::<bool>(&simulation, "shmup.bullets == danmaku"));
-    assert_eq!(bullets(&simulation), 0, "switching clears the bullets");
+    assert_eq!(snapshots(&simulation), before);
+    assert_eq!(eval::<u32>(&simulation, graze), 0, "they grazed already");
 
     spawn(&simulation, &format!("{PELLET}, 100, 100, 0, 0, 3, 0.1"));
-    assert_eq!(bullets(&simulation), 3);
     simulation.tap(Key::Tab);
     assert_eq!(eval::<String>(&simulation, "shmup.system"), "Luau");
-    assert_eq!(bullets(&simulation), 0);
+    assert_eq!(bullets(&simulation), 8);
+    assert_eq!(snapshots(&simulation)[..5], before);
+}
+
+#[test]
+fn switching_systems_carries_on_as_though_nothing_changed() {
+    // The boss's attacks, switching to Rust and back partway, against staying in Luau.
+    let (stay, stay_score, stay_graze) = play("Luau", "'boss'", 10, 20, &[]);
+    let (switch, switch_score, switch_graze) = play("Luau", "'boss'", 10, 20, &[6, 13]);
+    assert!(stay == switch, "the bullets differ");
+    assert!(stay[5].len() > 20, "{} bullets switched", stay[5].len());
+    assert_eq!(stay_graze, switch_graze);
+    assert_eq!(stay_score, switch_score);
 }
 
 #[test]

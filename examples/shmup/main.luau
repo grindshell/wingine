@@ -156,7 +156,8 @@ function shmup.start_stress()
     stress.start()
 end
 
--- Runs the bullets in the next system, clearing those of the last.
+-- Runs the bullets in the next system, which takes over the last one's bullets as they are, so
+-- they carry on as though nothing changed. The stress test starts again instead.
 function shmup.switch_system()
     if #systems == 1 then
         if shmup.mode == "play" then
@@ -164,14 +165,21 @@ function shmup.switch_system()
         end
         return
     end
-    shmup.bullets.clear()
     local index = 1
     for i, system in systems do
         if system.name == shmup.system then
             index = i % #systems + 1
         end
     end
-    shmup.bullets = systems[index].bullets
+    local from, to = shmup.bullets, systems[index].bullets
+    to.clear()
+    if shmup.mode ~= "stress" then
+        for i = 1, from.count() do
+            to.add(from.bullet(i))
+        end
+    end
+    from.clear()
+    shmup.bullets = to
     shmup.system = systems[index].name
     if shmup.mode == "stress" then
         stress.start()

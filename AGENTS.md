@@ -169,7 +169,9 @@ general-purpose ones such as physics engines, networking, editors or 3D pipeline
   `bullets.luau`, which is the Luau implementation (parallel arrays of numbers: a table per
   bullet managed little more than a third as many in the stress test) and which the `danmaku`
   library implements too; `main.luau` lists the systems there are, registers the bullet kinds
-  of `art.luau` with each in the same order, and `shmup.bullets` is the one running. Bullets move
+  of `art.luau` with each in the same order, and `shmup.bullets` is the one running. Switching
+  hands every bullet to the next system through `bullet` and `add`, so they carry on exactly as
+  they would have (the stress test starts again instead). Bullets move
   by parameters alone, so a game's bullets depend only on its inputs and `shmup.seed`: nothing
   else may take numbers from `math.random`. Enemies, the stage and the boss's attacks are
   coroutines the game resumes each update with `dt`, so the engine's `wait` works in them
@@ -221,7 +223,8 @@ general-purpose ones such as physics engines, networking, editors or 3D pipeline
   `danmaku` library, which they build with a nested `cargo build` as `tests/native.rs` builds
   `particles`, and one without, so a library in `examples/shmup/native` changes nothing. Tests
   of the bullet systems run each of them, and others check that both fire the same bullets, to
-  the bit, through the stage and the boss, and draw the same pixels.
+  the bit, through the stage and the boss, draw the same pixels, and that switching between them
+  mid-fight changes nothing.
 - `benches/drawing.rs`: what drawing a sprite costs from Rust, from Luau, and through a native
   library linked in, what moving a bullet costs in Luau, and what rendering 10,000 sprites costs,
   measured with frame stats in a `Simulation`. A plain program (`harness = false`); CI doesn't

@@ -99,7 +99,8 @@ cargo build --release -p native-danmaku
 ```
 
 Then copy `target/release/danmaku.dll` (`libdanmaku.so` on Linux, `libdanmaku.dylib` on macOS)
-into `examples/shmup/native/`, and press Tab in the game to switch between the two. The stress
+into `examples/shmup/native/`, and press Tab in the game to switch between the two, which takes
+the bullets over as they are. The stress
 test pours out bullets until frames take longer than a 60th of a second, and plots frame time
 against the bullet count for each.
 

@@ -33,11 +33,18 @@
 -- - `system.clear()` removes every bullet and returns how many there were.
 -- - `system.count()` returns how many bullets there are.
 -- - `system.draw()` draws every bullet, in their order.
+-- - `system.bullet(i)` returns everything about bullet `i`, counting from 1 in the system's order:
+--   `kind, x, y, angle, speed, acceleration, turn, min_speed, max_speed, grazed`.
+-- - `system.add(kind, x, y, angle, speed, acceleration, turn, min_speed, max_speed, grazed)` adds
+--   a bullet after the others, as `bullet` returned it, so that one system can take over another's
+--   bullets as they are. It fails as `spawn` does.
 -- - `system.positions()` returns a list of every bullet's `x` and `y`, for tests.
 
 local bullets = {}
 
 type Kind = {
+    -- What `kind` returned for it.
+    number: number,
     sprite: any,
     -- Half the sprite's size, to center it on the bullet.
     half_width: number,
@@ -67,14 +74,16 @@ local left, top, right, bottom = -math.huge, -math.huge, math.huge, math.huge
 
 function bullets.kind(sprite, radius: number, rotates: boolean?): number
     local width, height = sprite:size()
-    table.insert(kinds, {
+    local number = #kinds + 1
+    kinds[number] = {
+        number = number,
         sprite = sprite,
         half_width = width / 2,
         half_height = height / 2,
         radius = radius,
         rotates = rotates == true,
-    })
-    return #kinds
+    }
+    return number
 end
 
 function bullets.set_bounds(x: number, y: number, width: number, height: number, margin: number)
@@ -99,14 +108,14 @@ function bullets.spawn(
     if not look then
         error(`there's no bullet kind {kind}`, 2)
     end
-    local n = spawned or 1
-    local step = spacing or 0
-    local first = angle - step * (n - 1) / 2
-    local a, t = acceleration or 0, turn or 0
     local low, high = min_speed or -math.huge, max_speed or math.huge
     if low > high then
         error("min_speed is more than max_speed", 2)
     end
+    local n = spawned or 1
+    local step = spacing or 0
+    local first = angle - step * (n - 1) / 2
+    local a, t = acceleration or 0, turn or 0
     for i = 0, n - 1 do
         count += 1
         xs[count] = x
@@ -197,6 +206,55 @@ function bullets.draw()
             draw_sprite(look.sprite, x, y)
         end
     end
+end
+
+function bullets.bullet(i: number)
+    if i < 1 or i > count or i % 1 ~= 0 then
+        error(`there's no bullet {i}`, 2)
+    end
+    return looks[i].number,
+        xs[i],
+        ys[i],
+        angles[i],
+        speeds[i],
+        accelerations[i],
+        turns[i],
+        min_speeds[i],
+        max_speeds[i],
+        grazed[i]
+end
+
+function bullets.add(
+    kind: number,
+    x: number,
+    y: number,
+    angle: number,
+    speed: number,
+    acceleration: number,
+    turn: number,
+    min_speed: number,
+    max_speed: number,
+    was_grazed: boolean
+)
+    local look = kinds[kind]
+    if not look then
+        error(`there's no bullet kind {kind}`, 2)
+    end
+    if min_speed > max_speed then
+        error("min_speed is more than max_speed", 2)
+    end
+    count += 1
+    xs[count] = x
+    ys[count] = y
+    angles[count] = angle
+    speeds[count] = speed
+    accelerations[count] = acceleration
+    turns[count] = turn
+    min_speeds[count] = min_speed
+    max_speeds[count] = max_speed
+    radii[count] = look.radius
+    looks[count] = look
+    grazed[count] = if was_grazed then true else false
 end
 
 function bullets.positions(): { number }

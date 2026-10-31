@@ -19,8 +19,8 @@
 //! `examples/shmup/native/`.
 
 use wingine_native::{
-    Call, Canvas, Color, Context, Error, FromArgs, Library, Rect, Registry, Result, Sprite,
-    SpriteDraw,
+    Call, Canvas, Color, Context, Error, FromArgs, IntoResult, IntoResults, Library, Rect,
+    Registry, Result, Sprite, SpriteDraw,
 };
 
 /// A look for bullets, registered with `danmaku.kind`.
@@ -117,6 +117,57 @@ impl FromArgs for Spawn {
     }
 }
 
+/// Everything about a bullet, as `danmaku.bullet` returns it and `danmaku.add` takes it: its
+/// kind, counting from 1, its numbers, and whether it grazed the player.
+struct Snapshot {
+    kind: usize,
+    x: f64,
+    y: f64,
+    angle: f64,
+    speed: f64,
+    acceleration: f64,
+    turn: f64,
+    min_speed: f64,
+    max_speed: f64,
+    grazed: bool,
+}
+
+impl FromArgs for Snapshot {
+    fn from_args(call: &Call) -> Result<Self> {
+        Ok(Self {
+            kind: call.arg(0)?,
+            x: call.arg(1)?,
+            y: call.arg(2)?,
+            angle: call.arg(3)?,
+            speed: call.arg(4)?,
+            acceleration: call.arg(5)?,
+            turn: call.arg(6)?,
+            min_speed: call.arg(7)?,
+            max_speed: call.arg(8)?,
+            grazed: call.arg(9)?,
+        })
+    }
+}
+
+impl IntoResults for Snapshot {
+    fn push_all(self, call: &Call) -> Result<()> {
+        self.kind.push(call)?;
+        for number in [
+            self.x,
+            self.y,
+            self.angle,
+            self.speed,
+            self.acceleration,
+            self.turn,
+            self.min_speed,
+            self.max_speed,
+        ] {
+            number.push(call)?;
+        }
+        self.grazed.push(call)
+    }
+}
+
 /// `value` kept from `min` to `max`, as Luau's `math.clamp` keeps it.
 fn clamp(value: f64, min: f64, max: f64) -> f64 {
     let value = if value < min { min } else { value };
@@ -124,15 +175,21 @@ fn clamp(value: f64, min: f64, max: f64) -> f64 {
 }
 
 impl Danmaku {
-    fn spawn(&mut self, spawn: Spawn) -> Result<()> {
-        let kind = spawn
-            .kind
+    /// The index in `kinds` of the kind numbered `kind`, after checking that a bullet of it may
+    /// have these speed limits.
+    fn kind(&self, kind: usize, min_speed: f64, max_speed: f64) -> Result<usize> {
+        let index = kind
             .checked_sub(1)
-            .filter(|&kind| kind < self.kinds.len())
-            .ok_or_else(|| Error::new(format!("there's no bullet kind {}", spawn.kind)))?;
-        if spawn.min_speed > spawn.max_speed {
+            .filter(|&index| index < self.kinds.len())
+            .ok_or_else(|| Error::new(format!("there's no bullet kind {kind}")))?;
+        if min_speed > max_speed {
             return Err(Error::new("min_speed is more than max_speed"));
         }
+        Ok(index)
+    }
+
+    fn spawn(&mut self, spawn: Spawn) -> Result<()> {
+        let kind = self.kind(spawn.kind, spawn.min_speed, spawn.max_speed)?;
         let first = spawn.angle - spawn.spacing * (f64::from(spawn.count) - 1.0) / 2.0;
         let radius = self.kinds[kind].radius;
         self.bullets.extend((0..spawn.count).map(|i| Bullet {
@@ -148,6 +205,45 @@ impl Danmaku {
             kind,
             grazed: false,
         }));
+        Ok(())
+    }
+
+    /// Bullet `index`, counting from 1.
+    fn bullet(&self, index: usize) -> Result<Snapshot> {
+        let bullet = index
+            .checked_sub(1)
+            .and_then(|i| self.bullets.get(i))
+            .ok_or_else(|| Error::new(format!("there's no bullet {index}")))?;
+        Ok(Snapshot {
+            kind: bullet.kind + 1,
+            x: bullet.x,
+            y: bullet.y,
+            angle: bullet.angle,
+            speed: bullet.speed,
+            acceleration: bullet.acceleration,
+            turn: bullet.turn,
+            min_speed: bullet.min_speed,
+            max_speed: bullet.max_speed,
+            grazed: bullet.grazed,
+        })
+    }
+
+    /// Adds a bullet as `snapshot` says, after the others.
+    fn add(&mut self, snapshot: Snapshot) -> Result<()> {
+        let kind = self.kind(snapshot.kind, snapshot.min_speed, snapshot.max_speed)?;
+        self.bullets.push(Bullet {
+            x: snapshot.x,
+            y: snapshot.y,
+            angle: snapshot.angle,
+            speed: snapshot.speed,
+            acceleration: snapshot.acceleration,
+            turn: snapshot.turn,
+            min_speed: snapshot.min_speed,
+            max_speed: snapshot.max_speed,
+            radius: self.kinds[kind].radius,
+            kind,
+            grazed: snapshot.grazed,
+        });
         Ok(())
     }
 
@@ -278,13 +374,9 @@ impl Library for Danmaku {
                 danmaku.draw(call.canvas()?);
                 Ok(())
             })
-            // Bullet `index`'s position, counting from 1, for `positions`.
-            .function("position", |danmaku, _, index: usize| {
-                let bullet = index
-                    .checked_sub(1)
-                    .and_then(|i| danmaku.bullets.get(i))
-                    .ok_or_else(|| Error::new(format!("there's no bullet {index}")))?;
-                Ok((bullet.x, bullet.y))
+            .function("bullet", |danmaku, _, index: usize| danmaku.bullet(index))
+            .function("add", |danmaku, _, snapshot: Snapshot| {
+                danmaku.add(snapshot)
             })
             .luau(
                 "positions",
@@ -293,7 +385,8 @@ impl Library for Danmaku {
                     local count = danmaku.count()
                     local positions = table.create(count * 2)
                     for i = 1, count do
-                        positions[i * 2 - 1], positions[i * 2] = danmaku.position(i)
+                        local _, x, y = danmaku.bullet(i)
+                        positions[i * 2 - 1], positions[i * 2] = x, y
                     end
                     return positions
                 end",
