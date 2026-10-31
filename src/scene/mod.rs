@@ -100,6 +100,7 @@
 //!   they hold booleans, numbers, strings, and tables of them that are lists or have strings for
 //!   keys.
 //! - `children` is a list of nodes, the top of the scene's tree.
+//! - `clips` names animations of its nodes, such as a character's walk. See below.
 //!
 //! Every node has a `name`, unique among its siblings and without `/`, so a path such as
 //! `"mill/sails"` finds a node from the one above it, and a `kind`. Each of these is optional:
@@ -197,6 +198,49 @@
 //! That's a bar 12 tall along the bottom of the canvas, as wide as it, with a score ending 4 in
 //! from its right end.
 //!
+//! Characters are rigs: sprites of their parts, each the child of the part it hangs from and
+//! turning about its pivot, its joint, as cutouts do. Clips animate them. Each is a `duration` in
+//! seconds, whether it `loop`s (false by default), and `tracks`, each changing one `property` of
+//! one `node`, by its path from the node the clip poses (without a `node`, that node itself).
+//! Tracks change `x`, `y`, `rotation`, `scale_x` and `scale_y`, which move from key to key in a
+//! straight line, or with `interpolation = "step"` jump at each key; and `visible` and a sprite's
+//! `cell`, which always step. `keys` are a time in seconds, from 0 to the duration, and the value
+//! then, in order of time; before the first key a property has the first key's value, and after
+//! the last, the last key's. A loop that should come back to where it started has its first
+//! key's value again at its end.
+//!
+//! ```lua
+//! clips = {
+//!     wave = {
+//!         duration = 1.2,
+//!         loop = true,
+//!         tracks = {
+//!             {
+//!                 node = "body/arm",
+//!                 property = "rotation",
+//!                 keys = {
+//!                     { 0, -0.25 },
+//!                     { 0.6, 0.5 },
+//!                     { 1.2, -0.25 },
+//!                 },
+//!             },
+//!             {
+//!                 node = "body/head/face",
+//!                 property = "cell",
+//!                 keys = {
+//!                     { 0, { 1, 0 } },
+//!                     { 0.6, { 2, 0 } },
+//!                 },
+//!             },
+//!         },
+//!     },
+//! },
+//! ```
+//!
+//! A clip doesn't keep time: a game keeps how long it has played and poses a node with it then,
+//! with [`Scene::pose`], which sets only the properties it has tracks for. Since paths are from
+//! the node posed, one clip poses every instance of its file.
+//!
 //! A tileset file, named `*.tileset.luau` by convention, is plain data in the same way, holding
 //! the kinds of tile tilemaps are made of, by name ([`TilesetFile`]):
 //!
@@ -237,10 +281,11 @@
 //!
 //! Nodes draw in order, each before its children, so later ones are on top. A [`Scene`] is a
 //! scene loaded to play: its nodes, which a game finds by path or tag, moves, turns, changes,
-//! adds and removes, drawn with [`Scene::draw`], which fits it to the canvas. A scene drawn
+//! poses, adds and removes, drawn with [`Scene::draw`], which fits it to the canvas. A scene drawn
 //! without a camera is in canvas pixels, so [`Scene::bounds`] and [`Scene::contains`] test where
 //! the mouse is against its nodes.
 
+mod clip;
 mod file;
 mod writer;
 
@@ -251,6 +296,7 @@ use std::{
     rc::Rc,
 };
 
+pub use clip::{Clip, Interpolation, Keys, Property, Track};
 pub use file::{
     AreaDef, FORMAT, InstanceDef, KindDef, NodeDef, Props, RectDef, SceneFile, SheetDef, SpriteDef,
     TextDef, TileDef, TileLayerDef, TilemapDef, TilesetFile, Value,
@@ -413,6 +459,8 @@ pub enum Kind {
 #[derive(Clone, Debug)]
 pub struct SpriteNode {
     pub sprite: Sprite,
+    /// The sheet whose cells it shows, with [`SpriteNode::set_cell`] and clips.
+    pub sheet: Option<SpriteSheet>,
     /// The width and height it's stretched to, before `stretch`.
     pub size: [f32; 2],
     /// As a rect's.
@@ -512,6 +560,16 @@ pub(crate) fn a_node_of(kind: &str) -> String {
         "a"
     };
     format!("{article} {kind} node")
+}
+
+impl SpriteNode {
+    /// Shows the sprite in `cell` of its sheet, its column and row. Fails if it has no sheet, or
+    /// the sheet has no such cell.
+    pub fn set_cell(&mut self, [column, row]: [u32; 2]) -> Result<(), String> {
+        let sheet = self.sheet.as_ref().ok_or("the sprite isn't from a sheet")?;
+        self.sprite = sheet.try_sprite(column, row)?;
+        Ok(())
+    }
 }
 
 impl TextNode {
@@ -657,6 +715,28 @@ impl Node {
 
     fn update_local(&mut self) {
         self.local = Affine::from_parts(self.position, self.rotation, self.scale);
+    }
+
+    /// One of its numbers, as a clip's track changes it.
+    fn number(&self, property: Property) -> f32 {
+        match property {
+            Property::X => self.position[0],
+            Property::Y => self.position[1],
+            Property::Rotation => self.rotation,
+            Property::ScaleX => self.scale[0],
+            Property::ScaleY => self.scale[1],
+        }
+    }
+
+    fn set_number(&mut self, property: Property, value: f32) {
+        match property {
+            Property::X => self.position[0] = value,
+            Property::Y => self.position[1] = value,
+            Property::Rotation => self.rotation = value,
+            Property::ScaleX => self.scale[0] = value,
+            Property::ScaleY => self.scale[1] = value,
+        }
+        self.update_local();
     }
 
     /// The point of its parent's rectangle its position is from, as fractions of the
@@ -1003,6 +1083,117 @@ impl Scene {
         }
         names.reverse();
         names.join("/")
+    }
+
+    /// How errors name the node: by its path, or as the root.
+    pub(crate) fn describe(&self, id: NodeId) -> String {
+        if id == self.root() {
+            "the scene's root".into()
+        } else {
+            format!("node `{}`", self.path(id))
+        }
+    }
+
+    /// Poses `id` and the nodes inside it as `clip` has them `time` seconds after it started
+    /// (see [`Clip::time_in`]): each track sets a property of the node its path leads to from
+    /// `id` to the value its keys give then. Properties the clip has no track for keep what they
+    /// have, so a game that poses with several clips poses first with one that has tracks for
+    /// everything the others change.
+    ///
+    /// With a `weight` below 1, down to 0, numbers move only that fraction of the way from what
+    /// they are to the clip's, and visibility and cells change only from a weight of a half. So
+    /// posing with one clip, then with another at a weight rising from 0 to 1, crossfades from
+    /// the first to the second.
+    ///
+    /// Fails, changing nothing, if a track's node isn't there, or a track of cells is of a node
+    /// that isn't a sprite from a sheet with those cells.
+    pub fn pose(&mut self, id: NodeId, clip: &Clip, time: f32, weight: f32) -> Result<(), String> {
+        let mut targets = Vec::with_capacity(clip.tracks.len());
+        for track in &clip.tracks {
+            let target = if track.node.is_empty() {
+                id
+            } else {
+                self.find(id, &track.node).ok_or_else(|| {
+                    format!(
+                        "there's no node `{}` in {} for the clip to pose",
+                        track.node,
+                        self.describe(id)
+                    )
+                })?
+            };
+            if let Keys::Cell(keys) = &track.keys {
+                self.check_cells(target, keys)?;
+            }
+            targets.push(target);
+        }
+        let weight = weight.clamp(0.0, 1.0);
+        if weight == 0.0 {
+            return Ok(());
+        }
+        let time = clip.time_in(time);
+        let steps = weight >= 0.5;
+        for (track, target) in clip.tracks.iter().zip(targets) {
+            let node = self.node_mut(target);
+            match &track.keys {
+                Keys::Number {
+                    property,
+                    interpolation,
+                    keys,
+                } => {
+                    if let Some(value) = clip::number(keys, *interpolation, time) {
+                        let value = if weight == 1.0 {
+                            value
+                        } else {
+                            let from = node.number(*property);
+                            from + (value - from) * weight
+                        };
+                        node.set_number(*property, value);
+                    }
+                }
+                Keys::Visible(keys) => {
+                    if steps && let Some(visible) = clip::step(keys, time) {
+                        node.visible = visible;
+                    }
+                }
+                Keys::Cell(keys) => {
+                    if steps
+                        && let Some(cell) = clip::step(keys, time)
+                        && let Kind::Sprite(sprite) = &mut node.kind
+                    {
+                        sprite.set_cell(cell)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Fails unless `id` is a sprite node from a sheet with every cell of `keys`.
+    fn check_cells(&self, id: NodeId, keys: &[(f32, [u32; 2])]) -> Result<(), String> {
+        let sheet = match &self.node(id).kind {
+            Kind::Sprite(SpriteNode {
+                sheet: Some(sheet), ..
+            }) => sheet,
+            Kind::Sprite(_) => {
+                return Err(format!(
+                    "{}'s sprite isn't from a sheet, so it has no cells",
+                    self.describe(id)
+                ));
+            }
+            kind => {
+                return Err(format!(
+                    "{} is {}, which has no cell",
+                    self.describe(id),
+                    a_node_of(kind.name())
+                ));
+            }
+        };
+        for &(_, [column, row]) in keys {
+            sheet
+                .try_sprite(column, row)
+                .map_err(|err| format!("{}: {err}", self.describe(id)))?;
+        }
+        Ok(())
     }
 
     /// Where the node is laid out: from the root down, each node placed in its parent.
@@ -1555,11 +1746,13 @@ impl Build<'_> {
             KindDef::Node | KindDef::Instance(_) => Kind::Node,
             KindDef::Sprite(sprite) => {
                 let [column, row] = sprite.cell;
-                let image = self.sheet(&sprite.sheet, node)?.try_sprite(column, row);
+                let sheet = self.sheet(&sprite.sheet, node)?.clone();
+                let image = sheet.try_sprite(column, row);
                 let image = image.map_err(|err| self.error(node, &err))?;
                 Kind::Sprite(SpriteNode {
                     size: sprite.size.unwrap_or([image.width(), image.height()]),
                     sprite: image,
+                    sheet: Some(sheet),
                     stretch: sprite.stretch,
                     pivot: sprite.pivot,
                     tint: sprite.tint,

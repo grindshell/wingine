@@ -6,6 +6,7 @@
 
 use std::{collections::BTreeMap, fs, path::Path};
 
+use super::clip::{Clip, Interpolation, Keys, Property, Track};
 use crate::{
     Error, Result,
     graphics::{Align, Color},
@@ -22,8 +23,8 @@ pub const FORMAT: u32 = 1;
 /// that builds a table holding itself would otherwise never finish being read.
 const MAX_DEPTH: usize = 200;
 
-/// What a scene file holds: the sprite sheets its sprites come from, the scene's own props, and
-/// its nodes. See the [module docs](super) for the format.
+/// What a scene file holds: the sprite sheets its sprites come from, the scene's own props, its
+/// nodes, and clips that pose them. See the [module docs](super) for the format.
 ///
 /// Reading a file and writing it back with [`SceneFile::to_luau`] gives the file in its canonical
 /// layout, and reading that gives the same `SceneFile`.
@@ -35,6 +36,9 @@ pub struct SceneFile {
     pub props: Props,
     /// The nodes at the top of the scene's tree, in the order they draw.
     pub children: Vec<NodeDef>,
+    /// Animations of the scene's nodes by name, such as a character's walk, with paths from the
+    /// top of the scene.
+    pub clips: BTreeMap<String, Clip>,
 }
 
 /// An image divided into a grid of sprites the same size, as `graphics.load_sprite_sheet` divides
@@ -441,12 +445,170 @@ fn read_scene(scene: Value) -> Result<SceneFile, String> {
         tilemap: None,
     };
     let children = read_children(fields.take("children"), &top, &sheets, 0)?;
+    let clips = read_clips(fields.take("clips"))?;
     fields.finish("the scene").map_err(at_scene)?;
     Ok(SceneFile {
         sheets,
         props,
         children,
+        clips,
     })
+}
+
+fn read_clips(clips: Option<Value>) -> Result<BTreeMap<String, Clip>, String> {
+    let Some(clips) = clips else {
+        return Ok(BTreeMap::new());
+    };
+    let fields = Fields::new(clips, "`clips`").map_err(|err| format!("the scene: {err}"))?;
+    fields
+        .fields
+        .into_iter()
+        .map(|(name, clip)| {
+            if name.is_empty() {
+                return Err("the scene: a clip's name can't be empty".to_owned());
+            }
+            let clip = read_clip(clip).map_err(|err| format!("clip `{name}`: {err}"))?;
+            Ok((name, clip))
+        })
+        .collect()
+}
+
+fn read_clip(clip: Value) -> Result<Clip, String> {
+    let mut fields = Fields::new(clip, "a clip")?;
+    let duration = fields.take("duration").ok_or("a clip has a `duration`")?;
+    let duration = finite(duration, "duration")?;
+    if duration <= 0.0 {
+        return Err("`duration` must be above 0".into());
+    }
+    let looping = match fields.take("loop") {
+        Some(looping) => boolean(looping, "loop")?,
+        None => false,
+    };
+    let mut tracks: Vec<Track> = Vec::new();
+    if let Some(defs) = fields.take("tracks") {
+        for (i, def) in list(defs, "tracks")?.into_iter().enumerate() {
+            let at = |err: String| format!("track {}: {err}", i + 1);
+            let track = read_track(def, duration).map_err(at)?;
+            let property = track.keys.property_name();
+            if tracks
+                .iter()
+                .any(|other| other.node == track.node && other.keys.property_name() == property)
+            {
+                let node = if track.node.is_empty() {
+                    "the node posed".to_owned()
+                } else {
+                    format!("`{}`", track.node)
+                };
+                return Err(at(format!(
+                    "the clip has a track of the `{property}` of {node} already"
+                )));
+            }
+            tracks.push(track);
+        }
+    }
+    fields.finish("a clip")?;
+    Ok(Clip {
+        duration,
+        looping,
+        tracks,
+    })
+}
+
+fn read_track(track: Value, duration: f32) -> Result<Track, String> {
+    let mut fields = Fields::new(track, "a track")?;
+    let node = match fields.take("node") {
+        Some(node) => {
+            let node = string(node, "node")?;
+            if node.split('/').any(str::is_empty) {
+                return Err(format!(
+                    "`node` is a path of names separated by `/`, not `{node}`; leave it out for \
+                     the node posed"
+                ));
+            }
+            node
+        }
+        None => String::new(),
+    };
+    let property = fields.take("property").ok_or("a track has a `property`")?;
+    let property = string(property, "property")?;
+    let interpolation = match fields.take("interpolation") {
+        Some(interpolation) => {
+            let name = string(interpolation, "interpolation")?;
+            Some(Interpolation::from_name(&name).ok_or_else(|| {
+                format!(r#"`interpolation` must be "linear" or "step", not "{name}""#)
+            })?)
+        }
+        None => None,
+    };
+    let keys = fields.take("keys").ok_or("a track has `keys`")?;
+    let keys = read_keys(keys, duration)?;
+    let keys = if let Some(property) = Property::from_name(&property) {
+        Keys::Number {
+            property,
+            interpolation: interpolation.unwrap_or_default(),
+            keys: keys
+                .into_iter()
+                .map(|(time, value)| Ok((time, finite(value, "keys")?)))
+                .collect::<Result<_, String>>()?,
+        }
+    } else {
+        if interpolation == Some(Interpolation::Linear) {
+            return Err(format!(
+                "`{property}` steps from key to key, so its `interpolation` can't be \"linear\""
+            ));
+        }
+        match property.as_str() {
+            "visible" => Keys::Visible(
+                keys.into_iter()
+                    .map(|(time, value)| Ok((time, boolean(value, "keys")?)))
+                    .collect::<Result<_, String>>()?,
+            ),
+            "cell" => Keys::Cell(
+                keys.into_iter()
+                    .map(|(time, value)| Ok((time, cell(value)?)))
+                    .collect::<Result<_, String>>()?,
+            ),
+            other => {
+                return Err(format!(
+                    "there's no property `{other}` for a track: it's x, y, rotation, scale_x, \
+                     scale_y, visible or cell"
+                ));
+            }
+        }
+    };
+    fields.finish("a track")?;
+    Ok(Track { node, keys })
+}
+
+/// A track's keys, a time and a value each, with their times checked: from 0 to the clip's
+/// `duration`, each after the one before.
+fn read_keys(keys: Value, duration: f32) -> Result<Vec<(f32, Value)>, String> {
+    let keys = list(keys, "keys")?;
+    if keys.is_empty() {
+        return Err("a track has at least one key".into());
+    }
+    let mut read: Vec<(f32, Value)> = Vec::with_capacity(keys.len());
+    for (i, key) in keys.into_iter().enumerate() {
+        let at = |err: String| format!("key {}: {err}", i + 1);
+        let Ok([time, value]) = <[Value; 2]>::try_from(list(key, "keys").map_err(at)?) else {
+            return Err(at("a key is a time and a value, { time, value }".into()));
+        };
+        let time = finite(time, "keys").map_err(at)?;
+        if !(0.0..=duration).contains(&time) {
+            return Err(at(format!(
+                "its time must be from 0 to the clip's duration, {duration}, not {time}"
+            )));
+        }
+        if let Some(&(before, _)) = read.last()
+            && time <= before
+        {
+            return Err(at(format!(
+                "its time, {time}, must be after the time of the key before, {before}"
+            )));
+        }
+        read.push((time, value));
+    }
+    Ok(read)
 }
 
 fn read_tileset(tileset: Value) -> Result<TilesetFile, String> {
@@ -834,11 +996,15 @@ fn read_sheet_cell(
     let cell = fields
         .take("cell")
         .ok_or_else(|| format!("{what} has a `cell`"))?;
-    let cell = match <[Value; 2]>::try_from(list(cell, "cell")?) {
-        Ok([column, row]) => [whole(column, "cell")?, whole(row, "cell")?],
-        Err(_) => return Err("`cell` must be a column and a row, { column, row }".into()),
-    };
-    Ok((sheet, cell))
+    Ok((sheet, self::cell(cell)?))
+}
+
+/// A sprite's column and row in its sheet, `{ column, row }`.
+fn cell(value: Value) -> Result<[u32; 2], String> {
+    match <[Value; 2]>::try_from(list(value, "cell")?) {
+        Ok([column, row]) => Ok([whole(column, "cell")?, whole(row, "cell")?]),
+        Err(_) => Err("`cell` must be a column and a row, { column, row }".into()),
+    }
 }
 
 /// A tile layer's `legend` and `tiles`, which must have `columns` characters in each of `rows`
@@ -1223,6 +1389,151 @@ mod tests {
             "return {{ format = 1, sheets = {{ tiles = {{ path = 'tiles.png', tile_width = 16, \
              tile_height = 16 }} }}, children = {{ {children} }} }}"
         )
+    }
+
+    #[test]
+    fn reads_clips_of_tracks() {
+        let scene = parse(
+            r#"return {
+                format = 1,
+                children = { { name = "arm", kind = "node" } },
+                clips = {
+                    wave = {
+                        duration = 1.5,
+                        loop = true,
+                        tracks = {
+                            { node = "arm", property = "rotation", keys = { { 0, 0.5 }, { 0.75, -0.5 }, { 1.5, 0.5 } } },
+                            { property = "y", interpolation = "step", keys = { { 0, 1 } } },
+                            { node = "arm/hand", property = "visible", keys = { { 0.5, false } } },
+                            { node = "arm/hand", property = "cell", interpolation = "step", keys = { { 0, { 2, 1 } } } },
+                        },
+                    },
+                    rest = { duration = 1 },
+                },
+            }"#,
+        )
+        .unwrap();
+        let wave = &scene.clips["wave"];
+        assert_eq!(wave.duration, 1.5);
+        assert!(wave.looping);
+        assert_eq!(
+            wave.tracks,
+            [
+                Track {
+                    node: "arm".into(),
+                    keys: Keys::Number {
+                        property: Property::Rotation,
+                        interpolation: Interpolation::Linear,
+                        keys: vec![(0.0, 0.5), (0.75, -0.5), (1.5, 0.5)],
+                    },
+                },
+                Track {
+                    node: String::new(),
+                    keys: Keys::Number {
+                        property: Property::Y,
+                        interpolation: Interpolation::Step,
+                        keys: vec![(0.0, 1.0)],
+                    },
+                },
+                Track {
+                    node: "arm/hand".into(),
+                    keys: Keys::Visible(vec![(0.5, false)]),
+                },
+                Track {
+                    node: "arm/hand".into(),
+                    keys: Keys::Cell(vec![(0.0, [2, 1])]),
+                },
+            ]
+        );
+        let rest = &scene.clips["rest"];
+        assert!(!rest.looping);
+        assert!(rest.tracks.is_empty());
+    }
+
+    #[test]
+    fn clips_that_cannot_pose_are_errors() {
+        let clip =
+            |fields: &str| format!("return {{ format = 1, clips = {{ walk = {{ {fields} }} }} }}");
+        let track = |fields: &str| clip(&format!("duration = 1, tracks = {{ {{ {fields} }} }}"));
+        let cases = [
+            (clip("loop = true"), "clip `walk`: a clip has a `duration`"),
+            (
+                clip("duration = 0"),
+                "clip `walk`: `duration` must be above 0",
+            ),
+            (
+                clip("duration = 1, speed = 2"),
+                "clip `walk`: a clip has no field `speed`",
+            ),
+            (
+                track("property = 'x', keys = { { 0, 1 } }, ease = 1"),
+                "clip `walk`: track 1: a track has no field `ease`",
+            ),
+            (
+                track("keys = { { 0, 1 } }"),
+                "track 1: a track has a `property`",
+            ),
+            (track("property = 'x'"), "track 1: a track has `keys`"),
+            (
+                track("property = 'x', keys = {}"),
+                "a track has at least one key",
+            ),
+            (
+                track("property = 'tint', keys = { { 0, 1 } }"),
+                "there's no property `tint` for a track",
+            ),
+            (
+                track("property = 'x', interpolation = 'smooth', keys = { { 0, 1 } }"),
+                r#"`interpolation` must be "linear" or "step", not "smooth""#,
+            ),
+            (
+                track("property = 'visible', interpolation = 'linear', keys = { { 0, true } }"),
+                "`visible` steps from key to key",
+            ),
+            (
+                track("property = 'x', keys = { 0, 1 }"),
+                "key 1: `keys` must be a list",
+            ),
+            (
+                track("property = 'x', keys = { { 0, 1, 2 } }"),
+                "key 1: a key is a time and a value",
+            ),
+            (
+                track("property = 'x', keys = { { 0, 1 }, { 1.5, 2 } }"),
+                "key 2: its time must be from 0 to the clip's duration, 1, not 1.5",
+            ),
+            (
+                track("property = 'x', keys = { { 0.5, 1 }, { 0.5, 2 } }"),
+                "key 2: its time, 0.5, must be after the time of the key before, 0.5",
+            ),
+            (
+                track("property = 'x', keys = { { 0, true } }"),
+                "`keys` must be a number, not a boolean",
+            ),
+            (
+                track("property = 'visible', keys = { { 0, 1 } }"),
+                "`keys` must be true or false, not a number",
+            ),
+            (
+                track("property = 'cell', keys = { { 0, 1 } }"),
+                "`cell` must be a list, not a number",
+            ),
+            (
+                track("node = 'arm//hand', property = 'x', keys = { { 0, 1 } }"),
+                "`node` is a path of names separated by `/`",
+            ),
+            (
+                clip(
+                    "duration = 1, tracks = { { property = 'x', keys = { { 0, 1 } } }, \
+                     { property = 'x', keys = { { 0, 2 } } } }",
+                ),
+                "track 2: the clip has a track of the `x` of the node posed already",
+            ),
+        ];
+        for (source, expected) in cases {
+            let err = error(&source);
+            assert!(err.contains(expected), "{source}\n{err}");
+        }
     }
 
     #[test]

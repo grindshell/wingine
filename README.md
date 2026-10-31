@@ -8,7 +8,10 @@ or entirely in [Luau](https://luau.org) and run with the `wingine` executable.
 Wingine's first milestone, everything needed to ship a tile-based, top-down RPG, is complete.
 The [RPG example](#rpg) is that game. Its second, a bullet hell that shows the engine's
 performance, is complete too: the [shmup](#shmup), whose bullets run in Luau or in a native
-library written in Rust, which [fits 3.4 times as many](#luau-and-rust-compared).
+library written in Rust, which [fits 3.4 times as many](#luau-and-rust-compared). So is its
+third, [scenes](docs/scenes.md): levels, screens and rigged characters laid out in files a future
+editor can write, which the [garden](#garden), the RPG's maps, the shmup's HUD and the
+[orchard](#orchard) are made of.
 
 ## Features
 
@@ -25,6 +28,8 @@ library written in Rust, which [fits 3.4 times as many](#luau-and-rust-compared)
   carrying what's inside them along; screens anchor to the canvas's edges and middle, with text
   aligned left, center or right; scenes place other scenes, changed by overrides; and games find
   nodes by path or tag, test the mouse against them, and add and remove them as they play.
+- **Rigged characters**: sprites for parts that turn about their joints, animated by clips of
+  keyframes in scene files, which games layer and crossfade.
 - **Grid movement** from tile to tile, with tile collision.
 - **Sprite animation**, such as walk cycles.
 - **Text** in a built-in pixel font, wrapped to a width and revealed a little at a time for
@@ -61,6 +66,7 @@ The first build takes a little longer while Luau compiles.
 | [Shmup](#shmup) | Luau | `cargo run --release -- examples/shmup` |
 | [Pong](#pong) | Luau | `cargo run -- examples/pong` |
 | [Garden](#garden) | Luau, around a scene file | `cargo run -- examples/garden` |
+| [Orchard](#orchard) | Luau, around a rigged character | `cargo run -- examples/orchard` |
 | [Sprites](#sprites) | Rust, with Luau scripts | `cargo run --example sprites` |
 | [Shapes](#shapes) | Rust | `cargo run --example shapes` |
 
@@ -194,6 +200,21 @@ The trees and flowers are instances of scenes of their own, each changed by over
 planting adds another. Things tagged `solid` are in the player's way, and areas tagged `note`
 carry the text they show. See [Scenes](docs/scenes.md).
 
+### Orchard
+
+[`examples/orchard`](examples/orchard) is an orchard where apples ripen and fall, and a picker
+with a basket on their head catches them. Three apples on the ground and the day is over.
+
+![The picker walking under the apple trees as an apple falls](docs/screenshots/orchard.png)
+
+Walk with the arrow keys or A and D, and press Space to start again. The picker is a
+[rig](docs/scenes.md#rigging-characters), in [`picker.scene.luau`](examples/orchard/picker.scene.luau):
+a sprite for each part, turning about its joint, and clips of keyframes for standing, walking,
+blinking, catching, missing and giving up. Each frame the game poses the picker with one clip over
+another, weighting the walk by how much they're walking, so they ease between standing and
+walking, and fading the reactions in and out. The orchard places the picker as an instance of
+that file, and their clips pose it there.
+
 ### Sprites
 
 [`examples/sprites.rs`](examples/sprites.rs) is a small map written in Rust that uses Luau for
@@ -249,7 +270,7 @@ end
 ```
 
 Run it with `cargo run -- path/to/folder`. The engine's API is the global tables `graphics`,
-`input`, `audio`, `tilemap` and `grid`. [The docs](docs/README.md) cover making a game in Luau,
+`input`, `audio`, `tilemap`, `grid` and `scene`. [The docs](docs/README.md) cover making a game in Luau,
 from a quick start to native libraries, with a reference to every function and type scripts use.
 
 #### Native libraries
@@ -345,5 +366,6 @@ The script format is documented in [`src/script.rs`](src/script.rs).
 ## Credits
 
 The tileset is Kenney's [1-bit Pack](https://kenney.nl/assets/1-bit-pack), released under CC0.
-The RPG's `strides.png` adds walking frames derived from it. The music and sound effects were
+The RPG's `strides.png` adds walking frames derived from it. The shmup's bullets and the
+orchard's picker, apples and trees were drawn for them. The music and sound effects were
 synthesized for the examples.

@@ -1,6 +1,6 @@
-//! The `scene` table, for loading scenes.
+//! The `scene` table, for loading scenes and their clips.
 
-use std::{cell::RefCell, collections::HashMap, path::Path, path::PathBuf, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
 use mlua::{Lua, Table};
 
@@ -20,10 +20,16 @@ pub(super) fn module(
     textures: Textures,
 ) -> mlua::Result<Table> {
     let scene = lua.create_table()?;
+    // Each file is read once, for loading scenes and their clips.
+    let files = Rc::new(Files {
+        folder,
+        scenes: RefCell::default(),
+        tilesets: RefCell::default(),
+    });
     scene.set("load", {
         let lent = lent.clone();
-        // Each file is read once, and each load copies the scene it describes.
-        let files = Files::default();
+        let files = Rc::clone(&files);
+        // Each load copies the scene a file describes, built once.
         let loaded: RefCell<HashMap<String, Scene>> = RefCell::default();
         lua.create_function(move |_, path: String| {
             // Through the context even when loaded already, so this works at the same times
@@ -37,7 +43,6 @@ pub(super) fn module(
                             let font = ctx.default_font().clone();
                             let mut assets = GameAssets {
                                 ctx,
-                                folder: &folder,
                                 textures: &textures,
                                 files: &files,
                             };
@@ -57,47 +62,69 @@ pub(super) fn module(
             Ok(SceneNode::root(scene))
         })?
     })?;
+    scene.set(
+        "clips",
+        lua.create_function(move |lua, path: String| {
+            let file = files.scene(&path).map_err(mlua::Error::external)?;
+            let clips = lua.create_table_with_capacity(0, file.clips.len())?;
+            for (name, clip) in &file.clips {
+                clips.set(name.as_str(), clip.clone())?;
+            }
+            Ok(clips)
+        })?,
+    )?;
     scene.set_readonly(true);
     Ok(scene)
 }
 
-/// The scene and tileset files a game has read, by path.
-#[derive(Default)]
+/// The scene and tileset files a game has read, by their paths in its folder.
 struct Files {
+    folder: PathBuf,
     scenes: RefCell<HashMap<String, Rc<SceneFile>>>,
     tilesets: RefCell<HashMap<String, Rc<TilesetFile>>>,
+}
+
+impl Files {
+    /// The scene file at `path`, reading it if it hasn't been.
+    fn scene(&self, path: &str) -> Result<Rc<SceneFile>> {
+        if let Some(file) = self.scenes.borrow().get(path) {
+            return Ok(Rc::clone(file));
+        }
+        let file = Rc::new(SceneFile::read(self.folder.join(path))?);
+        let mut scenes = self.scenes.borrow_mut();
+        scenes.insert(path.to_owned(), Rc::clone(&file));
+        Ok(file)
+    }
+
+    /// The tileset file at `path`, reading it if it hasn't been.
+    fn tileset(&self, path: &str) -> Result<Rc<TilesetFile>> {
+        if let Some(file) = self.tilesets.borrow().get(path) {
+            return Ok(Rc::clone(file));
+        }
+        let file = Rc::new(TilesetFile::read(self.folder.join(path))?);
+        let mut tilesets = self.tilesets.borrow_mut();
+        tilesets.insert(path.to_owned(), Rc::clone(&file));
+        Ok(file)
+    }
 }
 
 /// A game's files and images, each read once.
 struct GameAssets<'a> {
     ctx: &'a mut Context,
-    folder: &'a Path,
     textures: &'a Textures,
     files: &'a Files,
 }
 
 impl Assets for GameAssets<'_> {
     fn texture(&mut self, path: &str) -> Result<Texture> {
-        self.textures.load(self.ctx, self.folder.join(path))
+        self.textures.load(self.ctx, self.files.folder.join(path))
     }
 
     fn scene(&mut self, path: &str) -> Result<Rc<SceneFile>> {
-        if let Some(file) = self.files.scenes.borrow().get(path) {
-            return Ok(Rc::clone(file));
-        }
-        let file = Rc::new(SceneFile::read(self.folder.join(path))?);
-        let mut scenes = self.files.scenes.borrow_mut();
-        scenes.insert(path.to_owned(), Rc::clone(&file));
-        Ok(file)
+        self.files.scene(path)
     }
 
     fn tileset(&mut self, path: &str) -> Result<Rc<TilesetFile>> {
-        if let Some(file) = self.files.tilesets.borrow().get(path) {
-            return Ok(Rc::clone(file));
-        }
-        let file = Rc::new(TilesetFile::read(self.folder.join(path))?);
-        let mut tilesets = self.files.tilesets.borrow_mut();
-        tilesets.insert(path.to_owned(), Rc::clone(&file));
-        Ok(file)
+        self.files.tileset(path)
     }
 }

@@ -111,12 +111,15 @@
 //!   `direction`.
 //! - `grid.opposite(direction)`
 //!
-//! `scene`, for loading [scenes](crate::scene), while the game loads and in `update`:
+//! `scene`, for loading [scenes](crate::scene):
 //!
-//! - `scene.load(path)` loads the scene file at `path`, the scene files its instances place, the
-//!   tileset files its tilemaps use and the images they all name, and returns the scene's root
-//!   node, laid out on the canvas. Each file is read once, and each load returns a copy of its
-//!   own.
+//! - `scene.load(path)`, while the game loads and in `update`, loads the scene file at `path`,
+//!   the scene files its instances place, the tileset files its tilemaps use and the images they
+//!   all name, and returns the scene's root node, laid out on the canvas. Each file is read once,
+//!   and each load returns a copy of its own.
+//! - `scene.clips(path)`, at any time, returns the clips of the scene file at `path`, a table of
+//!   `Clip`s by name, for posing nodes with `node:pose(clip, time, weight)`. A clip poses any node
+//!   whose nodes its tracks' paths lead to, such as each instance of the file.
 //!
 //! `input`, while the game loads and in `update`:
 //!

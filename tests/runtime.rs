@@ -853,6 +853,123 @@ fn scene_nodes_refuse_what_they_do_not_have() {
     );
 }
 
+#[test]
+fn clips_pose_scene_nodes() {
+    let folder = game(
+        "clips",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "puppet.scene.luau",
+                r##"return {
+                    format = 1,
+                    sheets = { colors = { path = "sheet.png", tile_width = 1, tile_height = 1 } },
+                    children = {
+                        {
+                            name = "arm", kind = "node", x = 10,
+                            children = {
+                                { name = "hand", kind = "sprite", x = 4, sheet = "colors", cell = { 0, 0 } },
+                            },
+                        },
+                    },
+                    clips = {
+                        wave = {
+                            duration = 1, loop = true,
+                            tracks = {
+                                { node = "arm", property = "rotation", keys = { { 0, 0 }, { 0.5, 1 }, { 1, 0 } } },
+                                { node = "arm/hand", property = "cell", keys = { { 0, { 0, 0 } }, { 0.5, { 1, 0 } } } },
+                            },
+                        },
+                        drop = {
+                            duration = 0.5,
+                            tracks = { { node = "arm", property = "y", keys = { { 0, 0 }, { 0.5, 8 } } } },
+                        },
+                        lost = { duration = 1, tracks = { { node = "leg", property = "x", keys = { { 0, 1 } } } } },
+                    },
+                }"##,
+            ),
+            (
+                "main.luau",
+                "puppet = scene.load('puppet.scene.luau')
+                clips = scene.clips('puppet.scene.luau')
+                arm = puppet:find('arm')
+                hand = puppet:find('arm/hand')
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.draw_scene(puppet)
+                end",
+            ),
+        ],
+    );
+    write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
+    let mut simulation = simulation(&folder);
+    assert_eq!(
+        eval::<(f32, bool, bool, bool)>(
+            &simulation,
+            "clips.wave:duration(), clips.wave:is_looping(), clips.drop:is_finished(0.4), \
+             clips.drop:is_finished(0.5)"
+        ),
+        (1.0, true, false, true)
+    );
+
+    let run = |simulation: &Simulation<LuauGame>, code: &str| {
+        let scripts = simulation.game().scripts();
+        scripts.load_source("test", code).unwrap();
+    };
+    run(&simulation, "puppet:pose(clips.wave, 1.25)");
+    assert_eq!(eval::<f32>(&simulation, "arm:rotation()"), 0.5, "looped");
+    // Halfway there from 2, at 4 for the clip.
+    run(
+        &simulation,
+        "arm:set_position(10, 2) puppet:pose(clips.drop, 0.25, 0.5)",
+    );
+    assert_eq!(
+        eval::<(f32, f32)>(&simulation, "arm:position()"),
+        (10.0, 3.0)
+    );
+
+    // The hand shows the clip's cell, the blue one.
+    run(
+        &simulation,
+        "puppet:pose(clips.wave, 0.5) arm:set_rotation(0)",
+    );
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&image, 14, 3), BLUE);
+    run(&simulation, "hand:set_cell(0, 0)");
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&image, 14, 3), RED);
+
+    let error = |code: &str| -> String {
+        eval(
+            &simulation,
+            &format!("tostring(select(2, pcall(function() {code} end)))"),
+        )
+    };
+    let err = error("puppet:pose(clips.lost, 0)");
+    assert!(
+        err.contains("there's no node `leg` in the scene's root for the clip to pose"),
+        "{err}"
+    );
+    let err = error("puppet:pose(clips.wave, 0/0)");
+    assert!(err.contains("a time must be finite"), "{err}");
+    let err = error("puppet:pose('wave', 0)");
+    assert!(err.contains("Clip"), "{err}");
+    let err = error("hand:set_cell(2, 0)");
+    assert!(
+        err.contains("sprite (2, 0) is outside a 2x1 sprite sheet"),
+        "{err}"
+    );
+    let err = error("arm:set_cell(0, 0)");
+    assert!(
+        err.contains("node `arm` is a plain node, which has no cell"),
+        "{err}"
+    );
+    let err = error("scene.clips('missing.scene.luau')");
+    assert!(err.contains("missing.scene.luau"), "{err}");
+}
+
 /// A tileset of red and blue tiles, the blue ones solid.
 const COLORS_TILESET: &str = r##"return {
     format = 1, tile_width = 2, tile_height = 2,

@@ -637,3 +637,155 @@ fn tile_layers_are_copied_only_with_their_tilemaps() {
         "the copy has a map of its own"
     );
 }
+
+/// A puppet: a body with an arm and a face, and clips that pose them.
+const PUPPET: &str = r##"return {
+    format = 1,
+    sheets = { tiles = { path = "tiles.png", tile_width = 16, tile_height = 16 } },
+    children = {
+        {
+            name = "body", kind = "rect", width = 4, height = 10, pivot = { 2, 10 },
+            children = {
+                { name = "arm", kind = "rect", y = -8, width = 2, height = 6, pivot = { 1, 0 } },
+                { name = "face", kind = "sprite", y = -16, sheet = "tiles", cell = { 0, 0 }, pivot = { 8, 8 } },
+            },
+        },
+        { name = "label", kind = "text", text = "Hi" },
+    },
+    clips = {
+        wave = {
+            duration = 1,
+            loop = true,
+            tracks = {
+                { node = "body/arm", property = "rotation", keys = { { 0, 0 }, { 0.5, 1 }, { 1, 0 } } },
+                { node = "body", property = "y", interpolation = "step", keys = { { 0, 0 }, { 0.5, -2 } } },
+                { node = "body/face", property = "cell", keys = { { 0, { 0, 0 } }, { 0.75, { 1, 0 } } } },
+                { node = "body/face", property = "visible", keys = { { 0, true }, { 0.9, false } } },
+            },
+        },
+        rest = {
+            duration = 1,
+            tracks = { { node = "body/arm", property = "rotation", keys = { { 0, -0.5 } } } },
+        },
+        broken = {
+            duration = 1,
+            tracks = {
+                { node = "body/arm", property = "rotation", keys = { { 0, 2 } } },
+                { node = "body/leg", property = "x", keys = { { 0, 1 } } },
+            },
+        },
+        talk = {
+            duration = 1,
+            tracks = { { node = "label", property = "cell", keys = { { 0, { 0, 0 } } } } },
+        },
+        stare = {
+            duration = 1,
+            tracks = { { node = "body/face", property = "cell", keys = { { 0, { 999, 0 } } } } },
+        },
+    },
+}"##;
+
+/// Two puppets, instances of the puppet's file.
+const SHOW: &str = r##"return {
+    format = 1,
+    children = {
+        { name = "left", kind = "instance", x = 20, scene = "puppet.scene.luau" },
+        { name = "right", kind = "instance", x = 60, scale_x = -1, scene = "puppet.scene.luau" },
+    },
+}"##;
+
+#[test]
+fn clips_pose_nodes() {
+    let mut headless = headless();
+    let mut scene = load(
+        &mut headless,
+        &[("puppet.scene.luau", PUPPET)],
+        "puppet.scene.luau",
+    )
+    .unwrap();
+    let clips = SceneFile::parse(PUPPET, "puppet.scene.luau").unwrap().clips;
+    let root = scene.root();
+    let body = scene.find(root, "body").unwrap();
+    let arm = scene.find(root, "body/arm").unwrap();
+    let face = scene.find(root, "body/face").unwrap();
+    let face_x = |scene: &Scene| sprite(scene, "body/face").0.region().x;
+
+    scene.pose(root, &clips["wave"], 0.25, 1.0).unwrap();
+    assert_eq!(scene.node(arm).rotation(), 0.5);
+    assert_eq!(scene.node(body).position(), [0.0, 0.0], "a step");
+    assert_eq!(face_x(&scene), 0.0);
+    scene.pose(root, &clips["wave"], 0.8, 1.0).unwrap();
+    assert!((scene.node(arm).rotation() - 0.4).abs() < 1e-6);
+    assert_eq!(scene.node(body).position(), [0.0, -2.0]);
+    assert_eq!(face_x(&scene), 16.0, "the next cell");
+    assert!(scene.node(face).is_visible());
+    scene.pose(root, &clips["wave"], 1.95, 1.0).unwrap();
+    assert!(!scene.node(face).is_visible(), "looped");
+
+    // Weighted, numbers go part of the way, and the rest changes from a weight of a half.
+    scene.pose(root, &clips["rest"], 0.0, 1.0).unwrap();
+    scene.node_mut(body).set_position([0.0, 0.0]);
+    scene.pose(root, &clips["wave"], 0.5, 0.25).unwrap();
+    assert_eq!(scene.node(arm).rotation(), -0.125);
+    assert_eq!(scene.node(body).position(), [0.0, -0.5]);
+    assert!(!scene.node(face).is_visible());
+    scene.pose(root, &clips["wave"], 0.8, 0.5).unwrap();
+    assert!(scene.node(face).is_visible());
+    assert_eq!(scene.node(body).position(), [0.0, -1.25]);
+    scene.pose(root, &clips["wave"], 0.0, 0.0).unwrap();
+    assert_eq!(scene.node(body).position(), [0.0, -1.25], "nothing at all");
+
+    // Clips that don't fit change nothing.
+    let rotation = scene.node(arm).rotation();
+    let err = scene.pose(root, &clips["broken"], 0.0, 1.0).unwrap_err();
+    assert!(
+        err.contains("there's no node `body/leg` in the scene's root for the clip to pose"),
+        "{err}"
+    );
+    assert_eq!(scene.node(arm).rotation(), rotation);
+    let err = scene.pose(body, &clips["wave"], 0.0, 1.0).unwrap_err();
+    assert!(
+        err.contains("no node `body/arm` in node `body`"),
+        "paths are from the node posed: {err}"
+    );
+    let err = scene.pose(root, &clips["talk"], 0.0, 1.0).unwrap_err();
+    assert!(
+        err.contains("node `label` is a text node, which has no cell"),
+        "{err}"
+    );
+    let err = scene.pose(root, &clips["stare"], 0.0, 1.0).unwrap_err();
+    assert!(
+        err.contains("node `body/face`: sprite (999, 0) is outside"),
+        "{err}"
+    );
+    let Kind::Sprite(sprite) = scene.node_mut(face).kind_mut() else {
+        panic!("the face is a sprite");
+    };
+    sprite.set_cell([2, 0]).unwrap();
+    assert_eq!(face_x(&scene), 32.0);
+}
+
+#[test]
+fn clips_pose_every_instance_of_their_scene() {
+    let mut headless = headless();
+    let files = [("puppet.scene.luau", PUPPET), ("show.scene.luau", SHOW)];
+    let mut scene = load(&mut headless, &files, "show.scene.luau").unwrap();
+    let wave = &SceneFile::parse(PUPPET, "puppet.scene.luau").unwrap().clips["wave"];
+    let root = scene.root();
+    let left = scene.find(root, "left").unwrap();
+    let right = scene.find(root, "right").unwrap();
+    scene.pose(left, wave, 0.5, 1.0).unwrap();
+    scene.pose(right, wave, 0.25, 1.0).unwrap();
+    let rotation = |path| scene.node(scene.find(root, path).unwrap()).rotation();
+    assert_eq!(rotation("left/body/arm"), 1.0);
+    assert_eq!(rotation("right/body/arm"), 0.5);
+    // The right one is mirrored, so its arm turns the other way on the canvas.
+    let hand = |path| {
+        scene
+            .transform(scene.find(root, path).unwrap())
+            .apply([0.0, 6.0])
+    };
+    let [left_x, _] = hand("left/body/arm");
+    let [right_x, _] = hand("right/body/arm");
+    assert!(left_x < 20.0 && right_x > 60.0, "{left_x}, {right_x}");
+}

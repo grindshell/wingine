@@ -9,6 +9,7 @@
 use std::{collections::BTreeMap, fmt::Write};
 
 use super::{
+    clip::{Clip, Interpolation, Keys, Track},
     file::{FORMAT, KindDef, NodeDef, SceneFile, SheetDef, TileDef, TilesetFile, Value},
     is_identifier,
 };
@@ -29,6 +30,19 @@ pub(super) fn write(scene: &SceneFile) -> Result<String, String> {
         writer.end_field();
     }
     writer.children(&scene.children, "")?;
+    if !scene.clips.is_empty() {
+        writer.key("clips");
+        writer.open();
+        for (name, clip) in &scene.clips {
+            writer.key(name);
+            writer
+                .clip(clip)
+                .map_err(|err| format!("clip `{name}`: {err}"))?;
+            writer.end_field();
+        }
+        writer.close();
+        writer.end_field();
+    }
     writer.close();
     writer.out.push('\n');
     Ok(writer.out)
@@ -317,6 +331,73 @@ impl Writer {
         Ok(())
     }
 
+    fn clip(&mut self, clip: &Clip) -> Result<(), String> {
+        self.open();
+        self.number_field("duration", clip.duration)?;
+        if clip.looping {
+            self.field("loop", "true");
+        }
+        if !clip.tracks.is_empty() {
+            self.key("tracks");
+            self.open();
+            for (i, track) in clip.tracks.iter().enumerate() {
+                self.indent();
+                self.track(track)
+                    .map_err(|err| format!("track {}: {err}", i + 1))?;
+                self.end_field();
+            }
+            self.close();
+            self.end_field();
+        }
+        self.close();
+        Ok(())
+    }
+
+    /// A track, with a key to a line.
+    fn track(&mut self, track: &Track) -> Result<(), String> {
+        self.open();
+        if !track.node.is_empty() {
+            self.field("node", &quoted(&track.node));
+        }
+        self.field("property", &quoted(track.keys.property_name()));
+        if let Keys::Number {
+            interpolation: Interpolation::Step,
+            ..
+        } = track.keys
+        {
+            self.field("interpolation", &quoted(Interpolation::Step.name()));
+        }
+        let keys: Vec<(f32, String)> = match &track.keys {
+            Keys::Number { keys, .. } => keys
+                .iter()
+                .map(|&(time, value)| Ok((time, single(value, "keys")?)))
+                .collect::<Result<_, String>>()?,
+            Keys::Visible(keys) => keys
+                .iter()
+                .map(|&(time, visible)| (time, visible.to_string()))
+                .collect(),
+            Keys::Cell(keys) => keys
+                .iter()
+                .map(|&(time, [column, row])| (time, format!("{{ {column}, {row} }}")))
+                .collect(),
+        };
+        self.key("keys");
+        if keys.is_empty() {
+            self.out.push_str("{}");
+        } else {
+            self.open();
+            for (time, value) in keys {
+                self.indent();
+                write!(self.out, "{{ {}, {value} }}", single(time, "keys")?).unwrap();
+                self.end_field();
+            }
+            self.close();
+        }
+        self.end_field();
+        self.close();
+        Ok(())
+    }
+
     fn pivot(&mut self, pivot: [f32; 2]) -> Result<(), String> {
         if pivot != [0.0, 0.0] {
             self.pair_field("pivot", pivot)?;
@@ -443,7 +524,7 @@ fn quoted(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{Props, RectDef, SpriteDef};
+    use crate::scene::{Property, Props, RectDef, SpriteDef};
 
     /// A scene in its canonical layout.
     const CANONICAL: &str = r##"return {
@@ -552,6 +633,24 @@ mod tests {
         mill.children[0].anchor = Some([0.0, 0.0]);
         let mut props = Props::new();
         props.insert("for".into(), Value::Number(-0.5));
+        let turn = Clip {
+            duration: 0.25,
+            looping: false,
+            tracks: vec![
+                Track {
+                    node: "mill".into(),
+                    keys: Keys::Number {
+                        property: Property::ScaleY,
+                        interpolation: Interpolation::Step,
+                        keys: vec![(0.0, 1.0), (0.1, 0.3333)],
+                    },
+                },
+                Track {
+                    node: "mill/floor".into(),
+                    keys: Keys::Visible(vec![(0.25, false)]),
+                },
+            ],
+        };
         let scene = SceneFile {
             sheets: [(
                 "tiles".to_owned(),
@@ -564,9 +663,11 @@ mod tests {
             .into(),
             props,
             children: vec![mill],
+            clips: [("turn".to_owned(), turn)].into(),
         };
         let written = scene.to_luau().unwrap();
         assert!(written.contains("[\"for\"] = -0.5,"), "{written}");
+        assert!(written.contains("{ 0.1, 0.3333 },"), "{written}");
         assert_eq!(parse(&written), scene);
     }
 
@@ -698,6 +799,90 @@ mod tests {
     fn screens_write_and_read_back() {
         let scene = parse(SCREEN);
         assert_eq!(scene.to_luau().unwrap(), SCREEN);
+    }
+
+    /// A rig: an arm with a hand, and clips that wave it and make it blink.
+    const RIG: &str = r##"return {
+    format = 1,
+    sheets = {
+        hands = {
+            path = "hands.png",
+            tile_width = 8,
+            tile_height = 8,
+        },
+    },
+    children = {
+        {
+            name = "arm",
+            kind = "rect",
+            width = 2,
+            height = 10,
+            pivot = { 1, 0 },
+            children = {
+                {
+                    name = "hand",
+                    kind = "sprite",
+                    y = 10,
+                    sheet = "hands",
+                    cell = { 0, 0 },
+                    pivot = { 4, 0 },
+                },
+            },
+        },
+    },
+    clips = {
+        blink = {
+            duration = 3,
+            loop = true,
+            tracks = {
+                {
+                    node = "arm/hand",
+                    property = "cell",
+                    keys = {
+                        { 0, { 0, 0 } },
+                        { 2.9, { 1, 0 } },
+                    },
+                },
+            },
+        },
+        wave = {
+            duration = 1.2,
+            loop = true,
+            tracks = {
+                {
+                    node = "arm",
+                    property = "rotation",
+                    keys = {
+                        { 0, -0.25 },
+                        { 0.6, 0.5 },
+                        { 1.2, -0.25 },
+                    },
+                },
+                {
+                    property = "y",
+                    interpolation = "step",
+                    keys = {
+                        { 0, 0 },
+                        { 0.6, -1 },
+                    },
+                },
+                {
+                    node = "arm/hand",
+                    property = "visible",
+                    keys = {
+                        { 1, false },
+                    },
+                },
+            },
+        },
+    },
+}
+"##;
+
+    #[test]
+    fn rigs_write_and_read_back() {
+        let scene = parse(RIG);
+        assert_eq!(scene.to_luau().unwrap(), RIG);
     }
 
     /// A tileset in its canonical layout.

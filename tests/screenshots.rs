@@ -368,6 +368,98 @@ fn scene_anchors() {
     }
 }
 
+/// Four instances of a puppet, off the pixel grid, posed by a clip that raises its arm, the
+/// forearm turning inside it, and leans its body: at the clip's start, halfway, at its end, and at
+/// its end weighted by a quarter. Halfway, its head steps to another sprite and its leg to half its
+/// length; at the end, its hat is hidden. A quarter of the way, numbers go a quarter of the way
+/// there, and the rest doesn't change. The head doesn't turn: GPUs sample a turned sprite's texels
+/// differently where its edges cross pixels' middles.
+#[test]
+fn scene_clips() {
+    let puppet = r##"return {
+        format = 1,
+        sheets = { tiles = { path = "tiles.png", tile_width = 16, tile_height = 16 } },
+        children = {
+            {
+                name = "body", kind = "rect", y = -8, width = 4, height = 12, pivot = { 2, 12 },
+                color = "#4f8fd0",
+                children = {
+                    {
+                        name = "arm", kind = "rect", y = -11, width = 2, height = 6, pivot = { 1, 1 },
+                        color = "#f2c28c",
+                        children = {
+                            {
+                                name = "forearm", kind = "rect", y = 5, width = 2, height = 6,
+                                pivot = { 1, 1 }, color = "#d49464",
+                            },
+                        },
+                    },
+                    {
+                        name = "hat", kind = "rect", y = -26, width = 8, height = 3, pivot = { 4, 3 },
+                        color = "#c04040",
+                    },
+                },
+            },
+            {
+                name = "head", kind = "sprite", y = -20, sheet = "tiles", cell = { 27, 0 },
+                pivot = { 8, 14 }, tint = "#f2d3ab",
+            },
+            {
+                name = "leg", kind = "rect", y = -8, width = 2, height = 8, pivot = { 1, 0 },
+                color = "#6b5844",
+            },
+        },
+        clips = {
+            wave = {
+                duration = 1,
+                tracks = {
+                    { node = "body/arm", property = "rotation", keys = { { 0, 0 }, { 1, -2.5 } } },
+                    { node = "body/arm/forearm", property = "rotation", keys = { { 0, 0 }, { 1, -1 } } },
+                    { node = "body", property = "rotation", keys = { { 0, 0 }, { 1, 0.3 } } },
+                    { node = "head", property = "cell", keys = { { 0, { 27, 0 } }, { 0.5, { 28, 0 } } } },
+                    { node = "body/hat", property = "visible", keys = { { 0, true }, { 0.75, false } } },
+                    {
+                        node = "leg", property = "scale_y", interpolation = "step",
+                        keys = { { 0, 1 }, { 0.5, 0.5 } },
+                    },
+                },
+            },
+        },
+    }"##;
+    let stage = r##"return {
+        format = 1,
+        children = {
+            { name = "1", kind = "instance", x = 16.3, y = 43.7, scene = "puppet.scene.luau" },
+            { name = "2", kind = "instance", x = 48.3, y = 43.7, scene = "puppet.scene.luau" },
+            { name = "3", kind = "instance", x = 80.3, y = 43.7, scene = "puppet.scene.luau" },
+            { name = "4", kind = "instance", x = 112.3, y = 43.7, scene = "puppet.scene.luau" },
+        },
+    }"##;
+    let mut headless = headless();
+    let mut scene = load_scene(
+        &mut headless,
+        &[("puppet.scene.luau", puppet), ("stage.scene.luau", stage)],
+    );
+    let wave = &SceneFile::parse(puppet, "puppet.scene.luau").unwrap().clips["wave"];
+    let root = scene.root();
+    for (name, time, weight) in [
+        ("1", 0.0, 1.0),
+        ("2", 0.5, 1.0),
+        ("3", 1.0, 1.0),
+        ("4", 1.0, 0.25),
+    ] {
+        let puppet = scene.find(root, name).unwrap();
+        scene.pose(puppet, wave, time, weight).unwrap();
+    }
+    let frame = headless
+        .render(128, 48, |canvas| {
+            canvas.clear(Color::rgb8(0x1b, 0x26, 0x1e));
+            scene.draw(canvas);
+        })
+        .unwrap();
+    assert_screenshot(&headless, "scene_clips", frame);
+}
+
 /// The scene at the end of `files`, a path and the file's contents for each scene and tileset
 /// file, with every image the tileset's.
 fn load_scene(headless: &mut Headless, files: &[(&'static str, &'static str)]) -> Scene {

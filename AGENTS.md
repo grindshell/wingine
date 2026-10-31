@@ -47,7 +47,7 @@ is fair. Bullets in Rust fit about 3.4 times as many in a frame. The milestone c
 - Results in the README, under the shmup: the most bullets each version fits in a 16.7 ms frame,
   and where the time goes
 
-**Current: a scene format, for a future editor to write and games to load.** Scenes are for
+**Done: a scene format, for a future editor to write and games to load.** Scenes are for
 level design, UI design and character rigging. The editor isn't part of the milestone, but the
 format is built for one: files it can read, change and write back. Built in order: the format and
 drawing first, then levels, UI and rigging, each finished with a game that uses it. The milestone
@@ -85,11 +85,12 @@ covers:
 - Docs for scene files and their API, screenshot tests for the new drawing, and round-trip tests
   of the writer
 
-Done so far: the format and drawing, shown by `examples/garden`; levels: tilemaps over tileset
-files, instances with overrides, and adding and removing nodes, with the RPG's maps moved into
-scenes and the garden's trees and flowers made instances; and UI: anchors, stretching with the
-parent, text alignment, and scenes laid out on the canvas, with the shmup's HUD and title menu
-moved into a scene whose menu takes the mouse. What's left is rigging (clips).
+Each part has its game: the format and drawing, `examples/garden`; levels (tilemaps over tileset
+files, instances with overrides, adding and removing nodes), the RPG's maps, moved into scenes,
+and the garden's trees and flowers, made instances; UI (anchors, stretching with the parent, text
+alignment, scenes laid out on the canvas), the shmup's HUD and title menu, moved into a scene
+whose menu takes the mouse; and rigging (clips in scene files, posed with weights so games layer
+and crossfade them), the picker of `examples/orchard`.
 
 Ask before starting features outside the current milestone, and especially general-purpose ones
 such as physics engines, networking, editors or 3D pipelines.
@@ -208,9 +209,13 @@ such as physics engines, networking, editors or 3D pipelines.
   places it in its parent's rectangle, and its stretch sizes it by it, where the root's is the
   scene's `size` (the canvas's: drawing sets it, and `scene.load` starts it there) and a plain
   node passes its parent's on. So `transform`, `bounds` and `contains` walk down from the root.
-  Scripts hold nodes as `lua::SceneNode`, an `Rc<RefCell<Scene>>` and a `NodeId`, so every node
-  of a scene shares it. Live scenes' tests are in `tests/scene.rs` and need a GPU; the formats'
-  are unit tests that don't.
+  `clip.rs` holds `Clip`s, a file's tracks of keyframes on nodes' properties, which a file names
+  apart from its nodes, so a clip poses whatever node it's given: `Scene::pose` finds every
+  track's node first, failing before changing anything, then samples each, moving numbers by its
+  weight. Sprite nodes keep the sheet their file gave them, so cell tracks and `set_cell` pick
+  from it. Scripts hold nodes as `lua::SceneNode`, an `Rc<RefCell<Scene>>` and a `NodeId`, so
+  every node of a scene shares it, and clips as `Clip` userdata, copied from the cached file. Live
+  scenes' tests are in `tests/scene.rs` and need a GPU; the formats' are unit tests that don't.
 - `src/runtime/native.rs`: native libraries, compiled Rust that adds a global table of functions
   and classes to a Luau game, and hooks before and after its `update` and `draw`. Each is
   registered once per process and never unloaded, and each game that loads one gets the
@@ -275,6 +280,17 @@ such as physics engines, networking, editors or 3D pipelines.
   a flower (`add`) or picks one (`remove`). The scene files are in the canonical layout, as an
   editor would write them, and `tests/garden.rs` checks they stay so: after editing one, write it
   again with `SceneFile::write`. The game's state is the global `garden`.
+- `examples/orchard/`: the scene milestone's rigged character, a picker with a basket on their
+  head who catches falling apples. `picker.scene.luau` is the rig, sprites of its parts from
+  `orchard.png` turning about their joints, and its clips: `idle` has a track for everything the
+  others change, so `main.luau` poses with it first each frame, then `walk` weighted by
+  `orchard.stride`, `blink`, and the reactions (`catch`, `miss`) faded in and out, or `slump`
+  once the day is over. Its near arm hangs from `body_front`, a node the clips turn as they turn
+  `body`, so it draws in front of the near leg. `orchard.scene.luau` places the picker as an
+  instance, and the apples are copies of a hidden node, caught against the bounds of the
+  basket's `mouth` area as it's posed. `orchard.grow(x)` starts an apple growing, and tests turn
+  `orchard.growing` off so only theirs grow. The scene files are in the canonical layout, and
+  `tests/orchard.rs` checks they stay so. The game's state is the global `orchard`.
 - `src/math.rs`: geometry types: `Rect`, and `Affine`, a 2D transform that composes with `*`.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
   `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
@@ -283,7 +299,10 @@ such as physics engines, networking, editors or 3D pipelines.
   `examples/sounds/` were synthesized for `sprites`; `pong`, `rpg` and `shmup` have copies of
   the ones they use, and `rpg`, `shmup` and `garden` copies of the tileset. `shmup/bullets.png` was drawn
   pixel by pixel for it: pellets, orbs and rice in eight colors, the hitbox, and the player's
-  shot. `rpg/strides.png` is another copy with its people
+  shot. `orchard/orchard.png` was drawn pixel by pixel for it too: the picker's parts and faces
+  and their basket in 16x16 cells, apples, and clumps of leaves, a cloud and a bush in 32x32 cells
+  below them, which the scenes divide with two sheets of the one image. `rpg/strides.png` is
+  another copy with its people
   and creatures mid-stride (raised a pixel on stretched legs), the frame characters show for the
   first half of each step. `native-particles/` is a native library, a `cdylib` built as
   `particles`, which `tests/native.rs` builds and loads.
@@ -305,8 +324,8 @@ such as physics engines, networking, editors or 3D pipelines.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders.
 - `tests/scene.rs`: tests for scenes loaded to play: finding nodes, transforms, hit testing,
-  anchors and stretching, tilemaps, instances and overrides, and adding and removing nodes, with
-  files held in memory.
+  anchors and stretching, tilemaps, instances and overrides, adding and removing nodes, and
+  posing with clips, with files held in memory.
 - `tests/native.rs`: tests for native libraries, most of them linked into the test. One builds
   `native-particles` with a nested `cargo build` into a target folder of its own and loads it
   from a file.
@@ -315,6 +334,9 @@ such as physics engines, networking, editors or 3D pipelines.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest.
 - `tests/garden.rs`: tests for the `garden` example, the same way, and that its scene files are
   in the canonical layout.
+- `tests/orchard.rs`: tests for the `orchard` example, the same way: its clips, the picker's walk
+  easing in and out, catching and missing apples, the reactions, and the end of the day, and that
+  its scene files are in the canonical layout.
 - `tests/shmup.rs`: tests for the `shmup` example, the same way: the title menu by key and by
   mouse, its HUD's scene, the player, the bullet systems
   through `shmup.bullets`, spell cards, clearing the stage with cheats, the same seed firing the
@@ -409,6 +431,7 @@ cargo run --example sprites
 cargo run -- examples/pong
 cargo run -- examples/rpg
 cargo run -- examples/garden
+cargo run -- examples/orchard
 cargo run --release -- examples/shmup
 cargo build --release -p native-danmaku
 cargo bench

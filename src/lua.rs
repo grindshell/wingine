@@ -90,8 +90,14 @@
 //!   for a plain node) and `node:contains(x, y)`. A scene is laid out on the canvas when it's
 //!   loaded and each time it's drawn, and one drawn without a camera is in canvas pixels, so
 //!   `contains` tests the mouse against a node. What they show: `node:set_sprite(sprite)`,
+//!   `node:set_cell(column, row)` (a cell of the sheet the scene file gave it),
 //!   `node:set_tint(tint)` (sprites), `node:set_color(color)` (rects and text), `node:text()` and
-//!   `node:set_text(text)` (text). Tilemaps, through a tilemap node or one of its layers:
+//!   `node:set_text(text)` (text). Posing: `node:pose(clip, time, weight)` poses the node and
+//!   those inside it as `clip` has them `time` seconds after it started; `weight`, from 0 to 1
+//!   and 1 if left out, moves numbers only that fraction of the way there, and changes
+//!   visibility and cells only from a half, for crossfading from one clip to another. Tracks
+//!   whose nodes aren't there are an error, and nothing changes. Tilemaps, through a tilemap
+//!   node or one of its layers:
 //!   `node:is_solid(column, row)`, `node:tile_to_world(column, row)` and
 //!   `node:world_to_tile(x, y)` (in the scene's coordinates), `node:grid_size()` (columns and
 //!   rows), `node:tile_size()` and `node:tile_props(name)`; and a layer's cells, `node:tile(column,
@@ -101,6 +107,10 @@
 //!   child of `node`, named `name` or as `source` is, and returns it; `node:remove()` takes a
 //!   node out of its scene, after which using it is an error apart from `node:is_removed()` and
 //!   `tostring`.
+//! - A [`Clip`] is userdata for a clip of a scene file, from `scene.clips`. Like an animation, it
+//!   doesn't keep time: scripts keep how long it has played and pose nodes with it. Its methods
+//!   are `clip:duration()`, `clip:is_looping()` and `clip:is_finished(time)` (whether one that
+//!   doesn't loop has reached its end; one that loops never does).
 //!
 //! Scripts are [Luau](https://luau.org), not standard Lua 5.x, and run in Luau's sandbox: the
 //! standard library and built-ins are read-only, and the globals a script defines are seen by the
@@ -123,8 +133,8 @@ use crate::{
     input::{Key, MouseButton},
     math::Rect,
     scene::{
-        AreaNode, Kind, NodeId, Props, RectNode, Scene, SpriteNode, TextNode, TilemapNode, Value,
-        a_node_of,
+        AreaNode, Clip, Kind, NodeId, Props, RectNode, Scene, SpriteNode, TextNode, TilemapNode,
+        Value, a_node_of,
     },
     tilemap::{Tile, TileId, Tilemap, Tileset},
 };
@@ -800,11 +810,7 @@ fn wrong_kind(described: &str, is: &str, what: &str) -> mlua::Error {
 
 /// How errors name a node: by its path, or as the root.
 fn describe_node(scene: &Scene, id: NodeId) -> String {
-    if id == scene.root() {
-        "the scene's root".into()
-    } else {
-        format!("node `{}`", scene.path(id))
-    }
+    scene.describe(id)
 }
 
 /// Fails unless every one of `numbers` is finite, which positions and the like must be so the
@@ -1021,6 +1027,23 @@ impl mlua::UserData for SceneNode {
                 })
             },
         );
+        methods.add_method("set_cell", |_, node, (column, row): (u32, u32)| {
+            node.write_kind("cell", |kind| match kind {
+                Kind::Sprite(sprite) => Some(sprite.set_cell([column, row])),
+                _ => None,
+            })?
+            .map_err(mlua::Error::runtime)
+        });
+        methods.add_method(
+            "pose",
+            |_, node, (clip, time, weight): (mlua::UserDataRef<Clip>, f32, Option<f32>)| {
+                let weight = weight.unwrap_or(1.0);
+                check_finite(&[time], "a time")?;
+                check_finite(&[weight], "a weight")?;
+                node.write(|scene, id| scene.pose(id, &clip, time, weight))?
+                    .map_err(mlua::Error::runtime)
+            },
+        );
         methods.add_method("set_tint", |_, node, tint: Color| {
             node.write_kind("tint", |kind| match kind {
                 Kind::Sprite(node) => {
@@ -1068,6 +1091,16 @@ impl mlua::UserData for SceneNode {
                 .read(describe_node)
                 .unwrap_or_else(|_| "removed".into());
             Ok(format!("SceneNode({described})"))
+        });
+    }
+}
+
+impl mlua::UserData for Clip {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("duration", |_, clip, ()| Ok(clip.duration));
+        methods.add_method("is_looping", |_, clip, ()| Ok(clip.looping));
+        methods.add_method("is_finished", |_, clip, time: f32| {
+            Ok(clip.is_finished(time))
         });
     }
 }

@@ -3,7 +3,7 @@
 Scenes loaded from scene files, and the nodes they're made of. [Scenes](../scenes.md) describes
 the files.
 
-- [Loading](#loading): [`scene.load`](#sceneload)
+- [Loading](#loading): [`scene.load`](#sceneload), [`scene.clips`](#sceneclips)
 - [Nodes](#nodes): [`name`](#nodename), [`kind`](#nodekind), [`path`](#nodepath),
   [`find`](#nodefind), [`tagged`](#nodetagged), [`parent`](#nodeparent),
   [`children`](#nodechildren), [`tags`](#nodetags), [`has_tag`](#nodehas_tag),
@@ -16,8 +16,9 @@ the files.
 - [What nodes cover](#what-nodes-cover): [`size`](#nodesize), [`set_size`](#nodeset_size),
   [`bounds`](#nodebounds), [`contains`](#nodecontains)
 - [What nodes show](#what-nodes-show): [`set_sprite`](#nodeset_sprite),
-  [`set_tint`](#nodeset_tint), [`set_color`](#nodeset_color), [`text`](#nodetext),
-  [`set_text`](#nodeset_text)
+  [`set_cell`](#nodeset_cell), [`set_tint`](#nodeset_tint), [`set_color`](#nodeset_color),
+  [`text`](#nodetext), [`set_text`](#nodeset_text)
+- [Posing](#posing): [`pose`](#nodepose), [`Clip`](#clip)
 - [Adding and removing nodes](#adding-and-removing-nodes): [`add`](#nodeadd),
   [`remove`](#noderemove), [`is_removed`](#nodeis_removed)
 - [Tilemaps](#tilemaps): [`is_solid`](#nodeis_solid), [`tile_to_world`](#nodetile_to_world),
@@ -47,6 +48,21 @@ loaded or placed, and each image once, however many scenes and sprite sheets use
 
 A file that can't be read, or that isn't a scene, is an error naming the file and the node where
 the problem is. Works while the game loads and in `update`.
+
+### `scene.clips`
+
+```lua
+scene.clips(path: string): { [string]: Clip }
+```
+
+Returns the [clips](../scenes.md#clips) of the scene file at `path`, by name, for posing nodes
+with [`node:pose`](#nodepose). The file is read once, whether it's loaded, placed or asked for
+its clips. A file that can't be read, or that isn't a scene, is an error. Works at any time.
+
+```lua
+local clips = scene.clips("hero.scene.luau")
+hero:pose(clips.walk, walk_time)
+```
 
 ## Nodes
 
@@ -311,6 +327,21 @@ node:set_sprite(sprite: Sprite)
 Changes the sprite a sprite node shows, such as to a frame of an
 [animation](graphics.md#animation). It keeps its size: a sprite of another size stretches to it.
 
+### `node:set_cell`
+
+```lua
+node:set_cell(column: number, row: number)
+```
+
+Shows the sprite in another cell of the sheet the scene file gave the sprite node, counting from 0
+at the top-left. A cell outside the sheet is an error. Clips change cells too, with a `cell`
+track.
+
+```lua
+-- A face that frowns.
+hero:find("head/face"):set_cell(4, 0)
+```
+
 ### `node:set_tint`
 
 ```lua
@@ -343,6 +374,72 @@ node:set_text(text: string)
 
 Changes a text node's text, laying it out again if it's different, so setting the same text
 every frame costs little.
+
+## Posing
+
+### `node:pose`
+
+```lua
+node:pose(clip: Clip, time: number, weight: number?)
+```
+
+Poses the node and the nodes inside it as `clip` has them `time` seconds after it started: each
+of the clip's tracks sets a property of the node its path leads to from this one to the value its
+keys give then. A clip that loops wraps `time` to its duration; one that doesn't holds its first
+pose before it starts and its last after it ends. Properties the clip has no track for keep what
+they have.
+
+`weight`, from 0 to 1 and 1 if left out, is how much the clip counts: numbers move only that
+fraction of the way from what they are to the clip's, and `visible` and `cell` change only from a
+weight of a half. Posing with one clip, then another at a weight rising from 0 to 1, crossfades
+from the first to the second:
+
+```lua
+-- Every frame: standing, walking as much as the hero is, and blinking now and then.
+hero:pose(clips.idle, time)
+hero:pose(clips.walk, walk_time, walking)
+hero:pose(clips.blink, time)
+```
+
+A track whose node isn't there, or a `cell` track of a node that isn't a sprite from a sheet with
+those cells, is an error, and the pose changes nothing. `time` and `weight` must be finite.
+
+### `Clip`
+
+A clip of a scene file, from [`scene.clips`](#sceneclips): tracks of keyframes on nodes'
+properties, described in [Clips](../scenes.md#clips). Like an [`Animation`](graphics.md#animation),
+it doesn't keep time; the game keeps how long it has played. One clip poses any number of nodes.
+
+#### `clip:duration`
+
+```lua
+clip:duration(): number
+```
+
+Returns how many seconds it lasts.
+
+#### `clip:is_looping`
+
+```lua
+clip:is_looping(): boolean
+```
+
+Returns whether it starts over at its end, rather than holding its last pose.
+
+#### `clip:is_finished`
+
+```lua
+clip:is_finished(time: number): boolean
+```
+
+Returns whether a clip that doesn't loop has reached its end, `time` seconds after it started.
+One that loops never has.
+
+```lua
+if clips.wave:is_finished(time - waved_at) then
+    waving = false
+end
+```
 
 ## Adding and removing nodes
 

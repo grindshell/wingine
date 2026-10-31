@@ -20,7 +20,8 @@ end
 
 Scene files are Luau, but only data: one table of tables, strings, numbers and booleans. That
 way a tool, such as an editor, can read a file, change it and write it back, and people can still
-write and read them by hand. [`examples/garden`](../examples/garden) is a game built around one.
+write and read them by hand. [`examples/garden`](../examples/garden) is a game built around one,
+and [`examples/orchard`](../examples/orchard) one around a character animated by a scene's clips.
 
 ## A scene file
 
@@ -86,6 +87,7 @@ At the top of the file:
 | `sheets` | The sprite sheets the scene's sprites come from, by name: each an image's `path`, relative to the game's folder, divided into sprites `tile_width` by `tile_height` texels, as [`graphics.load_sprite_sheet`](api/graphics.md#graphicsload_sprite_sheet) divides one. |
 | `props` | Data for the game about the scene as a whole, such as its music. |
 | `children` | The nodes at the top of the scene's tree. |
+| `clips` | Animations of the scene's nodes, by name, such as a character's walk. See [Rigging characters](#rigging-characters). |
 
 ## Nodes
 
@@ -341,6 +343,134 @@ than being replaced, and a `sheet` is one of the sheets of the file the node com
 can reach into an instance inside the placed scene, such as `["family/mother/body"]`. A scene that
 places itself, through its instances or theirs, is an error.
 
+## Rigging characters
+
+A character can be a rig: a sprite for each part, the head, the body, each half of each arm and
+leg, every part the child of the part it hangs from, with its pivot at its joint. Turning an upper
+arm then turns the forearm and hand with it, as a cutout puppet's would. Parts are rigid; the
+engine doesn't bend sprites.
+
+```lua
+{
+    name = "hips",
+    kind = "node",
+    y = -14,
+    children = {
+        {
+            name = "leg",
+            kind = "sprite",
+            sheet = "parts",
+            cell = { 3, 1 },
+            pivot = { 7.5, 3 },
+            children = {
+                {
+                    name = "shin",
+                    kind = "sprite",
+                    y = 6,
+                    sheet = "parts",
+                    cell = { 4, 1 },
+                    pivot = { 7.5, 3 },
+                },
+            },
+        },
+    },
+},
+```
+
+Nodes draw in the order they're in, so a part that should be behind another comes first. When a
+part must move with one node but draw in front of another, such as a near arm that moves with
+the body but is in front of the near leg, give it a plain node of its own, where it should draw,
+and turn that node as the body turns.
+
+### Clips
+
+Clips animate a rig. The file's `clips` names them, each with its `duration` in seconds, whether
+it `loop`s, and its `tracks`:
+
+```lua
+clips = {
+    walk = {
+        duration = 0.4,
+        loop = true,
+        tracks = {
+            {
+                node = "hips/leg",
+                property = "rotation",
+                keys = {
+                    { 0, -0.6 },
+                    { 0.2, 0.6 },
+                    { 0.4, -0.6 },
+                },
+            },
+            {
+                node = "hips",
+                property = "y",
+                interpolation = "step",
+                keys = {
+                    { 0, -14 },
+                    { 0.2, -13 },
+                },
+            },
+        },
+    },
+},
+```
+
+| Field | What it is | Default |
+|---|---|---|
+| `duration` | Required. Seconds the clip lasts, above 0. | |
+| `loop` | Whether it starts over at its end, rather than holding its last pose. | `false` |
+| `tracks` | What it changes: a list of tracks. | none |
+
+Each track changes one property of one node:
+
+| Field | What it is | Default |
+|---|---|---|
+| `node` | The node's path from the node the clip poses. | that node itself |
+| `property` | Required. `"x"`, `"y"`, `"rotation"`, `"scale_x"`, `"scale_y"`, `"visible"` or `"cell"` (a sprite's). | |
+| `interpolation` | How a number gets from one key to the next: `"linear"`, in a straight line, or `"step"`, jumping at each key. `visible` and `cell` always step. | `"linear"` |
+| `keys` | Required. Pairs of a time, in seconds from 0 to the duration, and the value then, `{ time, value }`, in order of time. | |
+
+Before its first key, a property has the first key's value, and after its last, the last's. A
+loop that comes back to where it started has its first key's value again at its end. Stepping a
+`cell` swaps a sprite for another of its sheet, such as a face that blinks; stepping `visible`
+shows and hides a part.
+
+A clip doesn't keep time, as an [`Animation`](api/graphics.md#animation) doesn't: the game keeps
+how long it has played, and [poses](api/scene.md#nodepose) a node with it then.
+[`scene.clips`](api/scene.md#sceneclips) returns a file's clips:
+
+```lua
+local hero = scene.load("level.scene.luau"):find("hero")
+local clips = scene.clips("hero.scene.luau")
+local time = 0
+
+function update(dt: number)
+    time += dt
+    hero:pose(clips.walk, time)
+end
+```
+
+Tracks find their nodes by path from the node posed, so one clip poses each instance of its file:
+here, `hero` is an instance of `hero.scene.luau` in the level.
+
+A clip sets only the properties it has tracks for; the others keep whatever they had. Games
+layer clips by posing with one after another: a pose with a weight below 1 moves numbers only that
+fraction of the way to the clip's, and changes `visible` and `cell` only from a weight of a half.
+So a game that poses with `idle`, then with `walk` at a weight rising from 0 to 1, crossfades from
+standing to walking. Pose first with a clip that has tracks for everything the others change, so
+nothing keeps a pose from an earlier frame:
+
+```lua
+hero:pose(clips.idle, time)
+hero:pose(clips.walk, walk_time, walking) -- `walking` eases between 0 and 1
+hero:pose(clips.blink, time)
+```
+
+The picker in [`examples/orchard`](../examples/orchard) is a rig like this, with clips for
+standing, walking, blinking, catching and missing apples, and giving up, which
+[`main.luau`](../examples/orchard/main.luau) layers each frame.
+
 ## Files that tools write
 
 The engine can write scenes and tilesets too, from Rust: `SceneFile::write` and
@@ -351,8 +481,9 @@ same text, so a change to a scene changes few lines of its file, and version con
 changed. Reading what it writes gives back the same scene. It doesn't keep comments.
 
 The scene files of [`examples/garden`](../examples/garden), the
-[RPG's maps](../examples/rpg/maps) and the [shmup's HUD](../examples/shmup/hud.scene.luau) are in
-that layout, as an editor would leave them, and tests check the garden's and the shmup's stay so.
+[RPG's maps](../examples/rpg/maps), the [shmup's HUD](../examples/shmup/hud.scene.luau) and
+[`examples/orchard`](../examples/orchard) are in that layout, as an editor would leave them, and
+tests check the garden's, the shmup's and the orchard's stay so. A clip's keys go one to a line.
 
 ## Using a scene
 
