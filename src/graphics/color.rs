@@ -39,6 +39,13 @@ impl Color {
         )
     }
 
+    /// The components as bytes, still in sRGB, each clamped to `0.0..=1.0` and rounded.
+    pub(crate) fn to_rgba8(self) -> [u8; 4] {
+        // Adding a half and truncating rounds, without `f32::round`, which is a function call
+        // where the CPU has no instruction for it.
+        [self.r, self.g, self.b, self.a].map(|c| (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
+    }
+
     /// Converts to linear-space components for the GPU. Alpha is already linear.
     pub(crate) fn to_linear(self) -> [f32; 4] {
         [
@@ -67,6 +74,18 @@ mod tests {
         assert_eq!(
             Color::rgba(0.0, 1.0, 0.0, 0.5).to_linear(),
             [0.0, 1.0, 0.0, 0.5]
+        );
+    }
+
+    #[test]
+    fn bytes_round_and_clamp() {
+        assert_eq!(
+            Color::rgba(0.5, 1.5, -1.0, 0.25).to_rgba8(),
+            [128, 255, 0, 64]
+        );
+        assert_eq!(
+            Color::rgb8(0xf2, 0xc1, 0x4e).to_rgba8(),
+            [0xf2, 0xc1, 0x4e, 0xff]
         );
     }
 

@@ -531,6 +531,34 @@ fn sprites_draw_rotated_about_their_centers() {
 }
 
 #[test]
+fn colors_can_be_made_numbers() {
+    let folder = game(
+        "color_numbers",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "hex = graphics.color('#ff804080')
+                table = graphics.color({ r = 0, g = 0, b = 1 })
+                function draw()
+                    graphics.clear(0x000000ff)
+                    graphics.fill_rect(0, 0, 1, 1, table)
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    assert_eq!(
+        eval::<(u32, u32)>(&simulation, "hex, table"),
+        (0xff804080, 0x0000ffff)
+    );
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&image, 0, 0), BLUE);
+    assert_eq!(pixel(&image, 1, 0), BLACK);
+}
+
+#[test]
 fn animations_show_their_frames_in_turn() {
     let folder = game(
         "animations",

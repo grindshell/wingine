@@ -104,6 +104,13 @@ fn main() {
         ),
     );
     report(
+        "Luau: graphics.draw_sprite(sprite, x, y, 0xff8040ff)",
+        luau(
+            "draw-sprite-number",
+            each("graphics.draw_sprite(sprite, x, y, 0xff8040ff)"),
+        ),
+    );
+    report(
         "Luau: graphics.draw_sprite(sprite, x, y, { r, g, b })",
         luau(
             "draw-sprite-table",
@@ -125,6 +132,10 @@ fn main() {
         "Luau: an empty Luau function per sprite",
         luau("luau-call", each("nothing(sprite, x, y)")),
     );
+    report(
+        "Luau: moving a bullet by its speed, angle and their rates",
+        luau("luau-bullets", MOVE_BULLETS.into()),
+    );
 
     let mut simulation =
         Simulation::new(&config(), |ctx| RustGame::load(ctx, &image, Shape::Sprite)).unwrap();
@@ -143,9 +154,9 @@ fn main() {
 }
 
 fn report(case: &str, draw: f32) {
-    let per_sprite = draw / SPRITES as f32 * 1e9;
+    let each = draw / SPRITES as f32 * 1e9;
     println!(
-        "  {case:<56}{per_sprite:>8.1} ns a sprite ({:.3} ms a frame)",
+        "  {case:<58}{each:>7.1} ns each ({:.3} ms a frame)",
         draw * 1000.0
     );
 }
@@ -178,6 +189,19 @@ fn each(line: &str) -> String {
     )
 }
 
+/// Moves [`SPRITES`] bullets as a bullet hell in Luau would, without drawing them: their speed
+/// and angle change at rates of their own, and they move by both.
+const MOVE_BULLETS: &str = "
+    bullets = bullets or make_bullets()
+    local dt = 1 / 60
+    for i = 1, SPRITES do
+        local b = bullets[i]
+        b.speed += b.acceleration * dt
+        b.angle += b.turn * dt
+        b.x += math.cos(b.angle) * b.speed * dt
+        b.y += math.sin(b.angle) * b.speed * dt
+    end";
+
 /// A Luau game whose `draw` runs `draw`.
 fn luau_game(draw: &str) -> String {
     format!(
@@ -188,6 +212,17 @@ fn luau_game(draw: &str) -> String {
         local calls = 0
         local function nothing(sprite, x, y)
             calls += 1
+        end
+        local bullets
+        local function make_bullets()
+            local made = table.create(SPRITES)
+            for i = 1, SPRITES do
+                made[i] = {{
+                    x = (i * 7) % 320, y = (i * 13) % 180, speed = 60, angle = i,
+                    acceleration = 1, turn = 0.5,
+                }}
+            end
+            return made
         end
         bench.use_sprite(sprite)
 

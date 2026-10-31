@@ -20,7 +20,7 @@ use std::{
 use mlua::IntoLua;
 use wingine_abi as abi;
 
-use super::{CANVAS, CONTEXT, LibraryConfig, lend, with_lent};
+use super::{Lent, LibraryConfig};
 use crate::{
     Context, Error, Result,
     graphics::{Canvas, Color, Sprite},
@@ -277,8 +277,9 @@ struct Instance {
 impl Natives {
     /// Loads `libraries`, in order, for the game in `folder`, creating their state for it and
     /// adding their tables to its VM. Optional libraries that aren't there are left out.
-    pub(crate) fn load(
+    pub(super) fn load(
         lua: &mlua::Lua,
+        lent: &Lent,
         ctx: &mut Context,
         folder: &Path,
         libraries: &[LibraryConfig],
@@ -323,7 +324,7 @@ impl Natives {
                 state,
             });
             // The context is lent for the library's Luau, as it is for the game's `main.luau`.
-            lend(lua, CONTEXT, ctx, || Ok(install(lua, library, state)))?
+            lent.lend(ctx, || Ok(install(lua, lent, library, state)))?
                 .map_err(|err| fail(err.to_string()))?;
         }
         Ok(natives)
@@ -405,13 +406,19 @@ fn class_key(class: &Class) -> usize {
 }
 
 /// Adds `library`'s table to `lua`, with functions that call it with its state for the game.
-fn install(lua: &mlua::Lua, library: &'static Library, state: *mut c_void) -> mlua::Result<()> {
+fn install(
+    lua: &mlua::Lua,
+    lent: &Lent,
+    library: &'static Library,
+    state: *mut c_void,
+) -> mlua::Result<()> {
     let table = lua.create_table()?;
     for (name, callback) in &library.functions {
         let label = format!("{}.{name}", library.name);
         let callback = *callback;
+        let lent = lent.clone();
         let function = lua.create_function(move |lua, args: mlua::Variadic<mlua::Value>| {
-            invoke(lua, &label, &args, 1, |call| {
+            invoke(lua, &lent, &label, &args, 1, |call| {
                 // SAFETY: the library's own callback, called as the ABI says.
                 unsafe { (callback.function)(callback.data, state, call) }
             })
@@ -427,6 +434,7 @@ fn install(lua: &mlua::Lua, library: &'static Library, state: *mut c_void) -> ml
         for (name, callback) in &class.methods {
             let label = format!("{}:{name}", class.name);
             let callback = *callback;
+            let lent = lent.clone();
             let method = lua.create_function(move |lua, args: mlua::Variadic<mlua::Value>| {
                 let bad_self = |message: String| mlua::Error::BadArgument {
                     to: Some(label.clone()),
@@ -451,7 +459,7 @@ fn install(lua: &mlua::Lua, library: &'static Library, state: *mut c_void) -> ml
                     return Err(bad_self(message));
                 }
                 let pointer = object.object;
-                invoke(lua, &label, &args[1..], 2, |call| {
+                invoke(lua, &lent, &label, &args[1..], 2, |call| {
                     // SAFETY: the library's own callback, called as the ABI says.
                     unsafe { (callback.function)(callback.data, state, pointer, call) }
                 })
@@ -566,6 +574,7 @@ impl Call<'_> {
 /// the first of `args`, for error messages.
 fn invoke(
     lua: &mlua::Lua,
+    lent: &Lent,
     function: &str,
     args: &[mlua::Value],
     first_position: usize,
@@ -596,16 +605,12 @@ fn invoke(
             ))),
         }
     };
-    let lent = with_lent(lua, CONTEXT, |ctx: &mut Context| {
-        run(ptr::from_mut(ctx), ptr::null_mut())
-    })?;
-    if let Some(result) = lent {
+    let result = lent.with(|ctx: &mut Context| run(ptr::from_mut(ctx), ptr::null_mut()))?;
+    if let Some(result) = result {
         return result;
     }
-    let lent = with_lent(lua, CANVAS, |canvas: &mut Canvas| {
-        run(ptr::null_mut(), ptr::from_mut(canvas))
-    })?;
-    if let Some(result) = lent {
+    let result = lent.with(|canvas: &mut Canvas| run(ptr::null_mut(), ptr::from_mut(canvas)))?;
+    if let Some(result) = result {
         return result;
     }
     run(ptr::null_mut(), ptr::null_mut())

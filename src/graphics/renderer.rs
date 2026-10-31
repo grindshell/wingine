@@ -9,7 +9,7 @@ use super::{
 };
 
 /// Initial GPU buffer room, in quads. Buffers grow as needed.
-const INITIAL_QUADS: u64 = 1024;
+const INITIAL_QUADS: u32 = 1024;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -30,7 +30,10 @@ pub(crate) struct Renderer {
     /// 1x1 white texture used for solid fills.
     white: Texture,
     vertex_buffer: wgpu::Buffer,
+    /// Indices for the two triangles of each of `index_quads` quads. Every quad's are the same,
+    /// so they're written only when there are more quads than ever before.
     index_buffer: wgpu::Buffer,
+    index_quads: u32,
 }
 
 impl Renderer {
@@ -115,7 +118,7 @@ impl Renderer {
                     attributes: &wgpu::vertex_attr_array![
                         0 => Float32x2,
                         1 => Float32x2,
-                        2 => Float32x4,
+                        2 => Unorm8x4,
                     ],
                 })],
             },
@@ -142,13 +145,7 @@ impl Renderer {
             device,
             "canvas vertices",
             wgpu::BufferUsages::VERTEX,
-            INITIAL_QUADS * 4 * size_of::<Vertex>() as u64,
-        );
-        let index_buffer = create_buffer(
-            device,
-            "canvas indices",
-            wgpu::BufferUsages::INDEX,
-            INITIAL_QUADS * 6 * size_of::<u32>() as u64,
+            u64::from(INITIAL_QUADS) * 4 * size_of::<Vertex>() as u64,
         );
 
         Self {
@@ -160,7 +157,8 @@ impl Renderer {
             sampler,
             white,
             vertex_buffer,
-            index_buffer,
+            index_buffer: create_index_buffer(device, INITIAL_QUADS),
+            index_quads: INITIAL_QUADS,
         }
     }
 
@@ -231,22 +229,19 @@ impl Renderer {
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
 
         let vertices: &[u8] = bytemuck::cast_slice(&canvas.vertices);
-        let indices: &[u8] = bytemuck::cast_slice(&canvas.indices);
-        if !indices.is_empty() {
+        let quads = canvas.quad_count();
+        if quads > 0 {
             ensure_capacity(
                 device,
                 &mut self.vertex_buffer,
                 "canvas vertices",
                 vertices.len(),
             );
-            ensure_capacity(
-                device,
-                &mut self.index_buffer,
-                "canvas indices",
-                indices.len(),
-            );
             queue.write_buffer(&self.vertex_buffer, 0, vertices);
-            queue.write_buffer(&self.index_buffer, 0, indices);
+            if quads > self.index_quads {
+                self.index_quads = quads.next_power_of_two();
+                self.index_buffer = create_index_buffer(device, self.index_quads);
+            }
         }
 
         let [r, g, b, a] = canvas.clear_color.to_linear().map(f64::from);
@@ -270,18 +265,15 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if !indices.is_empty() {
+            if quads > 0 {
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.globals_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.vertex_buffer.slice(..vertices.len() as u64));
-                pass.set_index_buffer(
-                    self.index_buffer.slice(..indices.len() as u64),
-                    wgpu::IndexFormat::Uint32,
-                );
+                pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 for batch in &canvas.batches {
                     let texture = batch.texture.as_ref().unwrap_or(&self.white);
                     pass.set_bind_group(1, texture.bind_group(), &[]);
-                    pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+                    pass.draw_indexed(batch.quads.start * 6..batch.quads.end * 6, 0, 0..1);
                 }
             }
         }
@@ -364,6 +356,18 @@ fn create_buffer(
         size,
         usage: usage | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
+    })
+}
+
+/// An index buffer drawing `quads` quads, each four vertices in a row, as two triangles.
+fn create_index_buffer(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
+    let indices: Vec<u32> = (0..quads)
+        .flat_map(|quad| [0, 1, 2, 0, 2, 3].map(|i| quad * 4 + i))
+        .collect();
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("quad indices"),
+        contents: bytemuck::cast_slice(&indices),
+        usage: wgpu::BufferUsages::INDEX,
     })
 }
 

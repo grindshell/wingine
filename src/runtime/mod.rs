@@ -47,7 +47,7 @@
 //!
 //! The engine's API is in five global tables:
 //!
-//! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.default_font`,
+//! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.color`, `graphics.default_font`,
 //! `graphics.frame_stats` and `graphics.new_animation` work anywhere, and
 //! `graphics.load_sprite_sheet` while the game loads and in `update`.
 //!
@@ -72,6 +72,10 @@
 //!   as for a HUD.
 //! - `graphics.size()` returns the canvas's width and height.
 //! - `graphics.default_font()` returns the built-in pixel font.
+//! - `graphics.color(color)` returns `color`, such as a hex string or a table, as a number
+//!   `0xRRGGBBAA`, which passes faster: a string or table is read again each time it's passed,
+//!   which costs more than drawing a sprite, so code that draws a lot makes its colors numbers
+//!   once.
 //! - `graphics.frame_stats()` returns how long the frame before took, and how much it drew, as a
 //!   table: `frame`, `update`, `draw` and `render` are seconds, and `quads` and `draw_calls`
 //!   counts. Before the first frame has finished, all are 0. See `FrameStats` for what each
@@ -140,7 +144,7 @@ mod input;
 mod native;
 mod tilemap;
 
-use std::{fs, path::Path};
+use std::{cell::Cell, fs, path::Path, ptr, rc::Rc};
 
 use wingine_abi::Phase;
 
@@ -152,11 +156,6 @@ use crate::{
     graphics::{Canvas, Color, Font, Resolution},
     lua::{Scripts, mlua},
 };
-
-/// Registry keys under which the engine lends its services to its Luau functions, while scripts
-/// may use them.
-const CONTEXT: &str = "wingine.context";
-const CANVAS: &str = "wingine.canvas";
 
 /// Runs the Luau game in `folder` until its window is closed. See the [module docs](self).
 pub fn run(folder: impl AsRef<Path>) -> Result<()> {
@@ -301,6 +300,7 @@ fn folder_name(folder: &Path) -> Option<String> {
 pub struct LuauGame {
     scripts: Scripts,
     natives: Natives,
+    lent: Lent,
     /// For showing an error.
     font: Font,
     /// The error that stopped the game, if one has.
@@ -315,18 +315,21 @@ impl LuauGame {
         let libraries = config(folder)?.libraries;
         let scripts = Scripts::new()?;
         let lua = scripts.lua();
+        let lent = Lent::default();
         let font = ctx.default_font().clone();
         let globals = lua.globals();
-        globals.set("graphics", graphics::module(lua, folder, font.clone())?)?;
-        globals.set("input", input::module(lua)?)?;
-        globals.set("audio", audio::module(lua, folder)?)?;
+        let graphics = graphics::module(lua, &lent, folder, font.clone())?;
+        globals.set("graphics", graphics)?;
+        globals.set("input", input::module(lua, &lent)?)?;
+        globals.set("audio", audio::module(lua, &lent, folder)?)?;
         globals.set("tilemap", tilemap::module(lua)?)?;
         globals.set("grid", grid::module(lua)?)?;
-        let natives = Natives::load(lua, ctx, folder, &libraries)?;
-        lend(lua, CONTEXT, ctx, || scripts.load(folder.join("main.luau")))?;
+        let natives = Natives::load(lua, &lent, ctx, folder, &libraries)?;
+        lent.lend(ctx, || scripts.load(folder.join("main.luau")))?;
         Ok(Self {
             scripts,
             natives,
+            lent,
             font,
             error: None,
         })
@@ -395,7 +398,8 @@ impl LuauGame {
         // Tasks started before this frame, such as while the game loaded, resume in it. Those
         // `update` starts have run until they first waited, and resume from the next frame.
         self.scripts.adopt_spawned();
-        lend(&lua, CONTEXT, ctx, || {
+        let lent = self.lent.clone();
+        lent.lend(ctx, || {
             self.callback("update", dt)?;
             if let Err(err) = self.scripts.resume_tasks(dt) {
                 log::error!("{err}");
@@ -409,8 +413,8 @@ impl LuauGame {
     /// draw in canvas pixels whatever camera the script left set.
     fn run_draw(&mut self, canvas: &mut Canvas) -> Result<()> {
         self.natives.draw(Phase::BEFORE, canvas)?;
-        let lua = self.scripts.lua().clone();
-        lend(&lua, CANVAS, canvas, || self.callback("draw", ()))?;
+        let lent = self.lent.clone();
+        lent.lend(canvas, || self.callback("draw", ()))?;
         canvas.set_camera(None);
         self.natives.draw(Phase::AFTER, canvas)
     }
@@ -428,42 +432,125 @@ fn draw_error(canvas: &mut Canvas, font: &Font, err: &Error) {
     canvas.draw_text_layout(&layout, .., [MARGIN, MARGIN], Color::WHITE);
 }
 
-/// Lends `value` to the engine's Luau functions under `key` while `f` runs. They reach it with
-/// [`with_lent`], and fail if they're called when it isn't lent.
-fn lend<T: 'static, R>(
-    lua: &mlua::Lua,
-    key: &str,
-    value: &mut T,
-    f: impl FnOnce() -> Result<R>,
-) -> Result<R> {
-    lua.scope(|scope| {
-        lua.set_named_registry_value(key, scope.create_any_userdata_ref_mut(value)?)?;
-        let result = f();
-        lua.unset_named_registry_value(key)?;
-        Ok(result)
-    })?
-}
+/// What the engine lends its Luau functions while scripts may use it: the context while the game
+/// loads and updates, and the canvas while it draws. Every engine function in a VM holds a handle
+/// to the same one.
+///
+/// Engine functions run on every draw call, so reaching what's lent has to be cheap: it's a
+/// pointer that [`Lent::lend`] sets for as long as it runs, which each function holds, rather than
+/// a lookup in the VM's registry or app data.
+#[derive(Clone, Default)]
+struct Lent(Rc<Loans>);
 
-/// Runs `f` with what the engine lent under `key`, if it lent anything.
-fn with_lent<T: 'static, R>(
-    lua: &mlua::Lua,
-    key: &str,
-    f: impl FnOnce(&mut T) -> R,
-) -> mlua::Result<Option<R>> {
-    match lua.named_registry_value::<Option<mlua::AnyUserData>>(key)? {
-        Some(lent) => lent.borrow_mut_scoped(f).map(Some),
-        None => Ok(None),
+impl Lent {
+    /// Lends `value` to the engine's Luau functions while `f` runs. Called at any other time, they
+    /// fail with a Lua error rather than reach it.
+    fn lend<T: Lendable, R>(&self, value: &mut T, f: impl FnOnce() -> Result<R>) -> Result<R> {
+        let loan = T::loan(&self.0);
+        // Whatever an outer call lent comes back however `f` ends, so nothing reaches `value`
+        // after.
+        let _value = Restore(&loan.value, loan.value.replace(value));
+        let _borrowed = Restore(&loan.borrowed, loan.borrowed.replace(false));
+        f()
+    }
+
+    /// Runs `f` with what's lent of `T`, if anything is.
+    fn with<T: Lendable, R>(&self, f: impl FnOnce(&mut T) -> R) -> mlua::Result<Option<R>> {
+        T::loan(&self.0).with(f)
+    }
+
+    /// Runs `f` with the context, which the engine lends while the game loads and updates.
+    fn context<R>(&self, f: impl FnOnce(&mut Context) -> R) -> mlua::Result<R> {
+        self.with(f)?.ok_or_else(|| {
+            mlua::Error::runtime(
+                "this only works while the game loads or in `update`, not in `draw`",
+            )
+        })
+    }
+
+    /// Runs `f` with the canvas, which the engine lends while the game draws.
+    fn canvas<R>(&self, f: impl FnOnce(&mut Canvas) -> R) -> mlua::Result<R> {
+        self.with(f)?
+            .ok_or_else(|| mlua::Error::runtime("drawing only works in `draw`"))
     }
 }
 
-/// Runs `f` with the context, which the engine lends while the game loads and updates.
-fn with_context<R>(lua: &mlua::Lua, f: impl FnOnce(&mut Context) -> R) -> mlua::Result<R> {
-    with_lent(lua, CONTEXT, f)?.ok_or_else(|| {
-        mlua::Error::runtime("this only works while the game loads or in `update`, not in `draw`")
-    })
+#[derive(Default)]
+struct Loans {
+    context: Loan<Context>,
+    canvas: Loan<Canvas>,
 }
 
-/// Runs `f` with the canvas, which the engine lends while the game draws.
-fn with_canvas<R>(lua: &mlua::Lua, f: impl FnOnce(&mut Canvas) -> R) -> mlua::Result<R> {
-    with_lent(lua, CANVAS, f)?.ok_or_else(|| mlua::Error::runtime("drawing only works in `draw`"))
+/// A value the engine lends its Luau functions, which one of them at a time may borrow.
+struct Loan<T> {
+    /// What's lent, or null.
+    value: Cell<*mut T>,
+    /// Whether a function has it borrowed.
+    borrowed: Cell<bool>,
+    /// What scripts call it, for errors.
+    name: &'static str,
+}
+
+impl<T> Loan<T> {
+    fn new(name: &'static str) -> Self {
+        Self {
+            value: Cell::new(ptr::null_mut()),
+            borrowed: Cell::new(false),
+            name,
+        }
+    }
+
+    /// Runs `f` with what's lent, if anything is.
+    fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> mlua::Result<Option<R>> {
+        let value = self.value.get();
+        if value.is_null() {
+            return Ok(None);
+        }
+        if self.borrowed.replace(true) {
+            let message = format!("the {} is already in use", self.name);
+            return Err(mlua::Error::runtime(message));
+        }
+        let _borrowed = Restore(&self.borrowed, false);
+        // SAFETY: `Lent::lend` keeps the value alive, and reaches it only through this, until it
+        // takes it back, and `borrowed` makes this the only reference to it until `f` returns.
+        Ok(Some(f(unsafe { &mut *value })))
+    }
+}
+
+impl Default for Loan<Context> {
+    fn default() -> Self {
+        Self::new("context")
+    }
+}
+
+impl Default for Loan<Canvas> {
+    fn default() -> Self {
+        Self::new("canvas")
+    }
+}
+
+/// Sets a cell back to a value when dropped, however the scope it guards ends.
+struct Restore<'a, T: Copy>(&'a Cell<T>, T);
+
+impl<T: Copy> Drop for Restore<'_, T> {
+    fn drop(&mut self) {
+        self.0.set(self.1);
+    }
+}
+
+/// The engine services its Luau functions can be lent.
+trait Lendable: Sized + 'static {
+    fn loan(loans: &Loans) -> &Loan<Self>;
+}
+
+impl Lendable for Context {
+    fn loan(loans: &Loans) -> &Loan<Self> {
+        &loans.context
+    }
+}
+
+impl Lendable for Canvas {
+    fn loan(loans: &Loans) -> &Loan<Self> {
+        &loans.canvas
+    }
 }

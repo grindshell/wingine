@@ -30,8 +30,11 @@
 //! - A [`Direction`] is one of the strings `"up"`, `"down"`, `"left"` or `"right"`.
 //! - A [`Key`] or [`MouseButton`] is its name, such as `"Space"` or `"left"`, in any case.
 //! - A [`Color`] is a hex string such as `"#f2c14e"`, with an optional alpha byte
-//!   (`"#00000080"`), or a table `{ r, g, b, a }` of components from 0 to 1, where `a` defaults
-//!   to 1.
+//!   (`"#00000080"`), a table `{ r, g, b, a }` of components from 0 to 1, where `a` defaults to
+//!   1, or a number `0xRRGGBBAA`, such as `0xf2c14eff`, which always includes the alpha byte.
+//!   Numbers pass fastest: a string or table is read again each time it's passed, which costs
+//!   more than drawing a sprite, so code that draws a lot makes its colors numbers once, with
+//!   `graphics.color`.
 //! - A [`Rect`] is a table `{ x, y, width, height }`.
 //! - [`PlaySettings`] are a table with any of `volume`, `speed` and `pan`; the rest, or all of
 //!   them for `nil`, keep their defaults.
@@ -73,7 +76,9 @@
 //!
 //! Scripts are [Luau](https://luau.org), not standard Lua 5.x, and run in Luau's sandbox: the
 //! standard library and built-ins are read-only, and the globals a script defines are seen by the
-//! scripts loaded after it. Luau compiles scripts to native code on platforms that support it.
+//! scripts loaded after it. Luau compiles scripts to native code on platforms that support it, at
+//! its optimization level 2, which inlines small local functions, so tracebacks may leave them
+//! out.
 //!
 //! The engine re-exports [`mlua`], which games use to register functions and convert values.
 
@@ -137,6 +142,8 @@ impl Scripts {
     /// A VM with the built-ins and nothing else loaded.
     pub fn new() -> Result<Self> {
         let lua = mlua::Lua::new();
+        // Calls between Luau functions take half as long.
+        lua.set_compiler(mlua::chunk::Compiler::new().set_optimization_level(2));
         lua.set_app_data(Spawned::default());
         let globals = lua.globals();
         globals.set("print", lua.create_function(print)?)?;
@@ -375,9 +382,30 @@ impl FromLua for MouseButton {
     }
 }
 
+/// `color` as a number `0xRRGGBBAA`, its components rounded to bytes, which converts back faster
+/// than a string or a table.
+pub(crate) fn packed_color(color: Color) -> u32 {
+    u32::from_be_bytes(color.to_rgba8())
+}
+
+/// The color a number `0xRRGGBBAA` stands for, if it's one.
+fn unpacked_color(number: f64) -> Option<Color> {
+    if !(0.0..=f64::from(u32::MAX)).contains(&number) || number.fract() != 0.0 {
+        return None;
+    }
+    let [r, g, b, a] = (number as u32).to_be_bytes();
+    Some(Color::rgba8(r, g, b, a))
+}
+
 impl FromLua for Color {
     fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
         match &value {
+            mlua::Value::Integer(number) => {
+                unpacked_color(*number as f64).ok_or_else(|| not_a_color(&value))
+            }
+            mlua::Value::Number(number) => {
+                unpacked_color(*number).ok_or_else(|| not_a_color(&value))
+            }
             mlua::Value::String(hex) => {
                 let hex = hex.to_str()?;
                 parse_hex(&hex).ok_or_else(|| {
@@ -392,13 +420,14 @@ impl FromLua for Color {
                 table.get("b")?,
                 table.get::<Option<f32>>("a")?.unwrap_or(1.0),
             )),
-            _ => {
-                let message =
-                    r##"expected a hex string such as "#f2c14e", or a table { r, g, b, a }"##;
-                Err(conversion_error(&value, "Color", message.into()))
-            }
+            _ => Err(not_a_color(&value)),
         }
     }
+}
+
+fn not_a_color(value: &mlua::Value) -> mlua::Error {
+    let message = r##"expected a hex string such as "#f2c14e", a table { r, g, b, a }, or a number such as 0xf2c14eff"##;
+    conversion_error(value, "Color", message.into())
 }
 
 impl FromLua for PlaySettings {
@@ -971,11 +1000,18 @@ mod tests {
     }
 
     #[test]
-    fn colors_are_hex_strings_or_tables() {
+    fn colors_are_hex_strings_tables_or_numbers() {
         assert_eq!(
             convert::<Color>("'#f2c14e'").unwrap(),
             Color::rgb8(0xf2, 0xc1, 0x4e)
         );
+        assert_eq!(
+            convert::<Color>("0xf2c14e80").unwrap(),
+            Color::rgba8(0xf2, 0xc1, 0x4e, 0x80)
+        );
+        assert_eq!(convert::<Color>("3").unwrap(), Color::rgba8(0, 0, 0, 3));
+        let color = Color::rgba8(0x12, 0x34, 0x56, 0x78);
+        assert_eq!(packed_color(color), 0x12345678);
         assert_eq!(
             convert::<Color>("'#00000080'").unwrap(),
             Color::rgba8(0, 0, 0, 0x80)
@@ -988,7 +1024,16 @@ mod tests {
             convert::<Color>("{ r = 0, g = 0, b = 0, a = 0.25 }").unwrap(),
             Color::rgba(0.0, 0.0, 0.0, 0.25)
         );
-        for invalid in ["'f2c14e'", "'#f2c14'", "'#+2c14e'", "'red'", "3"] {
+        for invalid in [
+            "'f2c14e'",
+            "'#f2c14'",
+            "'#+2c14e'",
+            "'red'",
+            "-1",
+            "0.5",
+            "0x100000000",
+            "true",
+        ] {
             assert!(convert::<Color>(invalid).is_err(), "{invalid}");
         }
     }

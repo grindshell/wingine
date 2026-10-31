@@ -8,11 +8,11 @@ use std::{
 
 use mlua::{Lua, Table, UserDataRef};
 
-use super::{CANVAS, with_canvas, with_context, with_lent};
+use super::Lent;
 use crate::{
     FrameStats,
     graphics::{Animation, Camera, Canvas, Color, Font, Sprite, SpriteSheet, TextLayout, Texture},
-    lua::check_layer,
+    lua::{check_layer, packed_color},
     math::Rect,
     tilemap::Tilemap,
 };
@@ -30,27 +30,30 @@ type RotatedSpriteArgs = (
 );
 
 /// The table, loading files relative to `folder`.
-pub(super) fn module(lua: &Lua, folder: &Path, default_font: Font) -> mlua::Result<Table> {
+pub(super) fn module(
+    lua: &Lua,
+    lent: &Lent,
+    folder: &Path,
+    default_font: Font,
+) -> mlua::Result<Table> {
     let graphics = lua.create_table()?;
-    graphics.set(
-        "clear",
-        lua.create_function(|lua, color: Color| with_canvas(lua, |canvas| canvas.clear(color)))?,
-    )?;
-    graphics.set(
-        "fill_rect",
+    graphics.set("clear", {
+        let lent = lent.clone();
+        lua.create_function(move |_, color: Color| lent.canvas(|canvas| canvas.clear(color)))?
+    })?;
+    graphics.set("fill_rect", {
+        let lent = lent.clone();
         lua.create_function(
-            |lua, (x, y, width, height, color): (f32, f32, f32, f32, Color)| {
-                with_canvas(lua, |canvas| {
-                    canvas.fill_rect(Rect::new(x, y, width, height), color)
-                })
+            move |_, (x, y, width, height, color): (f32, f32, f32, f32, Color)| {
+                lent.canvas(|canvas| canvas.fill_rect(Rect::new(x, y, width, height), color))
             },
-        )?,
-    )?;
-    graphics.set(
-        "draw_sprite",
+        )?
+    })?;
+    graphics.set("draw_sprite", {
+        let lent = lent.clone();
         lua.create_function(
-            |lua,
-             (sprite, x, y, tint, width, height): (
+            move |_,
+                  (sprite, x, y, tint, width, height): (
                 UserDataRef<Sprite>,
                 f32,
                 f32,
@@ -61,40 +64,47 @@ pub(super) fn module(lua: &Lua, folder: &Path, default_font: Font) -> mlua::Resu
                 let width = width.unwrap_or(sprite.width());
                 let height = height.unwrap_or(sprite.height());
                 let tint = tint.unwrap_or(Color::WHITE);
-                with_canvas(lua, |canvas| {
+                lent.canvas(|canvas| {
                     canvas.draw_sprite(&sprite, Rect::new(x, y, width, height), tint)
                 })
             },
-        )?,
-    )?;
-    graphics.set(
-        "draw_sprite_rotated",
+        )?
+    })?;
+    graphics.set("draw_sprite_rotated", {
+        let lent = lent.clone();
         lua.create_function(
-            |lua, (sprite, x, y, angle, tint, width, height): RotatedSpriteArgs| {
+            move |_, (sprite, x, y, angle, tint, width, height): RotatedSpriteArgs| {
                 let width = width.unwrap_or(sprite.width());
                 let height = height.unwrap_or(sprite.height());
                 let tint = tint.unwrap_or(Color::WHITE);
-                with_canvas(lua, |canvas| {
+                lent.canvas(|canvas| {
                     let dest = Rect::new(x, y, width, height);
                     canvas.draw_sprite_rotated(&sprite, dest, angle, tint)
                 })
             },
-        )?,
-    )?;
-    graphics.set(
-        "draw_text",
+        )?
+    })?;
+    graphics.set("draw_text", {
+        let lent = lent.clone();
         lua.create_function(
-            |lua, (font, text, x, y, color): (UserDataRef<Font>, mlua::LuaString, f32, f32, Color)| {
+            move |_,
+                  (font, text, x, y, color): (
+                UserDataRef<Font>,
+                mlua::LuaString,
+                f32,
+                f32,
+                Color,
+            )| {
                 let text = text.to_str()?;
-                with_canvas(lua, |canvas| canvas.draw_text(&font, &text, [x, y], color))
+                lent.canvas(|canvas| canvas.draw_text(&font, &text, [x, y], color))
             },
-        )?,
-    )?;
-    graphics.set(
-        "draw_text_layout",
+        )?
+    })?;
+    graphics.set("draw_text_layout", {
+        let lent = lent.clone();
         lua.create_function(
-            |lua,
-             (layout, x, y, color, glyphs): (
+            move |_,
+                  (layout, x, y, color, glyphs): (
                 UserDataRef<TextLayout>,
                 f32,
                 f32,
@@ -103,28 +113,28 @@ pub(super) fn module(lua: &Lua, folder: &Path, default_font: Font) -> mlua::Resu
             )| {
                 // Counts of revealed glyphs are often fractional; `as` rounds down, and NaN is 0.
                 let shown = glyphs.map_or(usize::MAX, |glyphs| glyphs.max(0.0) as usize);
-                with_canvas(lua, |canvas| {
-                    canvas.draw_text_layout(&layout, ..shown, [x, y], color)
+                lent.canvas(|canvas| canvas.draw_text_layout(&layout, ..shown, [x, y], color))
+            },
+        )?
+    })?;
+    graphics.set("draw_tilemap", {
+        let lent = lent.clone();
+        lua.create_function(
+            move |_, (map, layer): (UserDataRef<Tilemap>, Option<usize>)| {
+                if let Some(layer) = layer {
+                    check_layer(&map, layer)?;
+                }
+                lent.canvas(|canvas| match layer {
+                    Some(layer) => map.draw_layer(canvas, layer),
+                    None => map.draw(canvas),
                 })
             },
-        )?,
-    )?;
-    graphics.set(
-        "draw_tilemap",
-        lua.create_function(|lua, (map, layer): (UserDataRef<Tilemap>, Option<usize>)| {
-            if let Some(layer) = layer {
-                check_layer(&map, layer)?;
-            }
-            with_canvas(lua, |canvas| match layer {
-                Some(layer) => map.draw_layer(canvas, layer),
-                None => map.draw(canvas),
-            })
-        })?,
-    )?;
-    graphics.set(
-        "set_camera",
+        )?
+    })?;
+    graphics.set("set_camera", {
+        let lent = lent.clone();
         lua.create_function(
-            |lua, (x, y, bounds): (Option<f32>, Option<f32>, Option<Rect>)| {
+            move |_, (x, y, bounds): (Option<f32>, Option<f32>, Option<Rect>)| {
                 let camera = match (x, y) {
                     (Some(x), Some(y)) => Some(Camera {
                         bounds,
@@ -136,19 +146,23 @@ pub(super) fn module(lua: &Lua, folder: &Path, default_font: Font) -> mlua::Resu
                         return Err(mlua::Error::runtime(message));
                     }
                 };
-                with_canvas(lua, |canvas| canvas.set_camera(camera))
+                lent.canvas(|canvas| canvas.set_camera(camera))
             },
-        )?,
-    )?;
-    graphics.set(
-        "size",
-        lua.create_function(|lua, ()| {
+        )?
+    })?;
+    graphics.set("size", {
+        let lent = lent.clone();
+        lua.create_function(move |_, ()| {
             let size = |canvas: &mut Canvas| (canvas.width(), canvas.height());
-            match with_lent(lua, CANVAS, size)? {
+            match lent.with(size)? {
                 Some(size) => Ok(size),
-                None => with_context(lua, |ctx| ctx.canvas_size().into()),
+                None => lent.context(|ctx| ctx.canvas_size().into()),
             }
-        })?,
+        })?
+    })?;
+    graphics.set(
+        "color",
+        lua.create_function(|_, color: Color| Ok(packed_color(color)))?,
     )?;
     graphics.set(
         "default_font",
@@ -177,29 +191,30 @@ pub(super) fn module(lua: &Lua, folder: &Path, default_font: Font) -> mlua::Resu
             Animation::try_new(frames, frame_time).map_err(mlua::Error::runtime)
         })?,
     )?;
-    let root = folder.to_owned();
-    // Each image is loaded once, and shared by every sheet made from it.
-    let textures: RefCell<HashMap<PathBuf, Texture>> = RefCell::default();
-    graphics.set(
-        "load_sprite_sheet",
+    graphics.set("load_sprite_sheet", {
+        let lent = lent.clone();
+        let root = folder.to_owned();
+        // Each image is loaded once, and shared by every sheet made from it.
+        let textures: RefCell<HashMap<PathBuf, Texture>> = RefCell::default();
         lua.create_function(
-            move |lua, (path, tile_width, tile_height): (String, u32, u32)| {
+            move |_, (path, tile_width, tile_height): (String, u32, u32)| {
                 let path = root.join(path);
                 // Through the context even when cached, so this works at the same times either
                 // way.
-                let texture = with_context(lua, |ctx| -> crate::Result<Texture> {
-                    if let Some(texture) = textures.borrow().get(&path) {
-                        return Ok(texture.clone());
-                    }
-                    let texture = ctx.load_texture(&path)?;
-                    textures.borrow_mut().insert(path, texture.clone());
-                    Ok(texture)
-                })?
-                .map_err(mlua::Error::external)?;
+                let texture = lent
+                    .context(|ctx| -> crate::Result<Texture> {
+                        if let Some(texture) = textures.borrow().get(&path) {
+                            return Ok(texture.clone());
+                        }
+                        let texture = ctx.load_texture(&path)?;
+                        textures.borrow_mut().insert(path, texture.clone());
+                        Ok(texture)
+                    })?
+                    .map_err(mlua::Error::external)?;
                 SpriteSheet::try_new(texture, tile_width, tile_height).map_err(mlua::Error::runtime)
             },
-        )?,
-    )?;
+        )?
+    })?;
     graphics.set_readonly(true);
     Ok(graphics)
 }

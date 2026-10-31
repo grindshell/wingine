@@ -100,9 +100,11 @@ networking, editors or 3D pipelines.
   and ask it for the frame to draw, so one animation can be shared. Rotated sprites turn about the
   center of their destination, on the CPU as quads are recorded. All quads go through one
   textured pipeline; solid fills use a 1x1 white texture,
-  and consecutive quads with the same texture are batched into one draw call. A fixed resolution
-  renders the canvas to an offscreen texture, then draws that texture scaled onto the output
-  with the same pipeline. Shaders are WGSL files next to the code that loads them.
+  and consecutive quads with the same texture are batched into one draw call. Vertices are 20
+  bytes, their colors sRGB bytes that the vertex shader converts to linear space, and every quad
+  shares one static index buffer, which grows only when a frame has more quads than ever. A fixed
+  resolution renders the canvas to an offscreen texture, then draws that texture scaled onto the
+  output with the same pipeline. Shaders are WGSL files next to the code that loads them.
 - `src/graphics/font.rs` and `default_font.rs`: `Font` (glyphs packed into one texture, with
   their metrics) and `TextLayout`. `Font::layout` wraps text between words to a width, and
   `Canvas::draw_text_layout` draws a range of its glyphs, which is how dialogue reveals text
@@ -128,7 +130,8 @@ networking, editors or 3D pipelines.
   Games register Rust functions (`set_function`), load script files, and start script functions
   as tasks (`spawn`): coroutines that `update` resumes once a frame with the frame's duration.
   The built-ins `wait`, `wait_until`, `spawn` and `print` are documented at the top of the file.
-  Its unit tests don't need a GPU.
+  Scripts compile at Luau's optimization level 2, whose inlining halves calls between Luau
+  functions. Its unit tests don't need a GPU.
 - `src/runtime/`: games written entirely in Luau, run from a folder holding `main.luau` and an
   optional `conf.luau` of settings: the window's, the update rate, and the native libraries to
   load, any of them optional (skipped if there's no such library, but an error if it's there and
@@ -186,8 +189,11 @@ networking, editors or 3D pipelines.
   expressions such as `pong.ball.vx`.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest.
 - `benches/drawing.rs`: what drawing a sprite costs from Rust, from Luau, and through a native
-  library linked in, and what rendering 10,000 costs, measured with frame stats in a
-  `Simulation`. A plain program (`harness = false`); CI doesn't run it.
+  library linked in, what moving a bullet costs in Luau, and what rendering 10,000 sprites costs,
+  measured with frame stats in a `Simulation`. A plain program (`harness = false`); CI doesn't
+  run it. Its numbers shift by a third with unrelated changes to the program, from how the
+  compiler lays it out, so compare runs of the same build, or confirm a change against the
+  commit before it.
 
 ## Conventions
 
@@ -207,6 +213,9 @@ networking, editors or 3D pipelines.
 - `Color` values are sRGB, as authored. The renderer converts them to linear space, and the
   surface is viewed through an sRGB format so blending happens in linear space. Textures are
   uploaded as sRGB for the same reason.
+- Recording a quad runs for every sprite drawn, so keep it free of calls into the math library:
+  `f32::round`, `powf` and the like are function calls on baseline x86-64, and each cost as
+  much as the rest of the quad. Measure changes to it with `cargo bench`.
 - Textures are sampled nearest-neighbor so pixel art stays crisp.
 - Luau scripts reach game state only through functions the game registers. Those functions share
   state with the game through `Rc<RefCell<_>>`, so the game must not hold a borrow while scripts
@@ -226,11 +235,14 @@ networking, editors or 3D pipelines.
   the exception: `wingine::lua` re-exports it, since registering functions and converting values
   is its API. Engine types scripts use implement `FromLua`/`IntoLua` or `UserData` in
   `src/lua.rs` (`Direction` is a string such as `"up"`, `Color` a hex string such as
-  `"#f2c14e"`, and `Font` userdata with methods).
+  `"#f2c14e"`, a table or a number `0xRRGGBBAA`, and `Font` userdata with methods).
 - The Luau runtime lends its functions the `Context` while the game loads and updates, and the
-  `Canvas` while it draws, through `Lua::scope` (`lend`, `with_context` and `with_canvas` in
-  `src/runtime/mod.rs`). Called at any other time, they fail with a Lua error rather than
-  reaching stale state. Each update runs `update(dt)`, then resumes tasks; each frame runs its
+  `Canvas` while it draws, through `Lent` in `src/runtime/mod.rs`: a pointer that `Lent::lend`
+  sets while it runs, with a borrow flag, which every engine function captures a handle to
+  (`lent.context(...)`, `lent.canvas(...)`). Called at any other time, they fail with a Lua
+  error rather than reaching stale state. Looking what's lent up in the Lua registry, as it once
+  did, cost more than drawing; so do conversions mlua makes through `Value`, such as reading a
+  string's bytes, which is why scripts that draw a lot pass colors as numbers. Each update runs `update(dt)`, then resumes tasks; each frame runs its
   updates (one, or with an update rate, as many as its time holds), then `draw()`. Presses and
   releases last until an update has seen them.
 - Native libraries reach the engine only through the ABI's function pointers, and get the same
