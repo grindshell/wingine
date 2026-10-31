@@ -10,8 +10,12 @@ The [RPG example](#rpg) is that game.
 
 ## Features
 
-- **Rendering** with [wgpu](https://wgpu.rs): sprites, sprite sheets and solid shapes, batched
-  by texture. A fixed resolution, such as 320x180, scales up by whole numbers for crisp pixel art.
+- **Rendering** with [wgpu](https://wgpu.rs): sprites, rotated or not, sprite sheets and solid
+  shapes, batched by texture. A fixed resolution, such as 320x180, scales up by whole numbers for
+  crisp pixel art.
+- **Timing**: games update once a frame by the frame's time, or at a fixed rate, such as 60 times
+  a second, so they play the same at any frame rate. Frame stats and a headless benchmark show
+  where each frame's time goes.
 - **Tilemaps** with layers and tilesets, culled to the view, and a **camera** that follows the
   player and stays inside the map.
 - **Grid movement** from tile to tile, with tile collision.
@@ -156,6 +160,9 @@ return { libraries = { "particles" } } -- native/particles.dll, libparticles.so 
 local sparks = particles.new_emitter("#f2c14e")
 sparks:burst(160, 90, 24)
 ```
+
+A library listed as `{ name = "particles", optional = true }` loads only if it's there, so one
+game can run with it or without it.
 
 [`examples/native-particles`](examples/native-particles/src/lib.rs) is that library. Unlike
 scripts, native libraries aren't sandboxed: a game that loads one runs it with the player's full

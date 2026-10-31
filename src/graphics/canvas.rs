@@ -105,13 +105,24 @@ impl Canvas {
     }
 
     pub fn fill_rect(&mut self, rect: Rect, color: Color) {
-        self.push_quad(None, rect, ([0.0, 0.0], [1.0, 1.0]), color);
+        self.push_rect(None, rect, ([0.0, 0.0], [1.0, 1.0]), color);
     }
 
     /// Draws `sprite` stretched to fill `dest`, with its colors multiplied by `tint`.
     /// Use [`Color::WHITE`] to draw the sprite unchanged.
     pub fn draw_sprite(&mut self, sprite: &Sprite, dest: Rect, tint: Color) {
-        self.push_quad(Some(sprite.texture()), dest, sprite.uv_bounds(), tint);
+        self.push_rect(Some(sprite.texture()), dest, sprite.uv_bounds(), tint);
+    }
+
+    /// Draws `sprite` stretched to fill `dest`, then rotated by `angle` radians about the center
+    /// of `dest`, with its colors multiplied by `tint`. Positive angles turn clockwise, since `y`
+    /// grows downward. At an angle of 0 it draws exactly as [`Canvas::draw_sprite`] does.
+    pub fn draw_sprite_rotated(&mut self, sprite: &Sprite, dest: Rect, angle: f32, tint: Color) {
+        if angle == 0.0 {
+            return self.draw_sprite(sprite, dest, tint);
+        }
+        let corners = rotated_corners(self.transform.apply(dest), angle);
+        self.push_quad(Some(sprite.texture()), corners, sprite.uv_bounds(), tint);
     }
 
     /// Draws `text` in `font` with its top-left corner at `position`, without wrapping; `\n`
@@ -150,13 +161,33 @@ impl Canvas {
     ) {
         let rect = glyph.rect;
         let dest = Rect::new(x + rect.x, y + rect.y, rect.w, rect.h);
-        self.push_quad(Some(texture), dest, glyph.uv, color);
+        self.push_rect(Some(texture), dest, glyph.uv, color);
     }
 
-    fn push_quad(
+    /// Records a quad covering `dest`, in the coordinates drawing currently uses.
+    fn push_rect(
         &mut self,
         texture: Option<&Texture>,
         dest: Rect,
+        uv: ([f32; 2], [f32; 2]),
+        color: Color,
+    ) {
+        let dest = self.transform.apply(dest);
+        let corners = [
+            [dest.x, dest.y],
+            [dest.right(), dest.y],
+            [dest.right(), dest.bottom()],
+            [dest.x, dest.bottom()],
+        ];
+        self.push_quad(texture, corners, uv, color);
+    }
+
+    /// Records a quad with `corners` in canvas pixels, clockwise from the one that shows the
+    /// top-left of the texture region `uv_min..uv_max`.
+    fn push_quad(
+        &mut self,
+        texture: Option<&Texture>,
+        corners: [[f32; 2]; 4],
         (uv_min, uv_max): ([f32; 2], [f32; 2]),
         color: Color,
     ) {
@@ -170,21 +201,36 @@ impl Canvas {
         }
 
         let base = self.vertices.len() as u32;
-        let dest = self.transform.apply(dest);
         let color = color.to_linear();
-        let corners = [
-            ([dest.x, dest.y], uv_min),
-            ([dest.right(), dest.y], [uv_max[0], uv_min[1]]),
-            ([dest.right(), dest.bottom()], uv_max),
-            ([dest.x, dest.bottom()], [uv_min[0], uv_max[1]]),
+        let uvs = [
+            uv_min,
+            [uv_max[0], uv_min[1]],
+            uv_max,
+            [uv_min[0], uv_max[1]],
         ];
-        self.vertices.extend(corners.map(|(position, uv)| Vertex {
-            position,
-            uv,
-            color,
-        }));
+        self.vertices
+            .extend(corners.into_iter().zip(uvs).map(|(position, uv)| Vertex {
+                position,
+                uv,
+                color,
+            }));
         self.indices.extend([0, 1, 2, 0, 2, 3].map(|i| base + i));
     }
+}
+
+/// The corners of `rect` rotated by `angle` radians about its center, clockwise from the one
+/// that was its top-left.
+fn rotated_corners(rect: Rect, angle: f32) -> [[f32; 2]; 4] {
+    let (sin, cos) = angle.sin_cos();
+    let [half_w, half_h] = [rect.w / 2.0, rect.h / 2.0];
+    let center = [rect.x + half_w, rect.y + half_h];
+    [
+        [-half_w, -half_h],
+        [half_w, -half_h],
+        [half_w, half_h],
+        [-half_w, half_h],
+    ]
+    .map(|[x, y]| [center[0] + x * cos - y * sin, center[1] + x * sin + y * cos])
 }
 
 /// `range` cut to fit `0..len`.
@@ -255,6 +301,20 @@ mod tests {
             ..Camera::new(100.0, 50.0)
         }));
         assert_eq!(canvas.visible_area(), Rect::new(95.0, 47.5, 10.0, 5.0));
+    }
+
+    #[test]
+    fn rotation_turns_corners_clockwise_about_the_center() {
+        let corners = rotated_corners(Rect::new(0.0, 0.0, 4.0, 2.0), std::f32::consts::FRAC_PI_2);
+        // The 4x2 rect stands up as 2x4 about its center (2, 1): its top-left corner goes to the
+        // top-right.
+        let expected = [[3.0, -1.0], [3.0, 3.0], [1.0, 3.0], [1.0, -1.0]];
+        for (corner, expected) in corners.iter().zip(expected) {
+            assert!(
+                (corner[0] - expected[0]).abs() < 1e-5 && (corner[1] - expected[1]).abs() < 1e-5,
+                "{corners:?}"
+            );
+        }
     }
 
     #[test]

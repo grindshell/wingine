@@ -104,6 +104,45 @@ fn sprites() {
     assert_screenshot(&headless, "sprites", frame);
 }
 
+/// Sprites rotated about their centers: unturned, a quarter turn, a half turn and an eighth back,
+/// then one stretched before turning, and one through a zoomed camera.
+///
+/// Where a pixel's center lands exactly on the edge between two texels, GPUs pick either, so the
+/// scene avoids that: the eighth turn is off the pixel grid by a fraction, and nothing shrinks.
+#[test]
+fn rotated_sprites() {
+    use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, FRAC_PI_6, PI};
+
+    let mut headless = headless();
+    let sheet = SpriteSheet::new(headless.context().load_texture(TILESET).unwrap(), 16, 16);
+    let hero = sheet.sprite(27, 0);
+    let frame = headless
+        .render(96, 64, |canvas| {
+            canvas.clear(Color::rgb8(0x1b, 0x26, 0x1e));
+            for (x, angle) in [
+                (4.0, 0.0),
+                (24.0, FRAC_PI_2),
+                (44.0, PI),
+                (66.25, -FRAC_PI_4),
+            ] {
+                let dest = Rect::new(x, 4.0, 16.0, 16.0);
+                canvas.draw_sprite_rotated(&hero, dest, angle, Color::WHITE);
+            }
+            // 32x16, standing up as 16x32 about its center.
+            let dest = Rect::new(4.0, 32.0, 32.0, 16.0);
+            canvas.draw_sprite_rotated(&hero, dest, FRAC_PI_2, Color::RED);
+            // World units are two canvas pixels, with the world's origin at the canvas's.
+            canvas.set_camera(Some(Camera {
+                zoom: 2.0,
+                ..Camera::new(24.0, 16.0)
+            }));
+            let dest = Rect::new(26.0, 16.0, 12.0, 12.0);
+            canvas.draw_sprite_rotated(&hero, dest, FRAC_PI_6, Color::GREEN);
+        })
+        .unwrap();
+    assert_screenshot(&headless, "rotated_sprites", frame);
+}
+
 /// Solid fills and sprites interleaved, so batches switch texture several times. Draw order must
 /// hold across the switches.
 #[test]

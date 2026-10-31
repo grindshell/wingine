@@ -4,9 +4,12 @@
 //! (`cargo run -- path/to/game`) or [`run`]. The script's top level runs once, when the window is
 //! ready, to set the game up. Then each frame the engine calls the script's global function
 //! `update(dt)`, with the seconds since the last frame, resumes the tasks started with `spawn`
-//! (those `update` starts, from the next frame), and calls `draw()`. Both functions are optional. The built-ins `wait`, `wait_until`, `spawn`
-//! and `print` work as described in the [`lua`](crate::lua) module, which also lists how engine
-//! types such as colors and keys are written in Luau.
+//! (those `update` starts, from the next update), and calls `draw()`. With an `update_rate`
+//! setting, the game updates that many times a second instead, each time by the same `dt`, and
+//! each frame runs as many updates as its time holds before it draws. Both functions are
+//! optional. The built-ins `wait`, `wait_until`, `spawn` and `print` work as described in the
+//! [`lua`](crate::lua) module, which also lists how engine types such as colors and keys are
+//! written in Luau.
 //!
 //! The game's settings come from an optional `conf.luau` that returns a table, which the engine
 //! reads before the game starts. Every setting is optional:
@@ -22,8 +25,12 @@
 //!     -- Whether frames wait for the display's refresh (true by default). Turning it off shows
 //!     -- how long frames really take.
 //!     vsync = false,
-//!     -- Native libraries to load, in order, from the game's `native` folder.
-//!     libraries = { "particles" },
+//!     -- Updates a second, each by the same `dt`, so the game plays the same at any frame rate.
+//!     -- By default, the game updates once a frame by the frame's time.
+//!     update_rate = 60,
+//!     -- Native libraries to load, in order, from the game's `native` folder. One marked
+//!     -- optional loads only if it's there: `if danmaku then ... end` tells whether it did.
+//!     libraries = { "particles", { name = "danmaku", optional = true } },
 //! }
 //! ```
 //!
@@ -49,6 +56,9 @@
 //! - `graphics.draw_sprite(sprite, x, y, tint, width, height)` draws `sprite` with its top-left
 //!   corner at `x`, `y`, its colors multiplied by `tint` (white, unchanged, by default), and
 //!   stretched to `width` by `height` (its own size by default).
+//! - `graphics.draw_sprite_rotated(sprite, x, y, angle, tint, width, height)` draws `sprite` as
+//!   `draw_sprite` does, then rotated by `angle` radians about its center. Positive angles turn
+//!   clockwise, since `y` grows downward.
 //! - `graphics.draw_text(font, text, x, y, color)` draws `text` with its top-left corner at `x`,
 //!   `y`, rounded to whole pixels.
 //! - `graphics.draw_text_layout(layout, x, y, color, glyphs)` draws text laid out with
@@ -158,8 +168,17 @@ pub fn run(folder: impl AsRef<Path>) -> Result<()> {
 #[derive(Clone, Debug)]
 pub struct Config {
     pub window: WindowConfig,
-    /// The names of the native libraries to load, in order.
-    pub libraries: Vec<String>,
+    /// The native libraries to load, in order.
+    pub libraries: Vec<LibraryConfig>,
+}
+
+/// A native library a game loads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibraryConfig {
+    pub name: String,
+    /// Whether the game runs without it if there's no such library. One that's there but fails to
+    /// load is an error either way.
+    pub optional: bool,
 }
 
 /// The settings of the game in `folder`, from its `conf.luau` if it has one.
@@ -209,6 +228,13 @@ fn apply_setting(
         "height" => window.height = positive(lua.unpack(value)?)?,
         "resizable" => window.resizable = lua.unpack(value)?,
         "vsync" => window.vsync = lua.unpack(value)?,
+        "update_rate" => {
+            let rate: f32 = lua.unpack(value)?;
+            if !(rate > 0.0 && rate.is_finite()) {
+                return Err(mlua::Error::runtime("must be above 0"));
+            }
+            window.update_rate = Some(rate);
+        }
         "resolution" => {
             let size: mlua::Table = lua.unpack(value)?;
             window.resolution = Resolution::Fixed {
@@ -217,17 +243,46 @@ fn apply_setting(
             };
         }
         "libraries" => {
-            let names: Vec<String> = lua.unpack(value)?;
-            if let Some(name) = names.iter().find(|name| !native::is_library_name(name)) {
-                return Err(mlua::Error::runtime(format!(
-                    "`{name}` is not a library name: use only letters, digits, `_` and `-`"
-                )));
-            }
-            config.libraries = names;
+            let entries: Vec<mlua::Value> = lua.unpack(value)?;
+            config.libraries = entries
+                .into_iter()
+                .map(|entry| library(lua, entry))
+                .collect::<mlua::Result<_>>()?;
         }
         _ => return Err(mlua::Error::runtime("unknown setting")),
     }
     Ok(())
+}
+
+/// An entry in the `libraries` setting: a library's name, or a table with its `name` and whether
+/// it's `optional`.
+fn library(lua: &mlua::Lua, entry: mlua::Value) -> mlua::Result<LibraryConfig> {
+    let library = match entry {
+        mlua::Value::Table(table) => {
+            for pair in table.pairs::<mlua::Value, mlua::Value>() {
+                let key = pair?.0.to_string()?;
+                if key != "name" && key != "optional" {
+                    let message = format!("a library has a `name` and `optional`, not `{key}`");
+                    return Err(mlua::Error::runtime(message));
+                }
+            }
+            LibraryConfig {
+                name: table.get("name")?,
+                optional: table.get::<Option<bool>>("optional")?.unwrap_or(false),
+            }
+        }
+        name => LibraryConfig {
+            name: lua.unpack(name)?,
+            optional: false,
+        },
+    };
+    if !native::is_library_name(&library.name) {
+        return Err(mlua::Error::runtime(format!(
+            "`{}` is not a library name: use only letters, digits, `_` and `-`",
+            library.name
+        )));
+    }
+    Ok(library)
 }
 
 fn positive(size: u32) -> mlua::Result<u32> {

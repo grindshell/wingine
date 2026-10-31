@@ -17,6 +17,18 @@ use crate::{
     tilemap::Tilemap,
 };
 
+/// The arguments of `graphics.draw_sprite_rotated`: the sprite, where it goes and its angle, then
+/// optionally its tint and size.
+type RotatedSpriteArgs = (
+    UserDataRef<Sprite>,
+    f32,
+    f32,
+    f32,
+    Option<Color>,
+    Option<f32>,
+    Option<f32>,
+);
+
 /// The table, loading files relative to `folder`.
 pub(super) fn module(lua: &Lua, folder: &Path, default_font: Font) -> mlua::Result<Table> {
     let graphics = lua.create_table()?;
@@ -51,6 +63,20 @@ pub(super) fn module(lua: &Lua, folder: &Path, default_font: Font) -> mlua::Resu
                 let tint = tint.unwrap_or(Color::WHITE);
                 with_canvas(lua, |canvas| {
                     canvas.draw_sprite(&sprite, Rect::new(x, y, width, height), tint)
+                })
+            },
+        )?,
+    )?;
+    graphics.set(
+        "draw_sprite_rotated",
+        lua.create_function(
+            |lua, (sprite, x, y, angle, tint, width, height): RotatedSpriteArgs| {
+                let width = width.unwrap_or(sprite.width());
+                let height = height.unwrap_or(sprite.height());
+                let tint = tint.unwrap_or(Color::WHITE);
+                with_canvas(lua, |canvas| {
+                    let dest = Rect::new(x, y, width, height);
+                    canvas.draw_sprite_rotated(&sprite, dest, angle, tint)
                 })
             },
         )?,

@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     Context, Error, Game, Result, WindowConfig,
-    app::run_frame,
+    app::{Timestep, run_frame},
     audio::Audio,
     graphics::{Canvas, Resolution, gpu::Gpu, renderer::Renderer, screen::Screen},
     input::{Key, MouseButton},
@@ -161,8 +161,10 @@ fn create_frame(gpu: &Gpu, [width, height]: [u32; 2]) -> wgpu::Texture {
 /// for scripted runs (see the `WINGINE_SCRIPT` variable in [`run`](crate::run)).
 ///
 /// Frames only advance when asked to, each by exactly [`Simulation::FRAME_TIME`], so runs are
-/// deterministic. Input takes effect on the next frame, as events from a window would: for
-/// example, a key held down is pressed on the next frame and held until released.
+/// deterministic. With an [update rate](WindowConfig::update_rate), each frame runs the updates
+/// that time holds, as a window would. Input takes effect on the next frame, as events from a
+/// window would: for example, a key held down is pressed on the next frame and held until
+/// released.
 ///
 /// Frames are drawn but not rendered, unless [`Simulation::set_render_every_frame`] says to:
 /// only screenshots render.
@@ -172,6 +174,7 @@ pub struct Simulation<G> {
     /// Declared before `headless`, so the game's GPU resources drop while it still holds the GPU.
     game: G,
     headless: Headless,
+    timestep: Timestep,
     /// The virtual window's size, in physical pixels.
     output: [u32; 2],
     /// Whether the canvas holds a frame drawn at the current output size.
@@ -193,10 +196,15 @@ impl<G> Simulation<G> {
 impl<G: Game> Simulation<G> {
     /// Starts the game built by `init`, as [`run`](crate::run) would with `config`. The virtual
     /// window is `config.width` by `config.height` physical pixels, with a scale factor of 1.
+    ///
+    /// # Panics
+    ///
+    /// If `config` has an update rate that isn't above 0.
     pub fn new(
         config: &WindowConfig,
         init: impl FnOnce(&mut Context) -> Result<G>,
     ) -> Result<Self> {
+        let timestep = Timestep::new(config.update_rate);
         let mut headless = Headless::new()?;
         headless.set_resolution(config.resolution);
         let output = [config.width, config.height];
@@ -205,6 +213,7 @@ impl<G: Game> Simulation<G> {
         Ok(Self {
             headless,
             game,
+            timestep,
             output,
             drawn: false,
             render_every_frame: false,
@@ -253,6 +262,7 @@ impl<G: Game> Simulation<G> {
         let Self {
             headless,
             game,
+            timestep,
             output,
             ..
         } = self;
@@ -262,6 +272,7 @@ impl<G: Game> Simulation<G> {
             &mut headless.ctx,
             &mut headless.canvas,
             canvas_size,
+            timestep,
             Self::FRAME_TIME,
         );
         if self.render_every_frame {

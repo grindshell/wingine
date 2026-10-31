@@ -1,7 +1,7 @@
 //! Native libraries for Wingine's Luau runtime, written in Rust.
 //!
 //! A native library adds a global table of functions to the Luau games that load it, and can run
-//! hooks around each frame's `update` and `draw`. It's a `cdylib` crate with a type implementing
+//! hooks around each `update` and `draw`. It's a `cdylib` crate with a type implementing
 //! [`Library`], which holds the library's state for one game, exported with [`export!`]:
 //!
 //! ```
@@ -64,6 +64,10 @@
 //! Engine services are lent as they are to scripts: a [`Context`] while the game loads and in
 //! `update`, and a [`Canvas`] in `draw`. Hooks receive the one for their phase, and functions ask
 //! the [`Call`] for whichever the script that called them could use.
+//!
+//! Each call from Luau into a library costs far more than drawing a sprite, so a library that
+//! draws many sprites draws them with one function call and one [`Canvas::draw_sprites`], rather
+//! than a call from Luau for each.
 
 mod call;
 mod services;
@@ -80,7 +84,7 @@ use std::{
 
 #[doc(hidden)]
 pub use wingine_abi as abi;
-pub use wingine_abi::{Color, Rect};
+pub use wingine_abi::{Color, Rect, SpriteDraw};
 
 pub use call::{Call, FromArg, FromArgs, IntoResult, IntoResults};
 pub use services::{Canvas, Context, Sprite};
@@ -300,7 +304,8 @@ impl<L: Library> Registry<L> {
         }
     }
 
-    /// Runs `hook` each frame before the game's `update`, with the frame's duration in seconds.
+    /// Runs `hook` before each of the game's updates, with the `dt` it updates by in seconds: the
+    /// frame's duration, or the step of the game's update rate.
     pub fn before_update<F>(&mut self, hook: F) -> &mut Self
     where
         F: Fn(&mut L, &mut Context, f32) -> Result<()> + Send + Sync + 'static,
@@ -308,7 +313,7 @@ impl<L: Library> Registry<L> {
         self.update_hook(abi::Phase::BEFORE, hook)
     }
 
-    /// Runs `hook` each frame after the game's `update` and the tasks it resumes.
+    /// Runs `hook` after each of the game's updates and the tasks it resumes.
     pub fn after_update<F>(&mut self, hook: F) -> &mut Self
     where
         F: Fn(&mut L, &mut Context, f32) -> Result<()> + Send + Sync + 'static,

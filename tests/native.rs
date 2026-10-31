@@ -17,7 +17,9 @@ use wingine::{
     lua::mlua::FromLuaMulti,
     runtime::{self, LuauGame},
 };
-use wingine_native::{Call, Class, Color, Context, Library, Rect, Registry, Result, abi};
+use wingine_native::{
+    Call, Class, Color, Context, Library, Rect, Registry, Result, Sprite, SpriteDraw, abi,
+};
 
 /// Writes a game made of `files`, each a path in the game's folder and its contents, to a fresh
 /// folder named after `test`.
@@ -77,12 +79,13 @@ fn pixel(image: &Image, x: u32, y: u32) -> [u8; 4] {
 }
 
 /// A library that records what happens to it, for tests to look at through Luau.
-#[derive(Default)]
 struct Probe {
     log: Vec<String>,
     canvas_size: [f32; 2],
     /// The error its hook after `update` returns, if it fails.
     failure: Option<String>,
+    /// A white pixel.
+    white: Sprite,
 }
 
 /// A number scripts hold as an object.
@@ -97,8 +100,10 @@ impl Library for Probe {
 
     fn new(ctx: &mut Context) -> Result<Self> {
         Ok(Self {
+            log: Vec::new(),
             canvas_size: ctx.canvas_size(),
-            ..Self::default()
+            failure: None,
+            white: ctx.create_sprite(1, 1, &[255; 4])?,
         })
     }
 
@@ -139,6 +144,21 @@ impl Library for Probe {
             })
             .function("fill", |_, call, color: Color| {
                 call.canvas()?.fill_rect(Rect::new(0.0, 0.0, 1.0, 1.0), color);
+                Ok(())
+            })
+            .function("stamp", |probe, call, ()| {
+                let draws = [
+                    SpriteDraw {
+                        tint: Color::rgb(1.0, 0.0, 0.0),
+                        ..SpriteDraw::new(Rect::new(0.0, 0.0, 2.0, 2.0))
+                    },
+                    // 8x2, standing up as 2x8 about its center, (14, 5).
+                    SpriteDraw {
+                        angle: std::f32::consts::FRAC_PI_2,
+                        ..SpriteDraw::new(Rect::new(10.0, 4.0, 8.0, 2.0))
+                    },
+                ];
+                call.canvas()?.draw_sprites(&probe.white, &draws);
                 Ok(())
             })
             .function("new_counter", |_, _, start: i64| Ok(Counter(start)))
@@ -336,6 +356,25 @@ fn functions_get_the_context_or_canvas_as_scripts_do() {
     assert!(err.contains("not in `draw`"), "{err}");
     let image = simulation.screenshot().unwrap();
     assert_eq!(pixel(&image, 0, 0), [0, 0, 255, 255]);
+}
+
+#[test]
+fn one_call_draws_many_sprites() {
+    let mut simulation = probe_game(
+        "batch",
+        "function draw()
+            graphics.clear('#000000')
+            probe.stamp()
+        end",
+    );
+    simulation.step();
+    assert_eq!(simulation.context().frame_stats().quads, 3);
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&image, 1, 1), [255, 0, 0, 255]);
+    assert_eq!(pixel(&image, 13, 1), [255, 255, 255, 255]);
+    assert_eq!(pixel(&image, 14, 8), [255, 255, 255, 255]);
+    assert_eq!(pixel(&image, 10, 4), [0, 0, 0, 255]);
+    assert_eq!(pixel(&image, 15, 5), [0, 0, 0, 255]);
 }
 
 #[test]
@@ -625,6 +664,43 @@ fn libraries_that_fail_to_load_are_errors() {
     runtime::link_library("newer", newer);
     let err = load_error(&["newer"]);
     assert!(err.contains("can't load"), "{err}");
+}
+
+#[test]
+fn optional_libraries_load_only_if_theyre_there() {
+    runtime::link_library("optional_probe", wingine_native::library::<Probe>());
+    let folder = game(
+        "optional",
+        &[
+            (
+                "conf.luau",
+                "return { libraries = {
+                    { name = 'nowhere', optional = true },
+                    { name = 'optional_probe', optional = true },
+                } }",
+            ),
+            ("main.luau", "has_probe = probe ~= nil"),
+        ],
+    );
+    assert!(eval::<bool>(&simulation(&folder), "has_probe"));
+
+    // One that's there but doesn't load is an error all the same.
+    let folder = game(
+        "optional_broken",
+        &[
+            (
+                "conf.luau",
+                "return { libraries = { { name = 'broken', optional = true } } }",
+            ),
+            ("main.luau", ""),
+            (
+                &format!("native/{DLL_PREFIX}broken{DLL_SUFFIX}"),
+                "not a library",
+            ),
+        ],
+    );
+    let err = start(&folder).err().expect("loading fails").to_string();
+    assert!(err.contains("native library `broken`"), "{err}");
 }
 
 /// Builds the `native-particles` example, returning the library file. It builds in a target

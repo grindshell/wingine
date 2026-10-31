@@ -2,7 +2,7 @@
 
 use std::ptr::NonNull;
 
-use crate::{Color, Error, Rect, Result, abi, host};
+use crate::{Color, Error, Rect, Result, SpriteDraw, abi, host};
 
 /// The engine's services, lent while a game loads and updates: input, the canvas size, and
 /// creating sprites.
@@ -96,6 +96,16 @@ impl Canvas {
     pub fn draw_sprite(&mut self, sprite: &Sprite, dest: Rect, tint: Color) {
         // SAFETY: lent for as long as `self` is, and the sprite is alive.
         unsafe { (host().draw_sprite)(self.raw, sprite.raw.as_ptr(), dest, tint) };
+    }
+
+    /// Draws `sprite` as each of `draws` says, in order, each one stretched, rotated and tinted
+    /// as it says. One call draws them all, so this is how to draw many sprites.
+    pub fn draw_sprites(&mut self, sprite: &Sprite, draws: &[SpriteDraw]) {
+        // SAFETY: lent for as long as `self` is, the sprite is alive, and the draws are valid for
+        // the call.
+        unsafe {
+            (host().draw_sprites)(self.raw, sprite.raw.as_ptr(), draws.as_ptr(), draws.len());
+        }
     }
 }
 

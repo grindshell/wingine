@@ -35,7 +35,8 @@ use core::{
 };
 
 pub const ABI_MAJOR: u16 = 0;
-pub const ABI_MINOR: u16 = 1;
+/// 1: the first version. 2: [`Host::draw_sprites`].
+pub const ABI_MINOR: u16 = 2;
 
 /// The name of the function a library exports, an [`Entry`].
 pub const ENTRY_SYMBOL: &[u8] = b"wingine_library\0";
@@ -182,6 +183,28 @@ impl Rect {
     }
 }
 
+/// A sprite as [`Host::draw_sprites`] draws it: stretched over `dest`, then rotated by `angle`
+/// radians about the center of `dest`, its colors multiplied by `tint`. Positive angles turn
+/// clockwise, since `y` grows downward.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpriteDraw {
+    pub dest: Rect,
+    pub angle: f32,
+    pub tint: Color,
+}
+
+impl SpriteDraw {
+    /// A sprite stretched over `dest`, unturned and untinted.
+    pub const fn new(dest: Rect) -> Self {
+        Self {
+            dest,
+            angle: 0.0,
+            tint: Color::WHITE,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Size {
@@ -232,7 +255,7 @@ pub type Create = unsafe extern "C" fn(
 ) -> Status;
 /// Frees a library's state for a game, when the game ends.
 pub type Destroy = unsafe extern "C" fn(data: *mut c_void, instance: *mut c_void);
-/// Runs around the game's `update`, with the frame's duration in seconds.
+/// Runs around each of the game's updates, with the `dt` it updates by in seconds.
 pub type UpdateHook = unsafe extern "C" fn(
     data: *mut c_void,
     instance: *mut c_void,
@@ -374,4 +397,13 @@ pub struct Host {
     pub free_sprite: unsafe extern "C" fn(sprite: *mut Sprite),
     /// The sprite's size in texels.
     pub sprite_size: unsafe extern "C" fn(sprite: *const Sprite) -> Size,
+
+    /// Draws `sprite` as each of the `count` draws at `draws` says, in order: many sprites for
+    /// the cost of one call. Since 0.2.
+    pub draw_sprites: unsafe extern "C" fn(
+        canvas: *mut Canvas,
+        sprite: *const Sprite,
+        draws: *const SpriteDraw,
+        count: usize,
+    ),
 }

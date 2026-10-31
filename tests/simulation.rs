@@ -83,6 +83,30 @@ fn a_hold_lasts_its_duration() {
 }
 
 #[test]
+fn an_update_rate_sets_how_often_frames_update() {
+    let config = WindowConfig {
+        update_rate: Some(30.0),
+        ..config()
+    };
+    let mut simulation = Simulation::new(&config, |_| Ok(Probe::default())).unwrap();
+    // The tap's frame has no update, so the next update sees it.
+    simulation.tap(Key::Space);
+    simulation.run_frames(5);
+    assert_eq!(simulation.game().updates, 3);
+    assert_eq!(simulation.game().space_presses, 1);
+
+    let config = WindowConfig {
+        update_rate: Some(120.0),
+        ..config
+    };
+    let mut simulation = Simulation::new(&config, |_| Ok(Probe::default())).unwrap();
+    simulation.hold_frames(Key::Space, 3);
+    assert_eq!(simulation.game().updates, 6);
+    assert_eq!(simulation.game().space_presses, 1);
+    assert_eq!(simulation.game().space_held_frames, 6);
+}
+
+#[test]
 fn clicks_are_in_canvas_pixels() {
     let mut simulation = simulation();
     simulation.click(MouseButton::Left, 4.0, 5.0);

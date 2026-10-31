@@ -75,7 +75,11 @@ networking, editors or 3D pipelines.
 
 - `src/app.rs`: the public `run` entry point, the `Game` trait, and the winit event loop. `run`
   takes an init closure that builds the game once the GPU is ready. With `WINGINE_SCRIPT` set,
-  `run` hands off to the script runner instead of opening a window.
+  `run` hands off to the script runner instead of opening a window. `run_frame` runs a frame for
+  both the window and `Simulation`, and `Timestep` decides its updates: one by the frame's time,
+  or with `WindowConfig::update_rate`, as many fixed steps as the frame's time holds (possibly
+  none). Frames close to a whole number of steps count as exactly that, and updates fall due a
+  quarter step after frames at the rate end, so jitter doesn't move updates between frames.
 - `src/context.rs`: `Context`, the engine services passed to games: input, audio, the canvas
   size, the built-in font, texture loading, and `FrameStats` for the frame before (CPU time
   spent updating, drawing and rendering, the whole frame's time, and quads and draw calls).
@@ -93,7 +97,8 @@ networking, editors or 3D pipelines.
   `Renderer` (wgpu pipelines), `Screen` (applies the `Resolution`), and the public drawing API:
   `Canvas` (what games draw to each frame), `Camera`, `Resolution`, `Texture`, `Sprite`,
   `SpriteSheet` and `Animation`. An animation doesn't keep time: games keep how long it has played
-  and ask it for the frame to draw, so one animation can be shared. All quads go through one
+  and ask it for the frame to draw, so one animation can be shared. Rotated sprites turn about the
+  center of their destination, on the CPU as quads are recorded. All quads go through one
   textured pipeline; solid fills use a 1x1 white texture,
   and consecutive quads with the same texture are batched into one draw call. A fixed resolution
   renders the canvas to an offscreen texture, then draws that texture scaled onto the output
@@ -125,7 +130,9 @@ networking, editors or 3D pipelines.
   The built-ins `wait`, `wait_until`, `spawn` and `print` are documented at the top of the file.
   Its unit tests don't need a GPU.
 - `src/runtime/`: games written entirely in Luau, run from a folder holding `main.luau` and an
-  optional `conf.luau` of settings: the window's, and the native libraries to load. `LuauGame`
+  optional `conf.luau` of settings: the window's, the update rate, and the native libraries to
+  load, any of them optional (skipped if there's no such library, but an error if it's there and
+  fails to load). `LuauGame`
   is the `Game` that runs one, and the engine's API for it is the global tables `graphics`,
   `input`, `audio`, `tilemap` and `grid`, one file each. The module docs are the reference for
   script authors; the engine types those tables hand out (sprites, animations, tilemaps, grid
@@ -223,11 +230,15 @@ networking, editors or 3D pipelines.
 - The Luau runtime lends its functions the `Context` while the game loads and updates, and the
   `Canvas` while it draws, through `Lua::scope` (`lend`, `with_context` and `with_canvas` in
   `src/runtime/mod.rs`). Called at any other time, they fail with a Lua error rather than
-  reaching stale state. Each frame runs `update(dt)`, then resumes tasks, then `draw()`.
+  reaching stale state. Each update runs `update(dt)`, then resumes tasks; each frame runs its
+  updates (one, or with an update rate, as many as its time holds), then `draw()`. Presses and
+  releases last until an update has seen them.
 - Native libraries reach the engine only through the ABI's function pointers, and get the same
   lent services scripts do: a library function called from `draw` gets the canvas, not the
-  context. Hooks run in the order libraries are listed, before and after `update` (and its
-  tasks) and `draw`; hooks after `draw` draw in canvas pixels. Errors cross the ABI as strings,
+  context. Hooks run in the order libraries are listed, before and after each `update` (and its
+  tasks) and `draw`; hooks after `draw` draw in canvas pixels. Drawing many sprites goes through
+  one `draw_sprites` call with a slice of `SpriteDraw`s, since each call from Luau into a library
+  costs far more than drawing a sprite. Errors cross the ABI as strings,
   set with `set_error` before returning `Status::ERROR`, and the helper crate catches panics so
   they never unwind into the engine. Change the ABI only by adding to the end of `Host` and
   bumping `ABI_MINOR`; anything else bumps `ABI_MAJOR`.

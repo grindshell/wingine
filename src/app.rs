@@ -22,13 +22,14 @@ use crate::{
     input::{Key, MouseButton},
 };
 
-/// Longest frame time passed to [`Game::update`], so a stall (dragging the window, a breakpoint,
-/// being minimized) doesn't make the game jump forward.
+/// Longest frame time the game updates for, so a stall (dragging the window, a breakpoint, being
+/// minimized) doesn't make the game jump forward.
 const MAX_FRAME_TIME: f32 = 0.25;
 
 /// A game driven by the engine's main loop.
 pub trait Game {
-    /// Advances the game by `dt` seconds. Called once per frame, before [`Game::draw`].
+    /// Advances the game by `dt` seconds. Called before each [`Game::draw`]: once a frame, or
+    /// with an [update rate](WindowConfig::update_rate), as many times as the frame's time holds.
     fn update(&mut self, _ctx: &mut Context, _dt: f32) {}
 
     /// Draws the current frame.
@@ -49,6 +50,11 @@ pub struct WindowConfig {
     /// Whether frames wait for the display's refresh. Without vsync, frames come as fast as the
     /// game can make them (and may tear), which shows how much time a frame really takes.
     pub vsync: bool,
+    /// How many times a second the game updates, each time by the same `dt`, however often
+    /// frames come, so it plays the same at any frame rate. A frame runs as many updates as its
+    /// time holds, possibly none, then draws. `None`, the default, updates once a frame by the
+    /// frame's time. A rate must be above 0.
+    pub update_rate: Option<f32>,
 }
 
 impl Default for WindowConfig {
@@ -60,6 +66,7 @@ impl Default for WindowConfig {
             resizable: true,
             resolution: Resolution::Window,
             vsync: true,
+            update_rate: None,
         }
     }
 }
@@ -98,9 +105,10 @@ where
     app.error.map_or(Ok(()), Err)
 }
 
-/// Runs one frame of `game`, as both the window and a [`Simulation`] do: updates it by `dt` with
-/// a canvas `canvas_size` canvas pixels in size, then has it draw on `canvas`. Returns the
-/// frame's stats so far: the caller adds rendering and the frame's whole time.
+/// Runs one frame of `game`, as both the window and a [`Simulation`] do: updates it as `timestep`
+/// says for a frame `elapsed` seconds long, with a canvas `canvas_size` canvas pixels in size,
+/// then has it draw on `canvas`. Returns the frame's stats so far: the caller adds rendering and
+/// the frame's whole time.
 ///
 /// [`Simulation`]: crate::headless::Simulation
 pub(crate) fn run_frame(
@@ -108,14 +116,20 @@ pub(crate) fn run_frame(
     ctx: &mut Context,
     canvas: &mut Canvas,
     canvas_size: [f32; 2],
-    dt: f32,
+    timestep: &mut Timestep,
+    elapsed: f32,
 ) -> FrameStats {
     ctx.canvas_size = canvas_size;
-    let start = Instant::now();
-    game.update(ctx, dt);
-    let update = start.elapsed().as_secs_f32();
-    ctx.input.end_frame();
-    ctx.audio.advance(dt);
+    let (updates, dt) = timestep.updates(elapsed);
+    let mut update = 0.0;
+    for _ in 0..updates {
+        let start = Instant::now();
+        game.update(ctx, dt);
+        update += start.elapsed().as_secs_f32();
+        // Presses and releases last until an update has seen them.
+        ctx.input.end_frame();
+        ctx.audio.advance(dt);
+    }
     let start = Instant::now();
     canvas.begin(canvas_size[0], canvas_size[1]);
     game.draw(canvas);
@@ -125,6 +139,65 @@ pub(crate) fn run_frame(
         quads: canvas.quad_count(),
         draw_calls: canvas.draw_call_count(),
         ..Default::default()
+    }
+}
+
+/// Turns the time frames take into updates: one a frame by the frame's time, or a fixed number a
+/// second.
+pub(crate) struct Timestep {
+    /// The seconds each update covers, with a fixed rate.
+    step: Option<f64>,
+    /// The seconds of frames not yet updated for, with a fixed rate.
+    carried: f64,
+}
+
+impl Timestep {
+    /// How close a frame's time must be to a whole number of steps, as a fraction of a step, to
+    /// count as exactly that many.
+    const SNAP: f64 = 0.01;
+
+    /// Updates `rate` times a second, or once a frame without a rate.
+    ///
+    /// # Panics
+    ///
+    /// If `rate` isn't above 0.
+    pub(crate) fn new(rate: Option<f32>) -> Self {
+        let step = rate.map(|rate| {
+            assert!(
+                rate > 0.0 && rate.is_finite(),
+                "an update rate must be above 0, not {rate}"
+            );
+            1.0 / f64::from(rate)
+        });
+        Self {
+            step,
+            // A quarter of a step ahead, so frames that take about a step each, or half of one,
+            // end well clear of when an update falls due, and jitter in their timing doesn't move
+            // updates from one frame to the next.
+            carried: step.map_or(0.0, |step| step / 4.0),
+        }
+    }
+
+    /// How many updates to run for a frame that took `elapsed` seconds, and the `dt` of each.
+    pub(crate) fn updates(&mut self, elapsed: f32) -> (u32, f32) {
+        let elapsed = elapsed.min(MAX_FRAME_TIME);
+        let Some(step) = self.step else {
+            return (1, elapsed);
+        };
+        // Frames paced by a display that refreshes at about the update rate, such as 59.94 Hz
+        // for 60, count as a step each. Otherwise the difference would add up until a frame had
+        // no update, and the next two.
+        let steps = f64::from(elapsed) / step;
+        let whole = steps.round();
+        let steps = if whole >= 1.0 && (steps - whole).abs() < Self::SNAP {
+            whole
+        } else {
+            steps
+        };
+        self.carried += steps * step;
+        let updates = (self.carried / step).floor();
+        self.carried -= updates * step;
+        (updates as u32, step as f32)
     }
 }
 
@@ -207,6 +280,7 @@ struct State<G> {
     ctx: Context,
     canvas: Canvas,
     game: G,
+    timestep: Timestep,
     last_frame: Instant,
     /// The stats of the last frame, which become the context's once its whole time is known, at
     /// the start of the next.
@@ -221,6 +295,7 @@ impl<G: Game> State<G> {
         config: &WindowConfig,
         init: impl FnOnce(&mut Context) -> Result<G>,
     ) -> Result<Self> {
+        let timestep = Timestep::new(config.update_rate);
         let attributes = Window::default_attributes()
             .with_title(&config.title)
             .with_inner_size(LogicalSize::new(config.width, config.height))
@@ -255,6 +330,7 @@ impl<G: Game> State<G> {
             ctx,
             canvas: Canvas::new(),
             game,
+            timestep,
             last_frame: Instant::now(),
             stats: FrameStats::default(),
             cursor: None,
@@ -295,7 +371,6 @@ impl<G: Game> State<G> {
 
         let now = Instant::now();
         let elapsed = (now - self.last_frame).as_secs_f32();
-        let dt = elapsed.min(MAX_FRAME_TIME);
         self.last_frame = now;
         self.ctx.frame_stats = FrameStats {
             frame: elapsed,
@@ -306,7 +381,8 @@ impl<G: Game> State<G> {
             &mut self.ctx,
             &mut self.canvas,
             canvas_size,
-            dt,
+            &mut self.timestep,
+            elapsed,
         );
 
         let Context { gpu, renderer, .. } = &mut self.ctx;
@@ -335,5 +411,55 @@ impl<G: Game> State<G> {
             Acquired::Occluded => return,
         }
         self.window.request_redraw();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// How many updates each of `frames`, their times in seconds, gets at `rate`.
+    fn updates(rate: f32, frames: impl IntoIterator<Item = f32>) -> Vec<u32> {
+        let mut timestep = Timestep::new(Some(rate));
+        frames
+            .into_iter()
+            .map(|elapsed| timestep.updates(elapsed).0)
+            .collect()
+    }
+
+    #[test]
+    fn without_a_rate_frames_update_once_by_their_time() {
+        let mut timestep = Timestep::new(None);
+        assert_eq!(timestep.updates(0.01), (1, 0.01));
+        assert_eq!(timestep.updates(1.0), (1, MAX_FRAME_TIME));
+    }
+
+    #[test]
+    fn a_rate_updates_as_often_as_frames_hold() {
+        // Frames at 120, 60 and 30 Hz, updating at 60.
+        assert_eq!(updates(60.0, [1.0 / 120.0; 4]), [0, 1, 0, 1]);
+        assert_eq!(updates(60.0, [1.0 / 60.0; 3]), [1, 1, 1]);
+        assert_eq!(updates(60.0, [1.0 / 30.0; 3]), [2, 2, 2]);
+        let (_, dt) = Timestep::new(Some(60.0)).updates(0.1);
+        assert!((dt - 1.0 / 60.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn jitter_in_frames_at_the_rate_moves_no_updates() {
+        let frames = (0..600).map(|i| 1.0 / 60.0 + if i % 2 == 0 { 0.0005 } else { -0.0005 });
+        assert!(updates(60.0, frames).iter().all(|&n| n == 1));
+    }
+
+    #[test]
+    fn frames_close_to_the_rate_update_once_each() {
+        // A 59.94 Hz display, a little off in its timing. Updating by the frames' times, a
+        // frame every 16 seconds would have no update.
+        let frames = (0..6000).map(|i| 1.0 / 59.94 + if i % 3 == 0 { 0.0001 } else { -0.00005 });
+        assert!(updates(60.0, frames).iter().all(|&n| n == 1));
+    }
+
+    #[test]
+    fn a_stall_updates_for_a_quarter_second_at_most() {
+        assert_eq!(updates(60.0, [10.0]), [15]);
     }
 }

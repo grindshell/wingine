@@ -11,6 +11,7 @@ use std::{
     collections::HashMap,
     env::consts::{DLL_PREFIX, DLL_SUFFIX},
     ffi::c_void,
+    io,
     path::{Path, PathBuf},
     ptr,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
@@ -19,7 +20,7 @@ use std::{
 use mlua::IntoLua;
 use wingine_abi as abi;
 
-use super::{CANVAS, CONTEXT, lend, with_lent};
+use super::{CANVAS, CONTEXT, LibraryConfig, lend, with_lent};
 use crate::{
     Context, Error, Result,
     graphics::{Canvas, Color, Sprite},
@@ -66,9 +67,17 @@ pub fn link_library(name: &str, library: abi::Library) {
     lock(&REGISTERED).retain(|(registered, _)| *registered != source);
 }
 
+/// Where the game in `folder` keeps the library `name`.
+fn library_path(folder: &Path, name: &str) -> PathBuf {
+    folder
+        .join("native")
+        .join(format!("{DLL_PREFIX}{name}{DLL_SUFFIX}"))
+}
+
 /// The library `name` for the game in `folder`: linked into this program, or loaded from the
-/// game's `native` folder, and registered if it hasn't been yet.
-fn find(folder: &Path, name: &str) -> Result<&'static Library, String> {
+/// game's `native` folder, and registered if it hasn't been yet. `None` if there's no such
+/// library.
+fn find(folder: &Path, name: &str) -> Result<Option<&'static Library>, String> {
     let linked = lock(&LINKED)
         .iter()
         .find(|(linked, _)| linked == name)
@@ -76,19 +85,18 @@ fn find(folder: &Path, name: &str) -> Result<&'static Library, String> {
     let source = match linked {
         Some(_) => Source::Linked(name.to_owned()),
         None => {
-            let path = folder
-                .join("native")
-                .join(format!("{DLL_PREFIX}{name}{DLL_SUFFIX}"));
-            let path = path
-                .canonicalize()
-                .map_err(|err| format!("couldn't find {}: {err}", path.display()))?;
-            Source::File(path)
+            let path = library_path(folder, name);
+            match path.canonicalize() {
+                Ok(path) => Source::File(path),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(err) => return Err(format!("couldn't open {}: {err}", path.display())),
+            }
         }
     };
     // Held while registering, so two games loading the library at once register it once.
     let mut registered = lock(&REGISTERED);
     if let Some((_, library)) = registered.iter().find(|(s, _)| *s == source) {
-        return Ok(library);
+        return Ok(Some(library));
     }
     let descriptor = match (&source, linked) {
         (_, Some(library)) => library,
@@ -97,7 +105,7 @@ fn find(folder: &Path, name: &str) -> Result<&'static Library, String> {
     };
     let library: &'static Library = Box::leak(Box::new(register(descriptor)?));
     registered.push((source, library));
-    Ok(library)
+    Ok(Some(library))
 }
 
 /// Loads the library file at `path`, which stays loaded until the process ends, and returns how
@@ -267,21 +275,31 @@ struct Instance {
 }
 
 impl Natives {
-    /// Loads the libraries `names`, in order, for the game in `folder`, creating their state for
-    /// it and adding their tables to its VM.
+    /// Loads `libraries`, in order, for the game in `folder`, creating their state for it and
+    /// adding their tables to its VM. Optional libraries that aren't there are left out.
     pub(crate) fn load(
         lua: &mlua::Lua,
         ctx: &mut Context,
         folder: &Path,
-        names: &[String],
+        libraries: &[LibraryConfig],
     ) -> Result<Self> {
         let mut natives = Self::default();
-        for name in names {
+        for LibraryConfig { name, optional } in libraries {
             let fail = |message: String| Error::NativeLibrary {
                 name: name.clone(),
                 message,
             };
-            let library = find(folder, name).map_err(fail)?;
+            let library = match find(folder, name).map_err(fail)? {
+                Some(library) => library,
+                None => {
+                    let path = library_path(folder, name);
+                    if *optional {
+                        log::info!("no {}: running without `{name}`", path.display());
+                        continue;
+                    }
+                    return Err(fail(format!("couldn't find {}", path.display())));
+                }
+            };
             if !lua.globals().get::<mlua::Value>(&*library.name)?.is_nil() {
                 return Err(fail(format!(
                     "its table `{}` is taken by the engine or another library",
@@ -657,6 +675,7 @@ static HOST: abi::Host = abi::Host {
     clone_sprite: host::clone_sprite,
     free_sprite: host::free_sprite,
     sprite_size: host::sprite_size,
+    draw_sprites: host::draw_sprites,
 };
 
 /// The functions in [`HOST`]. Each trusts the library to pass what the ABI says: pointers the
@@ -1243,5 +1262,24 @@ mod host {
         // SAFETY: the library's promise.
         let sprite = unsafe { sprite_ref(sprite) };
         size([sprite.width(), sprite.height()])
+    }
+
+    pub(super) unsafe extern "C" fn draw_sprites(
+        canvas: *mut abi::Canvas,
+        sprite: *const abi::Sprite,
+        draws: *const abi::SpriteDraw,
+        count: usize,
+    ) {
+        // SAFETY: the library's promise.
+        let (canvas, sprite) = unsafe { (canvas_mut(canvas), sprite_ref(sprite)) };
+        let draws = if count == 0 {
+            &[]
+        } else {
+            // SAFETY: the library's promise.
+            unsafe { std::slice::from_raw_parts(draws, count) }
+        };
+        for draw in draws {
+            canvas.draw_sprite_rotated(sprite, rect(draw.dest), draw.angle, color(draw.tint));
+        }
     }
 }

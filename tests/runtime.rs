@@ -12,7 +12,7 @@ use wingine::{
     headless::{Image, Simulation},
     input::Key,
     lua::mlua::FromLuaMulti,
-    runtime::{self, LuauGame},
+    runtime::{self, LibraryConfig, LuauGame},
 };
 
 /// Writes a game made of `files`, each a path in the game's folder and its contents, to a fresh
@@ -73,7 +73,8 @@ fn settings_come_from_conf_luau() {
                 resizable = false,
                 resolution = { width = 160, height = 120 },
                 vsync = false,
-                libraries = { 'physics', 'particle_fx' },
+                update_rate = 60,
+                libraries = { 'physics', { name = 'particle_fx', optional = true } },
             }",
         )],
     );
@@ -83,6 +84,7 @@ fn settings_come_from_conf_luau() {
     assert_eq!([window.width, window.height], [640, 480]);
     assert!(!window.resizable);
     assert!(!window.vsync);
+    assert_eq!(window.update_rate, Some(60.0));
     assert_eq!(
         window.resolution,
         Resolution::Fixed {
@@ -90,7 +92,14 @@ fn settings_come_from_conf_luau() {
             height: 120
         }
     );
-    assert_eq!(config.libraries, ["physics", "particle_fx"]);
+    let library = |name: &str, optional| LibraryConfig {
+        name: name.into(),
+        optional,
+    };
+    assert_eq!(
+        config.libraries,
+        [library("physics", false), library("particle_fx", true)]
+    );
 }
 
 #[test]
@@ -100,6 +109,7 @@ fn without_settings_the_title_is_the_folders_name() {
     assert_eq!(config.window.title, "untitled");
     assert_eq!(config.window.resolution, Resolution::Window);
     assert!(config.window.vsync);
+    assert_eq!(config.window.update_rate, None);
     assert!(config.libraries.is_empty());
 }
 
@@ -155,12 +165,52 @@ fn unknown_or_invalid_settings_are_errors() {
     let err = runtime::config(&folder).unwrap_err().to_string();
     assert!(err.contains("must be at least 1"), "{err}");
 
+    for (test, conf, message) in [
+        (
+            "library_path",
+            "return { libraries = { '../physics' } }",
+            "`../physics` is not a library name",
+        ),
+        (
+            "library_setting",
+            "return { libraries = { { name = 'physics', optinal = true } } }",
+            "not `optinal`",
+        ),
+        (
+            "zero_update_rate",
+            "return { update_rate = 0 }",
+            "`update_rate`: runtime error: must be above 0",
+        ),
+    ] {
+        let folder = game(test, &[("conf.luau", conf)]);
+        let err = runtime::config(&folder).unwrap_err().to_string();
+        assert!(err.contains(message), "{err}");
+    }
+}
+
+#[test]
+fn an_update_rate_updates_by_the_same_dt() {
     let folder = game(
-        "library_path",
-        &[("conf.luau", "return { libraries = { '../physics' } }")],
+        "update_rate",
+        &[
+            ("conf.luau", "return { update_rate = 30 }"),
+            (
+                "main.luau",
+                "updates, draws, dts = 0, 0, {}
+                function update(dt)
+                    updates += 1
+                    dts[dt] = true
+                end
+                function draw() draws += 1 end",
+            ),
+        ],
     );
-    let err = runtime::config(&folder).unwrap_err().to_string();
-    assert!(err.contains("`../physics` is not a library name"), "{err}");
+    let mut simulation = simulation(&folder);
+    simulation.run_frames(4);
+    assert_eq!(eval::<(u32, u32)>(&simulation, "updates, draws"), (2, 4));
+    let dt: f32 = eval(&simulation, "next(dts)");
+    assert!((dt - 1.0 / 30.0).abs() < 1e-6, "{dt}");
+    assert!(eval::<bool>(&simulation, "next(dts, next(dts)) == nil"));
 }
 
 #[test]
@@ -444,6 +494,38 @@ fn sprites_load_from_sheets_and_draw() {
     let image = simulation.screenshot().unwrap();
     assert_eq!(pixel(&image, 9, 19), BLUE);
     assert_eq!(pixel(&image, 10, 19), BLACK);
+    assert_eq!(pixel(&image, 12, 0), RED);
+    assert_eq!(pixel(&image, 13, 0), BLACK);
+}
+
+#[test]
+fn sprites_draw_rotated_about_their_centers() {
+    let folder = game(
+        "rotated",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "local sheet = graphics.load_sprite_sheet('sheet.png', 1, 1)
+                local red, blue = sheet:sprite(0, 0), sheet:sprite(1, 0)
+                function draw()
+                    graphics.clear('#000000')
+                    -- 8x2, standing up as 2x8 about its center, (4, 5).
+                    graphics.draw_sprite_rotated(blue, 0, 4, math.pi / 2, nil, 8, 2)
+                    graphics.draw_sprite_rotated(red, 12, 0, 0, '#ffffff')
+                end",
+            ),
+        ],
+    );
+    write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
+
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&image, 3, 1), BLUE);
+    assert_eq!(pixel(&image, 4, 8), BLUE);
+    assert_eq!(pixel(&image, 0, 4), BLACK);
+    assert_eq!(pixel(&image, 5, 5), BLACK);
     assert_eq!(pixel(&image, 12, 0), RED);
     assert_eq!(pixel(&image, 13, 0), BLACK);
 }

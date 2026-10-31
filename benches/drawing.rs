@@ -22,6 +22,8 @@ const WARMUP: u32 = 30;
 const FRAMES: u32 = 120;
 /// The sprite's size, in texels.
 const SIZE: u32 = 8;
+/// What rotated sprites turn by, in radians.
+const ANGLE: f32 = 0.5;
 
 /// A 320x180 canvas, with sprites spread over it.
 fn config() -> WindowConfig {
@@ -45,16 +47,22 @@ fn main() {
     image::save_buffer(&image, &pixels, SIZE, SIZE, image::ExtendedColorType::Rgba8).unwrap();
     runtime::link_library("bench", native::library::<Bench>());
 
-    let mut simulation = Simulation::new(&config(), |ctx| RustGame::load(ctx, &image, false))
-        .expect("a GPU adapter is available");
+    let mut simulation =
+        Simulation::new(&config(), |ctx| RustGame::load(ctx, &image, Shape::Sprite))
+            .expect("a GPU adapter is available");
     println!(
         "Drawing {SPRITES} sprites a frame on {}, median of {FRAMES} frames:",
         simulation.adapter_name()
     );
     report("Rust: Canvas::draw_sprite", draw_time(&mut simulation));
-    let mut simulation =
-        Simulation::new(&config(), |ctx| RustGame::load(ctx, &image, true)).unwrap();
-    report("Rust: Canvas::fill_rect", draw_time(&mut simulation));
+    for (case, shape) in [
+        ("Rust: Canvas::draw_sprite_rotated", Shape::Rotated),
+        ("Rust: Canvas::fill_rect", Shape::Rect),
+    ] {
+        let mut simulation =
+            Simulation::new(&config(), |ctx| RustGame::load(ctx, &image, shape)).unwrap();
+        report(case, draw_time(&mut simulation));
+    }
 
     let luau = |name: &str, draw: String| {
         let game = folder.join(name);
@@ -74,8 +82,19 @@ fn main() {
         luau("native-many", "bench.draw_many(SPRITES)".into()),
     );
     report(
+        "Native: one call drawing every sprite rotated, batched",
+        luau("native-batch", "bench.draw_batch(SPRITES)".into()),
+    );
+    report(
         "Luau: graphics.draw_sprite(sprite, x, y)",
         luau("draw-sprite", each("graphics.draw_sprite(sprite, x, y)")),
+    );
+    report(
+        "Luau: graphics.draw_sprite_rotated(sprite, x, y, angle)",
+        luau(
+            "draw-sprite-rotated",
+            each("graphics.draw_sprite_rotated(sprite, x, y, ANGLE)"),
+        ),
     );
     report(
         "Luau: graphics.draw_sprite(sprite, x, y, \"#ff8040\")",
@@ -108,7 +127,7 @@ fn main() {
     );
 
     let mut simulation =
-        Simulation::new(&config(), |ctx| RustGame::load(ctx, &image, false)).unwrap();
+        Simulation::new(&config(), |ctx| RustGame::load(ctx, &image, Shape::Sprite)).unwrap();
     simulation.set_render_every_frame(true);
     let render = median(&mut simulation, |stats| stats.render);
     let frame = median(&mut simulation, |stats| stats.frame);
@@ -165,6 +184,7 @@ fn luau_game(draw: &str) -> String {
         "local SPRITES = {SPRITES}
         local sprite = graphics.load_sprite_sheet('sprite.png', {SIZE}, {SIZE}):sprite(0, 0)
         local TINT = {{ r = 1, g = 0.5, b = 0.25 }}
+        local ANGLE = {ANGLE}
         local calls = 0
         local function nothing(sprite, x, y)
             calls += 1
@@ -177,16 +197,26 @@ fn luau_game(draw: &str) -> String {
     )
 }
 
-/// Draws [`SPRITES`] sprites, or rectangles the size of one.
+/// What [`RustGame`] draws.
+#[derive(Clone, Copy)]
+enum Shape {
+    Sprite,
+    /// The sprite, turned by [`ANGLE`].
+    Rotated,
+    /// A rectangle the sprite's size.
+    Rect,
+}
+
+/// Draws [`SPRITES`] shapes.
 struct RustGame {
     sprite: Sprite,
-    rects: bool,
+    shape: Shape,
 }
 
 impl RustGame {
-    fn load(ctx: &mut Context, image: &std::path::Path, rects: bool) -> wingine::Result<Self> {
+    fn load(ctx: &mut Context, image: &std::path::Path, shape: Shape) -> wingine::Result<Self> {
         let sprite = ctx.load_texture(image)?.sprite();
-        Ok(Self { sprite, rects })
+        Ok(Self { sprite, shape })
     }
 }
 
@@ -196,10 +226,12 @@ impl Game for RustGame {
         for i in 0..SPRITES {
             let [x, y] = position(i);
             let dest = Rect::new(x, y, SIZE as f32, SIZE as f32);
-            if self.rects {
-                canvas.fill_rect(dest, tint);
-            } else {
-                canvas.draw_sprite(&self.sprite, dest, Color::WHITE);
+            match self.shape {
+                Shape::Sprite => canvas.draw_sprite(&self.sprite, dest, Color::WHITE),
+                Shape::Rotated => {
+                    canvas.draw_sprite_rotated(&self.sprite, dest, ANGLE, Color::WHITE)
+                }
+                Shape::Rect => canvas.fill_rect(dest, tint),
             }
         }
     }
@@ -209,6 +241,8 @@ impl Game for RustGame {
 #[derive(Default)]
 struct Bench {
     sprite: Option<native::Sprite>,
+    /// Kept from frame to frame, as a game's bullets would be.
+    draws: Vec<native::SpriteDraw>,
 }
 
 impl native::Library for Bench {
@@ -236,6 +270,19 @@ impl native::Library for Bench {
                 for i in 0..count {
                     canvas.draw_sprite(sprite, dest(position(i)), native::Color::WHITE);
                 }
+                Ok(())
+            })
+            .function("draw_batch", |bench, call, count: u32| {
+                let Bench { sprite, draws } = bench;
+                let sprite = sprite
+                    .as_ref()
+                    .ok_or_else(|| native::Error::new("no sprite to draw"))?;
+                draws.clear();
+                draws.extend((0..count).map(|i| native::SpriteDraw {
+                    angle: ANGLE,
+                    ..native::SpriteDraw::new(dest(position(i)))
+                }));
+                call.canvas()?.draw_sprites(sprite, draws);
                 Ok(())
             });
     }
