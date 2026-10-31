@@ -19,7 +19,7 @@ use std::{
 use mlua::IntoLua;
 use wingine_abi as abi;
 
-use super::{CANVAS, CONTEXT, with_lent};
+use super::{CANVAS, CONTEXT, lend, with_lent};
 use crate::{
     Context, Error, Result,
     graphics::{Canvas, Color, Sprite},
@@ -304,7 +304,9 @@ impl Natives {
                 library,
                 state,
             });
-            install(lua, library, state).map_err(|err| fail(err.to_string()))?;
+            // The context is lent for the library's Luau, as it is for the game's `main.luau`.
+            lend(lua, CONTEXT, ctx, || Ok(install(lua, library, state)))?
+                .map_err(|err| fail(err.to_string()))?;
         }
         Ok(natives)
     }

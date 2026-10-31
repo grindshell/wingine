@@ -75,10 +75,7 @@ use std::{
     marker::PhantomData,
     panic::{self, AssertUnwindSafe},
     ptr,
-    sync::{
-        Mutex, PoisonError,
-        atomic::{AtomicPtr, Ordering},
-    },
+    sync::atomic::{AtomicPtr, Ordering},
 };
 
 #[doc(hidden)]
@@ -240,28 +237,32 @@ fn panic_message(panic: &dyn Any) -> &str {
     }
 }
 
-/// The classes libraries registered in this process, by type.
-static CLASSES: Mutex<Vec<(TypeId, ClassHandle)>> = Mutex::new(Vec::new());
+/// The classes one registration of a library added, by type. A program can register a library
+/// more than once, such as by linking it under two names, and the engine gives each registration
+/// classes of its own, so games use those of the registration they loaded.
+struct Classes(Vec<(TypeId, *mut abi::Class)>);
 
-#[derive(Clone, Copy)]
-struct ClassHandle(*mut abi::Class);
+impl Classes {
+    /// The class registered for `T`.
+    fn get<T: Class>(&self) -> Result<*mut abi::Class> {
+        self.0
+            .iter()
+            .find(|(type_id, _)| *type_id == TypeId::of::<T>())
+            .map(|&(_, class)| class)
+            .ok_or_else(|| Error::new(format!("{} isn't a registered class", T::NAME)))
+    }
+}
 
-// SAFETY: the engine's classes live as long as the process, and are only read once registered.
-unsafe impl Send for ClassHandle {}
-
-/// The class registered for `T`.
-fn class_of<T: Class>() -> Result<*mut abi::Class> {
-    let classes = CLASSES.lock().unwrap_or_else(PoisonError::into_inner);
-    classes
-        .iter()
-        .find(|(type_id, _)| *type_id == TypeId::of::<T>())
-        .map(|(_, class)| class.0)
-        .ok_or_else(|| Error::new(format!("{} isn't a registered class", T::NAME)))
+/// A library's state for a game, with the classes of the registration the game loaded.
+struct Instance<L> {
+    library: L,
+    classes: &'static Classes,
 }
 
 /// Registers a library's functions, classes and hooks, in [`Library::register`].
 pub struct Registry<L> {
     raw: *mut abi::Registry,
+    classes: Vec<(TypeId, *mut abi::Class)>,
     _library: PhantomData<fn() -> L>,
 }
 
@@ -290,9 +291,8 @@ impl<L: Library> Registry<L> {
     pub fn class<T: Class>(&mut self) -> ClassRegistry<'_, L, T> {
         // SAFETY: the name is static.
         let raw = unsafe { (host().add_class)(self.raw, abi::Str::new(T::NAME), drop_object::<T>) };
-        let mut classes = CLASSES.lock().unwrap_or_else(PoisonError::into_inner);
-        classes.retain(|(type_id, _)| *type_id != TypeId::of::<T>());
-        classes.push((TypeId::of::<T>(), ClassHandle(raw)));
+        // Adding a class twice fails the registration, so this is the only one for `T`.
+        self.classes.push((TypeId::of::<T>(), raw));
         ClassRegistry {
             raw,
             _registry: PhantomData,
@@ -335,7 +335,8 @@ impl<L: Library> Registry<L> {
 
     /// Adds Luau `source` that runs as the library loads, once its functions are in its table,
     /// which the chunk receives as `...`. It may add functions written in Luau, such as ones that
-    /// `wait`. `name` names it in errors.
+    /// `wait`, and functions it calls get the [`Context`], as they do while the game loads.
+    /// `name` names it in errors.
     pub fn luau(&mut self, name: &str, source: &str) -> &mut Self {
         // SAFETY: the strings are valid for the call.
         unsafe { (host().add_luau)(self.raw, abi::Str::new(name), abi::Str::new(source)) };
@@ -402,25 +403,37 @@ unsafe extern "C" fn register<L: Library>(
 ) -> abi::Status {
     HOST.store(host.cast_mut(), Ordering::Release);
     guard(|| {
-        // SAFETY: the callbacks are for `L`, and need no data.
-        unsafe {
-            (crate::host().set_instance)(registry, create::<L>, destroy::<L>, ptr::null_mut());
-        }
-        L::register(&mut Registry {
+        let mut registry = Registry {
             raw: registry,
+            classes: Vec::new(),
             _library: PhantomData,
-        });
+        };
+        L::register(&mut registry);
+        // Leaked, like the callbacks, since games' state refers to it.
+        let classes: &'static Classes = Box::leak(Box::new(Classes(registry.classes)));
+        // SAFETY: the callbacks are for `L`, and their data is the registration's classes.
+        unsafe {
+            (crate::host().set_instance)(
+                registry.raw,
+                create::<L>,
+                destroy::<L>,
+                ptr::from_ref(classes).cast_mut().cast(),
+            );
+        }
         Ok(())
     })
 }
 
 unsafe extern "C" fn create<L: Library>(
-    _: *mut c_void,
+    classes: *mut c_void,
     ctx: *mut abi::Context,
     instance: *mut *mut c_void,
 ) -> abi::Status {
     guard(|| {
-        let state = L::new(&mut Context::new(ctx))?;
+        let library = L::new(&mut Context::new(ctx))?;
+        // SAFETY: `register` leaked the classes, and passed them as the data.
+        let classes = unsafe { &*classes.cast::<Classes>() };
+        let state = Instance { library, classes };
         // SAFETY: the engine's promise.
         unsafe { instance.write(Box::into_raw(Box::new(state)).cast()) };
         Ok(())
@@ -431,7 +444,7 @@ unsafe extern "C" fn destroy<L: Library>(_: *mut c_void, instance: *mut c_void) 
     // A panic dropping it is reported by the panic hook, and goes no further.
     let _ = panic::catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: `create` boxed it, and the engine destroys it once.
-        drop(unsafe { Box::from_raw(instance.cast::<L>()) });
+        drop(unsafe { Box::from_raw(instance.cast::<Instance<L>>()) });
     }));
 }
 
@@ -455,10 +468,11 @@ where
 {
     guard(|| {
         // SAFETY: registered with this data, and the engine passes the game's state for `L`.
-        let (function, library) = unsafe { (&*data.cast::<F>(), &mut *instance.cast::<L>()) };
-        let mut call = Call::new(call);
+        let (function, instance) =
+            unsafe { (&*data.cast::<F>(), &mut *instance.cast::<Instance<L>>()) };
+        let mut call = Call::new(call, instance.classes);
         let args = A::from_args(&call)?;
-        function(library, &mut call, args)?.push_all(&call)
+        function(&mut instance.library, &mut call, args)?.push_all(&call)
     })
 }
 
@@ -478,16 +492,16 @@ where
     guard(|| {
         // SAFETY: registered with this data, the engine passes the game's state for `L`, and
         // the object is a `T` the engine borrowed exclusively for the call.
-        let (method, library, object) = unsafe {
+        let (method, instance, object) = unsafe {
             (
                 &*data.cast::<F>(),
-                &mut *instance.cast::<L>(),
+                &mut *instance.cast::<Instance<L>>(),
                 &mut *object.cast::<T>(),
             )
         };
-        let mut call = Call::new(call);
+        let mut call = Call::new(call, instance.classes);
         let args = A::from_args(&call)?;
-        method(library, object, &mut call, args)?.push_all(&call)
+        method(&mut instance.library, object, &mut call, args)?.push_all(&call)
     })
 }
 
@@ -503,8 +517,9 @@ where
 {
     guard(|| {
         // SAFETY: registered with this data, and the engine passes the game's state for `L`.
-        let (hook, library) = unsafe { (&*data.cast::<F>(), &mut *instance.cast::<L>()) };
-        hook(library, &mut Context::new(ctx), dt)
+        let (hook, instance) =
+            unsafe { (&*data.cast::<F>(), &mut *instance.cast::<Instance<L>>()) };
+        hook(&mut instance.library, &mut Context::new(ctx), dt)
     })
 }
 
@@ -519,7 +534,8 @@ where
 {
     guard(|| {
         // SAFETY: registered with this data, and the engine passes the game's state for `L`.
-        let (hook, library) = unsafe { (&*data.cast::<F>(), &mut *instance.cast::<L>()) };
-        hook(library, &mut Canvas::new(canvas))
+        let (hook, instance) =
+            unsafe { (&*data.cast::<F>(), &mut *instance.cast::<Instance<L>>()) };
+        hook(&mut instance.library, &mut Canvas::new(canvas))
     })
 }

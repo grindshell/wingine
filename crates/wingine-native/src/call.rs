@@ -3,21 +3,24 @@
 use std::ptr;
 
 use crate::{
-    Canvas, Class, Color, Context, Error, Rect, Result, Sprite, abi, check, class_of, host,
+    Canvas, Class, Classes, Color, Context, Error, Rect, Result, Sprite, abi, check, host,
 };
 
 /// A call from a script to one of the library's functions or methods: its arguments, and the
 /// services the engine lent for it.
 pub struct Call {
     raw: *mut abi::Call,
+    /// The classes of the registration the game loaded.
+    classes: &'static Classes,
     context: Option<Context>,
     canvas: Option<Canvas>,
 }
 
 impl Call {
-    pub(crate) fn new(raw: *mut abi::Call) -> Self {
+    pub(crate) fn new(raw: *mut abi::Call, classes: &'static Classes) -> Self {
         Self {
             raw,
+            classes,
             context: None,
             canvas: None,
         }
@@ -55,7 +58,7 @@ impl Call {
     }
 
     fn borrow_object<T: Class>(&self, index: usize, exclusive: bool) -> Result<*mut T> {
-        let class = class_of::<T>()?;
+        let class = self.classes.get::<T>()?;
         let mut object = ptr::null_mut();
         // SAFETY: valid for as long as `self` is.
         let status = unsafe { (host().arg_object)(self.raw, index, class, exclusive, &mut object) };
@@ -317,7 +320,7 @@ impl<T: IntoResult> IntoResult for Option<T> {
 impl<T: Class> IntoResult for T {
     /// A new object, which scripts own from then on.
     fn push(self, call: &Call) -> Result<()> {
-        let class = class_of::<T>()?;
+        let class = call.classes.get::<T>()?;
         let object = Box::into_raw(Box::new(self));
         // SAFETY: valid for as long as `call` is, and the engine owns the object from then on.
         unsafe { (host().push_object)(call.raw, class, object.cast()) };

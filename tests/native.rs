@@ -2,6 +2,7 @@
 //! one builds the `native-particles` example and loads it from a game's `native` folder.
 
 use std::{
+    cell::RefCell,
     env::consts::{DLL_PREFIX, DLL_SUFFIX},
     fs,
     path::{Path, PathBuf},
@@ -35,15 +36,20 @@ fn game(test: &str, files: &[(&str, &str)]) -> PathBuf {
     folder
 }
 
-/// Settings for a game that loads `library`, in a 20x20 window whose screenshots are canvas
+/// Settings for a game that loads `libraries`, in a 20x20 window whose screenshots are canvas
 /// pixels.
-fn conf(library: &str) -> String {
+fn conf(libraries: &[&str]) -> String {
+    let libraries = libraries
+        .iter()
+        .map(|name| format!("'{name}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
         "return {{
             width = 20,
             height = 20,
             resolution = {{ width = 20, height = 20 }},
-            libraries = {{ '{library}' }},
+            libraries = {{ {libraries} }},
         }}"
     )
 }
@@ -75,6 +81,8 @@ fn pixel(image: &Image, x: u32, y: u32) -> [u8; 4] {
 struct Probe {
     log: Vec<String>,
     canvas_size: [f32; 2],
+    /// The error its hook after `update` returns, if it fails.
+    failure: Option<String>,
 }
 
 /// A number scripts hold as an object.
@@ -117,6 +125,10 @@ impl Library for Probe {
                 Err(wingine_native::Error::new(message))
             })
             .function("panic", |_, _, ()| -> Result<()> { panic!("on purpose") })
+            .function("fail_after_update", |probe, _, message: String| {
+                probe.failure = Some(message);
+                Ok(())
+            })
             .function("mark", |probe, _, name: String| {
                 probe.log.push(name);
                 Ok(())
@@ -144,7 +156,10 @@ impl Library for Probe {
             })
             .after_update(|probe, _, _| {
                 probe.log.push("after_update".into());
-                Ok(())
+                match &probe.failure {
+                    Some(message) => Err(wingine_native::Error::new(message)),
+                    None => Ok(()),
+                }
             })
             .before_draw(|probe, _| {
                 probe.log.push("before_draw".into());
@@ -161,7 +176,9 @@ impl Library for Probe {
                 "local probe = ...
                 function probe.wait_marked(name)
                     wait_until(function() return string.find(probe.log(), name, 1, true) ~= nil end)
-                end",
+                end
+                local lent = pcall(probe.held, 'jump')
+                function probe.lent_while_loading() return lent end",
             );
         registry
             .class::<Counter>()
@@ -181,7 +198,7 @@ impl Library for Probe {
 /// and runs `main`.
 fn probe_game(test: &str, main: &str) -> Simulation<LuauGame> {
     runtime::link_library(test, wingine_native::library::<Probe>());
-    let folder = game(test, &[("conf.luau", &conf(test)), ("main.luau", main)]);
+    let folder = game(test, &[("conf.luau", &conf(&[test])), ("main.luau", main)]);
     simulation(&folder)
 }
 
@@ -274,6 +291,24 @@ fn hooks_run_around_update_and_draw() {
 }
 
 #[test]
+fn a_failing_hook_stops_the_game() {
+    let mut simulation = probe_game("failing_hook", "probe.fail_after_update('jammed')");
+    simulation.step();
+    simulation.step();
+    let err = simulation.game().error().expect("the game stopped");
+    assert!(
+        err.to_string()
+            .contains("native library `failing_hook`: jammed"),
+        "{err}"
+    );
+    assert_eq!(
+        eval::<String>(&simulation, "probe.log()"),
+        "before_update after_update",
+        "nothing ran after the hook failed"
+    );
+}
+
+#[test]
 fn functions_get_the_context_or_canvas_as_scripts_do() {
     let mut simulation = probe_game(
         "lent",
@@ -288,6 +323,10 @@ fn functions_get_the_context_or_canvas_as_scripts_do() {
             probe.fill('#0000ff')
             _, held_in_draw = pcall(probe.held, 'jump')
         end",
+    );
+    assert!(
+        eval::<bool>(&simulation, "probe.lent_while_loading()"),
+        "the library's Luau had the context"
     );
     simulation.tap(Key::Space);
     assert!(eval::<bool>(&simulation, "jumped"));
@@ -339,6 +378,20 @@ fn objects_have_methods_and_borrow_safely() {
         assert!(err.contains(message), "{name}: {err}");
     }
     assert!(eval::<bool>(&simulation, "missing == nil"));
+}
+
+#[test]
+fn objects_work_in_games_that_loaded_earlier_registrations() {
+    let first = probe_game("registered_first", "kept = probe.new_counter(1)");
+    // Registers `Probe` again, under another name.
+    let second = probe_game("registered_second", "kept = probe.new_counter(2)");
+    for (simulation, kept) in [(&first, 1), (&second, 2)] {
+        assert_eq!(
+            eval::<i64>(simulation, "probe.total(kept, probe.new_counter(10))"),
+            kept + 10
+        );
+        assert_eq!(eval::<i64>(simulation, "probe.new_counter(3):value()"), 3);
+    }
 }
 
 #[test]
@@ -403,7 +456,7 @@ fn each_game_has_its_own_state_until_it_ends() {
     let folder = game(
         "lifecycle",
         &[
-            ("conf.luau", &conf("lifecycle")),
+            ("conf.luau", &conf(&["lifecycle"])),
             ("main.luau", "kept = lifecycle.token() lifecycle.token()"),
         ],
     );
@@ -419,6 +472,68 @@ fn each_game_has_its_own_state_until_it_ends() {
     drop(second);
     assert_eq!(DESTROYED.load(Ordering::SeqCst), 2);
     assert_eq!(FREED.load(Ordering::SeqCst), 4);
+}
+
+thread_local! {
+    /// What `Tracer`s did on this thread, in order.
+    static TRACE: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A library that traces its state's life and its hooks to `TRACE`, under its table's name:
+/// `north` or `south`.
+struct Tracer<const N: usize>;
+
+impl<const N: usize> Tracer<N> {
+    /// Traces `event`, which always succeeds, so hooks can return it.
+    fn trace(event: &str) -> Result<()> {
+        let event = format!("{}:{event}", Self::NAME);
+        TRACE.with_borrow_mut(|trace| trace.push(event));
+        Ok(())
+    }
+}
+
+impl<const N: usize> Drop for Tracer<N> {
+    fn drop(&mut self) {
+        let _ = Self::trace("drop");
+    }
+}
+
+impl<const N: usize> Library for Tracer<N> {
+    const NAME: &str = ["north", "south"][N];
+
+    fn new(_: &mut Context) -> Result<Self> {
+        Self::trace("new")?;
+        Ok(Self)
+    }
+
+    fn register(registry: &mut Registry<Self>) {
+        registry
+            .before_update(|_, _, _| Self::trace("before_update"))
+            .after_update(|_, _, _| Self::trace("after_update"))
+            .before_draw(|_, _| Self::trace("before_draw"))
+            .after_draw(|_, _| Self::trace("after_draw"));
+    }
+}
+
+#[test]
+fn libraries_run_in_the_order_games_list_them() {
+    runtime::link_library("north", wingine_native::library::<Tracer<0>>());
+    runtime::link_library("south", wingine_native::library::<Tracer<1>>());
+    let folder = game(
+        "order",
+        &[("conf.luau", &conf(&["south", "north"])), ("main.luau", "")],
+    );
+    TRACE.take();
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    drop(simulation);
+    assert_eq!(
+        TRACE.take().join(" "),
+        "south:new north:new \
+         south:before_update north:before_update south:after_update north:after_update \
+         south:before_draw north:before_draw south:after_draw north:after_draw \
+         north:drop south:drop"
+    );
 }
 
 /// A library that fails as a game loads it.
@@ -464,11 +579,11 @@ impl Library for Impostor {
     fn register(_: &mut Registry<Self>) {}
 }
 
-/// The error loading a game that loads the library `name` fails with.
-fn load_error(name: &str) -> String {
+/// The error loading a game that loads `libraries` fails with.
+fn load_error(libraries: &[&str]) -> String {
     let folder = game(
-        &format!("load_{name}"),
-        &[("conf.luau", &conf(name)), ("main.luau", "")],
+        &format!("load_{}", libraries.join("_")),
+        &[("conf.luau", &conf(libraries)), ("main.luau", "")],
     );
     let err = start(&folder).err().expect("loading fails");
     assert!(matches!(err, Error::NativeLibrary { .. }), "{err}");
@@ -477,29 +592,38 @@ fn load_error(name: &str) -> String {
 
 #[test]
 fn libraries_that_fail_to_load_are_errors() {
-    let err = load_error("nowhere");
+    let err = load_error(&["nowhere"]);
     assert!(
         err.contains("native library `nowhere`: couldn't find"),
         "{err}"
     );
 
     runtime::link_library("failing", wingine_native::library::<Failing>());
-    assert!(load_error("failing").contains("out of fuel"));
+    assert!(load_error(&["failing"]).contains("out of fuel"));
 
     runtime::link_library("twice", wingine_native::library::<Twice>());
-    let err = load_error("twice");
+    let err = load_error(&["twice"]);
     assert!(err.contains("registered `go` twice"), "{err}");
 
     runtime::link_library("impostor", wingine_native::library::<Impostor>());
-    let err = load_error("impostor");
+    let err = load_error(&["impostor"]);
     assert!(err.contains("its table `graphics` is taken"), "{err}");
+
+    // Two libraries with the same table.
+    runtime::link_library("north_one", wingine_native::library::<Tracer<0>>());
+    runtime::link_library("north_two", wingine_native::library::<Tracer<0>>());
+    let err = load_error(&["north_one", "north_two"]);
+    assert!(
+        err.contains("native library `north_two`: its table `north` is taken"),
+        "{err}"
+    );
 
     let newer = abi::Library {
         abi_minor: abi::ABI_MINOR + 1,
         ..wingine_native::library::<Probe>()
     };
     runtime::link_library("newer", newer);
-    let err = load_error("newer");
+    let err = load_error(&["newer"]);
     assert!(err.contains("can't load"), "{err}");
 }
 
@@ -528,7 +652,7 @@ fn libraries_load_from_the_games_native_folder() {
     let folder = game(
         "particles",
         &[
-            ("conf.luau", &conf("particles")),
+            ("conf.luau", &conf(&["particles"])),
             (
                 "main.luau",
                 "sparks = particles.new_emitter('#ffffff')
