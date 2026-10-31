@@ -311,7 +311,12 @@ such as physics engines, networking or 3D pipelines.
   tile layer selected, it paints instead, by the Tiles panel's tool (`docks/tiles.rs`, in the
   bottom panel, with a `Palette` of the tileset's tiles), and a selected tilemap has handles that
   resize it. Scene files dragged from the FileSystem dock carry a `ScenePath`, which the viewport
-  and the Scene dock take as a drop. Play
+  and the Scene dock take as a drop. For screens, the toolbar's Anchors menu applies Godot's
+  anchor presets (`layout.rs`, pure functions of the node and its drawn size: an anchor, a pivot
+  at the same point of the node, and its size and stretch), the Select tool resizes sprites,
+  rects and areas by handles on their edges, and the toolbar's canvas size, or dragging the
+  canvas's corner, previews scenes laid out on canvases of other sizes (`Viewport::preview`),
+  which never changes the file. Play
   (`play.rs`) runs the editor's own executable with `--run`, which runs the game, so it's a
   process of its own; tests point it at the built executable with `set_runner`. Its tests
   (`tests/editor.rs`) drive it through `Simulation`, clicking widgets by label, and copy example

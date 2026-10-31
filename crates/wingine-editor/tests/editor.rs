@@ -598,6 +598,146 @@ fn the_inspector_overrides_nodes_inside_instances_and_reverts_them() {
     assert!(!simulation.game().document().unwrap().is_dirty());
 }
 
+/// Adds a 16 by 16 rect named `box` at the top of the open scene, at `x`, `y`, and selects it.
+fn add_box(simulation: &mut Simulation<Editor>, x: f32, y: f32) {
+    let document = simulation.game_mut().document_mut().unwrap();
+    let mut node = edit::new_node("rect", "", "", "");
+    node.name = "box".into();
+    node.x = x;
+    node.y = y;
+    let path = edit::add(document.edit(), &[], node).unwrap();
+    document.end_change();
+    document.select(Some(path));
+    simulation.run_frames(2);
+}
+
+/// Where the open scene's node at `names` is drawn, in the scene.
+fn bounds(simulation: &Simulation<Editor>, names: &str) -> wingine::math::Rect {
+    let document = simulation.game().document().unwrap();
+    let id = document
+        .live_node(&edit::path_of(document.file(), names))
+        .unwrap();
+    document.preview.as_ref().unwrap().bounds(id).unwrap()
+}
+
+fn assert_bounds(simulation: &Simulation<Editor>, names: &str, [x, y, w, h]: [f32; 4]) {
+    let rect = bounds(simulation, names);
+    assert_eq!([rect.x, rect.y, rect.w, rect.h], [x, y, w, h]);
+}
+
+/// Opens the menu `menu` and clicks its item `item`: menus are sized in their first frame, and
+/// shown in the next.
+fn menu(simulation: &mut Simulation<Editor>, menu: &str, item: &str) {
+    simulation.click_gui(menu);
+    simulation.step();
+    simulation.click_gui(item);
+    simulation.run_frames(2);
+}
+
+#[test]
+fn anchor_presets_lay_nodes_out_on_canvases_of_any_size() {
+    let mut simulation = garden(examples().join("garden"));
+    add_box(&mut simulation, 40.0, 30.0);
+
+    // Into the canvas's corner, and its middle.
+    menu(&mut simulation, "Anchors", "Bottom Right");
+    assert_bounds(&simulation, "box", [304.0, 164.0, 16.0, 16.0]);
+    menu(&mut simulation, "Anchors", "Center");
+    assert_bounds(&simulation, "box", [152.0, 82.0, 16.0, 16.0]);
+
+    // Without an anchor, it stays where it is.
+    menu(&mut simulation, "Anchors", "No Anchor");
+    assert_eq!(node(&simulation, "box").anchor, None);
+    assert_bounds(&simulation, "box", [152.0, 82.0, 16.0, 16.0]);
+
+    // Stretched across the canvas, and on a bigger one, stretched with it.
+    menu(&mut simulation, "Anchors", "Full Rect");
+    assert_bounds(&simulation, "box", [0.0, 0.0, 320.0, 180.0]);
+    menu(&mut simulation, "canvas 320 x 180", "640 x 360");
+    assert_eq!(
+        simulation
+            .game()
+            .document()
+            .unwrap()
+            .preview
+            .as_ref()
+            .unwrap()
+            .size(),
+        [640.0, 360.0]
+    );
+    assert_bounds(&simulation, "box", [0.0, 0.0, 640.0, 360.0]);
+    menu(
+        &mut simulation,
+        "preview 640 x 360",
+        "The game's, 320 x 180",
+    );
+    assert_bounds(&simulation, "box", [0.0, 0.0, 320.0, 180.0]);
+
+    // Each was a change of its own, back to where it was added.
+    for _ in 0..4 {
+        control(&mut simulation, Key::Z);
+    }
+    assert_eq!(node(&simulation, "box").anchor, None);
+    assert_bounds(&simulation, "box", [40.0, 30.0, 16.0, 16.0]);
+}
+
+#[test]
+fn handles_resize_nodes_with_the_select_tool() {
+    let mut simulation = garden(examples().join("garden"));
+    add_box(&mut simulation, 100.0, 60.0);
+    let zoom = simulation.game().document().unwrap().view.unwrap().zoom;
+    let size = |simulation: &Simulation<Editor>| match &node(simulation, "box").kind {
+        KindDef::Rect(rect) => rect.size,
+        _ => panic!("the box is a rect"),
+    };
+    let near = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3;
+
+    // Its right edge, 24 points further right.
+    let from = simulation.game().scene_to_window([116.0, 68.0]).unwrap();
+    drag(&mut simulation, from, [from[0] + 24.0, from[1]]);
+    let wider = size(&simulation);
+    assert!(near(wider, [16.0 + 24.0 / zoom, 16.0]), "{wider:?}");
+    assert_eq!(node(&simulation, "box").x, 100.0);
+
+    // Its top-left corner, out by 8 points each way: it grows, and moves with the corner.
+    let from = simulation.game().scene_to_window([100.0, 60.0]).unwrap();
+    drag(&mut simulation, from, [from[0] - 8.0, from[1] - 8.0]);
+    let bigger = size(&simulation);
+    assert!(
+        near(bigger, [16.0 + 32.0 / zoom, 16.0 + 8.0 / zoom]),
+        "{bigger:?}"
+    );
+    let moved = node(&simulation, "box");
+    let at = [moved.x, moved.y];
+    assert!(near(at, [100.0 - 8.0 / zoom, 60.0 - 8.0 / zoom]), "{at:?}");
+
+    control(&mut simulation, Key::Z);
+    control(&mut simulation, Key::Z);
+    assert_eq!(size(&simulation), [16.0, 16.0]);
+}
+
+#[test]
+fn dragging_the_canvas_corner_previews_another_size() {
+    let mut simulation = garden(examples().join("garden"));
+    let zoom = simulation.game().document().unwrap().view.unwrap().zoom;
+    let from = simulation.game().scene_to_window([320.0, 180.0]).unwrap();
+    drag(&mut simulation, from, [from[0] + 40.0, from[1] + 20.0]);
+    let size = simulation
+        .game()
+        .document()
+        .unwrap()
+        .preview
+        .as_ref()
+        .unwrap()
+        .size();
+    assert_eq!(
+        size,
+        [320.0 + 40.0 / zoom, 180.0 + 20.0 / zoom].map(f32::round)
+    );
+    // Only a preview: the scene hasn't changed.
+    assert!(!simulation.game().document().unwrap().is_dirty());
+}
+
 #[test]
 fn closing_with_unsaved_changes_asks_first() {
     let mut simulation = garden(examples().join("garden"));

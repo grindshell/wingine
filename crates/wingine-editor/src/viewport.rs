@@ -4,6 +4,11 @@
 //! selected node, by the tool chosen. With a tile layer selected, pressing paints it instead, by
 //! the Tiles panel's tool, and a selected tilemap has handles that resize it. Scenes dragged in
 //! from the FileSystem dock are placed where they're dropped.
+//!
+//! For laying out screens, the toolbar's Anchors menu places the selected node by a preset, and
+//! with the Select tool, a node with a size has handles on its edges and corners that resize it.
+//! The scene can be previewed laid out on canvases of other sizes, chosen in the toolbar or by
+//! dragging the canvas's bottom-right corner.
 
 use std::f32::consts::PI;
 
@@ -22,8 +27,22 @@ use crate::{
     },
     document::{Document, View},
     edit::{self, NodePath},
+    layout::{self, PRESETS, Place, Preset},
     theme,
 };
+
+/// Canvas sizes to preview a scene laid out on, besides the game's own.
+const PREVIEW_SIZES: [[f32; 2]; 7] = [
+    [320.0, 180.0],
+    [640.0, 360.0],
+    [1280.0, 720.0],
+    [1920.0, 1080.0],
+    [800.0, 600.0],
+    [360.0, 640.0],
+    [1080.0, 1920.0],
+];
+/// The smallest canvas a preview can have, across or down.
+const MIN_PREVIEW: f32 = 16.0;
 
 /// How far from a plain node's origin, in points, a click still picks it.
 const PICK_DISTANCE: f32 = 6.0;
@@ -69,10 +88,36 @@ pub struct Viewport {
     stroke: Option<Stroke>,
     /// Resizing a tilemap, in progress.
     resize: Option<Resize>,
+    /// Resizing a node with a size, in progress.
+    sizing: Option<Sizing>,
+    /// Whether the canvas's corner is being dragged, to preview another size.
+    sizing_canvas: bool,
+    /// The size of canvas scenes are laid out on, instead of the game's, to see how they fit
+    /// others.
+    pub preview: Option<[f32; 2]>,
+    /// How far in from its parent's edges an anchor preset puts a node.
+    pub margin: f32,
     /// How the scene mapped to the viewport when it was last shown.
     shown: Option<ViewMap>,
     /// Where the last click selected something, in points.
     last_click: Option<egui::Pos2>,
+}
+
+/// Resizing a node by dragging one of the handles on its edges or corners.
+struct Sizing {
+    path: NodePath,
+    start: NodeDef,
+    /// Which of its edges move, across and down: -1 the left or top, 1 the right or bottom, 0
+    /// neither.
+    edges: [i8; 2],
+    /// Its own size, before stretching with its parent, and the rectangle it covers as drawn, in
+    /// its own coordinates.
+    own: [f32; 2],
+    rect: Rect,
+    /// From the scene to its own coordinates.
+    to_node: Affine,
+    /// From its own directions to its parent's, for moving it as its left or top edge moves.
+    to_parent: Affine,
 }
 
 /// What the viewport asks of the editor.
@@ -179,6 +224,10 @@ impl Default for Viewport {
             drag: None,
             stroke: None,
             resize: None,
+            sizing: None,
+            sizing_canvas: false,
+            preview: None,
+            margin: 0.0,
             shown: None,
             last_click: None,
         }
@@ -233,12 +282,14 @@ impl Viewport {
         self.shown.map(|map| map.to_screen(point))
     }
 
-    pub fn toolbar(
-        &mut self,
-        ui: &mut egui::Ui,
-        document: Option<&mut Document>,
-        canvas_size: [f32; 2],
-    ) {
+    /// The size of canvas scenes are laid out on: the one previewed, or the game's, `game`.
+    pub fn canvas_size(&self, game: [f32; 2]) -> [f32; 2] {
+        self.preview.unwrap_or(game)
+    }
+
+    /// The toolbar over the viewport, for a game whose canvas is `game` in size.
+    pub fn toolbar(&mut self, ui: &mut egui::Ui, document: Option<&mut Document>, game: [f32; 2]) {
+        let canvas_size = self.canvas_size(game);
         ui.horizontal(|ui| {
             for (tool, name, key) in Tool::ALL {
                 ui.selectable_value(&mut self.tool, tool, name)
@@ -274,9 +325,121 @@ impl Viewport {
             if let Some(view) = document.view {
                 ui.weak(format!("{:.0}%", view.zoom * 100.0));
             }
-            let [width, height] = canvas_size;
-            ui.weak(format!("canvas {width} x {height}"));
+            ui.separator();
+            self.canvas_menu(ui, canvas_size, game);
+            self.anchors_menu(ui, document);
         });
+    }
+
+    /// The size of canvas the scene is laid out on, to preview it on others.
+    fn canvas_menu(&mut self, ui: &mut egui::Ui, [width, height]: [f32; 2], game: [f32; 2]) {
+        let text = match self.preview {
+            Some(_) => format!("preview {width} x {height}"),
+            None => format!("canvas {width} x {height}"),
+        };
+        ui.menu_button(text, |ui| {
+            let [game_width, game_height] = game;
+            if ui
+                .button(format!("The game's, {game_width} x {game_height}"))
+                .clicked()
+            {
+                self.preview = None;
+            }
+            ui.separator();
+            for size @ [width, height] in PREVIEW_SIZES {
+                if ui.button(format!("{width} x {height}")).clicked() {
+                    self.preview = Some(size);
+                }
+            }
+            ui.separator();
+            let mut size = [width, height];
+            ui.horizontal(|ui| {
+                for value in &mut size {
+                    ui.add(egui::DragValue::new(value).range(MIN_PREVIEW..=8192.0));
+                }
+            });
+            if size != [width, height] {
+                self.preview = Some(size);
+            }
+        })
+        .response
+        .on_hover_text("The canvas the scene is laid out on: drag its corner to try others");
+    }
+
+    /// Anchor presets for the selected node.
+    fn anchors_menu(&mut self, ui: &mut egui::Ui, document: &mut Document) {
+        let selected = document
+            .selected
+            .clone()
+            .filter(|path| !path.is_empty() && document.inner().is_none());
+        let node = selected
+            .as_ref()
+            .and_then(|path| edit::node(document.file(), path))
+            .filter(|node| !matches!(node.kind, KindDef::TileLayer(_)))
+            .cloned();
+        let (Some(path), Some(node)) = (selected, node) else {
+            ui.add_enabled(false, egui::Button::new("Anchors"))
+                .on_disabled_hover_text("Select a node to lay it out in its parent");
+            return;
+        };
+        let mut chosen = None;
+        let mut unanchor = false;
+        ui.menu_button("Anchors", |ui| {
+            ui.label(format!("Lay out `{}` in its parent:", node.name));
+            egui::Grid::new("anchor presets")
+                .spacing([4.0, 4.0])
+                .show(ui, |ui| {
+                    for (i, preset) in PRESETS.iter().enumerate() {
+                        let fits = layout::fits(&node.kind, preset);
+                        if preset_button(ui, preset, fits).clicked() {
+                            chosen = Some(preset);
+                        }
+                        if i % 4 == 3 {
+                            ui.end_row();
+                        }
+                    }
+                });
+            ui.horizontal(|ui| {
+                ui.label("margin");
+                ui.add(egui::DragValue::new(&mut self.margin).range(0.0..=4096.0));
+            });
+            if ui
+                .add_enabled(node.anchor.is_some(), egui::Button::new("No Anchor"))
+                .on_hover_text("Place it from its parent's origin, where it is now")
+                .clicked()
+            {
+                unanchor = true;
+            }
+        })
+        .response
+        .on_hover_text("Anchor presets: place the node at a point of its parent, or stretch it");
+
+        let live = document.live_node(&path);
+        let scene = document.preview.as_ref();
+        let mut changed = node.clone();
+        if let Some(preset) = chosen {
+            let size = live
+                .zip(scene)
+                .and_then(|(id, scene)| scene.rect(id))
+                .map_or([0.0, 0.0], |rect| [rect.w, rect.h]);
+            layout::apply(&mut changed, preset, size, self.margin);
+        }
+        if unanchor && let (Some(id), Some(scene)) = (live, scene) {
+            // Where its origin is in its parent, with the anchor's offset.
+            let parent = scene
+                .node(id)
+                .parent()
+                .map_or(Affine::IDENTITY, |parent| scene.transform(parent));
+            let origin = scene.transform(id).translation;
+            if let Some(to_parent) = parent.inverse() {
+                [changed.x, changed.y] = to_parent.apply(origin);
+                changed.anchor = None;
+            }
+        }
+        if changed != node {
+            *edit::node_mut(document.edit(), &path).expect("the node is there") = changed;
+            document.end_change();
+        }
     }
 
     /// The viewport, painting the selected tile layer with what `tiles` says, from `palette`,
@@ -369,7 +532,11 @@ impl Viewport {
                 Some(KindDef::TileLayer(_))
             )
         });
-        if !panning && !self.resize(ui, &response, &map, document, tilemap.as_ref()) {
+        let busy = panning
+            || self.resize(ui, &response, &map, document, tilemap.as_ref())
+            || self.size_node(ui, &response, &map, document)
+            || self.size_canvas(ui, &response, &map, canvas_size);
+        if !busy {
             match (&layer, &tilemap) {
                 (Some(layer), Some((_, grid))) => {
                     self.paint(ui, &response, &map, document, layer, *grid, tiles);
@@ -393,6 +560,15 @@ impl Viewport {
             0.0,
             egui::Stroke::new(1.0, theme::CANVAS),
             egui::StrokeKind::Middle,
+        );
+        // Its corner, to drag to preview other sizes.
+        painter.rect_filled(
+            egui::Rect::from_center_size(
+                map.to_screen(canvas_size),
+                egui::vec2(HANDLE_SIZE, HANDLE_SIZE),
+            ),
+            1.0,
+            theme::CANVAS,
         );
         self.overlay(&painter, &map, document);
         if let Some((_, grid)) = &tilemap {
@@ -454,6 +630,88 @@ impl Viewport {
         }
     }
 
+    /// Resizing the selected node by the handles on its edges and corners, with the Select tool.
+    /// Returns whether the pointer is the resize's, so nothing else takes it.
+    fn size_node(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        map: &ViewMap,
+        document: &mut Document,
+    ) -> bool {
+        let primary = egui::PointerButton::Primary;
+        let handles = node_handles(document).filter(|_| self.tool == Tool::Select);
+        let under = |at: egui::Pos2| {
+            let (path, handles) = handles.as_ref()?;
+            let (edges, _) = handles
+                .iter()
+                .find(|(_, handle)| map.to_screen(*handle).distance(at) <= HANDLE_SIZE)?;
+            Some((path.clone(), *edges))
+        };
+        if let Some((_, edges)) = response.hover_pos().and_then(under) {
+            ui.ctx().set_cursor_icon(resize_cursor(edges));
+        }
+        // A drag, not a click, so clicking in place still reaches the nodes under it.
+        if self.sizing.is_none()
+            && response.drag_started_by(primary)
+            && let Some(origin) = ui.input(|input| input.pointer.press_origin())
+            && let Some((path, edges)) = under(origin)
+        {
+            self.sizing = start_sizing(document, path, edges);
+        }
+        let Some(sizing) = &self.sizing else {
+            return false;
+        };
+        ui.ctx().set_cursor_icon(resize_cursor(sizing.edges));
+        if response.dragged_by(primary)
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            size_to(document, sizing, self.snapped(map.to_scene(pointer)));
+        }
+        if !response.is_pointer_button_down_on() {
+            self.sizing = None;
+        }
+        true
+    }
+
+    /// Previewing the scene on a canvas of another size, by dragging the canvas's bottom-right
+    /// corner, `corner`. Returns whether the pointer is the drag's.
+    fn size_canvas(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        map: &ViewMap,
+        corner: [f32; 2],
+    ) -> bool {
+        let primary = egui::PointerButton::Primary;
+        let on_corner = |at: egui::Pos2| map.to_screen(corner).distance(at) <= HANDLE_SIZE;
+        if response.hover_pos().is_some_and(on_corner) {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+        }
+        if !self.sizing_canvas
+            && response.drag_started_by(primary)
+            && ui
+                .input(|input| input.pointer.press_origin())
+                .is_some_and(on_corner)
+        {
+            self.sizing_canvas = true;
+        }
+        if !self.sizing_canvas {
+            return false;
+        }
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+        if response.dragged_by(primary)
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            let point = self.snapped(map.to_scene(pointer));
+            self.preview = Some(point.map(|v| v.round().max(MIN_PREVIEW)));
+        }
+        if !response.is_pointer_button_down_on() {
+            self.sizing_canvas = false;
+        }
+        true
+    }
+
     /// Resizing the selected tilemap, `tilemap`, by its handles. Returns whether the pointer is
     /// the resize's, so nothing else takes it.
     fn resize(
@@ -472,9 +730,14 @@ impl Viewport {
                 .find(|(_, handle)| map.to_screen(*handle).distance(at) <= HANDLE_SIZE)
                 .map(|(axes, _)| axes)
         };
+        if let (Some(pointer), Some((_, grid))) = (response.hover_pos(), tilemap)
+            && let Some([across, down]) = on_handle(grid, pointer)
+        {
+            ui.ctx()
+                .set_cursor_icon(resize_cursor([across, down].map(i8::from)));
+        }
         if self.resize.is_none()
-            && response.is_pointer_button_down_on()
-            && ui.input(|input| input.pointer.button_down(primary))
+            && response.drag_started_by(primary)
             && let (Some((path, grid)), Some(origin)) = (tilemap, origin)
             && let Some(axes) = on_handle(grid, origin)
         {
@@ -536,9 +799,16 @@ impl Viewport {
         let cell = response
             .interact_pointer_pos()
             .map(|pointer| grid.cell_at(map.to_scene(pointer)));
+        // A press on one of the map's handles is for resizing it.
+        let on_handle = response.interact_pointer_pos().is_some_and(|pointer| {
+            grid.handles()
+                .iter()
+                .any(|(_, handle)| map.to_screen(*handle).distance(pointer) <= HANDLE_SIZE)
+        });
         if let Some(cell) = cell
             && down
             && pressed
+            && !on_handle
             && self.stroke.is_none()
         {
             let def = match &edit::node(document.file(), layer).map(|node| &node.kind) {
@@ -871,7 +1141,22 @@ impl Viewport {
             return;
         }
         match self.tool {
-            Tool::Select => {}
+            Tool::Select => {
+                let handles = node_handles(document).map(|(_, handles)| handles);
+                for (_, handle) in handles.into_iter().flatten() {
+                    let at = egui::Rect::from_center_size(
+                        map.to_screen(handle),
+                        egui::vec2(HANDLE_SIZE, HANDLE_SIZE),
+                    );
+                    painter.rect(
+                        at,
+                        1.0,
+                        egui::Color32::WHITE,
+                        egui::Stroke::new(1.0, theme::ACCENT),
+                        egui::StrokeKind::Middle,
+                    );
+                }
+            }
             Tool::Move => {
                 for (axis, color) in [
                     ([1.0, 0.0], egui::Color32::from_rgb(0xf0, 0x60, 0x70)),
@@ -1068,6 +1353,169 @@ fn paint_cells(
     };
     if !patched {
         document.rebuild();
+    }
+}
+
+/// A button for `preset`, drawn as a node in its parent where the preset puts it, named for
+/// screen readers and tests by the preset's name.
+fn preset_button(ui: &mut egui::Ui, preset: &Preset, enabled: bool) -> egui::Response {
+    let sense = if enabled {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), sense);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, preset.name));
+    let visuals = ui.style().interact(&response);
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        3.0,
+        visuals.weak_bg_fill,
+        visuals.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
+    let parent = rect.shrink(6.0);
+    painter.rect_stroke(
+        parent,
+        0.0,
+        egui::Stroke::new(1.0, visuals.fg_stroke.color.gamma_multiply(0.5)),
+        egui::StrokeKind::Middle,
+    );
+    // The node: a small square, or stretched across.
+    let span = |place: Place, start: f32, end: f32| match place {
+        Place::At(fraction) => {
+            let from = start + (end - start - 6.0) * fraction;
+            (from, from + 6.0)
+        }
+        Place::Wide => (start, end),
+    };
+    let (left, right) = span(preset.places[0], parent.left(), parent.right());
+    let (top, bottom) = span(preset.places[1], parent.top(), parent.bottom());
+    let color = if enabled {
+        theme::ACCENT
+    } else {
+        visuals.fg_stroke.color.gamma_multiply(0.3)
+    };
+    painter.rect_filled(
+        egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom)),
+        1.0,
+        color,
+    );
+    let response = response.on_hover_text(preset.name);
+    if enabled {
+        response
+    } else {
+        response.on_disabled_hover_text("Only sprites, rects and areas stretch")
+    }
+}
+
+/// A handle that resizes a node: the edges it moves, as [`Sizing::edges`], and where it is in the
+/// scene.
+type Handle = ([i8; 2], [f32; 2]);
+
+/// The handles that resize the selected node, if it's a sprite, rect or area of the file, with its
+/// path.
+fn node_handles(document: &Document) -> Option<(NodePath, Vec<Handle>)> {
+    let path = document
+        .selected
+        .clone()
+        .filter(|path| !path.is_empty() && document.inner().is_none())?;
+    let node = edit::node(document.file(), &path)?;
+    if !matches!(
+        node.kind,
+        KindDef::Sprite(_) | KindDef::Rect(_) | KindDef::Area(_)
+    ) {
+        return None;
+    }
+    let scene = document.preview.as_ref()?;
+    let id = document.live_node(&path)?;
+    let rect = scene.rect(id)?;
+    let transform = scene.transform(id);
+    let mut handles = Vec::with_capacity(8);
+    for down in [-1, 0, 1] {
+        for across in [-1, 0, 1] {
+            if [across, down] == [0, 0] {
+                continue;
+            }
+            let at = |edge: i8, start: f32, size: f32| start + size * (f32::from(edge) + 1.0) / 2.0;
+            let point = [at(across, rect.x, rect.w), at(down, rect.y, rect.h)];
+            handles.push(([across, down], transform.apply(point)));
+        }
+    }
+    Some((path, handles))
+}
+
+/// A resize of the node at `path` by the handle on `edges`, from how it is now.
+fn start_sizing(document: &Document, path: NodePath, edges: [i8; 2]) -> Option<Sizing> {
+    let start = edit::node(document.file(), &path)?.clone();
+    let scene = document.preview.as_ref()?;
+    let id = document.live_node(&path)?;
+    let transform = scene.transform(id);
+    let parent = scene
+        .node(id)
+        .parent()
+        .map_or(Affine::IDENTITY, |parent| scene.transform(parent));
+    let local = parent.inverse()? * transform;
+    Some(Sizing {
+        path,
+        start,
+        edges,
+        own: scene.node(id).size()?,
+        rect: scene.rect(id)?,
+        to_node: transform.inverse()?,
+        to_parent: Affine {
+            translation: [0.0, 0.0],
+            ..local
+        },
+    })
+}
+
+/// Resizes the node `sizing` is resizing for the pointer at `point`, in the scene: the edges it
+/// moves follow the pointer, and the others stay where they were.
+fn size_to(document: &mut Document, sizing: &Sizing, point: [f32; 2]) {
+    let pointer = sizing.to_node.apply(point);
+    let rect = [
+        [sizing.rect.x, sizing.rect.w],
+        [sizing.rect.y, sizing.rect.h],
+    ];
+    let mut own = sizing.own;
+    // How far its start edges move, in its own coordinates, which moves its origin with them.
+    let mut moved = [0.0; 2];
+    for i in 0..2 {
+        let [start, size] = rect[i];
+        match sizing.edges[i] {
+            1 => own[i] += (pointer[i] - (start + size)).max(1.0 - size),
+            -1 => {
+                let by = (pointer[i] - start).min(size - 1.0);
+                own[i] -= by;
+                moved[i] = by;
+            }
+            _ => {}
+        }
+    }
+    let mut node = sizing.start.clone();
+    let [dx, dy] = sizing.to_parent.apply(moved);
+    node.x += dx;
+    node.y += dy;
+    match &mut node.kind {
+        KindDef::Sprite(sprite) => sprite.size = Some(own),
+        KindDef::Rect(rect) => rect.size = own,
+        KindDef::Area(area) => area.size = own,
+        _ => return,
+    }
+    if edit::node(document.file(), &sizing.path) != Some(&node) {
+        *edit::node_mut(document.edit(), &sizing.path).expect("the node is there") = node;
+    }
+}
+
+/// The cursor for resizing by a handle on `edges`.
+fn resize_cursor(edges: [i8; 2]) -> egui::CursorIcon {
+    match edges {
+        [0, _] => egui::CursorIcon::ResizeVertical,
+        [_, 0] => egui::CursorIcon::ResizeHorizontal,
+        [across, down] if across == down => egui::CursorIcon::ResizeNwSe,
+        _ => egui::CursorIcon::ResizeNeSw,
     }
 }
 

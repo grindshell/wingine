@@ -18,7 +18,7 @@ Without a folder, it starts with a choice of the repository's examples, and **Pr
 Folder…** opens any game.
 
 The editor is new, and grows with each part of the current milestone. It edits scenes' nodes, the
-scene's sheets and props, tilemaps' tiles, and instances' overrides now. Anchor presets, editing
+scene's sheets and props, tilemaps' tiles, instances' overrides, and screens' layouts now. Editing
 clips and editing scripts come next. Until then, edit those in the scene file, and the editor shows
 the change once it's saved.
 
@@ -42,7 +42,8 @@ Drag the edges between them to resize them.
 The viewport shows the open scene as the game draws it, laid out on the game's canvas: the size of
 the [`resolution`](project-structure.md#resolution) in `conf.luau`, or of its window. A purple
 rectangle outlines the canvas, and red and green lines are the scene's x and y axes through its
-origin. A screen anchored to the canvas's edges is laid out as it is in the game.
+origin. A screen anchored to the canvas's edges is laid out as it is in the game, and can be
+[previewed on canvases of other sizes](#laying-out-screens).
 
 - **Pan** by dragging with the middle button, or with the left while holding Space.
 - **Zoom** with the wheel, about the pointer. **Frame** shows the whole canvas again, and **1:1**
@@ -60,7 +61,7 @@ The toolbar's tools, or their keys, decide what dragging in the viewport does:
 
 | Tool | Key | Dragging |
 |---|---|---|
-| Select | Q | Selects the node under the pointer, and moves it |
+| Select | Q | Selects the node under the pointer, and moves it; the selected node's handles resize it |
 | Move | W | Moves the selected node, wherever the drag starts |
 | Rotate | E | Turns the selected node about its origin |
 | Scale | S | Stretches the selected node along its own axes; with Shift, evenly |
@@ -83,6 +84,27 @@ The **Inspector** shows the selected node's fields, as scene files name them:
   value; lists and tables hold more values.
 
 Select the scene itself, at the top of the Scene dock, to change its sheets and props.
+
+## Laying out screens
+
+Screens, such as menus and HUDs, are laid out with [anchors](scenes.md): a node with an `anchor` is
+placed from that point of its parent's rectangle, the canvas's for the nodes at the top of a scene,
+so it stays in its corner or middle on a canvas of any size, and a node with a `stretch` grows and
+shrinks with its parent.
+
+- **Anchors**, in the toolbar, lays the selected node out in its parent by a preset, as Godot's do:
+  into a corner, the middle of an edge or the middle, keeping its size, or stretched across its
+  parent, along its top, middle or bottom, its left, middle or right, or all of it. The preset sets
+  its `anchor`, a `pivot` at the same point of the node, and its size and `stretch`; `x` and `y`
+  become the **margin** set below the presets, in from the parent's edges. Text lines up with the
+  edge or middle it's put at, and only sprites, rects and areas stretch. **No Anchor** takes the
+  anchor away, leaving the node where it is.
+- With the **Select** tool, a selected sprite, rect or area has handles on its edges and corners:
+  drag one to resize the node, its other edges staying where they are. A sprite takes a size of
+  its own the first time.
+- The canvas's size, in the toolbar, previews the scene laid out on canvases of other sizes:
+  common ones, or any typed in, or drag the purple handle on the canvas's bottom-right corner. A
+  preview changes nothing in the scene; **The game's** goes back to the game's own.
 
 ## The Scene dock
 

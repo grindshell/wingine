@@ -854,7 +854,8 @@ impl Game for Editor {
         }
 
         let project = self.project.as_ref().expect("a game is open");
-        let canvas_size = project.canvas_size();
+        let game_size = project.canvas_size();
+        let canvas_size = self.viewport.canvas_size(game_size);
         let folder = project.folder.clone();
         if let Some(document) = self.documents.get_mut(self.current)
             && let Some(error) = document.refresh(ctx, &mut self.cache, &folder, canvas_size)
@@ -1010,7 +1011,7 @@ impl Game for Editor {
         egui::CentralPanel::default().show(ui, |ui| {
             self.tabs(ui);
             let document = self.documents.get_mut(self.current);
-            self.viewport.toolbar(ui, document, canvas_size);
+            self.viewport.toolbar(ui, document, game_size);
             ui.separator();
             match self.documents.get_mut(self.current) {
                 Some(document) => {

@@ -6,6 +6,7 @@ pub mod document;
 pub mod edit;
 pub mod editor;
 pub mod instance;
+pub mod layout;
 pub mod play;
 pub mod project;
 pub mod theme;
