@@ -18,6 +18,12 @@ the files.
 - [What nodes show](#what-nodes-show): [`set_sprite`](#nodeset_sprite),
   [`set_tint`](#nodeset_tint), [`set_color`](#nodeset_color), [`text`](#nodetext),
   [`set_text`](#nodeset_text)
+- [Adding and removing nodes](#adding-and-removing-nodes): [`add`](#nodeadd),
+  [`remove`](#noderemove), [`is_removed`](#nodeis_removed)
+- [Tilemaps](#tilemaps): [`is_solid`](#nodeis_solid), [`tile_to_world`](#nodetile_to_world),
+  [`world_to_tile`](#nodeworld_to_tile), [`grid_size`](#nodegrid_size),
+  [`tile_size`](#nodetile_size), [`tile_props`](#nodetile_props), [`tile`](#nodetile),
+  [`set_tile`](#nodeset_tile)
 
 Draw a scene with [`graphics.draw_scene`](graphics.md#graphicsdraw_scene).
 
@@ -29,13 +35,13 @@ Draw a scene with [`graphics.draw_scene`](graphics.md#graphicsdraw_scene).
 scene.load(path: string): SceneNode
 ```
 
-Loads the scene file at `path`, relative to the game's folder, and the images its sheets name,
-and returns the scene's root: a plain node holding the scene's `props`, with the file's nodes as
-its children.
+Loads the scene file at `path`, relative to the game's folder, and the scene files its instances
+place, the tileset files its tilemaps use and the images its sheets name, and returns the
+scene's root: a plain node holding the scene's `props`, with the file's nodes as its children.
 
 Each call returns a scene of its own, so loading a file twice gives two scenes that change
-independently, such as two of the same enemy. The file is read once, however many times it's
-loaded, and each image once, however many scenes and sprite sheets use it.
+independently, such as two of the same enemy. Each file is read once, however many times it's
+loaded or placed, and each image once, however many scenes and sprite sheets use it.
 
 A file that can't be read, or that isn't a scene, is an error naming the file and the node where
 the problem is. Works while the game loads and in `update`.
@@ -208,8 +214,8 @@ Positions, rotations and scales must be finite numbers.
 
 ## What nodes cover
 
-A sprite, rect, text or area covers a rectangle, with its pivot at the node's origin. A plain node
-covers nothing.
+A sprite, rect, text or area covers a rectangle, with its pivot at the node's origin, and a
+tilemap, or a layer of one, covers its map. A plain node covers nothing.
 
 ### `node:size`
 
@@ -218,7 +224,7 @@ node:size(): (number, number)
 ```
 
 Returns the width and height it covers, before any scaling: a sprite's size, a rect's or an
-area's, or the size of a text's text.
+area's, the size of a text's text, or the size of a tilemap's map.
 
 ### `node:set_size`
 
@@ -300,3 +306,121 @@ node:set_text(text: string)
 ```
 
 Changes a text node's text, laying it out again.
+
+## Adding and removing nodes
+
+### `node:add`
+
+```lua
+node:add(source: SceneNode, name: string?): SceneNode
+```
+
+Adds a copy of `source` and everything inside it as the last child of `node`, named `name`, or
+the name `source` has, and returns the copy. `source` can be from any scene, this one included,
+such as a scene's root from [`scene.load`](#sceneload), whose props come with it. A root has no
+name, so copying one takes a `name`.
+
+```lua
+-- A bat, from a scene of its own, in the level's creatures.
+local bat = level:find("creatures"):add(scene.load("bat.scene.luau"), "bat_1")
+bat:set_position(48, 96)
+```
+
+A name that's empty, holds `/`, or is one of `node`'s children's already is an error, as is
+copying a tile layer without its tilemap.
+
+### `node:remove`
+
+```lua
+node:remove()
+```
+
+Takes the node and everything inside it out of its scene. Using a removed node afterwards is an
+error, apart from [`is_removed`](#nodeis_removed) and `tostring`. A scene's root can't be
+removed.
+
+### `node:is_removed`
+
+```lua
+node:is_removed(): boolean
+```
+
+## Tilemaps
+
+These work on a tilemap node, or one of its layers, which stands for its tilemap. Cells are a
+column and a row, counting from 0 at the map's top-left corner, which is at the tilemap node's
+origin.
+
+### `node:is_solid`
+
+```lua
+node:is_solid(column: number, row: number): boolean
+```
+
+Returns whether a cell blocks movement: whether it holds a solid tile on any layer, or is outside
+the map, as [`map:is_solid`](tilemap.md#mapis_solid) does.
+
+### `node:tile_to_world`
+
+```lua
+node:tile_to_world(column: number, row: number): (number, number)
+```
+
+Returns the position in the scene of the top-left corner of a cell, which may be a fraction of
+the way between cells, as for a [grid mover](grid.md#moverposition) partway through a step.
+
+### `node:world_to_tile`
+
+```lua
+node:world_to_tile(x: number, y: number): (number, number)
+```
+
+Returns the cell containing the position `x`, `y` in the scene, which may be outside the map.
+
+### `node:grid_size`
+
+```lua
+node:grid_size(): (number, number)
+```
+
+Returns how many columns and rows the map has. [`size`](#nodesize) is its size in the scene.
+
+### `node:tile_size`
+
+```lua
+node:tile_size(): (number, number)
+```
+
+Returns the width and height of the map's tiles.
+
+### `node:tile_props`
+
+```lua
+node:tile_props(name: string): { [string]: any }
+```
+
+Returns the props of the tile named `name` in the map's tileset, as a new table. A name the
+tileset doesn't have is an error.
+
+### `node:tile`
+
+```lua
+node:tile(column: number, row: number): string?
+```
+
+Returns the name of the tile in a cell of this tile layer, or `nil` if the cell is empty or
+outside the map.
+
+### `node:set_tile`
+
+```lua
+node:set_tile(column: number, row: number, name: string?)
+```
+
+Puts the tile named `name` in a cell of this tile layer, or with `nil`, empties it. A cell
+outside the map, or a name the tileset doesn't have, is an error.
+
+```lua
+-- The gate opens.
+level:find("map/objects"):set_tile(20, 2, "gate_open")
+```

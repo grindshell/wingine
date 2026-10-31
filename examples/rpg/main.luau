@@ -7,7 +7,8 @@
 -- turn by turn, when they catch you. Beaten, you wake up back in the village; the village well
 -- restores you. Coins from battles, and from poking around, buy gear at the village shop.
 --
--- The world and its maps are in `world.luau` and `maps/`, the people in `characters.luau`, the
+-- The world is in `world.luau`, its maps are scenes in `maps/` over the tiles of
+-- `world.tileset.luau`, the people are in `characters.luau`, the
 -- dialogue box in `dialogue.luau`, and conversations and events in `story.luau`. Battles are in
 -- `battle.luau`, against the creatures in `foes.luau`. What the player carries is in
 -- `items.luau`, the shop in `shop.luau`, and the bag in `bag.luau`. The game's state is in the
@@ -27,9 +28,10 @@ local story = require("./story")
 local conf = require("./conf")
 local world = require("./world")
 
+-- Each map's scene.
 local MAPS = {
-    village = require("./maps/village"),
-    shrine = require("./maps/shrine"),
+    village = "maps/village.scene.luau",
+    shrine = "maps/shrine.scene.luau",
 }
 
 local WIDTH = conf.resolution.width
@@ -138,7 +140,8 @@ rpg = {
 local function enter(name: string, at: { number }, facing: string)
     local level = rpg.levels[name]
     if not level then
-        level = world.build(MAPS[name] or error(`there's no map called {name}`))
+        local map = MAPS[name] or error(`there's no map called {name}`)
+        level = world.build(name, scene.load(map))
         rpg.levels[name] = level
     end
     if rpg.level then
@@ -424,7 +427,7 @@ local function draw_world()
     local level = rpg.level :: world.Level
     local x, y = characters.position(rpg.player, level.map)
     graphics.set_camera(x + TILE / 2, y + TILE / 2, level.map:bounds())
-    graphics.draw_tilemap(level.map)
+    graphics.draw_scene(level.map)
     for _, character in level.characters do
         characters.draw(character, level.map)
         if character.alert then

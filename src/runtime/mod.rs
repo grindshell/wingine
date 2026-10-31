@@ -112,8 +112,9 @@
 //!
 //! `scene`, for loading [scenes](crate::scene), while the game loads and in `update`:
 //!
-//! - `scene.load(path)` loads the scene file at `path` and the images it names, and returns the
-//!   scene's root node. Each file is read once, and each load returns a copy of its own.
+//! - `scene.load(path)` loads the scene file at `path`, the scene files its instances place, the
+//!   tileset files its tilemaps use and the images they all name, and returns the scene's root
+//!   node. Each file is read once, and each load returns a copy of its own.
 //!
 //! `input`, while the game loads and in `update`:
 //!

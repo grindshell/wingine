@@ -1,11 +1,15 @@
--- The world: the kinds of tile it's made of, the levels built from the maps in `maps/`, and
+-- The world: the kinds of tile it's made of, the levels built from the scenes in `maps/`, and
 -- what's where on them.
 --
--- A map draws its level as rows of characters, one per cell, which `LEGEND` turns into a kind
--- of ground and, on top of it, an optional object. Every kind has a description, which the
--- player reads by examining a cell. Maps can also have places, cells with a description, an
--- event, or something to find of their own; exits, cells that lead to another map; characters;
--- and foes, creatures from `foes.luau` that the game adds while they're about.
+-- A level's scene holds a tilemap, `map`, of the tiles in `world.tileset.luau`, in three layers:
+-- `floor`, which holds the kind of ground in each cell, such as `grass`, as its color; `ground`,
+-- the ground's sprite, which varies from cell to cell; and `objects`, what stands on the ground,
+-- such as trees. Tiles with sprites are named for their kind and which of its sprites they show,
+-- such as `tree.2`. Every kind has a description, which the player reads by examining a cell.
+-- The scene also marks out places, cells with a description, an event, or something to find of
+-- their own; exits, cells that lead to another map; characters; and foes, creatures from
+-- `foes.luau` that the game adds while they're about. Each is a node tagged for what it is, on
+-- the cell it's about, whose props say the rest.
 
 local characters = require("./characters")
 local foes = require("./foes")
@@ -31,32 +35,18 @@ function world.stride(column: number, row: number)
     return strides:sprite(column, row)
 end
 
--- A sprite that's solid white, for the color under ground tiles.
-local FILL = world.sprite(8, 5)
-
-local GRASS = "#22382a"
-local DIRT = "#4e3d2c"
-local WATER = "#21406a"
-local PAVING = "#34353e"
-
--- Each kind of tile: its sprite, given as a column and row of the tileset, or several to vary
--- from cell to cell (`false` for none); its tint; whether it blocks the way; and what examining
--- it says, or several things to vary from cell to cell. Ground kinds have a `fill`, the color
--- of the cell under their sprite.
+-- Each kind of tile: the tiles it varies between from cell to cell, as the tileset names them,
+-- with `false` for no sprite; and what examining it says, or several things to vary from cell to
+-- cell. Kinds of ground have a tile of their own on the floor, named for them.
 type Kind = {
-    sprites: { { number } | false },
-    tint: string?,
-    solid: boolean?,
-    fill: string?,
+    tiles: { string | false },
     text: string | { string },
 }
 
 local KINDS: { [string]: Kind } = {
     -- Ground.
     grass = {
-        fill = GRASS,
-        sprites = { false, false, { 1, 0 }, { 5, 0 }, { 7, 0 } },
-        tint = "#3e6b3f",
+        tiles = { false, false, "grass.3", "grass.4", "grass.5" },
         text = {
             "Soft grass, still damp with dew.",
             "A beetle trundles between the blades of grass.",
@@ -64,42 +54,31 @@ local KINDS: { [string]: Kind } = {
         },
     },
     flowers = {
-        fill = GRASS,
-        sprites = { { 15, 6 }, { 16, 6 } },
-        tint = "#e0c070",
+        tiles = { "flowers.1", "flowers.2" },
         text = { "Wildflowers, yellow and white.", "Bees drift from flower to flower." },
     },
     path = {
-        fill = DIRT,
-        sprites = { false, { 2, 0 }, false, { 7, 0 } },
-        tint = "#6e5a42",
+        tiles = { false, "path.2", false, "path.4" },
         text = {
             "A dirt path, packed hard by generations of feet.",
             "Cart wheels have worn ruts into the path.",
         },
     },
     water = {
-        fill = WATER,
-        sprites = { false, false, { 7, 0 } },
-        tint = "#4f7fb0",
-        solid = true,
+        tiles = { false, false, "water.3" },
         text = {
             "The pond is clear and cold. Little fish dart away from your shadow.",
             "Lily pads drift on the water.",
         },
     },
     paving = {
-        fill = PAVING,
-        sprites = { { 4, 0 }, { 3, 0 } },
-        tint = "#4a4b56",
+        tiles = { "paving.1", "paving.2" },
         text = "Pale paving stones, swept clean, with moss in the cracks.",
     },
 
     -- Objects.
     tree = {
-        sprites = { { 0, 1 }, { 1, 1 }, { 4, 1 } },
-        tint = "#6aa84f",
-        solid = true,
+        tiles = { "tree.1", "tree.2", "tree.3" },
         text = {
             "An old oak. Someone carved their initials into the bark long ago.",
             "A tall pine. Its needles carpet the ground.",
@@ -107,41 +86,30 @@ local KINDS: { [string]: Kind } = {
         },
     },
     bush = {
-        sprites = { { 5, 2 } },
-        tint = "#4f8f45",
-        solid = true,
+        tiles = { "bush.1" },
         text = "A thick bush, heavy with berries. They look sour.",
     },
     dead_tree = {
-        sprites = { { 1, 2 }, { 6, 2 } },
-        tint = "#8a8070",
-        solid = true,
+        tiles = { "dead_tree.1", "dead_tree.2" },
         text = { "A dead tree, grey and leafless.", "This tree's bark has peeled away in strips." },
     },
     fence = {
-        sprites = { { 1, 3 } },
-        tint = "#c8b8a0",
-        solid = true,
+        tiles = { "fence.1" },
         text = {
             "A picket fence, freshly whitewashed.",
             "A sturdy fence. One post leans a little.",
         },
     },
     gate = {
-        sprites = { { 3, 3 } },
-        tint = "#b08a5a",
-        solid = true,
+        tiles = { "gate.1" },
         text = "The north gate is latched shut. Elder Rowan keeps the key.",
     },
     gate_open = {
-        sprites = { { 4, 3 } },
-        tint = "#b08a5a",
+        tiles = { "gate_open.1" },
         text = "The north gate stands open. Beyond it, the path climbs toward Shrine Hill.",
     },
     house = {
-        sprites = { { 0, 19 }, { 1, 19 }, { 1, 20 } },
-        tint = "#d09060",
-        solid = true,
+        tiles = { "house.1", "house.2", "house.3" },
         text = {
             "A cozy cottage. Smoke curls from the chimney.",
             "A cottage with a flower box under every window.",
@@ -149,33 +117,23 @@ local KINDS: { [string]: Kind } = {
         },
     },
     elder_house = {
-        sprites = { { 1, 21 } },
-        tint = "#d8b070",
-        solid = true,
+        tiles = { "elder_house.1" },
         text = "Elder Rowan's house. Bundles of dried herbs hang by the door.",
     },
     shop = {
-        sprites = { { 5, 20 } },
-        tint = "#e0a050",
-        solid = true,
+        tiles = { "shop.1" },
         text = "Mossbrook Goods, the village shop. Hazel keeps it stocked with all sorts.",
     },
     sign = {
-        sprites = { { 0, 7 } },
-        tint = "#c8a070",
-        solid = true,
+        tiles = { "sign.1" },
         text = "A signpost. The writing has faded away.",
     },
     well = {
-        sprites = { { 4, 14 } },
-        tint = "#a0a8b8",
-        solid = true,
+        tiles = { "well.1" },
         text = "The village well. The rope is new; the stones are very old.",
     },
     grave = {
-        sprites = { { 0, 14 }, { 1, 14 } },
-        tint = "#9098a0",
-        solid = true,
+        tiles = { "grave.1", "grave.2", "grave.3" },
         text = {
             "A weathered headstone. The name has worn away.",
             "Fresh flowers lie before this headstone.",
@@ -183,119 +141,47 @@ local KINDS: { [string]: Kind } = {
         },
     },
     barrel = {
-        sprites = { { 13, 13 } },
-        tint = "#b07848",
-        solid = true,
+        tiles = { "barrel.1" },
         text = "A barrel of apples. The ones on top are bruised.",
     },
     wheat = {
-        sprites = { { 12, 6 } },
-        tint = "#d8b850",
-        solid = true,
+        tiles = { "wheat.1" },
         text = "Golden wheat, nearly ready for harvest.",
     },
     bench = {
-        sprites = { { 7, 4 } },
-        tint = "#a87848",
-        solid = true,
+        tiles = { "bench.1" },
         text = "A bench, worn smooth by years of gossip.",
     },
     torii = {
-        sprites = { { 21, 11 } },
-        tint = "#d04a3a",
+        tiles = { "torii.1" },
         text = "A gateway painted red, marking the way into sacred ground.",
     },
     shrine = {
-        sprites = { { 3, 19 } },
-        tint = "#9a9aa8",
-        solid = true,
+        tiles = { "shrine.1" },
         text = "The Stone Shrine: a small hall of grey stone under a roof of moss.",
     },
     chimes = {
-        sprites = { { 22, 10 } },
-        tint = "#c8c8a0",
-        solid = true,
+        tiles = { "chimes.1" },
         text = "Wind chimes hang from the eaves, perfectly still, though the wind tugs at your "
             .. "sleeves.",
     },
     seal_stone = {
-        sprites = { { 18, 6 } },
-        tint = "#b0b0bc",
-        solid = true,
+        tiles = { "seal_stone.1" },
         text = "The seal stone, split in two.",
     },
     candle = {
-        sprites = { { 3, 15 } },
-        tint = "#e8d8a0",
-        solid = true,
+        tiles = { "candle.1" },
         text = "A candle, burnt down to a stub. The wax is cold.",
     },
     statue = {
-        sprites = { { 19, 6 } },
-        tint = "#8a8a96",
-        solid = true,
+        tiles = { "statue.1" },
         text = "A stone guardian, worn by the weather. Its eyes seem to follow the path.",
     },
     bones = {
-        sprites = { { 32, 12 } },
-        tint = "#d8d0c0",
+        tiles = { "bones.1" },
         text = "Small bones, picked clean.",
     },
 }
-
--- What each character in a map's rows holds: a kind of ground, and an object on top of it.
-local LEGEND: { [string]: { string } } = {
-    ["."] = { "grass" },
-    ["*"] = { "flowers" },
-    [":"] = { "path" },
-    ["~"] = { "water" },
-    ["_"] = { "paving" },
-    ["T"] = { "grass", "tree" },
-    ["t"] = { "grass", "bush" },
-    ["D"] = { "grass", "dead_tree" },
-    ["F"] = { "grass", "fence" },
-    ["G"] = { "path", "gate" },
-    ["H"] = { "grass", "house" },
-    ["E"] = { "grass", "elder_house" },
-    ["S"] = { "grass", "shop" },
-    ["s"] = { "grass", "sign" },
-    ["W"] = { "path", "well" },
-    ["R"] = { "grass", "grave" },
-    ["B"] = { "grass", "barrel" },
-    ["w"] = { "grass", "wheat" },
-    ["b"] = { "path", "bench" },
-    ["I"] = { "path", "torii" },
-    ["A"] = { "paving", "shrine" },
-    ["Y"] = { "paving", "chimes" },
-    ["O"] = { "paving", "seal_stone" },
-    ["c"] = { "paving", "candle" },
-    ["P"] = { "grass", "statue" },
-    ["%"] = { "paving", "bones" },
-}
-
--- Every level's map shares one tileset, holding a tile for each sprite of each kind, and one for
--- each fill.
-local tileset = tilemap.new_tileset(TILE, TILE)
--- The tiles of each kind, one per sprite, or `false` where it has none.
-local tiles: { [string]: { number | false } } = {}
--- The tile for each fill, solid or not.
-local fills: { [string]: number } = {}
-
-for name, kind in KINDS do
-    local variants = {}
-    for i, at in kind.sprites do
-        local sprite = at and world.sprite(at[1], at[2])
-        local tile = { sprite = sprite, tint = kind.tint, solid = kind.solid }
-        variants[i] = sprite and tileset:add(tile)
-    end
-    tiles[name] = variants
-    if kind.fill then
-        local fill = kind.fill .. (if kind.solid then "!" else "")
-        if not fills[fill] then
-            fills[fill] = tileset:add({ sprite = FILL, tint = kind.fill, solid = kind.solid })
-        end
-    end
-end
 
 -- Cheap deterministic noise, so cells vary but each level looks the same every time. Products
 -- stay below 2^53, where numbers are exact.
@@ -314,17 +200,24 @@ local function key(column: number, row: number): string
     return `{column},{row}`
 end
 
+-- The kind of tile a tile with a sprite, such as `tree.2`, is.
+local function kind_of(tile: string): string
+    return string.match(tile, "^(.*)%.%d+$") or error(`{tile} isn't a tile with a sprite`)
+end
+
 export type Level = {
     name: string,
     -- Shown as the player enters.
     title: string,
     -- The music that plays here, or `false` for silence.
     music: string | false,
+    -- The level's scene, its tilemap, and the tilemap's layers: the color of the ground, the
+    -- ground's sprites, and objects.
+    scene: any,
     map: any,
-    -- The map's layers: the color of the ground, the ground's sprites, and objects.
-    floor: number,
-    ground: number,
-    objects: number,
+    floor: any,
+    ground: any,
+    objects: any,
     -- Each cell, by `key`, and the kinds in it.
     cells: { [string]: { column: number, row: number, ground: string, object: string? } },
     places: { [string]: any },
@@ -341,9 +234,8 @@ export type Level = {
 -- Sets the ground in cell `column`, `row` to the kind `name`.
 function world.set_ground(level: Level, column: number, row: number, name: string)
     local kind = KINDS[name] or error(`there's no kind of tile called {name}`)
-    local fill = kind.fill or error(`{name} isn't a kind of ground`)
-    level.map:set(level.floor, column, row, fills[fill .. (if kind.solid then "!" else "")])
-    level.map:set(level.ground, column, row, pick(tiles[name], column, row) or nil)
+    level.floor:set_tile(column, row, name)
+    level.ground:set_tile(column, row, pick(kind.tiles, column, row) or nil)
     level.cells[key(column, row)].ground = name
 end
 
@@ -351,9 +243,10 @@ end
 function world.set_object(level: Level, column: number, row: number, name: string?)
     local tile = nil
     if name then
-        tile = pick(tiles[name] or error(`there's no kind of tile called {name}`), column, row)
+        local kind = KINDS[name] or error(`there's no kind of tile called {name}`)
+        tile = pick(kind.tiles, column, row)
     end
-    level.map:set(level.objects, column, row, tile or nil)
+    level.objects:set_tile(column, row, tile or nil)
     level.cells[key(column, row)].object = name
 end
 
@@ -388,51 +281,59 @@ local function put_character(level: Level, options): characters.Character
     return character
 end
 
--- The level that `data`, a map from `maps/`, describes.
-function world.build(data): Level
-    local rows = data.rows
-    local columns = #rows[1]
-    local map = tilemap.new(tileset, columns, #rows)
+-- The level named `name` that `scene`, the root of a scene from `maps/`, describes.
+function world.build(name: string, scene): Level
+    local props = scene:props()
+    local map = scene:find("map")
     local level: Level = {
-        name = data.name,
-        title = data.title,
-        music = data.music,
+        name = name,
+        title = props.title,
+        music = props.music,
+        scene = scene,
         map = map,
-        floor = map:add_layer(),
-        ground = map:add_layer(),
-        objects = map:add_layer(),
+        floor = map:find("floor"),
+        ground = map:find("ground"),
+        objects = map:find("objects"),
         cells = {},
         places = {},
         exits = {},
         characters = {},
-        foes = data.foes or {},
+        foes = {},
         defeated = {},
         found = {},
     }
-    for r, line in rows do
-        local row = r - 1
-        if #line ~= columns then
-            error(`row {row} of {data.name} is {#line} cells wide, not {columns}`)
-        end
+    local columns, rows = map:grid_size()
+    for row = 0, rows - 1 do
         for column = 0, columns - 1 do
-            local symbol = string.sub(line, column + 1, column + 1)
-            local holds = LEGEND[symbol]
-                or error(`{data.name} has an unknown symbol "{symbol}" at {column}, {row}`)
-            level.cells[key(column, row)] = { column = column, row = row, ground = holds[1] }
-            world.set_ground(level, column, row, holds[1])
-            if holds[2] then
-                world.set_object(level, column, row, holds[2])
-            end
+            local object = level.objects:tile(column, row)
+            level.cells[key(column, row)] = {
+                column = column,
+                row = row,
+                ground = level.floor:tile(column, row)
+                    or error(`{name} has no ground at {column}, {row}`),
+                object = if object then kind_of(object) else nil,
+            }
         end
     end
-    for _, place in data.places or {} do
-        level.places[key(place.at[1], place.at[2])] = place
+    -- The cell a marker is on.
+    local function cell(marker): (number, number)
+        return map:world_to_tile(marker:world_position())
     end
-    for _, exit in data.exits or {} do
-        level.exits[key(exit.at[1], exit.at[2])] = exit
+    for _, place in scene:tagged("place") do
+        level.places[key(cell(place))] = place:props()
     end
-    for _, options in data.characters or {} do
+    for _, exit in scene:tagged("exit") do
+        level.exits[key(cell(exit))] = exit:props()
+    end
+    for _, marker in scene:tagged("character") do
+        local options = marker:props()
+        options.at = { cell(marker) }
         put_character(level, options)
+    end
+    for _, marker in scene:tagged("foe") do
+        local options = marker:props()
+        options.at = { cell(marker) }
+        table.insert(level.foes, options)
     end
     return level
 end

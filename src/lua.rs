@@ -88,8 +88,16 @@
 //!   `node:bounds()` (a `Rect` in the scene's coordinates, or `nil` for a plain node) and
 //!   `node:contains(x, y)`. What they show: `node:set_sprite(sprite)`, `node:set_tint(tint)`
 //!   (sprites), `node:set_color(color)` (rects and text), `node:text()` and
-//!   `node:set_text(text)` (text). Using one of these on a node of a kind without it is an
-//!   error.
+//!   `node:set_text(text)` (text). Tilemaps, through a tilemap node or one of its layers:
+//!   `node:is_solid(column, row)`, `node:tile_to_world(column, row)` and
+//!   `node:world_to_tile(x, y)` (in the scene's coordinates), `node:grid_size()` (columns and
+//!   rows), `node:tile_size()` and `node:tile_props(name)`; and a layer's cells, `node:tile(column,
+//!   row)` (a tile's name, or `nil`) and `node:set_tile(column, row, name)` (with `nil` to empty
+//!   the cell). Using one of these on a node of a kind without it is an error. Adding and
+//!   removing: `node:add(source, name)` adds a copy of `source`, a node of any scene, as the last
+//!   child of `node`, named `name` or as `source` is, and returns it; `node:remove()` takes a
+//!   node out of its scene, after which using it is an error apart from `node:is_removed()` and
+//!   `tostring`.
 //!
 //! Scripts are [Luau](https://luau.org), not standard Lua 5.x, and run in Luau's sandbox: the
 //! standard library and built-ins are read-only, and the globals a script defines are seen by the
@@ -112,7 +120,8 @@ use crate::{
     input::{Key, MouseButton},
     math::Rect,
     scene::{
-        AreaNode, Kind, NodeId, Props, RectNode, Scene, SpriteNode, TextNode, Value, a_node_of,
+        AreaNode, Kind, NodeId, Props, RectNode, Scene, SpriteNode, TextNode, TilemapNode, Value,
+        a_node_of,
     },
     tilemap::{Tile, TileId, Tilemap, Tileset},
 };
@@ -409,7 +418,7 @@ pub(crate) fn packed_color(color: Color) -> u32 {
 }
 
 /// The color a number `0xRRGGBBAA` stands for, if it's one.
-fn unpacked_color(number: f64) -> Option<Color> {
+pub(crate) fn unpacked_color(number: f64) -> Option<Color> {
     if !(0.0..=f64::from(u32::MAX)).contains(&number) || number.fract() != 0.0 {
         return None;
     }
@@ -716,21 +725,28 @@ impl SceneNode {
         Self::new(Rc::clone(&self.scene), id)
     }
 
-    /// Runs `f` with the scene and which node this is.
+    /// Runs `f` with the scene and which node this is. Fails if the node has been removed.
     pub(crate) fn read<R>(&self, f: impl FnOnce(&Scene, NodeId) -> R) -> mlua::Result<R> {
         let scene = self
             .scene
             .try_borrow()
             .map_err(|_| mlua::Error::runtime("the scene is being changed"))?;
+        if !scene.contains_node(self.id) {
+            return Err(removed());
+        }
         Ok(f(&scene, self.id))
     }
 
-    /// Runs `f` with the scene to change, and which node this is.
+    /// Runs `f` with the scene to change, and which node this is. Fails if the node has been
+    /// removed.
     fn write<R>(&self, f: impl FnOnce(&mut Scene, NodeId) -> R) -> mlua::Result<R> {
         let mut scene = self
             .scene
             .try_borrow_mut()
             .map_err(|_| mlua::Error::runtime("the scene is in use"))?;
+        if !scene.contains_node(self.id) {
+            return Err(removed());
+        }
         Ok(f(&mut scene, self.id))
     }
 
@@ -740,11 +756,43 @@ impl SceneNode {
             let described = describe_node(scene, id);
             let kind = scene.node_mut(id).kind_mut();
             let is = a_node_of(kind.name());
-            f(kind).ok_or_else(|| {
-                mlua::Error::runtime(format!("{described} is {is}, which has no {what}"))
-            })
+            f(kind).ok_or_else(|| wrong_kind(&described, &is, what))
         })?
     }
+
+    /// Runs `f` with the tilemap this tilemap node holds, or this tile layer node is a layer of,
+    /// and the tilemap node's ID.
+    fn read_tilemap<R>(
+        &self,
+        f: impl FnOnce(&Scene, NodeId, &TilemapNode) -> mlua::Result<R>,
+    ) -> mlua::Result<R> {
+        self.read(|scene, id| match scene.tilemap(id) {
+            Some((map_id, map)) => f(scene, map_id, map),
+            None => {
+                let is = a_node_of(scene.node(id).kind().name());
+                Err(wrong_kind(&describe_node(scene, id), &is, "tilemap"))
+            }
+        })?
+    }
+
+    /// Fails unless this is a tile layer node.
+    fn check_tile_layer(&self) -> mlua::Result<()> {
+        self.read(|scene, id| match scene.node(id).kind() {
+            Kind::TileLayer(_) => Ok(()),
+            kind => {
+                let is = a_node_of(kind.name());
+                Err(wrong_kind(&describe_node(scene, id), &is, "tiles"))
+            }
+        })?
+    }
+}
+
+fn removed() -> mlua::Error {
+    mlua::Error::runtime("the node has been removed from its scene")
+}
+
+fn wrong_kind(described: &str, is: &str, what: &str) -> mlua::Error {
+    mlua::Error::runtime(format!("{described} is {is}, which has no {what}"))
 }
 
 /// How errors name a node: by its path, or as the root.
@@ -844,6 +892,74 @@ impl mlua::UserData for SceneNode {
         methods.add_method("contains", |_, node, (x, y): (f32, f32)| {
             node.read(|scene, id| scene.contains(id, [x, y]))
         });
+        methods.add_method(
+            "add",
+            |_, node, (source, name): (mlua::UserDataRef<SceneNode>, Option<String>)| {
+                // Copied out first, so a node can be copied into its own scene.
+                let (copy, from) = source.read(|scene, id| scene.copy_of(id))?;
+                let id = node
+                    .write(|scene, parent| scene.add(parent, &copy, from, name.as_deref()))?
+                    .map_err(mlua::Error::runtime)?;
+                Ok(node.at(id))
+            },
+        );
+        methods.add_method("remove", |_, node, ()| {
+            node.write(|scene, id| scene.remove(id))?
+                .map_err(mlua::Error::runtime)
+        });
+        methods.add_method("is_removed", |_, node, ()| {
+            let scene = node
+                .scene
+                .try_borrow()
+                .map_err(|_| mlua::Error::runtime("the scene is being changed"))?;
+            Ok(!scene.contains_node(node.id))
+        });
+        methods.add_method("is_solid", |_, node, (column, row): (i32, i32)| {
+            node.read_tilemap(|_, _, map| Ok(map.map.is_solid([column, row])))
+        });
+        methods.add_method("tile_to_world", |_, node, (column, row): (f32, f32)| {
+            node.read_tilemap(|scene, map_id, map| {
+                let [left, top] = scene.transform(map_id).translation;
+                let [x, y] = map.map.tile_to_world([column, row]);
+                Ok((left + x, top + y))
+            })
+        });
+        methods.add_method("world_to_tile", |_, node, (x, y): (f32, f32)| {
+            node.read_tilemap(|scene, map_id, map| {
+                let [left, top] = scene.transform(map_id).translation;
+                let [column, row] = map.map.world_to_tile([x - left, y - top]);
+                Ok((column, row))
+            })
+        });
+        methods.add_method("grid_size", |_, node, ()| {
+            node.read_tilemap(|_, _, map| Ok((map.map.columns(), map.map.rows())))
+        });
+        methods.add_method("tile_size", |_, node, ()| {
+            node.read_tilemap(|_, _, map| {
+                let tileset = map.map.tileset();
+                Ok((tileset.tile_width(), tileset.tile_height()))
+            })
+        });
+        methods.add_method("tile_props", |lua, node, name: String| {
+            node.read_tilemap(|_, _, map| match map.tile_props(&name) {
+                Some(props) => props_table(lua, props),
+                None => Err(mlua::Error::runtime(format!(
+                    "there's no tile `{name}` in the tilemap's tileset"
+                ))),
+            })
+        });
+        methods.add_method("tile", |_, node, (column, row): (i32, i32)| {
+            node.check_tile_layer()?;
+            node.read(|scene, id| scene.tile(id, [column, row]).map(str::to_owned))
+        });
+        methods.add_method(
+            "set_tile",
+            |_, node, (column, row, name): (i32, i32, Option<String>)| {
+                node.check_tile_layer()?;
+                node.write(|scene, id| scene.set_tile(id, [column, row], name.as_deref()))?
+                    .map_err(mlua::Error::runtime)
+            },
+        );
         methods.add_method("size", |_, node, ()| {
             let rect = node.read(|scene, id| {
                 scene.node(id).rect().ok_or_else(|| {
@@ -921,7 +1037,10 @@ impl mlua::UserData for SceneNode {
                 .is_ok_and(|other| Rc::ptr_eq(&node.scene, &other.scene) && node.id == other.id))
         });
         methods.add_meta_method(mlua::MetaMethod::ToString, |_, node, ()| {
-            node.read(|scene, id| format!("SceneNode({})", describe_node(scene, id)))
+            let described = node
+                .read(describe_node)
+                .unwrap_or_else(|_| "removed".into());
+            Ok(format!("SceneNode({described})"))
         });
     }
 }
@@ -1032,7 +1151,7 @@ fn conversion_error(value: &mlua::Value, to: &str, message: String) -> mlua::Err
 }
 
 /// Parses a color written `#rrggbb` or `#rrggbbaa`.
-fn parse_hex(text: &str) -> Option<Color> {
+pub(crate) fn parse_hex(text: &str) -> Option<Color> {
     let digits = text.strip_prefix('#')?;
     if !matches!(digits.len(), 6 | 8) || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;

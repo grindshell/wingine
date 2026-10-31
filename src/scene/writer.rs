@@ -1,13 +1,17 @@
-//! Writing scene files, in one canonical layout.
+//! Writing scene and tileset files, in one canonical layout.
 //!
 //! The layout is fixed, so writing the same scene always gives the same text, and changing one
-//! thing changes few lines: every field of a node or sheet on a line of its own, in a fixed order,
-//! and fields at their defaults left out. Lists of plain values, such as a cell or tags, stay on
-//! one line. Indents are four spaces, and every field ends with a comma.
+//! thing changes few lines: every field of a node, sheet or tile on a line of its own, in a fixed
+//! order, and fields at their defaults left out. Lists of plain values, such as a cell or tags,
+//! stay on one line, but a tile layer's rows go one to a line, so they line up as the map does.
+//! Indents are four spaces, and every field ends with a comma.
 
-use std::fmt::Write;
+use std::{collections::BTreeMap, fmt::Write};
 
-use super::file::{FORMAT, KindDef, NodeDef, SceneFile, SheetDef, Value};
+use super::{
+    file::{FORMAT, KindDef, NodeDef, SceneFile, SheetDef, TileDef, TilesetFile, Value},
+    is_identifier,
+};
 use crate::graphics::Color;
 
 /// `scene` as the text of a scene file, or why it can't be written: only finite numbers can.
@@ -16,17 +20,7 @@ pub(super) fn write(scene: &SceneFile) -> Result<String, String> {
     writer.out.push_str("return ");
     writer.open();
     writer.field("format", &FORMAT.to_string());
-    if !scene.sheets.is_empty() {
-        writer.key("sheets");
-        writer.open();
-        for (name, sheet) in &scene.sheets {
-            writer.key(name);
-            writer.sheet(sheet);
-            writer.end_field();
-        }
-        writer.close();
-        writer.end_field();
-    }
+    writer.sheets(&scene.sheets);
     if !scene.props.is_empty() {
         writer.key("props");
         writer
@@ -35,6 +29,33 @@ pub(super) fn write(scene: &SceneFile) -> Result<String, String> {
         writer.end_field();
     }
     writer.children(&scene.children, "")?;
+    writer.close();
+    writer.out.push('\n');
+    Ok(writer.out)
+}
+
+/// `tileset` as the text of a tileset file, or why it can't be written.
+pub(super) fn write_tileset(tileset: &TilesetFile) -> Result<String, String> {
+    let mut writer = Writer::default();
+    writer.out.push_str("return ");
+    writer.open();
+    writer.field("format", &FORMAT.to_string());
+    writer.field("tile_width", &tileset.tile_width.to_string());
+    writer.field("tile_height", &tileset.tile_height.to_string());
+    writer.sheets(&tileset.sheets);
+    if !tileset.tiles.is_empty() {
+        writer.key("tiles");
+        writer.open();
+        for (name, tile) in &tileset.tiles {
+            writer.key(name);
+            writer
+                .tile(tile)
+                .map_err(|err| format!("tile `{name}`: {err}"))?;
+            writer.end_field();
+        }
+        writer.close();
+        writer.end_field();
+    }
     writer.close();
     writer.out.push('\n');
     Ok(writer.out)
@@ -101,12 +122,43 @@ impl Writer {
         Ok(())
     }
 
-    fn sheet(&mut self, sheet: &SheetDef) {
+    /// The `sheets` field, if there are any.
+    fn sheets(&mut self, sheets: &BTreeMap<String, SheetDef>) {
+        if sheets.is_empty() {
+            return;
+        }
+        self.key("sheets");
         self.open();
-        self.field("path", &quoted(&sheet.path));
-        self.field("tile_width", &sheet.tile_width.to_string());
-        self.field("tile_height", &sheet.tile_height.to_string());
+        for (name, sheet) in sheets {
+            self.key(name);
+            self.open();
+            self.field("path", &quoted(&sheet.path));
+            self.field("tile_width", &sheet.tile_width.to_string());
+            self.field("tile_height", &sheet.tile_height.to_string());
+            self.close();
+            self.end_field();
+        }
         self.close();
+        self.end_field();
+    }
+
+    fn tile(&mut self, tile: &TileDef) -> Result<(), String> {
+        self.open();
+        self.field("sheet", &quoted(&tile.sheet));
+        let [column, row] = tile.cell;
+        self.field("cell", &format!("{{ {column}, {row} }}"));
+        self.color("tint", tile.tint);
+        if tile.solid {
+            self.field("solid", "true");
+        }
+        if !tile.props.is_empty() {
+            self.key("props");
+            self.map(&tile.props)
+                .map_err(|err| format!("props: {err}"))?;
+            self.end_field();
+        }
+        self.close();
+        Ok(())
     }
 
     /// The `children` field of the node at `parent`, or of the scene for `""`, if it has any.
@@ -204,6 +256,50 @@ impl Writer {
                 self.number_field("width", area.size[0])?;
                 self.number_field("height", area.size[1])?;
                 self.pivot(area.pivot)?;
+            }
+            KindDef::Tilemap(map) => {
+                self.field("tileset", &quoted(&map.tileset));
+                self.field("columns", &map.columns.to_string());
+                self.field("rows", &map.rows.to_string());
+            }
+            KindDef::TileLayer(layer) => {
+                if !layer.legend.is_empty() {
+                    self.key("legend");
+                    self.open();
+                    for (symbol, tile) in &layer.legend {
+                        self.field(&symbol.to_string(), &quoted(tile));
+                    }
+                    self.close();
+                    self.end_field();
+                }
+                self.key("tiles");
+                if layer.tiles.is_empty() {
+                    self.out.push_str("{}");
+                } else {
+                    self.open();
+                    for row in &layer.tiles {
+                        self.indent();
+                        self.out.push_str(&quoted(row));
+                        self.end_field();
+                    }
+                    self.close();
+                }
+                self.end_field();
+            }
+            KindDef::Instance(instance) => {
+                self.field("scene", &quoted(&instance.scene));
+                if !instance.overrides.is_empty() {
+                    self.key("overrides");
+                    self.open();
+                    for (path, change) in &instance.overrides {
+                        self.key(path);
+                        self.map(change)
+                            .map_err(|err| format!("overrides of `{path}`: {err}"))?;
+                        self.end_field();
+                    }
+                    self.close();
+                    self.end_field();
+                }
             }
         }
         Ok(())
@@ -323,20 +419,6 @@ fn quoted(text: &str) -> String {
     }
     out.push('"');
     out
-}
-
-/// Whether `key` can be written bare, as `key = value`, rather than as `["key"] = value`.
-fn is_identifier(key: &str) -> bool {
-    const KEYWORDS: [&str; 22] = [
-        "and", "break", "continue", "do", "else", "elseif", "end", "false", "for", "function",
-        "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until",
-        "while",
-    ];
-    let mut chars = key.chars();
-    let starts = chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
-    starts && chars.all(|c| c.is_ascii_alphanumeric() || c == '_') && !KEYWORDS.contains(&key)
 }
 
 #[cfg(test)]
@@ -486,5 +568,105 @@ mod tests {
         assert!(!is_identifier("the mill"));
         assert!(!is_identifier("end"));
         assert!(!is_identifier(""));
+    }
+
+    /// A level: a tilemap with two layers and people between them, and an instance.
+    const LEVEL: &str = r##"return {
+    format = 1,
+    children = {
+        {
+            name = "map",
+            kind = "tilemap",
+            x = 16,
+            tileset = "world.tileset.luau",
+            columns = 4,
+            rows = 2,
+            children = {
+                {
+                    name = "ground",
+                    kind = "tile_layer",
+                    legend = {
+                        ["."] = "grass",
+                        T = "tree",
+                        ["~"] = "water",
+                    },
+                    tiles = {
+                        "..T~",
+                        "T. ~",
+                    },
+                },
+                {
+                    name = "people",
+                    kind = "node",
+                },
+                {
+                    name = "roofs",
+                    kind = "tile_layer",
+                    tiles = {
+                        "    ",
+                        "    ",
+                    },
+                },
+            },
+        },
+        {
+            name = "elder",
+            kind = "instance",
+            x = 32,
+            scene = "villager.scene.luau",
+            overrides = {
+                ["body/hat"] = {
+                    props = {
+                        brim = 2,
+                    },
+                    tint = "#c8b8e8",
+                },
+            },
+            tags = { "talks" },
+        },
+    },
+}
+"##;
+
+    #[test]
+    fn levels_write_and_read_back() {
+        let scene = parse(LEVEL);
+        assert_eq!(scene.to_luau().unwrap(), LEVEL);
+    }
+
+    /// A tileset in its canonical layout.
+    const TILESET: &str = r##"return {
+    format = 1,
+    tile_width = 16,
+    tile_height = 16,
+    sheets = {
+        tiles = {
+            path = "tiles.png",
+            tile_width = 16,
+            tile_height = 16,
+        },
+    },
+    tiles = {
+        grass = {
+            sheet = "tiles",
+            cell = { 5, 0 },
+            tint = "#3e6b3f",
+        },
+        ["tree.1"] = {
+            sheet = "tiles",
+            cell = { 0, 1 },
+            solid = true,
+            props = {
+                text = "An old oak.",
+            },
+        },
+    },
+}
+"##;
+
+    #[test]
+    fn tilesets_write_and_read_back() {
+        let tileset = TilesetFile::parse(TILESET, "world.tileset.luau").unwrap();
+        assert_eq!(tileset.to_luau().unwrap(), TILESET);
     }
 }

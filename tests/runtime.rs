@@ -788,6 +788,192 @@ fn scene_nodes_refuse_what_they_do_not_have() {
     );
 }
 
+/// A tileset of red and blue tiles, the blue ones solid.
+const COLORS_TILESET: &str = r##"return {
+    format = 1, tile_width = 2, tile_height = 2,
+    sheets = { colors = { path = "sheet.png", tile_width = 1, tile_height = 1 } },
+    tiles = {
+        red = { sheet = "colors", cell = { 0, 0 } },
+        blue = { sheet = "colors", cell = { 1, 0 }, solid = true, props = { cold = true } },
+    },
+}"##;
+
+/// A 4x3 map of 2x2 tiles at (4, 2), red with a blue wall on a layer above, and a villager from
+/// another file.
+const LEVEL: &str = r##"return {
+    format = 1,
+    children = {
+        {
+            name = "map", kind = "tilemap", x = 4, y = 2, tileset = "colors.tileset.luau",
+            columns = 4, rows = 3,
+            children = {
+                { name = "floor", kind = "tile_layer", legend = { r = "red" }, tiles = { "rrrr", "rrrr", "rrrr" } },
+                { name = "walls", kind = "tile_layer", legend = { b = "blue" }, tiles = { "    ", " b  ", "    " } },
+            },
+        },
+        {
+            name = "guide", kind = "instance", x = 1, scene = "people/villager.scene.luau",
+            overrides = { body = { color = "#00ff00" } },
+        },
+    },
+}"##;
+
+const VILLAGER: &str = r##"return {
+    format = 1,
+    props = { talk = "hello" },
+    children = { { name = "body", kind = "rect", width = 1, height = 1 } },
+}"##;
+
+#[test]
+fn scene_tilemaps_and_instances_work_from_luau() {
+    let folder = game(
+        "scene_tilemaps",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            ("colors.tileset.luau", COLORS_TILESET),
+            ("level.scene.luau", LEVEL),
+            ("people/villager.scene.luau", VILLAGER),
+            (
+                "main.luau",
+                "level = scene.load('level.scene.luau')
+                map = level:find('map')
+                walls = level:find('map/walls')
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.draw_scene(level)
+                end",
+            ),
+        ],
+    );
+    write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
+    let mut simulation = simulation(&folder);
+    assert!(eval::<bool>(
+        &simulation,
+        "map:is_solid(1, 1) and not map:is_solid(0, 0) and map:is_solid(-1, 0)
+         and walls:is_solid(1, 1)"
+    ));
+    assert_eq!(
+        eval::<(f32, f32)>(&simulation, "map:tile_to_world(1, 1)"),
+        (6.0, 4.0)
+    );
+    assert_eq!(
+        eval::<(i32, i32)>(&simulation, "map:world_to_tile(7, 5)"),
+        (1, 1)
+    );
+    assert_eq!(eval::<(u32, u32)>(&simulation, "map:grid_size()"), (4, 3));
+    assert_eq!(eval::<(u32, u32)>(&simulation, "map:tile_size()"), (2, 2));
+    assert!(eval::<bool>(&simulation, "map:tile_props('blue').cold"));
+    assert_eq!(
+        eval::<(Option<String>, Option<String>)>(&simulation, "walls:tile(1, 1), walls:tile(0, 0)"),
+        (Some("blue".into()), None)
+    );
+    assert_eq!(
+        eval::<String>(&simulation, "level:find('guide'):props().talk"),
+        "hello"
+    );
+
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    // The map covers (4, 2) to (12, 8), its wall (6, 4) to (8, 6).
+    assert_eq!(pixel(&image, 4, 2), RED);
+    assert_eq!(pixel(&image, 6, 4), BLUE);
+    assert_eq!(pixel(&image, 3, 2), BLACK);
+    assert_eq!(
+        pixel(&image, 1, 0),
+        [0, 255, 0, 255],
+        "the guide's body, overridden"
+    );
+
+    let scripts = simulation.game().scripts();
+    scripts
+        .load_source(
+            "test",
+            "walls:set_tile(1, 1, nil) walls:set_tile(0, 0, 'blue')",
+        )
+        .unwrap();
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&image, 6, 4), RED);
+    assert_eq!(pixel(&image, 4, 2), BLUE);
+
+    let error = |code: &str| -> String {
+        eval(
+            &simulation,
+            &format!("tostring(select(2, pcall(function() {code} end)))"),
+        )
+    };
+    let err = error("walls:set_tile(0, 0, 'green')");
+    assert!(err.contains("there's no tile `green`"), "{err}");
+    let err = error("map:set_tile(0, 0, 'red')");
+    assert!(
+        err.contains("node `map` is a tilemap node, which has no tiles"),
+        "{err}"
+    );
+    let err = error("level:is_solid(0, 0)");
+    assert!(err.contains("which has no tilemap"), "{err}");
+}
+
+#[test]
+fn scene_nodes_are_added_and_removed_from_luau() {
+    let folder = game(
+        "scene_add_remove",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            ("room.scene.luau", ROOM),
+            (
+                "main.luau",
+                "room = scene.load('room.scene.luau')
+                spare = room:find('floor'):add(scene.load('room.scene.luau'), 'spare')
+                hand = room:find('arm/hand')
+                twin = room:add(hand, 'twin')
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.draw_scene(room)
+                end",
+            ),
+        ],
+    );
+    write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
+    let mut simulation = simulation(&folder);
+    assert!(eval::<bool>(
+        &simulation,
+        "room:find('floor/spare/arm/hand') ~= nil and twin:path() == 'twin'
+         and twin ~= hand and spare:props().title == 'Room'"
+    ));
+    let error = |simulation: &Simulation<LuauGame>, code: &str| -> String {
+        eval(
+            simulation,
+            &format!("tostring(select(2, pcall(function() {code} end)))"),
+        )
+    };
+    let err = error(&simulation, "room:add(twin)");
+    assert!(err.contains("a node named `twin` there already"), "{err}");
+    let err = error(&simulation, "room:add(room)");
+    assert!(err.contains("takes a name"), "{err}");
+
+    simulation.step();
+    // The twin, at the hand's position in the arm but in the room, covers (3, -1) to (5, 1).
+    assert_eq!(pixel(&simulation.screenshot().unwrap(), 4, 0), BLUE);
+    assert_eq!(pixel(&simulation.screenshot().unwrap(), 2, 0), BLACK);
+
+    let scripts = simulation.game().scripts();
+    scripts.load_source("test", "twin:remove()").unwrap();
+    simulation.step();
+    assert_eq!(pixel(&simulation.screenshot().unwrap(), 4, 0), BLACK);
+    assert!(eval::<bool>(
+        &simulation,
+        "twin:is_removed() and not hand:is_removed()"
+    ));
+    let err = error(&simulation, "twin:position()");
+    assert!(err.contains("has been removed"), "{err}");
+    assert_eq!(
+        eval::<String>(&simulation, "tostring(twin)"),
+        "SceneNode(removed)"
+    );
+    let err = error(&simulation, "room:remove()");
+    assert!(err.contains("root can't be removed"), "{err}");
+}
+
 #[test]
 fn scenes_only_load_while_the_game_loads_or_updates() {
     let folder = game(

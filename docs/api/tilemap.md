@@ -38,8 +38,9 @@ function draw()
 end
 ```
 
-[`examples/rpg/world.luau`](../../examples/rpg/world.luau) builds its maps from rows of symbols,
-which is easier to edit than code.
+Maps can be laid out in [scene files](../scenes.md#tilemaps) instead, as tilemap nodes over a
+tileset file, which is easier to edit than code, and which a tool can write. The
+[RPG's maps](../../examples/rpg/maps) are.
 
 ## Tilesets
 

@@ -48,7 +48,10 @@ pub enum Error {
     /// A scene file couldn't be read, or what it describes couldn't be loaded.
     #[error("scene {}: {message}", .path.display())]
     Scene { path: PathBuf, message: String },
-    /// A scene couldn't be written as a scene file.
+    /// A tileset file couldn't be read, or what it describes couldn't be loaded.
+    #[error("tileset {}: {message}", .path.display())]
+    Tileset { path: PathBuf, message: String },
+    /// A scene or tileset couldn't be written as a file.
     #[error("failed to write a scene: {0}")]
     WriteScene(String),
     #[error("failed to read a rendered frame back from the GPU: {0}")]

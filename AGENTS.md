@@ -85,8 +85,10 @@ covers:
 - Docs for scene files and their API, screenshot tests for the new drawing, and round-trip tests
   of the writer
 
-Done so far: the format and drawing, shown by `examples/garden`. That's everything above but
-tilemap and instance nodes, anchors and text alignment, clips, and adding and removing nodes.
+Done so far: the format and drawing, shown by `examples/garden`, and levels: tilemaps over
+tileset files, instances with overrides, and adding and removing nodes, with the RPG's maps
+moved into scenes and the garden's trees and flowers made instances. What's left is UI (anchors,
+text alignment) and rigging (clips).
 
 Ask before starting features outside the current milestone, and especially general-purpose ones
 such as physics engines, networking, editors or 3D pipelines.
@@ -187,14 +189,22 @@ such as physics engines, networking, editors or 3D pipelines.
   `src/lua.rs`. Sprite sheets and scenes share one cache of images (`Textures`), so each is read
   once.
 - `src/scene/`: scenes. `SceneFile` is what a scene file holds (`NodeDef`s, `SheetDef`s and props
-  of `Value`s): `file.rs` reads one by running it as Luau in an empty environment and converting
-  the table it returns, with errors naming the node's path, and `writer.rs` writes one in the
-  canonical layout. The module docs are the format's reference. `Scene` is a scene loaded to
-  play: its nodes in a `Vec`, each after its parent, with `NodeId`s for indices, each keeping its
-  local `Affine` up to date as it moves. Drawing walks the tree, composing transforms from parent
-  to child; text only translates. Scripts hold nodes as `lua::SceneNode`, an
-  `Rc<RefCell<Scene>>` and a `NodeId`, so every node of a scene shares it. Live scenes' tests are
-  in `tests/scene.rs` and need a GPU; the format's are unit tests that don't.
+  of `Value`s), and `TilesetFile` a tileset file: `file.rs` reads one by running it as Luau in an
+  empty environment, turning what it returns into plain `Value`s, then reading those, with errors
+  naming the node's path; `writer.rs` writes either in the canonical layout. The module docs are
+  the formats' reference. `Scene::new` builds a scene in two passes: `Expand` replaces instances
+  with the nodes of the files they place, then makes their overrides by turning the node back
+  into `Value`s (`node_fields`), setting the fields and reading it again, so overrides are
+  checked as files are; sprites then name sheets `file#sheet`, since nodes from many files are
+  together. `Build` then makes the live nodes, loading sheets and tilesets through `Assets`
+  (`FolderAssets` reads a folder; the runtime caches files). `Scene` keeps nodes in slots with
+  generations, so `NodeId`s of removed nodes never reach nodes added since; each node keeps its
+  local `Affine` up to date as it moves. A tilemap node holds a `Tilemap` whose layers are its
+  `tile_layer` children, in order, which draw as children, so other nodes draw between layers.
+  Drawing walks the tree, composing transforms from parent to child; text and tilemaps only move.
+  Scripts hold nodes as `lua::SceneNode`, an `Rc<RefCell<Scene>>` and a `NodeId`, so every node
+  of a scene shares it. Live scenes' tests are in `tests/scene.rs` and need a GPU; the formats'
+  are unit tests that don't.
 - `src/runtime/native.rs`: native libraries, compiled Rust that adds a global table of functions
   and classes to a Luau game, and hooks before and after its `update` and `draw`. Each is
   registered once per process and never unloaded, and each game that loads one gets the
@@ -207,9 +217,15 @@ such as physics engines, networking, editors or 3D pipelines.
   the `Library` and `Class` traits, a `Registry` for functions, methods and hooks, argument and
   result conversions, and `export!`. Libraries depend on it alone, never on `wingine`.
 - `src/main.rs`: the `wingine` executable, which runs a Luau game: `cargo run -- examples/pong`.
-- `examples/rpg/`: the milestone's RPG, written entirely in Luau. Maps in `maps/` are rows of
-  symbols, which `world.luau` turns into tiles with descriptions; examining any cell shows its
-  description. `story.luau` holds conversations and events, which maps refer to by name, and
+- `examples/rpg/`: the milestone's RPG, written entirely in Luau. Maps in `maps/` are scenes: a
+  tilemap over `world.tileset.luau` whose layers hold each cell's kind of ground (`floor`), the
+  ground's sprite (`ground`) and objects (`objects`), with tiles named for their kind and sprite
+  (`tree.2`), and nodes tagged `place`, `exit`, `character` and `foe` on the cells they're about,
+  whose props say the rest. `world.luau` builds levels from them, and holds each kind's
+  descriptions and the tiles it varies between, picked by a deterministic noise, so changing a
+  cell at runtime picks what the map would have; examining any cell shows its description. The
+  scenes were made from the maps' old rows of symbols, cell for cell. `story.luau` holds
+  conversations and events, which maps refer to by name, and
   `dialogue.luau` the dialogue box, whose `say` and `ask` wait for the player. `battle.luau` runs
   one-on-one, turn-based battles against the creatures in `foes.luau`, which maps place and
   which fight when the player stands beside them; its messages and menus go through the dialogue
@@ -245,9 +261,11 @@ such as physics engines, networking, editors or 3D pipelines.
 - `examples/garden/`: a garden around a windmill, laid out in `garden.scene.luau`, which
   `main.luau` loads and plays: it turns the mill's sails and a flock of birds (nodes whose
   children turn with them), walks the player, which waddles and mirrors about its feet, stops it
-  at nodes tagged `solid`, and shows the `text` of areas tagged `note`. The scene file is in the
-  canonical layout, as an editor would write it, and `tests/garden.rs` checks it stays so: after
-  editing it, write it again with `SceneFile::write`. The game's state is the global `garden`.
+  at nodes tagged `solid`, and shows the `text` of areas tagged `note`. Its trees and flowers are
+  instances of `tree.scene.luau` and `flower.scene.luau`, changed by overrides, and Space plants
+  a flower (`add`) or picks one (`remove`). The scene files are in the canonical layout, as an
+  editor would write them, and `tests/garden.rs` checks they stay so: after editing one, write it
+  again with `SceneFile::write`. The game's state is the global `garden`.
 - `src/math.rs`: geometry types: `Rect`, and `Affine`, a 2D transform that composes with `*`.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
   `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
@@ -277,15 +295,16 @@ such as physics engines, networking, editors or 3D pipelines.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders.
-- `tests/scene.rs`: tests for scenes loaded to play: finding nodes, transforms, hit testing.
+- `tests/scene.rs`: tests for scenes loaded to play: finding nodes, transforms, hit testing,
+  tilemaps, instances and overrides, and adding and removing nodes, with files held in memory.
 - `tests/native.rs`: tests for native libraries, most of them linked into the test. One builds
   `native-particles` with a nested `cargo build` into a target folder of its own and loads it
   from a file.
 - `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
   expressions such as `pong.ball.vx`.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest.
-- `tests/garden.rs`: tests for the `garden` example, the same way, and that its scene file is in
-  the canonical layout.
+- `tests/garden.rs`: tests for the `garden` example, the same way, and that its scene files are
+  in the canonical layout.
 - `tests/shmup.rs`: tests for the `shmup` example, the same way: the player, the bullet systems
   through `shmup.bullets`, spell cards, clearing the stage with cheats, the same seed firing the
   same bullets, and the stress test. They run copies of the game in `target/tmp`, one with the

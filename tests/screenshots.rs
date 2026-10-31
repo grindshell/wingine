@@ -9,14 +9,15 @@
 //! Matching allows a small per-channel difference, so references rendered on one GPU pass on
 //! others, including the software rasterizers used in CI.
 
-use std::{env, fs, path::Path};
+use std::{env, fs, path::Path, rc::Rc};
 
 use image::{Rgba, RgbaImage};
 use wingine::{
-    graphics::{Camera, Color, Resolution, SpriteSheet},
+    Context,
+    graphics::{Camera, Color, Resolution, SpriteSheet, Texture},
     headless::{Headless, Image},
     math::{Affine, Rect},
-    scene::{Scene, SceneFile},
+    scene::{Assets, Scene, SceneFile, TilesetFile},
     tilemap::{Tile, Tilemap, Tileset},
 };
 
@@ -242,13 +243,7 @@ fn scene() {
         },
     }"##;
     let mut headless = headless();
-    let file = SceneFile::parse(source, "scene.scene.luau").unwrap();
-    let ctx = headless.context();
-    let font = ctx.default_font().clone();
-    let scene = Scene::new(&file, "scene.scene.luau", &font, |_| {
-        ctx.load_texture(TILESET)
-    })
-    .unwrap();
+    let scene = load_scene(&mut headless, &[("scene.scene.luau", source)]);
     let frame = headless
         .render(128, 64, |canvas| {
             canvas.clear(Color::rgb8(0x1b, 0x26, 0x1e));
@@ -256,6 +251,91 @@ fn scene() {
         })
         .unwrap();
     assert_screenshot(&headless, "scene", frame);
+}
+
+/// A scene with a tilemap placed away from the origin, seen through a camera that cuts its edge
+/// cells: grass with a gap, a hero between the ground and the trees, and a tree over the hero.
+#[test]
+fn scene_tilemap() {
+    let tileset = r##"return {
+        format = 1, tile_width = 16, tile_height = 16,
+        sheets = { tiles = { path = "tiles.png", tile_width = 16, tile_height = 16 } },
+        tiles = {
+            grass = { sheet = "tiles", cell = { 5, 0 }, tint = "#3e6b3f" },
+            tree = { sheet = "tiles", cell = { 0, 1 }, tint = "#6aa84f", solid = true },
+        },
+    }"##;
+    let level = r##"return {
+        format = 1,
+        sheets = { tiles = { path = "tiles.png", tile_width = 16, tile_height = 16 } },
+        children = {
+            {
+                name = "map", kind = "tilemap", x = 24, y = 8, tileset = "world.tileset.luau",
+                columns = 6, rows = 4,
+                children = {
+                    {
+                        name = "ground", kind = "tile_layer", legend = { ["."] = "grass" },
+                        tiles = { "......", "......", ".. ...", "......" },
+                    },
+                    {
+                        name = "hero", kind = "sprite", x = 40, y = 32, sheet = "tiles",
+                        cell = { 27, 0 }, tint = "#f2d3ab",
+                    },
+                    {
+                        name = "trees", kind = "tile_layer", legend = { T = "tree" },
+                        tiles = { "      ", " T    ", "   T  ", "      " },
+                    },
+                },
+            },
+        },
+    }"##;
+    let mut headless = headless();
+    let scene = load_scene(
+        &mut headless,
+        &[("world.tileset.luau", tileset), ("level.scene.luau", level)],
+    );
+    let frame = headless
+        .render(64, 48, |canvas| {
+            canvas.clear(Color::rgb8(0x10, 0x10, 0x18));
+            // Shows x 32..96 and y 14..62 of the world, where the map covers x 24..120 and y
+            // 8..72.
+            canvas.set_camera(Some(Camera::new(64.0, 38.0)));
+            scene.draw(canvas);
+        })
+        .unwrap();
+    assert_screenshot(&headless, "scene_tilemap", frame);
+}
+
+/// The scene at the end of `files`, a path and the file's contents for each scene and tileset
+/// file, with every image the tileset's.
+fn load_scene(headless: &mut Headless, files: &[(&'static str, &'static str)]) -> Scene {
+    struct Files<'a> {
+        ctx: &'a mut Context,
+        files: &'a [(&'static str, &'static str)],
+    }
+    impl Files<'_> {
+        fn source(&self, path: &str) -> &'static str {
+            let found = self.files.iter().find(|(name, _)| *name == path);
+            found.unwrap_or_else(|| panic!("no {path}")).1
+        }
+    }
+    impl Assets for Files<'_> {
+        fn texture(&mut self, _: &str) -> wingine::Result<Texture> {
+            self.ctx.load_texture(TILESET)
+        }
+        fn scene(&mut self, path: &str) -> wingine::Result<Rc<SceneFile>> {
+            SceneFile::parse(self.source(path), path).map(Rc::new)
+        }
+        fn tileset(&mut self, path: &str) -> wingine::Result<Rc<TilesetFile>> {
+            TilesetFile::parse(self.source(path), path).map(Rc::new)
+        }
+    }
+    let ctx = headless.context();
+    let font = ctx.default_font().clone();
+    let path = files.last().unwrap().0;
+    let mut assets = Files { ctx, files };
+    let file = assets.scene(path).unwrap();
+    Scene::new(&file, path, &font, &mut assets).unwrap()
 }
 
 /// Solid fills and sprites interleaved, so batches switch texture several times. Draw order must

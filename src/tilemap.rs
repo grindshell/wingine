@@ -234,17 +234,31 @@ impl Tilemap {
     ///
     /// If there is no layer `layer`.
     pub fn draw_layer(&self, canvas: &mut Canvas, layer: usize) {
+        self.draw_layer_at(canvas, layer, [0.0, 0.0]);
+    }
+
+    /// Draws one layer as [`Tilemap::draw_layer`] does, with the map's top-left corner at
+    /// `origin` rather than the world's origin.
+    ///
+    /// # Panics
+    ///
+    /// If there is no layer `layer`.
+    pub fn draw_layer_at(&self, canvas: &mut Canvas, layer: usize, origin: [f32; 2]) {
         let cells = &self.layers[layer];
         let visible = canvas.visible_area();
         let [width, height] = self.tile_size();
-        let columns = cell_range(visible.x, visible.right(), width, self.columns);
-        let rows = cell_range(visible.y, visible.bottom(), height, self.rows);
+        let [left, top] = [visible.x - origin[0], visible.y - origin[1]];
+        let columns = cell_range(left, left + visible.w, width, self.columns);
+        let rows = cell_range(top, top + visible.h, height, self.rows);
         for row in rows {
             for column in columns.clone() {
                 let index = row as usize * self.columns as usize + column as usize;
                 if let Some(id) = cells[index] {
                     let tile = self.tileset.tile(id);
-                    canvas.draw_sprite(&tile.sprite, self.tile_rect([column, row]), tile.tint);
+                    let mut rect = self.tile_rect([column, row]);
+                    rect.x += origin[0];
+                    rect.y += origin[1];
+                    canvas.draw_sprite(&tile.sprite, rect, tile.tint);
                 }
             }
         }
@@ -376,5 +390,16 @@ mod tests {
         map.draw(&mut canvas);
         // Grass in the first column; the wall is in the second.
         assert_eq!(canvas.vertices.len(), 2 * 4);
+    }
+
+    #[test]
+    fn draws_at_an_origin() {
+        let (map, _) = map();
+        let mut canvas = Canvas::new();
+        // Shows x 0..16 and y 0..8: with the map 12 to the right, only its first column.
+        canvas.begin(16.0, 8.0);
+        map.draw_layer_at(&mut canvas, 0, [12.0, 0.0]);
+        assert_eq!(canvas.vertices.len(), 2 * 4);
+        assert_eq!(canvas.vertices[0].position, [12.0, 0.0]);
     }
 }

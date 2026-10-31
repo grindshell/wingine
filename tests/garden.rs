@@ -49,16 +49,18 @@ fn player(simulation: &Simulation<LuauGame>) -> [f32; 2] {
 }
 
 #[test]
-fn the_scene_file_is_in_the_canonical_layout() {
-    let path = Path::new(GAME).join("garden.scene.luau");
-    // As checked out, which may have turned line endings into CRLF.
-    let text = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
-    let scene = SceneFile::parse(&text, &path).unwrap();
-    assert!(
-        scene.to_luau().unwrap() == text,
-        "garden.scene.luau isn't in the layout scenes are written in: write it again with \
-         `SceneFile::write`"
-    );
+fn the_scene_files_are_in_the_canonical_layout() {
+    for name in ["garden", "tree", "flower"] {
+        let path = Path::new(GAME).join(format!("{name}.scene.luau"));
+        // As checked out, which may have turned line endings into CRLF.
+        let text = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+        let scene = SceneFile::parse(&text, &path).unwrap();
+        assert!(
+            scene.to_luau().unwrap() == text,
+            "{name}.scene.luau isn't in the layout scenes are written in: write it again with \
+             `SceneFile::write`"
+        );
+    }
 }
 
 #[test]
@@ -102,6 +104,54 @@ fn solid_things_are_in_the_way() {
     simulation.hold(Key::Up, 0.5);
     let [x, y] = player(&simulation);
     assert!(x > 188.0 && y < 80.0, "went around the bench to {x}, {y}");
+
+    // A tree, from `tree.scene.luau`, covering 50 to 66 across and 38 to 54 down.
+    exec(&simulation, "garden.player:set_position(58, 70)");
+    simulation.hold(Key::Up, 1.0);
+    let [_, y] = player(&simulation);
+    assert!((54.0..56.0).contains(&y), "stopped below the tree at {y}");
+}
+
+#[test]
+fn space_plants_and_picks_flowers() {
+    let mut simulation = simulation();
+    let flowers = |simulation: &Simulation<LuauGame>| -> u32 {
+        eval(simulation, "#garden.flowers:children()")
+    };
+    assert_eq!(flowers(&simulation), 5);
+
+    exec(&simulation, "garden.player:set_position(160, 120)");
+    simulation.tap(Key::Space);
+    run_for(&mut simulation, 0.05);
+    assert_eq!(flowers(&simulation), 6);
+    assert_eq!(
+        eval::<(f32, f32)>(&simulation, "garden.flowers:find('planted_1'):position()"),
+        (160.0, 120.0),
+        "at the player's feet"
+    );
+    assert_eq!(
+        eval::<(f32, f32)>(
+            &simulation,
+            "garden.flowers:find('planted_1/flower'):size()"
+        ),
+        (16.0, 16.0)
+    );
+
+    // Standing on it, Space picks it.
+    simulation.tap(Key::Space);
+    run_for(&mut simulation, 0.05);
+    assert_eq!(flowers(&simulation), 5);
+    assert!(eval::<bool>(
+        &simulation,
+        "garden.flowers:find('planted_1') == nil"
+    ));
+
+    // So it does a flower the scene placed, which covers 196 to 212 across and 150 to 166 down.
+    exec(&simulation, "garden.player:set_position(204, 162)");
+    simulation.tap(Key::Space);
+    run_for(&mut simulation, 0.05);
+    assert_eq!(flowers(&simulation), 4);
+    assert!(eval::<bool>(&simulation, "garden.flowers:find('3') == nil"));
 }
 
 #[test]

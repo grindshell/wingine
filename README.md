@@ -20,9 +20,10 @@ library written in Rust, which [fits 3.4 times as many](#luau-and-rust-compared)
   where each frame's time goes.
 - **Tilemaps** with layers and tilesets, culled to the view, and a **camera** that follows the
   player and stays inside the map.
-- **Scenes**: trees of sprites, rectangles, text and areas laid out in files of plain Luau data,
-  which tools can write as well as people. Nodes turn and stretch about pivots, carrying what's
-  inside them along, and games find them by path or tag.
+- **Scenes**: trees of sprites, rectangles, text, areas and tilemaps laid out in files of plain
+  Luau data, which tools can write as well as people. Nodes turn and stretch about pivots,
+  carrying what's inside them along; scenes place other scenes, changed by overrides; and games
+  find nodes by path or tag, and add and remove them as they play.
 - **Grid movement** from tile to tile, with tile collision.
 - **Sprite animation**, such as walk cycles.
 - **Text** in a built-in pixel font, wrapped to a width and revealed a little at a time for
@@ -76,9 +77,10 @@ poking around, buy gear at the village shop.
 Walk with the arrow keys or WASD. Press Space, Enter or E to talk or to examine what's in front
 of you, Tab or I to open your bag, and Escape or Backspace to back out of menus.
 
-The maps in [`maps/`](examples/rpg/maps) are rows of symbols, and the story, battles, items and
-shop each have a script of their own. The tileset is Kenney's
-[1-bit Pack](https://kenney.nl/assets/1-bit-pack).
+The maps in [`maps/`](examples/rpg/maps) are [scenes](docs/scenes.md): tilemaps over the tiles of
+[`world.tileset.luau`](examples/rpg/world.tileset.luau), with the places, exits, characters and
+foes on them marked out as nodes. The story, battles, items and shop each have a script of their
+own. The tileset is Kenney's [1-bit Pack](https://kenney.nl/assets/1-bit-pack).
 
 ### Shmup
 
@@ -181,9 +183,11 @@ leave it.
 
 ![The windmill's sails turning over the garden](docs/screenshots/garden.png)
 
-Walk with the arrow keys or WASD, and stand beside something to read about it. The mill's sails
-are a node holding four arms and cloths, which turn together as the script turns the node; the
-birds circle the same way. Things tagged `solid` are in the player's way, and areas tagged `note`
+Walk with the arrow keys or WASD, and stand beside something to read about it. Press Space to
+plant a flower, or to pick the one you're standing on. The mill's sails are a node holding four
+arms and cloths, which turn together as the script turns the node; the birds circle the same way.
+The trees and flowers are instances of scenes of their own, each changed by overrides, and
+planting adds another. Things tagged `solid` are in the player's way, and areas tagged `note`
 carry the text they show. See [Scenes](docs/scenes.md).
 
 ### Sprites

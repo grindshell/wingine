@@ -15,6 +15,9 @@
 --   the player stands in them.
 -- - The player turns and mirrors about its pivot, the middle of its feet: it waddles as it walks,
 --   and faces the way it's going.
+-- - The trees and flowers are instances of `tree.scene.luau` and `flower.scene.luau`, each changed
+--   by overrides: another sprite, another tint. Pressing Space plants a flower, adding a copy of
+--   `flower.scene.luau` to the garden, or picks the one the player stands on, removing it.
 --
 -- Run with `cargo run -- examples/garden`. The tileset is Kenney's 1-bit Pack
 -- (<https://kenney.nl/assets/1-bit-pack>, CC0). Its sprites are white on transparent, so the scene
@@ -26,6 +29,7 @@ input.bind("left", { "Left", "A" })
 input.bind("right", { "Right", "D" })
 input.bind("up", { "Up", "W" })
 input.bind("down", { "Down", "S" })
+input.bind("tend", { "Space", "Enter", "E" })
 
 -- How far either side of the middle of its feet the player bumps into things.
 local FOOT = 4
@@ -50,6 +54,10 @@ garden = {
     note_text = garden_scene:find("hud/note/text"),
     -- The area whose note is showing, if any.
     showing = nil,
+    -- Where the flowers are, those the scene places and those the player plants, and how many
+    -- the player has planted.
+    flowers = garden_scene:find("flowers"),
+    planted = 0,
 }
 
 local WIDTH, HEIGHT = garden_scene:find("ground"):size()
@@ -122,6 +130,20 @@ local function show_note()
     end
 end
 
+-- Picks the flower the player stands on, or if there isn't one, plants one there.
+local function tend()
+    local x, y = player:position()
+    for _, flower in garden.flowers:children() do
+        if flower:find("flower"):contains(x, y - 1) then
+            flower:remove()
+            return
+        end
+    end
+    garden.planted += 1
+    local flower = garden.flowers:add(scene.load("flower.scene.luau"), `planted_{garden.planted}`)
+    flower:set_position(x, y)
+end
+
 -- How fast the sails and the flock turn, from their props: radians a second.
 local SAILS_SPEED = sails:props().speed
 local FLOCK_SPEED = flock:props().speed
@@ -136,6 +158,9 @@ function update(dt: number)
     spin(flock, FLOCK_SPEED, dt)
     walk(dt)
     show_note()
+    if input.pressed("tend") then
+        tend()
+    end
 end
 
 function draw()
