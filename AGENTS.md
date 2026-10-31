@@ -163,6 +163,19 @@ networking, editors or 3D pipelines.
   them, and `bag.luau` (the menu key) equips gear and uses items. `ui.luau` holds the panels'
   shared look. `story.reached(stage)` compares quest stages, which run in the order of
   `story.STAGES`. The game's state is the global `rpg`.
+- `examples/shmup/`: the current milestone's bullet hell, written entirely in Luau, at a fixed
+  60 updates a second. Its enemy bullets go through one interface, documented at the top of
+  `bullets.luau`, which is the Luau implementation (parallel arrays of numbers: a table per
+  bullet managed little more than a third as many in the stress test) and which the `danmaku`
+  library will implement too; `main.luau` lists the systems there are, registers the bullet kinds
+  of `art.luau` with each in the same order, and `shmup.bullets` is the one running. Bullets move
+  by parameters alone, so a game's bullets depend only on its inputs and `shmup.seed`: nothing
+  else may take numbers from `math.random`. Enemies, the stage and the boss's attacks are
+  coroutines the game resumes each update with `dt`, so the engine's `wait` works in them
+  (`enemies.resume`, `enemies.frame`). `boss.luau` holds the spell cards, `stage.luau` the waves,
+  `stress.luau` the stress test, and `hud.luau` the panel and screens. `shmup.start("boss")` is
+  boss practice, and `shmup.cheats` (`invincible`, `damage`) are for tests. The game's state is
+  the global `shmup`.
 - `src/script.rs`: scripted runs, which drive a game with simulated input from a text file
   (unrelated to Luau scripts), built on `Simulation`. Their `benchmark` command renders every
   frame for a while and reports how long frames took.
@@ -171,14 +184,17 @@ networking, editors or 3D pipelines.
   `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
   `Simulation`, and its events and NPC are scripted in `sprites.luau`. `pong/` is a game written
   entirely in Luau, with its computer opponent in `opponent.luau`. The sounds and music in
-  `examples/sounds/` were synthesized for `sprites`; `pong` and `rpg` have copies of the ones
-  they use, and `rpg` a copy of the tileset. `rpg/strides.png` is another copy with its people
+  `examples/sounds/` were synthesized for `sprites`; `pong`, `rpg` and `shmup` have copies of
+  the ones they use, and `rpg` and `shmup` copies of the tileset. `shmup/bullets.png` was drawn
+  pixel by pixel for it: pellets, orbs and rice in eight colors, the hitbox, and the player's
+  shot. `rpg/strides.png` is another copy with its people
   and creatures mid-stride (raised a pixel on stretched legs), the frame characters show for the
   first half of each step. `native-particles/` is a native library, a `cdylib` built as
   `particles`, which `tests/native.rs` builds and loads.
 - `README.md`: the project's overview, with a screenshot of each example in `docs/screenshots/`.
   They were taken headlessly at 640x360 (768x432 for `sprites`, so its 256x144 canvas scales
-  without bars); retake them when an example changes how it looks.
+  without bars, and 960x720 for `shmup`, twice its canvas); retake them when an example changes
+  how it looks.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders.
@@ -188,6 +204,9 @@ networking, editors or 3D pipelines.
 - `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
   expressions such as `pong.ball.vx`.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest.
+- `tests/shmup.rs`: tests for the `shmup` example, the same way: the player, the bullet system
+  through `shmup.bullets`, spell cards, clearing the stage with cheats, the same seed firing the
+  same bullets, and the stress test.
 - `benches/drawing.rs`: what drawing a sprite costs from Rust, from Luau, and through a native
   library linked in, what moving a bullet costs in Luau, and what rendering 10,000 sprites costs,
   measured with frame stats in a `Simulation`. A plain program (`harness = false`); CI doesn't
@@ -266,6 +285,7 @@ cargo run --example shapes
 cargo run --example sprites
 cargo run -- examples/pong
 cargo run -- examples/rpg
+cargo run --release -- examples/shmup
 cargo bench
 ```
 

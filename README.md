@@ -51,6 +51,7 @@ The first build takes a little longer while Luau compiles.
 | Example | Written in | Run with |
 |---|---|---|
 | [RPG](#rpg) | Luau | `cargo run -- examples/rpg` |
+| [Shmup](#shmup) | Luau | `cargo run --release -- examples/shmup` |
 | [Pong](#pong) | Luau | `cargo run -- examples/pong` |
 | [Sprites](#sprites) | Rust, with Luau scripts | `cargo run --example sprites` |
 | [Shapes](#shapes) | Rust | `cargo run --example shapes` |
@@ -72,6 +73,23 @@ of you, Tab or I to open your bag, and Escape or Backspace to back out of menus.
 The maps in [`maps/`](examples/rpg/maps) are rows of symbols, and the story, battles, items and
 shop each have a script of their own. The tileset is Kenney's
 [1-bit Pack](https://kenney.nl/assets/1-bit-pack).
+
+### Shmup
+
+[`examples/shmup`](examples/shmup) is a bullet hell in the style of Touhou, written entirely in
+Luau: waves of fairies, then a boss with an opening attack and three spell cards. Shoot a spell
+card down without being hit or bombing for its bonus.
+
+![The boss's Twin Spiral spell card](docs/screenshots/shmup.png)
+
+Move with the arrow keys or WASD, and hold Shift to move slowly and see your hitbox. Hold Z to
+shoot and press X to bomb, which clears the bullets and keeps you safe for a moment. Grazing
+bullets scores. Escape pauses. The title screen also offers boss practice and a stress test.
+
+The game is a benchmark too, and is best run as a release build. Its enemy bullets go through one
+interface, implemented in Luau by [`bullets.luau`](examples/shmup/bullets.luau). The stress test
+pours out bullets until frames take longer than a 60th of a second, and plots frame time against
+the bullet count.
 
 ### Pong
 
