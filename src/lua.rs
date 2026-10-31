@@ -75,19 +75,22 @@
 //!   the mover too. `step` returns whether a step started.
 //! - A [`SceneNode`] is userdata for a node of a [`Scene`], which every node of the scene shares;
 //!   two of the same node are `==`. Finding nodes: `node:name()`, `node:kind()` (`"node"`,
-//!   `"sprite"`, `"rect"`, `"text"` or `"area"`), `node:path()` (the names from the root, joined
-//!   by `/`), `node:find(path)` (the node `path` leads to from this one, or `nil`),
-//!   `node:tagged(tag)` (this node and those inside it with the tag, in draw order),
-//!   `node:parent()`, `node:children()`, `node:tags()`, `node:has_tag(tag)` and `node:props()`
-//!   (a copy of its props, as a table). Placing them, within their parents:
-//!   `node:position()`, `node:set_position(x, y)`, `node:rotation()`,
+//!   `"sprite"`, `"rect"`, `"text"`, `"area"`, `"tilemap"` or `"tile_layer"`), `node:path()`
+//!   (the names from the root, joined by `/`), `node:find(path)` (the node `path` leads to from
+//!   this one, or `nil`), `node:tagged(tag)` (this node and those inside it with the tag, in draw
+//!   order), `node:parent()`, `node:children()`, `node:tags()`, `node:has_tag(tag)` and
+//!   `node:props()` (a copy of its props, as a table). Placing them, within their parents:
+//!   `node:position()`, `node:set_position(x, y)`, `node:anchor()` (two fractions, or `nil`),
+//!   `node:set_anchor(x, y)` (or `nil` to place it from its parent's origin), `node:rotation()`,
 //!   `node:set_rotation(angle)`, `node:scale()`, `node:set_scale(x, y)` (`y` is `x` if left
 //!   out), `node:world_position()` (its origin in the scene's coordinates),
 //!   `node:is_visible()` and `node:set_visible(visible)`; numbers must be finite. What they
-//!   cover: `node:size()`, `node:set_size(width, height)` (sprites, rects and areas),
-//!   `node:bounds()` (a `Rect` in the scene's coordinates, or `nil` for a plain node) and
-//!   `node:contains(x, y)`. What they show: `node:set_sprite(sprite)`, `node:set_tint(tint)`
-//!   (sprites), `node:set_color(color)` (rects and text), `node:text()` and
+//!   cover: `node:size()` (before stretching with its parent), `node:set_size(width, height)`
+//!   (sprites, rects and areas), `node:bounds()` (a `Rect` in the scene's coordinates, or `nil`
+//!   for a plain node) and `node:contains(x, y)`. A scene is laid out on the canvas when it's
+//!   loaded and each time it's drawn, and one drawn without a camera is in canvas pixels, so
+//!   `contains` tests the mouse against a node. What they show: `node:set_sprite(sprite)`,
+//!   `node:set_tint(tint)` (sprites), `node:set_color(color)` (rects and text), `node:text()` and
 //!   `node:set_text(text)` (text). Tilemaps, through a tilemap node or one of its layers:
 //!   `node:is_solid(column, row)`, `node:tile_to_world(column, row)` and
 //!   `node:world_to_tile(x, y)` (in the scene's coordinates), `node:grid_size()` (columns and
@@ -739,7 +742,7 @@ impl SceneNode {
 
     /// Runs `f` with the scene to change, and which node this is. Fails if the node has been
     /// removed.
-    fn write<R>(&self, f: impl FnOnce(&mut Scene, NodeId) -> R) -> mlua::Result<R> {
+    pub(crate) fn write<R>(&self, f: impl FnOnce(&mut Scene, NodeId) -> R) -> mlua::Result<R> {
         let mut scene = self
             .scene
             .try_borrow_mut()
@@ -867,6 +870,30 @@ impl mlua::UserData for SceneNode {
             check_finite(&[x, y], "a scale")?;
             node.write(|scene, id| scene.node_mut(id).set_scale([x, y]))
         });
+        methods.add_method("anchor", |_, node, ()| {
+            let anchor = node.read(|scene, id| scene.node(id).anchor())?;
+            Ok(match anchor {
+                Some([x, y]) => (Some(x), Some(y)),
+                None => (None, None),
+            })
+        });
+        methods.add_method(
+            "set_anchor",
+            |_, node, (x, y): (Option<f32>, Option<f32>)| {
+                let anchor = match (x, y) {
+                    (Some(x), Some(y)) => {
+                        check_finite(&[x, y], "an anchor")?;
+                        Some([x, y])
+                    }
+                    (None, None) => None,
+                    _ => {
+                        let message = "set_anchor takes fractions, x and y, or nil for none";
+                        return Err(mlua::Error::runtime(message));
+                    }
+                };
+                node.write(|scene, id| scene.node_mut(id).set_anchor(anchor))
+            },
+        );
         methods.add_method("world_position", |_, node, ()| {
             let [x, y] = node.read(|scene, id| scene.transform(id).apply([0.0, 0.0]))?;
             Ok((x, y))
@@ -961,14 +988,14 @@ impl mlua::UserData for SceneNode {
             },
         );
         methods.add_method("size", |_, node, ()| {
-            let rect = node.read(|scene, id| {
-                scene.node(id).rect().ok_or_else(|| {
+            let [width, height] = node.read(|scene, id| {
+                scene.node(id).size().ok_or_else(|| {
                     let described = describe_node(scene, id);
                     let is = a_node_of(scene.node(id).kind().name());
                     mlua::Error::runtime(format!("{described} is {is}, which has no size"))
                 })
             })??;
-            Ok((rect.w, rect.h))
+            Ok((width, height))
         });
         methods.add_method("set_size", |_, node, (width, height): (f32, f32)| {
             check_finite(&[width, height], "a size")?;

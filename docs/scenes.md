@@ -96,6 +96,7 @@ Every node has a `name` and a `kind`, and may have any of the rest:
 | `name` | Required. Unique among the node's siblings, and without `/`. | |
 | `kind` | Required. `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"tilemap"`, `"tile_layer"` or `"instance"`. | |
 | `x`, `y` | Where the node's origin is within its parent. | `0` |
+| `anchor` | The point of the parent's rectangle that `x` and `y` are measured from, `{ x, y }`, as fractions of its width and height. See [Laying out screens](#laying-out-screens). | the parent's origin |
 | `rotation` | Radians, clockwise, about its origin. | `0` |
 | `scale_x`, `scale_y` | How much it's stretched along its own axes, about its origin. Negative scales mirror it. | `1` |
 | `visible` | Whether it and its children draw. | `true` |
@@ -114,14 +115,16 @@ Each kind has fields of its own:
   such as where the player starts.
 - **`sprite`**: `sheet`, the name of one of the scene's sheets, and `cell`, the sprite's column and
   row in it, `{ column, row }`, counting from 0 at the top-left. Optionally `width` and `height`
-  to stretch it to (both or neither; its own size by default), and `tint`, a color its colors are
-  multiplied by.
-- **`rect`**: a filled rectangle, `width` by `height`, of `color`.
+  to stretch it to (both or neither; its own size by default), `stretch`, as a rect's, and
+  `tint`, a color its colors are multiplied by.
+- **`rect`**: a filled rectangle, `width` by `height`, of `color`. Optionally `stretch`, to grow
+  with its parent: see [Laying out screens](#laying-out-screens).
 - **`text`**: `text` in the built-in font, `font_scale` times its size (1 by default), wrapped
-  between words to `wrap` if given, in `color`. Text moves with its node, but doesn't turn or
-  stretch.
+  between words to `wrap` if given, in `color`, and lined up by `align`: `"left"`, the default,
+  `"center"` or `"right"`. Text moves with its node, but doesn't turn or stretch.
 - **`area`**: a rectangle `width` by `height` that doesn't draw, for marking out part of a scene:
-  where the player can't walk, where something happens, a door to another scene.
+  where the player can't walk, where something happens, a door to another scene, a button to
+  click. Like a rect, it may `stretch`.
 - **`tilemap`** and **`tile_layer`**: a grid of tiles, and its layers. See [Tilemaps](#tilemaps).
 - **`instance`**: another scene file, placed here. See [Instances](#instances).
 
@@ -145,6 +148,60 @@ same name.
 ```text
 scene garden.scene.luau: node `mill/sails`: a plain node has no field `colour`
 ```
+
+## Laying out screens
+
+Menus and HUDs sit against the canvas's edges, or in its middle, whatever its size. An `anchor`
+says which point of the parent's rectangle a node is placed from: `{ 0, 0 }` is its top-left
+corner, `{ 0.5, 0.5 }` its middle and `{ 1, 1 }` its bottom-right. `x` and `y` are then measured
+from there, so a node `anchor = { 1, 0 }` with `x = -8` stays 8 in from its parent's right edge.
+`stretch` makes a sprite, rect or area grow with its parent: it adds those fractions of the
+parent's width and height to its own, so `width = 0` with `stretch = { 1, 0 }` is as wide as the
+parent, and `width = -16` 16 narrower.
+
+```lua
+{
+    name = "bar",
+    kind = "rect",
+    anchor = { 0, 1 },
+    width = 0,
+    height = 12,
+    stretch = { 1, 0 },
+    pivot = { 0, 12 },
+    color = "#14182c",
+    children = {
+        {
+            name = "score",
+            kind = "text",
+            x = -4,
+            y = 1,
+            anchor = { 1, 0 },
+            text = "1,250",
+            align = "right",
+        },
+    },
+},
+```
+
+That's a bar 12 tall along the bottom of the canvas, as wide as it, with a score that ends 4 in
+from its right end however long it gets: right-aligned text ends at its origin, and centered text
+is centered on it.
+
+Which rectangle a node anchors to:
+
+- A sprite, rect, text, area or tilemap's own, pivot and all.
+- For the nodes at the top of a scene, the canvas's. The scene is laid out on the canvas when it's
+  loaded and again each time it's drawn, so it follows a window that's resized.
+- A plain node covers nothing, so it passes its parent's rectangle on to its children, carried
+  along with it as it moves. Grouping nodes in one changes nothing, and moving the group moves
+  everything in it, anchored or not.
+
+A node without an `anchor` is placed from its parent's origin, which is where a pivot puts it, as
+the parts of a character are. In a rect with a pivot at its bottom, an unanchored child is placed
+from its bottom.
+
+The shmup's [panel, title screen and messages](../examples/shmup/hud.scene.luau) are a scene
+like this, which [`hud.luau`](../examples/shmup/hud.luau) fills in each frame.
 
 ## Tilemaps
 
@@ -200,8 +257,8 @@ cell. Each layer has a legend of its own, so a character can mean different tile
 layers.
 
 A tilemap moves with its node, but doesn't turn or stretch, so it has no `rotation`, `scale_x` or
-`scale_y`, and its layers are where it is, so they have no `x` or `y` either. A cell blocks
-movement if it holds a solid tile on any layer.
+`scale_y`, and its layers are where it is, so they have no `x`, `y` or `anchor` either. A cell
+blocks movement if it holds a solid tile on any layer.
 
 ### Tileset files
 
@@ -293,9 +350,9 @@ tile layer's rows one to a line, lined up as the map is. Writing the same scene 
 same text, so a change to a scene changes few lines of its file, and version control shows what
 changed. Reading what it writes gives back the same scene. It doesn't keep comments.
 
-The scene files of [`examples/garden`](../examples/garden) and the
-[RPG's maps](../examples/rpg/maps) are in that layout, as an editor would leave them, and tests
-check the garden's stay so.
+The scene files of [`examples/garden`](../examples/garden), the
+[RPG's maps](../examples/rpg/maps) and the [shmup's HUD](../examples/shmup/hud.scene.luau) are in
+that layout, as an editor would leave them, and tests check the garden's and the shmup's stay so.
 
 ## Using a scene
 
@@ -358,5 +415,29 @@ bat:remove()
 ```
 
 [`examples/garden`](../examples/garden) plants flowers this way, and picks them.
+
+A scene drawn without a camera is in canvas pixels, which is where
+[`input.mouse_position`](api/input.md#inputmouse_position) is too, so
+[`node:contains`](api/scene.md#nodecontains) tells which button the mouse is over:
+
+```lua
+local menu = scene.load("menu.scene.luau")
+local buttons = menu:tagged("button")
+
+function update(dt: number)
+    local x, y = input.mouse_position()
+    if x and y and input.mouse_pressed("left") then
+        for _, button in buttons do
+            if button:contains(x, y) then
+                start(button:props().action)
+            end
+        end
+    end
+end
+
+function draw()
+    graphics.draw_scene(menu)
+end
+```
 
 See [the `scene` reference](api/scene.md) for everything a node can do.

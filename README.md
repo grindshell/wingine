@@ -22,8 +22,9 @@ library written in Rust, which [fits 3.4 times as many](#luau-and-rust-compared)
   player and stays inside the map.
 - **Scenes**: trees of sprites, rectangles, text, areas and tilemaps laid out in files of plain
   Luau data, which tools can write as well as people. Nodes turn and stretch about pivots,
-  carrying what's inside them along; scenes place other scenes, changed by overrides; and games
-  find nodes by path or tag, and add and remove them as they play.
+  carrying what's inside them along; screens anchor to the canvas's edges and middle, with text
+  aligned left, center or right; scenes place other scenes, changed by overrides; and games find
+  nodes by path or tag, test the mouse against them, and add and remove them as they play.
 - **Grid movement** from tile to tile, with tile collision.
 - **Sprite animation**, such as walk cycles.
 - **Text** in a built-in pixel font, wrapped to a width and revealed a little at a time for
@@ -92,7 +93,10 @@ card down without being hit or bombing for its bonus.
 
 Move with the arrow keys or WASD, and hold Shift to move slowly and see your hitbox. Hold Z to
 shoot and press X to bomb, which clears the bullets and keeps you safe for a moment. Grazing
-bullets scores. Escape pauses. The title screen also offers boss practice and a stress test.
+bullets scores. Escape pauses. The title screen also offers boss practice and a stress test,
+chosen with the keys or the mouse. The panel, title screen and messages are laid out in a
+[scene](docs/scenes.md#laying-out-screens), [`hud.scene.luau`](examples/shmup/hud.scene.luau),
+which the game fills in each frame.
 
 The game is a benchmark too, and is best run as a release build. Its enemy bullets go through one
 interface, implemented in Luau by [`bullets.luau`](examples/shmup/bullets.luau) and in Rust by

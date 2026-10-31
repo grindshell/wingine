@@ -9,10 +9,10 @@ the files.
   [`children`](#nodechildren), [`tags`](#nodetags), [`has_tag`](#nodehas_tag),
   [`props`](#nodeprops)
 - [Placing nodes](#placing-nodes): [`position`](#nodeposition),
-  [`set_position`](#nodeset_position), [`rotation`](#noderotation),
-  [`set_rotation`](#nodeset_rotation), [`scale`](#nodescale), [`set_scale`](#nodeset_scale),
-  [`world_position`](#nodeworld_position), [`is_visible`](#nodeis_visible),
-  [`set_visible`](#nodeset_visible)
+  [`set_position`](#nodeset_position), [`anchor`](#nodeanchor), [`set_anchor`](#nodeset_anchor),
+  [`rotation`](#noderotation), [`set_rotation`](#nodeset_rotation), [`scale`](#nodescale),
+  [`set_scale`](#nodeset_scale), [`world_position`](#nodeworld_position),
+  [`is_visible`](#nodeis_visible), [`set_visible`](#nodeset_visible)
 - [What nodes cover](#what-nodes-cover): [`size`](#nodesize), [`set_size`](#nodeset_size),
   [`bounds`](#nodebounds), [`contains`](#nodecontains)
 - [What nodes show](#what-nodes-show): [`set_sprite`](#nodeset_sprite),
@@ -38,6 +38,8 @@ scene.load(path: string): SceneNode
 Loads the scene file at `path`, relative to the game's folder, and the scene files its instances
 place, the tileset files its tilemaps use and the images its sheets name, and returns the
 scene's root: a plain node holding the scene's `props`, with the file's nodes as its children.
+The scene is laid out on the canvas, as its [anchors](../scenes.md#laying-out-screens) say, and
+laid out again each time it's drawn.
 
 Each call returns a scene of its own, so loading a file twice gives two scenes that change
 independently, such as two of the same enemy. Each file is read once, however many times it's
@@ -66,7 +68,8 @@ Returns the node's name, unique among its siblings. The root's is `""`.
 node:kind(): string
 ```
 
-Returns `"node"`, `"sprite"`, `"rect"`, `"text"` or `"area"`.
+Returns `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"tilemap"` or `"tile_layer"`. An
+instance is a `"node"` once loaded.
 
 ### `node:path`
 
@@ -148,13 +151,33 @@ coordinates, and its children move, turn and stretch with it.
 node:position(): (number, number)
 ```
 
-Returns where its origin is within its parent.
+Returns where its origin is within its parent: from the parent's origin, or from its
+[anchor](#nodeanchor) if it has one.
 
 ### `node:set_position`
 
 ```lua
 node:set_position(x: number, y: number)
 ```
+
+### `node:anchor`
+
+```lua
+node:anchor(): (number?, number?)
+```
+
+Returns the point of its parent's rectangle its position is from, as fractions of the
+rectangle's width and height from its top-left corner, or `nil` if it's placed from its
+parent's origin. See [Laying out screens](../scenes.md#laying-out-screens).
+
+### `node:set_anchor`
+
+```lua
+node:set_anchor(x: number?, y: number?)
+```
+
+Places it from the point `x`, `y` of its parent's rectangle, such as `0.5, 0.5` for its middle,
+keeping its position, or with `nil`, from its parent's origin. The root's anchor does nothing.
 
 ### `node:rotation`
 
@@ -210,7 +233,7 @@ node:set_visible(visible: boolean)
 
 Shows or hides it and everything inside it.
 
-Positions, rotations and scales must be finite numbers.
+Positions, anchors, rotations and scales must be finite numbers.
 
 ## What nodes cover
 
@@ -224,7 +247,9 @@ node:size(): (number, number)
 ```
 
 Returns the width and height it covers, before any scaling: a sprite's size, a rect's or an
-area's, the size of a text's text, or the size of a tilemap's map.
+area's, the size of a text's text, or the size of a tilemap's map. For a node that
+[stretches](../scenes.md#laying-out-screens) with its parent, it's the size it has before
+stretching, as [`set_size`](#nodeset_size) sets it; [`bounds`](#nodebounds) is where it is.
 
 ### `node:set_size`
 
@@ -241,7 +266,8 @@ node:bounds(): Rect?
 ```
 
 Returns the smallest [`Rect`](README.md#rect) in the scene's coordinates around what it covers, as
-it's turned and stretched, or `nil` for a plain node.
+it's turned and stretched, or `nil` for a plain node. For a scene drawn without a camera, that's
+where it is on the canvas, in canvas pixels.
 
 ### `node:contains`
 
@@ -258,6 +284,16 @@ plain node.
 -- Whether the player stands in the doorway.
 if level:find("house/door"):contains(player_x, player_y) then
     enter_house()
+end
+```
+
+A scene drawn without a camera is in canvas pixels, as the mouse's position is, so `contains`
+tells whether the mouse is over a node:
+
+```lua
+local x, y = input.mouse_position()
+if x and y and menu:find("quit"):contains(x, y) and input.mouse_pressed("left") then
+    quit_to_title()
 end
 ```
 
@@ -305,7 +341,8 @@ Returns a text node's text.
 node:set_text(text: string)
 ```
 
-Changes a text node's text, laying it out again.
+Changes a text node's text, laying it out again if it's different, so setting the same text
+every frame costs little.
 
 ## Adding and removing nodes
 

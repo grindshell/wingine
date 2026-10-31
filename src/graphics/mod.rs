@@ -17,7 +17,7 @@ pub use animation::Animation;
 pub use camera::Camera;
 pub use canvas::Canvas;
 pub use color::Color;
-pub use font::{Font, TextLayout};
+pub use font::{Align, Font, TextLayout};
 pub use screen::Resolution;
 pub use sprite::{Sprite, SpriteSheet};
 pub use texture::Texture;

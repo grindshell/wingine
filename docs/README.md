@@ -31,7 +31,7 @@ Read these in order the first time:
 When a game's levels, screens or characters are laid out rather than coded:
 
 4. [Scenes](scenes.md): scene files, trees of sprites, rectangles, text and areas that a game
-   loads, finds its way around, and draws.
+   loads, finds its way around, and draws, with screens anchored to the canvas.
 
 When a game needs compiled code:
 
@@ -53,7 +53,7 @@ The repository's examples are complete games, and the best place to see how the 
 |---|---|
 | [`examples/pong`](../examples/pong) | A small game in one script and a module: input, sound, music, text, a camera that shakes |
 | [`examples/rpg`](../examples/rpg) | A top-down RPG: tilemaps, grid movement, animation, dialogue, menus and turn-based battles |
-| [`examples/shmup`](../examples/shmup) | A bullet hell at a fixed update rate, with an optional native library for its bullets |
+| [`examples/shmup`](../examples/shmup) | A bullet hell at a fixed update rate, with an optional native library for its bullets, and a HUD laid out in a scene, whose menu takes the mouse |
 | [`examples/garden`](../examples/garden) | A garden laid out in a scene file: nodes found by path and tag, turned together, and areas for collision and notes |
 | [`examples/native-particles`](../examples/native-particles/src/lib.rs) | A small native library: functions, a class and hooks |
 | [`examples/native-danmaku`](../examples/native-danmaku/src/lib.rs) | The shmup's bullets in Rust, drawn with one call per kind of bullet |

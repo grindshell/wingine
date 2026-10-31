@@ -85,10 +85,11 @@ covers:
 - Docs for scene files and their API, screenshot tests for the new drawing, and round-trip tests
   of the writer
 
-Done so far: the format and drawing, shown by `examples/garden`, and levels: tilemaps over
-tileset files, instances with overrides, and adding and removing nodes, with the RPG's maps
-moved into scenes and the garden's trees and flowers made instances. What's left is UI (anchors,
-text alignment) and rigging (clips).
+Done so far: the format and drawing, shown by `examples/garden`; levels: tilemaps over tileset
+files, instances with overrides, and adding and removing nodes, with the RPG's maps moved into
+scenes and the garden's trees and flowers made instances; and UI: anchors, stretching with the
+parent, text alignment, and scenes laid out on the canvas, with the shmup's HUD and title menu
+moved into a scene whose menu takes the mouse. What's left is rigging (clips).
 
 Ask before starting features outside the current milestone, and especially general-purpose ones
 such as physics engines, networking, editors or 3D pipelines.
@@ -152,7 +153,8 @@ such as physics engines, networking, editors or 3D pipelines.
   resolution renders the canvas to an offscreen texture, then draws that texture scaled onto the
   output with the same pipeline. Shaders are WGSL files next to the code that loads them.
 - `src/graphics/font.rs` and `default_font.rs`: `Font` (glyphs packed into one texture, with
-  their metrics) and `TextLayout`. `Font::layout` wraps text between words to a width, and
+  their metrics) and `TextLayout`. `Font::layout` wraps text between words to a width
+  (`layout_aligned` also lines its lines up by an `Align`, moving each by whole pixels), and
   `Canvas::draw_text_layout` draws a range of its glyphs, which is how dialogue reveals text
   without words jumping lines. The built-in pixel font is authored in `default_font.rs` as rows of
   `#` and `.`, and built into a texture when the `Context` is created. Layout logic is separate
@@ -202,6 +204,10 @@ such as physics engines, networking, editors or 3D pipelines.
   local `Affine` up to date as it moves. A tilemap node holds a `Tilemap` whose layers are its
   `tile_layer` children, in order, which draw as children, so other nodes draw between layers.
   Drawing walks the tree, composing transforms from parent to child; text and tilemaps only move.
+  Layout is worked out as the tree is walked, from the root down (`Placed`): a node's anchor
+  places it in its parent's rectangle, and its stretch sizes it by it, where the root's is the
+  scene's `size` (the canvas's: drawing sets it, and `scene.load` starts it there) and a plain
+  node passes its parent's on. So `transform`, `bounds` and `contains` walk down from the root.
   Scripts hold nodes as `lua::SceneNode`, an `Rc<RefCell<Scene>>` and a `NodeId`, so every node
   of a scene shares it. Live scenes' tests are in `tests/scene.rs` and need a GPU; the formats'
   are unit tests that don't.
@@ -247,7 +253,10 @@ such as physics engines, networking, editors or 3D pipelines.
   coroutines the game resumes each update with `dt`, so the engine's `wait` works in them
   (`enemies.resume`, `enemies.frame`). `boss.luau` holds the spell cards, `stage.luau` the waves,
   `stress.luau` the stress test, which prints the limit it finds for runs without a window, and
-  `hud.luau` the panel and screens. `shmup.start("boss")` is
+  `hud.luau` the panel and screens, laid out in `hud.scene.luau` (in canvas pixels, so the title
+  menu's items, areas, are hit-tested against the mouse), which it fills in from the game's
+  state and draws each frame; `shmup.hud` is the scene's root, for tests, which check the file
+  stays in the canonical layout. `shmup.start("boss")` is
   boss practice, and `shmup.cheats` (`invincible`, `damage`) are for tests. The game's state is
   the global `shmup`.
 - `examples/native-danmaku/`: the shmup's bullets as a native library, `danmaku`, a `cdylib` the
@@ -296,7 +305,8 @@ such as physics engines, networking, editors or 3D pipelines.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders.
 - `tests/scene.rs`: tests for scenes loaded to play: finding nodes, transforms, hit testing,
-  tilemaps, instances and overrides, and adding and removing nodes, with files held in memory.
+  anchors and stretching, tilemaps, instances and overrides, and adding and removing nodes, with
+  files held in memory.
 - `tests/native.rs`: tests for native libraries, most of them linked into the test. One builds
   `native-particles` with a nested `cargo build` into a target folder of its own and loads it
   from a file.
@@ -305,7 +315,8 @@ such as physics engines, networking, editors or 3D pipelines.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest.
 - `tests/garden.rs`: tests for the `garden` example, the same way, and that its scene files are
   in the canonical layout.
-- `tests/shmup.rs`: tests for the `shmup` example, the same way: the player, the bullet systems
+- `tests/shmup.rs`: tests for the `shmup` example, the same way: the title menu by key and by
+  mouse, its HUD's scene, the player, the bullet systems
   through `shmup.bullets`, spell cards, clearing the stage with cheats, the same seed firing the
   same bullets, and the stress test. They run copies of the game in `target/tmp`, one with the
   `danmaku` library, which they build with a nested `cargo build` as `tests/native.rs` builds

@@ -15,9 +15,10 @@ use std::{
 
 use wingine::{
     headless::{Image, Simulation},
-    input::Key,
+    input::{Key, MouseButton},
     lua::mlua::FromLuaMulti,
     runtime::{self, LuauGame},
+    scene::SceneFile,
 };
 
 const GAME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/shmup");
@@ -247,6 +248,80 @@ fn the_title_menu_starts_each_mode() {
     assert!(
         eval::<bool>(&simulation, "shmup.boss == nil"),
         "fairies first"
+    );
+}
+
+#[test]
+fn the_mouse_points_at_and_starts_the_title_menus_items() {
+    let mut simulation = simulation();
+    // Each item is a strip 160 wide and 14 tall, across the middle of the field, which is 16
+    // across and 12 down the canvas: "Boss practice" runs from 202 to 216 down.
+    simulation.move_mouse(160.0, 209.0);
+    step(&mut simulation);
+    assert_eq!(eval::<u32>(&simulation, "shmup.selected"), 2);
+    assert_eq!(
+        eval::<String>(
+            &simulation,
+            "shmup.hud:find('field/title/menu/boss/label'):text()"
+        ),
+        "> Boss practice <"
+    );
+    // Keys still choose while the cursor rests.
+    simulation.tap(Key::Down);
+    assert_eq!(eval::<u32>(&simulation, "shmup.selected"), 3);
+    // Clicking outside the items does nothing; clicking one starts it.
+    simulation.click(MouseButton::Left, 30.0, 209.0);
+    assert_eq!(mode(&simulation), "title");
+    simulation.click(MouseButton::Left, 230.0, 190.0);
+    assert_eq!(mode(&simulation), "play");
+    assert_eq!(eval::<u32>(&simulation, "shmup.selected"), 1, "Play");
+}
+
+#[test]
+fn the_hud_is_laid_out_by_its_scene() {
+    let path = Path::new(GAME).join("hud.scene.luau");
+    // As checked out, which may have turned line endings into CRLF.
+    let text = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+    let scene = SceneFile::parse(&text, &path).unwrap();
+    assert!(
+        scene.to_luau().unwrap() == text,
+        "hud.scene.luau isn't in the layout scenes are written in: write it again with \
+         `SceneFile::write`"
+    );
+
+    let mut simulation = simulation();
+    let field: (f64, f64, f64, f64) = eval(
+        &simulation,
+        "shmup.hud:find('field'):bounds().x, shmup.hud:find('field'):bounds().y,
+         shmup.hud:find('field'):bounds().width, shmup.hud:find('field'):bounds().height",
+    );
+    assert_eq!(
+        field,
+        (16.0, 12.0, FIELD[0], FIELD[1]),
+        "where `field.luau` puts it"
+    );
+
+    // The boss's spell card's name and bonus end 4 in from the field's right edge, at 300.
+    exec(&simulation, "shmup.start('boss')");
+    assert!(run_until(&mut simulation, 6.0, "shmup.card ~= nil"));
+    exec(
+        &simulation,
+        "shmup.card.name = 'Test Sign' shmup.card.failed = true",
+    );
+    step(&mut simulation);
+    let name = "shmup.hud:find('field/boss/name')";
+    assert_eq!(
+        eval::<String>(&simulation, &format!("{name}:text()")),
+        "Test Sign"
+    );
+    let (right, visible): (f64, bool) = eval(
+        &simulation,
+        &format!("{name}:bounds().x + {name}:bounds().width, {name}:is_visible()"),
+    );
+    assert_eq!((right, visible), (300.0, true));
+    assert_eq!(
+        eval::<String>(&simulation, "shmup.hud:find('field/boss/bonus'):text()"),
+        "Bonus failed"
     );
 }
 

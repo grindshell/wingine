@@ -1,33 +1,41 @@
--- What's drawn around and over the field: the frame, the side panel, the boss's health and spell
--- card, messages, and the screens between games.
+-- What's drawn around and over the field, laid out in `hud.scene.luau`: the frame, the side panel,
+-- the boss's health and spell card, messages, and the title screen's menu. `hud.draw` fills its
+-- nodes in from the game's state, shows the ones the game's mode needs and draws it, in canvas
+-- pixels, so the mouse can point at the menu's items.
 
 local boss = require("./boss")
-local conf = require("./conf")
-local field = require("./field")
 local stress = require("./stress")
 
 local hud = {}
 
-local WIDTH, HEIGHT = conf.resolution.width, conf.resolution.height
-local PANEL_X = field.X + field.WIDTH + 16
-local LINE = 10
-
-local font = graphics.default_font()
-local big = font:scaled(2)
-
-hud.BORDER = graphics.color("#0b0d1a")
-local EDGE = graphics.color("#3a405c")
 local TEXT = graphics.color("#f4f0e8")
 local DIM = graphics.color("#8a92b8")
-local GOLD = graphics.color("#f2c14e")
-local SHADE = graphics.color({ r = 0, g = 0, b = 0, a = 0.6 })
-local HEALTH = graphics.color("#ff7b9c")
 local PLOT_LINE = graphics.color("#ff4048")
 -- The stress test's colors for each bullet system.
 hud.SYSTEM_COLORS = {
     Luau = graphics.color("#f2c14e"),
     native = graphics.color("#4de0e0"),
 }
+
+hud.scene = scene.load("hud.scene.luau")
+
+-- The node at `path` from the scene's top, found the first time it's asked for.
+local found = {}
+local function node(path: string)
+    local at = found[path]
+    if not at then
+        at = hud.scene:find(path) or error(`hud.scene.luau has no node {path}`)
+        found[path] = at
+    end
+    return at
+end
+
+-- The title menu's items, areas whose props say what they start, and what each is called.
+hud.items = node("field/title/menu"):children()
+local item_names = {}
+for i, item in hud.items do
+    item_names[i] = item:find("label"):text()
+end
 
 -- `n` with commas between groups of three digits, such as "1,234,567".
 function hud.number(n: number): string
@@ -36,142 +44,147 @@ function hud.number(n: number): string
     return (grouped:gsub("^,", ""))
 end
 
--- Draws `text` centered on `x`, with its top at `y`.
-function hud.centered(text_font, text: string, x: number, y: number, color)
-    local width = text_font:measure(text)
-    graphics.draw_text(text_font, text, x - width / 2, y, color)
+-- The number of the menu item at `x`, `y` on the canvas, if there's one there.
+function hud.item_at(x: number, y: number): number?
+    for i, item in hud.items do
+        if item:contains(x, y) then
+            return i
+        end
+    end
+    return nil
 end
 
--- Covers whatever was drawn outside the field with the border, and outlines the field.
-function hud.frame()
-    local right = field.X + field.WIDTH
-    local bottom = field.Y + field.HEIGHT
-    graphics.fill_rect(0, 0, WIDTH, field.Y, hud.BORDER)
-    graphics.fill_rect(0, bottom, WIDTH, HEIGHT - bottom, hud.BORDER)
-    graphics.fill_rect(0, field.Y, field.X, field.HEIGHT, hud.BORDER)
-    graphics.fill_rect(right, field.Y, WIDTH - right, field.HEIGHT, hud.BORDER)
-    graphics.fill_rect(field.X - 1, field.Y - 1, field.WIDTH + 2, 1, EDGE)
-    graphics.fill_rect(field.X - 1, bottom, field.WIDTH + 2, 1, EDGE)
-    graphics.fill_rect(field.X - 1, field.Y, 1, field.HEIGHT, EDGE)
-    graphics.fill_rect(right, field.Y, 1, field.HEIGHT, EDGE)
+-- Sets the value of the panel's row `path`, and its color if given.
+local function row(path: string, value: string, color: number?)
+    local value_node = node(`panel/{path}/value`)
+    value_node:set_text(value)
+    if color then
+        value_node:set_color(color)
+    end
 end
 
--- A label on the left of the panel and its value on the right, on row `row`.
-local function row(row: number, label: string, value: string, color)
-    local y = field.Y + 4 + row * LINE
-    graphics.draw_text(font, label, PANEL_X, y, DIM)
-    local width = font:measure(value)
-    graphics.draw_text(font, value, WIDTH - 12 - width, y, color or TEXT)
+-- How long the frame before took to update, draw and render, in milliseconds, in rows from `y`.
+local function timings(y: number)
+    local frame = graphics.frame_stats()
+    node("panel/stats"):set_position(0, y)
+    row("stats/bullets", hud.number(shmup.bullets.count()))
+    row("stats/system", shmup.system, hud.SYSTEM_COLORS[shmup.system])
+    row("stats/update", string.format("%.2f ms", frame.update * 1000))
+    row("stats/draw", string.format("%.2f ms", frame.draw * 1000))
+    row("stats/render", string.format("%.2f ms", frame.render * 1000))
 end
 
--- How long the frame before took to update, draw and render, in milliseconds.
-local function timings(first: number)
-    local stats = graphics.frame_stats()
-    row(first, "Bullets", hud.number(shmup.bullets.count()))
-    row(first + 1, "System", shmup.system, hud.SYSTEM_COLORS[shmup.system])
-    row(first + 2, "Update", string.format("%.2f ms", stats.update * 1000))
-    row(first + 3, "Draw", string.format("%.2f ms", stats.draw * 1000))
-    row(first + 4, "Render", string.format("%.2f ms", stats.render * 1000))
+local function stars(count: number): string
+    return if count > 0 then string.rep("*", count) else "-"
 end
 
-function hud.panel()
-    graphics.draw_text(big, "SHMUP", PANEL_X, field.Y + 4, GOLD)
-    if shmup.mode == "stress" then
-        hud.stress_panel()
+-- The stress test's numbers, and its plot's scale.
+local function fill_stress_panel()
+    timings(34)
+    row("stress/work", string.format("%.2f ms", stress.frame_time()))
+    local rows = node("panel/stress/curves"):children()
+    for _, curve_row in rows do
+        curve_row:set_visible(false)
+    end
+    local i = 1
+    for name, curve in shmup.stress.curves do
+        rows[i]:set_visible(true)
+        rows[i]:find("label"):set_text(name)
+        local limit = if curve.limit then hud.number(curve.limit) else "..."
+        row(`stress/curves/{i}`, limit, hud.SYSTEM_COLORS[name])
+        i += 1
+    end
+    local most_bullets, most_time = stress.scale()
+    node("panel/stress/plot/most_time"):set_text(string.format("%.0f ms", most_time))
+    node("panel/stress/plot/most_bullets"):set_text(hud.number(most_bullets))
+end
+
+local function fill_panel()
+    local stressing = shmup.mode == "stress"
+    node("panel/play"):set_visible(not stressing)
+    node("panel/stress"):set_visible(stressing)
+    if stressing then
+        fill_stress_panel()
         return
     end
-    row(3, "Score", string.format("%010d", math.floor(shmup.score)))
-    row(4, "Graze", hud.number(shmup.graze))
-    local p = shmup.player
-    local function stars(count: number): string
-        return if count > 0 then string.rep("*", count) else "-"
-    end
-    row(5, "Lives", stars(p.lives), GOLD)
-    row(6, "Bombs", stars(p.bombs), GOLD)
-    timings(8)
-    local help = { "Arrows  move", "Shift   focus", "Z       shoot", "X       bomb", "Tab     bullets", "Esc     pause" }
-    for i, line in help do
-        graphics.draw_text(font, line, PANEL_X, field.Y + field.HEIGHT - (#help - i + 1) * LINE, DIM)
-    end
+    timings(84)
+    row("play/score", string.format("%010d", math.floor(shmup.score)))
+    row("play/graze", hud.number(shmup.graze))
+    row("play/lives", stars(shmup.player.lives))
+    row("play/bombs", stars(shmup.player.bombs))
 end
 
--- The stress test's numbers, and its plot.
-function hud.stress_panel()
-    timings(3)
-    row(8, "Work", string.format("%.2f ms", stress.frame_time()))
-    local first = 10
-    for name, curve in shmup.stress.curves do
-        local limit = if curve.limit then hud.number(curve.limit) else "..."
-        row(first, name, limit, hud.SYSTEM_COLORS[name])
-        first += 1
-    end
-    local x, y, width, height = PANEL_X + 4, field.Y + 150, WIDTH - PANEL_X - 16, 110
-    graphics.fill_rect(x - 1, y + height, width + 2, 1, EDGE)
-    graphics.fill_rect(x - 1, y, 1, height, EDGE)
-    stress.draw_plot(x, y, width, height, hud.SYSTEM_COLORS, PLOT_LINE)
-    local most_bullets, most_time = stress.scale()
-    graphics.draw_text(font, string.format("%.0f ms", most_time), x + 2, y - LINE, DIM)
-    graphics.draw_text(font, "16.7", x + 2, y + height / 2 - LINE, PLOT_LINE)
-    hud.centered(font, hud.number(most_bullets), x + width - 16, y + height + 2, DIM)
-    graphics.draw_text(font, "0", x - 1, y + height + 2, DIM)
-    local help = { "Tab  other system", "R    run again", "Esc  back" }
-    for i, line in help do
-        graphics.draw_text(font, line, PANEL_X, field.Y + field.HEIGHT - (#help - i + 1) * LINE, DIM)
-    end
-end
-
--- The boss's health along the top of the field, and its spell card's name, time and bonus.
--- Drawn in field coordinates.
-function hud.boss()
+-- The boss's health along the top of the field, and its spell card's number, time, name and
+-- bonus.
+local function fill_boss()
     local enemy = shmup.boss
+    node("field/boss"):set_visible(shmup.mode == "play" and enemy ~= nil)
     if not enemy then
         return
     end
-    local share = enemy.hp / enemy.max_hp
-    graphics.fill_rect(4, 4, field.WIDTH - 8, 3, SHADE)
-    graphics.fill_rect(4, 4, (field.WIDTH - 8) * share, 3, HEALTH)
+    node("field/boss/health"):set_scale(enemy.hp / enemy.max_hp, 1)
     local card = shmup.card
+    node("field/boss/card"):set_visible(card ~= nil)
+    node("field/boss/time"):set_visible(card ~= nil)
+    node("field/boss/name"):set_visible(card ~= nil and card.name ~= nil)
+    node("field/boss/bonus"):set_visible(card ~= nil and card.name ~= nil)
     if not card then
         return
     end
-    local time = string.format("%d", math.ceil(math.max(card.time_left, 0)))
-    graphics.draw_text(font, time, field.WIDTH - 4 - font:measure(time), 10, TEXT)
-    graphics.draw_text(font, `{card.number}/{#boss.CARDS}`, 4, 10, DIM)
+    node("field/boss/card"):set_text(`{card.number}/{#boss.CARDS}`)
+    node("field/boss/time"):set_text(string.format("%d", math.ceil(math.max(card.time_left, 0))))
     if card.name then
-        local width = font:measure(card.name)
-        graphics.draw_text(font, card.name, field.WIDTH - 4 - width, 20, GOLD)
+        node("field/boss/name"):set_text(card.name)
         local bonus = if card.failed then "Bonus failed" else `Bonus {hud.number(boss.bonus(card))}`
-        graphics.draw_text(font, bonus, field.WIDTH - 4 - font:measure(bonus), 30, DIM)
+        node("field/boss/bonus"):set_text(bonus)
     end
 end
 
--- A headline and a line under it, in a band across the middle of the field. Drawn in field
--- coordinates.
-function hud.banner(headline: string, detail: string?)
-    local height = 2 * LINE + (if detail then LINE + 4 else 0) + 12
-    local top = field.HEIGHT / 2 - height / 2
-    graphics.fill_rect(0, top, field.WIDTH, height, SHADE)
-    hud.centered(big, headline, field.WIDTH / 2, top + 6, TEXT)
-    if detail then
-        hud.centered(font, detail, field.WIDTH / 2, top + 6 + 2 * LINE + 4, DIM)
+-- The title screen's menu, with the selected item pointed out.
+local function fill_title()
+    node("field/title"):set_visible(shmup.mode == "title")
+    for i, item in hud.items do
+        local label = item:find("label")
+        local selected = i == shmup.selected
+        label:set_text(if selected then `> {item_names[i]} <` else item_names[i])
+        label:set_color(if selected then TEXT else DIM)
     end
+    local system = node("field/title/system")
+    system:set_text(`Bullets in {shmup.system} (Tab to switch)`)
+    system:set_color(hud.SYSTEM_COLORS[shmup.system])
+    node("field/title/no_library"):set_visible(danmaku == nil)
 end
 
--- The title screen's menu, over the field. Drawn in field coordinates.
-function hud.title(items: { string }, selected: number)
-    hud.centered(big, "WINGINE SHMUP", field.WIDTH / 2, 90, GOLD)
-    hud.centered(font, "A bullet hell in Luau, with or without Rust", field.WIDTH / 2, 116, DIM)
-    for i, item in items do
-        local color = if i == selected then TEXT else DIM
-        local text = if i == selected then `> {item} <` else item
-        hud.centered(font, text, field.WIDTH / 2, 160 + i * 16, color)
+-- The headline and the line under it to show across the middle of the field, if any.
+local function message(): (string?, string?)
+    if shmup.mode == "over" then
+        return "Game over", `Score {hud.number(shmup.score)} - Z to go on`
+    elseif shmup.mode == "clear" then
+        return "Stage clear!", `Score {hud.number(shmup.score)} - Z to go on`
+    elseif shmup.mode == "play" and shmup.paused then
+        return "Paused", "Esc to go on, X to quit"
+    elseif shmup.mode == "play" and shmup.message then
+        return shmup.message.headline, shmup.message.detail
     end
-    local system = `Bullets in {shmup.system} (Tab to switch)`
-    hud.centered(font, system, field.WIDTH / 2, 240, hud.SYSTEM_COLORS[shmup.system])
-    if not danmaku then
-        hud.centered(font, "No danmaku library: bullets run in Luau", field.WIDTH / 2, 252, DIM)
+    return nil, nil
+end
+
+-- Draws the HUD over the field, in canvas pixels.
+function hud.draw()
+    fill_panel()
+    fill_boss()
+    fill_title()
+    local headline, detail = message()
+    node("field/banner"):set_visible(headline ~= nil)
+    if headline then
+        node("field/banner/headline"):set_text(headline)
+        node("field/banner/detail"):set_text(detail or "")
     end
-    hud.centered(font, "Arrows to choose, Z to start", field.WIDTH / 2, 300, DIM)
+    graphics.draw_scene(hud.scene)
+    if shmup.mode == "stress" then
+        local plot = node("panel/stress/plot"):bounds()
+        stress.draw_plot(plot.x, plot.y, plot.width, plot.height, hud.SYSTEM_COLORS, PLOT_LINE)
+    end
 end
 
 return hud

@@ -67,8 +67,9 @@
 //! - `graphics.draw_tilemap(map, layer)` draws one layer of `map`, or all of them in order
 //!   without a layer. Only the cells the canvas shows are drawn.
 //! - `graphics.draw_scene(node)` draws a node of a scene and every node inside it, each before
-//!   its children, where they are in the scene. Hidden nodes don't draw, nor what's inside them,
-//!   and nothing is drawn where it's off the canvas.
+//!   its children, where they are in the scene, first laying the scene out on the canvas, so its
+//!   anchors follow the canvas's edges. Hidden nodes don't draw, nor what's inside them, and
+//!   nothing is drawn where it's off the canvas.
 //! - `graphics.set_camera(x, y, bounds)` centers the view on world position `x`, `y` for whatever
 //!   is drawn next, keeping it inside `bounds`, a rect such as `map:bounds()`, if given.
 //!   `graphics.set_camera(nil)`, the default at the start of each frame, draws in canvas pixels,
@@ -114,7 +115,8 @@
 //!
 //! - `scene.load(path)` loads the scene file at `path`, the scene files its instances place, the
 //!   tileset files its tilemaps use and the images they all name, and returns the scene's root
-//!   node. Each file is read once, and each load returns a copy of its own.
+//!   node, laid out on the canvas. Each file is read once, and each load returns a copy of its
+//!   own.
 //!
 //! `input`, while the game loads and in `update`:
 //!

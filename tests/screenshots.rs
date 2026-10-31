@@ -243,7 +243,7 @@ fn scene() {
         },
     }"##;
     let mut headless = headless();
-    let scene = load_scene(&mut headless, &[("scene.scene.luau", source)]);
+    let mut scene = load_scene(&mut headless, &[("scene.scene.luau", source)]);
     let frame = headless
         .render(128, 64, |canvas| {
             canvas.clear(Color::rgb8(0x1b, 0x26, 0x1e));
@@ -290,7 +290,7 @@ fn scene_tilemap() {
         },
     }"##;
     let mut headless = headless();
-    let scene = load_scene(
+    let mut scene = load_scene(
         &mut headless,
         &[("world.tileset.luau", tileset), ("level.scene.luau", level)],
     );
@@ -304,6 +304,68 @@ fn scene_tilemap() {
         })
         .unwrap();
     assert_screenshot(&headless, "scene_tilemap", frame);
+}
+
+/// A screen laid out by anchors, drawn on a wide canvas and a narrow one: a bar stretched along
+/// the bottom, inset by 4, with text at each end, the right-hand one aligned right; a panel in
+/// the middle, with two lines of centered text; a marker in the top-right corner, inside a group
+/// at the canvas's origin; and a shade over the left quarter of the canvas.
+#[test]
+fn scene_anchors() {
+    let screen = r##"return {
+        format = 1,
+        children = {
+            {
+                name = "bar", kind = "rect", x = 4, y = -4, anchor = { 0, 1 }, width = -8,
+                height = 12, stretch = { 1, 0 }, pivot = { 0, 12 }, color = "#3a405c",
+                children = {
+                    -- Without an anchor, it would be from the bar's origin, its bottom-left.
+                    { name = "lives", kind = "text", x = 2, y = 1, anchor = { 0, 0 }, text = "HP 3" },
+                    {
+                        name = "score", kind = "text", x = -2, y = 1, anchor = { 1, 0 },
+                        text = "1,250", align = "right", color = "#f2c14e",
+                    },
+                },
+            },
+            {
+                name = "panel", kind = "rect", y = -6, anchor = { 0.5, 0.5 }, width = 72,
+                height = 26, pivot = { 36, 13 }, color = "#14182c",
+                children = {
+                    {
+                        name = "title", kind = "text", y = 3, anchor = { 0.5, 0 },
+                        text = "Paused\nPress a key", align = "center",
+                    },
+                },
+            },
+            {
+                name = "corner", kind = "node",
+                children = {
+                    {
+                        name = "marker", kind = "rect", x = -2, y = 2, anchor = { 1, 0 }, width = 6,
+                        height = 6, pivot = { 6, 0 }, color = "#ff7b9c",
+                    },
+                },
+            },
+            {
+                name = "shade", kind = "rect", width = 0, height = 0, stretch = { 0.25, 1 },
+                color = "#00000080",
+            },
+        },
+    }"##;
+    let mut headless = headless();
+    let mut scene = load_scene(&mut headless, &[("screen.scene.luau", screen)]);
+    for (name, [width, height]) in [
+        ("scene_anchors_wide", [128, 64]),
+        ("scene_anchors_narrow", [96, 80]),
+    ] {
+        let frame = headless
+            .render(width, height, |canvas| {
+                canvas.clear(Color::rgb8(0x2a, 0x3d, 0x2c));
+                scene.draw(canvas);
+            })
+            .unwrap();
+        assert_screenshot(&headless, name, frame);
+    }
 }
 
 /// The scene at the end of `files`, a path and the file's contents for each scene and tileset

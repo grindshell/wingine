@@ -30,19 +30,27 @@ pub(super) fn module(
             // either way.
             let scene = lent
                 .context(|ctx| -> Result<Scene> {
-                    if let Some(scene) = loaded.borrow().get(&path) {
-                        return Ok(scene.clone());
-                    }
-                    let font = ctx.default_font().clone();
-                    let mut assets = GameAssets {
-                        ctx,
-                        folder: &folder,
-                        textures: &textures,
-                        files: &files,
+                    let size = ctx.canvas_size();
+                    let mut scene = match loaded.borrow().get(&path) {
+                        Some(scene) => scene.clone(),
+                        None => {
+                            let font = ctx.default_font().clone();
+                            let mut assets = GameAssets {
+                                ctx,
+                                folder: &folder,
+                                textures: &textures,
+                                files: &files,
+                            };
+                            let file = assets.scene(&path)?;
+                            Scene::new(&file, &path, &font, &mut assets)?
+                        }
                     };
-                    let file = assets.scene(&path)?;
-                    let scene = Scene::new(&file, &path, &font, &mut assets)?;
-                    loaded.borrow_mut().insert(path.clone(), scene.clone());
+                    loaded
+                        .borrow_mut()
+                        .entry(path.clone())
+                        .or_insert_with(|| scene.clone());
+                    // Laid out on the canvas until it's drawn, which fits it to the canvas again.
+                    scene.set_size(size);
                     Ok(scene)
                 })?
                 .map_err(mlua::Error::external)?;

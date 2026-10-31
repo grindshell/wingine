@@ -131,7 +131,7 @@ pub(super) fn module(
     graphics.set("draw_scene", {
         let lent = lent.clone();
         lua.create_function(move |_, node: UserDataRef<SceneNode>| {
-            node.read(|scene, id| lent.canvas(|canvas| scene.draw_node(canvas, id)))?
+            node.write(|scene, id| lent.canvas(|canvas| scene.draw_node(canvas, id)))?
         })?
     })?;
     graphics.set("set_camera", {

@@ -156,7 +156,9 @@ nodes inside hidden ones, don't draw, and nothing is drawn where it's off the ca
 scene's root, from [`scene.load`](scene.md#sceneload), to draw the whole scene.
 
 The scene's coordinates are the ones drawing uses: canvas pixels, or with a
-[camera](#graphicsset_camera) set, the world's.
+[camera](#graphicsset_camera) set, the world's. Drawing first lays the scene out on the canvas,
+so nodes [anchored](../scenes.md#laying-out-screens) to its edges follow them when it changes
+size.
 
 ```lua
 local level = scene.load("level.scene.luau")

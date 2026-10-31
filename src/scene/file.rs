@@ -8,7 +8,7 @@ use std::{collections::BTreeMap, fs, path::Path};
 
 use crate::{
     Error, Result,
-    graphics::Color,
+    graphics::{Align, Color},
     lua::{
         mlua::{self, chunk::ChunkMode},
         parse_hex, unpacked_color,
@@ -54,9 +54,15 @@ pub struct NodeDef {
     /// Unique among its siblings, without `/`, which separates the names in a path.
     pub name: String,
     pub kind: KindDef,
-    /// Where its origin is in its parent's coordinates.
+    /// Where its origin is in its parent's coordinates: from the parent's origin, or with an
+    /// `anchor`, from that point of the parent's rectangle.
     pub x: f32,
     pub y: f32,
+    /// The point of its parent's rectangle that `x` and `y` are measured from, as fractions of
+    /// its width and height from its top-left corner: `[0.5, 0.5]` is its middle. The rectangle
+    /// is what the parent covers, the canvas for the nodes at the top of a scene, or for a plain
+    /// node, its own parent's, carried along with it.
+    pub anchor: Option<[f32; 2]>,
     /// Radians, clockwise, about its origin.
     pub rotation: f32,
     /// How much it and its children are stretched along its own axes, about its origin. Negative
@@ -82,6 +88,7 @@ impl NodeDef {
             kind,
             x: 0.0,
             y: 0.0,
+            anchor: None,
             rotation: 0.0,
             scale_x: 1.0,
             scale_y: 1.0,
@@ -134,6 +141,8 @@ pub struct SpriteDef {
     pub cell: [u32; 2],
     /// The width and height it's stretched to, or its own size in texels.
     pub size: Option<[f32; 2]>,
+    /// The fractions of its parent's width and height added to its own: see [`RectDef`].
+    pub stretch: [f32; 2],
     /// The point of the sprite, from its top-left corner, at the node's origin, which it turns
     /// and stretches about.
     pub pivot: [f32; 2],
@@ -145,6 +154,10 @@ pub struct SpriteDef {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RectDef {
     pub size: [f32; 2],
+    /// The fractions of its parent's width and height added to `size`, so it grows and shrinks
+    /// with its parent: with a width of 0 and a stretch of `[1, 0]`, it's as wide as its parent.
+    /// The parent's rectangle is the one anchors are in: see [`NodeDef::anchor`].
+    pub stretch: [f32; 2],
     /// As a sprite's.
     pub pivot: [f32; 2],
     pub color: Color,
@@ -158,17 +171,22 @@ pub struct TextDef {
     pub font_scale: f32,
     /// The width it wraps to between words, if any.
     pub wrap: Option<f32>,
-    /// The point of the text, from its top-left corner, at the node's origin. Text moves with
-    /// its node but doesn't turn or stretch.
+    /// How its lines line up, and which part of them is at the node's origin: their left edges,
+    /// their middles or their right edges.
+    pub align: Align,
+    /// The point of the text at the node's origin, from the top of the edge or middle it's
+    /// aligned by. Text moves with its node but doesn't turn or stretch.
     pub pivot: [f32; 2],
     pub color: Color,
 }
 
 /// A rectangle that doesn't draw, for marking out part of a scene, such as somewhere the player
-/// can't walk or something happens.
+/// can't walk or something happens, or for laying out the nodes inside it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AreaDef {
     pub size: [f32; 2],
+    /// As a rect's.
+    pub stretch: [f32; 2],
     /// As a sprite's.
     pub pivot: [f32; 2],
 }
@@ -617,6 +635,9 @@ pub(super) fn read_node(
     node.rotation = number("rotation", 0.0).map_err(at)?;
     node.scale_x = number("scale_x", 1.0).map_err(at)?;
     node.scale_y = number("scale_y", 1.0).map_err(at)?;
+    if let Some(anchor) = fields.take("anchor") {
+        node.anchor = Some(pair(anchor, "anchor").map_err(at)?);
+    }
     if let Some(visible) = fields.take("visible") {
         node.visible = boolean(visible, "visible").map_err(at)?;
     }
@@ -657,15 +678,16 @@ fn check_name(name: &str) -> Result<(), String> {
 /// layer is where its tilemap is.
 fn check_placement(node: &NodeDef) -> Result<(), String> {
     let turned = node.rotation != 0.0 || node.scale_x != 1.0 || node.scale_y != 1.0;
+    let moved = node.x != 0.0 || node.y != 0.0 || node.anchor.is_some();
     match node.kind {
         KindDef::Tilemap(_) if turned => Err(
             "a tilemap moves, but doesn't turn or stretch: it has no `rotation`, `scale_x` \
                  or `scale_y`"
                 .into(),
         ),
-        KindDef::TileLayer(_) if turned || node.x != 0.0 || node.y != 0.0 => Err(
-            "a tile layer is where its tilemap is: it has no `x`, `y`, `rotation`, `scale_x` or \
-             `scale_y`"
+        KindDef::TileLayer(_) if turned || moved => Err(
+            "a tile layer is where its tilemap is: it has no `x`, `y`, `anchor`, `rotation`, \
+             `scale_x` or `scale_y`"
                 .into(),
         ),
         _ => Ok(()),
@@ -696,12 +718,14 @@ fn read_kind(
                 sheet,
                 cell,
                 size,
+                stretch: read_stretch(fields)?,
                 pivot: read_pivot(fields)?,
                 tint: optional_color(fields, "tint")?,
             })
         }
         "rect" => KindDef::Rect(RectDef {
             size: read_size(fields, "a rect node")?,
+            stretch: read_stretch(fields)?,
             pivot: read_pivot(fields)?,
             color: optional_color(fields, "color")?,
         }),
@@ -718,16 +742,27 @@ fn read_kind(
                 Some(wrap) => Some(finite(wrap, "wrap")?),
                 None => None,
             };
+            let align = match fields.take("align") {
+                Some(align) => {
+                    let name = string(align, "align")?;
+                    Align::from_name(&name).ok_or_else(|| {
+                        format!(r#"`align` must be "left", "center" or "right", not "{name}""#)
+                    })?
+                }
+                None => Align::Left,
+            };
             KindDef::Text(TextDef {
                 text: string(text, "text")?,
                 font_scale,
                 wrap,
+                align,
                 pivot: read_pivot(fields)?,
                 color: optional_color(fields, "color")?,
             })
         }
         "area" => KindDef::Area(AreaDef {
             size: read_size(fields, "an area node")?,
+            stretch: read_stretch(fields)?,
             pivot: read_pivot(fields)?,
         }),
         "tilemap" => {
@@ -865,6 +900,13 @@ fn read_size(fields: &mut Fields, what: &str) -> Result<[f32; 2], String> {
 fn read_pivot(fields: &mut Fields) -> Result<[f32; 2], String> {
     match fields.take("pivot") {
         Some(pivot) => pair(pivot, "pivot"),
+        None => Ok([0.0, 0.0]),
+    }
+}
+
+fn read_stretch(fields: &mut Fields) -> Result<[f32; 2], String> {
+    match fields.take("stretch") {
+        Some(stretch) => pair(stretch, "stretch"),
         None => Ok([0.0, 0.0]),
     }
 }
@@ -1077,6 +1119,9 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
     set("kind", string(node.kind.name()));
     set("x", number(node.x));
     set("y", number(node.y));
+    if let Some(anchor) = node.anchor {
+        set("anchor", pair(anchor));
+    }
     set("rotation", number(node.rotation));
     set("scale_x", number(node.scale_x));
     set("scale_y", number(node.scale_y));
@@ -1102,12 +1147,14 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
                 set("width", number(width));
                 set("height", number(height));
             }
+            set("stretch", pair(sprite.stretch));
             set("pivot", pair(sprite.pivot));
             set("tint", hex(sprite.tint));
         }
         KindDef::Rect(rect) => {
             set("width", number(rect.size[0]));
             set("height", number(rect.size[1]));
+            set("stretch", pair(rect.stretch));
             set("pivot", pair(rect.pivot));
             set("color", hex(rect.color));
         }
@@ -1117,12 +1164,14 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
             if let Some(wrap) = text.wrap {
                 set("wrap", number(wrap));
             }
+            set("align", string(text.align.name()));
             set("pivot", pair(text.pivot));
             set("color", hex(text.color));
         }
         KindDef::Area(area) => {
             set("width", number(area.size[0]));
             set("height", number(area.size[1]));
+            set("stretch", pair(area.stretch));
             set("pivot", pair(area.pivot));
         }
         KindDef::Tilemap(map) => {
@@ -1192,8 +1241,11 @@ mod tests {
                             { name = "sails", kind = "node", visible = false },
                         },
                     },
-                    { name = "pond", kind = "rect", width = 48, height = 32, color = "#21406a80" },
-                    { name = "title", kind = "text", text = "Hi", font_scale = 2, wrap = 100 },
+                    {
+                        name = "pond", kind = "rect", anchor = { 0.5, 1 }, width = 48, height = 32,
+                        stretch = { 1, 0 }, color = "#21406a80",
+                    },
+                    { name = "title", kind = "text", text = "Hi", font_scale = 2, wrap = 100, align = "center" },
                     { name = "gate", kind = "area", width = 16, height = 8, props = { to = "town" } },
                     {
                         name = "map", kind = "tilemap", x = 8, tileset = "world.tileset.luau",
@@ -1227,12 +1279,14 @@ mod tests {
         assert_eq!([mill.x, mill.y, mill.rotation], [10.0, -4.5, 0.25]);
         assert_eq!([mill.scale_x, mill.scale_y], [-1.0, 1.0]);
         assert_eq!(mill.tags, ["building", "solid"]);
+        assert_eq!(mill.anchor, None);
         assert_eq!(
             mill.kind,
             KindDef::Sprite(SpriteDef {
                 sheet: "tiles".into(),
                 cell: [3, 20],
                 size: None,
+                stretch: [0.0, 0.0],
                 pivot: [8.0, 16.0],
                 tint: Color::rgb8(0xd8, 0xb0, 0x70),
             })
@@ -1241,10 +1295,13 @@ mod tests {
         assert_eq!(sails.kind, KindDef::Node);
         assert!(!sails.visible);
 
+        let pond = &scene.children[1];
+        assert_eq!(pond.anchor, Some([0.5, 1.0]));
         assert_eq!(
-            scene.children[1].kind,
+            pond.kind,
             KindDef::Rect(RectDef {
                 size: [48.0, 32.0],
+                stretch: [1.0, 0.0],
                 pivot: [0.0, 0.0],
                 color: Color::rgba8(0x21, 0x40, 0x6a, 0x80),
             })
@@ -1255,6 +1312,7 @@ mod tests {
                 text: "Hi".into(),
                 font_scale: 2.0,
                 wrap: Some(100.0),
+                align: Align::Center,
                 pivot: [0.0, 0.0],
                 color: Color::WHITE,
             })
@@ -1264,6 +1322,7 @@ mod tests {
             gate.kind,
             KindDef::Area(AreaDef {
                 size: [16.0, 8.0],
+                stretch: [0.0, 0.0],
                 pivot: [0.0, 0.0],
             })
         );
@@ -1421,6 +1480,22 @@ mod tests {
                 "{ name = 'a', kind = 'node', bounce = 1 }",
                 "node `a`: a plain node has no field `bounce`",
             ),
+            (
+                "{ name = 'a', kind = 'text', text = 'hi', align = 'middle' }",
+                r#"`align` must be "left", "center" or "right", not "middle""#,
+            ),
+            (
+                "{ name = 'a', kind = 'area', width = 4, height = 4, stretch = { 1 } }",
+                "`stretch` must be two numbers",
+            ),
+            (
+                "{ name = 'a', kind = 'node', anchor = 'middle' }",
+                "`anchor` must be a list",
+            ),
+            (
+                "{ name = 'a', kind = 'text', text = 'hi', stretch = { 1, 0 } }",
+                "a text node has no field `stretch`",
+            ),
         ];
         for (children, expected) in cases {
             let err = error(&with_children(children));
@@ -1466,6 +1541,10 @@ mod tests {
             ),
             (
                 map(&layer("x = 4, tiles = { '   ', '   ' }"), ""),
+                "node `map/ground`: a tile layer is where its tilemap is",
+            ),
+            (
+                map(&layer("anchor = { 0, 0 }, tiles = { '   ', '   ' }"), ""),
                 "node `map/ground`: a tile layer is where its tilemap is",
             ),
             (

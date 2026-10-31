@@ -753,6 +753,71 @@ fn scenes_draw_and_change() {
 }
 
 #[test]
+fn scenes_lay_out_on_the_canvas() {
+    let folder = game(
+        "scenes_lay_out",
+        &[
+            // The canvas is the window's size.
+            ("conf.luau", "return { width = 40, height = 20 }"),
+            (
+                "screen.scene.luau",
+                r##"return {
+                    format = 1,
+                    children = {
+                        {
+                            name = "corner", kind = "rect", anchor = { 1, 1 }, width = 2,
+                            height = 2, pivot = { 2, 2 }, color = "#ff0000",
+                        },
+                        { name = "label", kind = "text", text = "Hi", align = "right" },
+                    },
+                }"##,
+            ),
+            (
+                "main.luau",
+                "screen = scene.load('screen.scene.luau')
+                corner = screen:find('corner')
+                label = screen:find('label')
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.draw_scene(screen)
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    let bounds = "corner:bounds().x, corner:bounds().y";
+    assert_eq!(
+        eval::<(f32, f32)>(&simulation, bounds),
+        (38.0, 18.0),
+        "laid out on the canvas once loaded"
+    );
+    assert_eq!(
+        eval::<(f32, f32)>(&simulation, "corner:anchor()"),
+        (1.0, 1.0)
+    );
+    simulation.resize(60, 30);
+    simulation.step();
+    assert_eq!(eval::<(f32, f32)>(&simulation, bounds), (58.0, 28.0));
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&image, 59, 29), [255, 0, 0, 255]);
+
+    let scripts = simulation.game().scripts();
+    scripts
+        .load_source("test", "corner:set_anchor(0.5, 0) label:set_anchor(nil)")
+        .unwrap();
+    assert_eq!(eval::<(f32, f32)>(&simulation, bounds), (28.0, -2.0));
+    assert!(eval::<bool>(
+        &simulation,
+        "label:anchor() == nil and label:bounds().x + label:bounds().width == 0"
+    ));
+    let err = scripts
+        .load_source("test", "corner:set_anchor(1)")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("set_anchor takes fractions"), "{err}");
+}
+
+#[test]
 fn scene_nodes_refuse_what_they_do_not_have() {
     let folder = game(
         "scene_errors",

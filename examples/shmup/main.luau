@@ -11,8 +11,8 @@
 --
 -- The player is in `player.luau`, enemies in `enemies.luau`, the waves in `stage.luau`, the boss
 -- and its spell cards in `boss.luau`, and the ways they fire in `patterns.luau`. `stress.luau` is
--- the stress test and `hud.luau` the panel and screens. The game's state is in the global table
--- `shmup`, where tests can see it.
+-- the stress test, and `hud.luau` the panel and screens, which `hud.scene.luau` lays out. The
+-- game's state is in the global table `shmup`, where tests can see it.
 --
 -- Run with `cargo run --release -- examples/shmup`. `examples/native-danmaku` says how to build
 -- the library and where to put it.
@@ -39,8 +39,6 @@ local STAR_COLORS = { graphics.color("#3a405c"), graphics.color("#5a628c"), grap
 
 local BACKGROUND = graphics.color("#14182c")
 local FLASH = graphics.color({ r = 1, g = 1, b = 1, a = 0.35 })
-
-local MENU = { "Play", "Boss practice", "Stress test" }
 
 input.bind("up", { "Up", "W" })
 input.bind("down", { "Down", "S" })
@@ -82,6 +80,11 @@ shmup = {
     mode = "title",
     -- The title menu's selected item.
     selected = 1,
+    -- Where the cursor was the frame before, if it was in the window, so the menu can tell when
+    -- it moves.
+    cursor = nil :: { x: number, y: number }?,
+    -- The root of the HUD's scene, which `hud.luau` fills in.
+    hud = hud.scene,
     -- The bullet system running, and its name.
     bullets = systems[1].bullets,
     system = systems[1].name,
@@ -199,15 +202,25 @@ local function update_stars(dt: number)
 end
 
 local function update_title()
+    local items = #hud.items
+    -- The cursor selects the item it moves onto, and clicking one starts it.
+    local x, y = input.mouse_position()
+    local last = shmup.cursor
+    local pointed = if x and y then hud.item_at(x, y) else nil
+    if pointed and (not last or last.x ~= x or last.y ~= y) then
+        shmup.selected = pointed
+    end
+    shmup.cursor = if x and y then { x = x, y = y } else nil
+    local clicked = pointed ~= nil and input.mouse_pressed("left")
     if input.pressed("up") then
-        shmup.selected = (shmup.selected - 2) % #MENU + 1
+        shmup.selected = (shmup.selected - 2) % items + 1
     elseif input.pressed("down") then
-        shmup.selected = shmup.selected % #MENU + 1
-    elseif input.pressed("confirm") then
-        local item = MENU[shmup.selected]
-        if item == "Play" then
+        shmup.selected = shmup.selected % items + 1
+    elseif input.pressed("confirm") or clicked then
+        local start = hud.items[shmup.selected]:props().start
+        if start == "play" then
             shmup.start()
-        elseif item == "Boss practice" then
+        elseif start == "boss" then
             shmup.start("boss")
         else
             shmup.start_stress()
@@ -222,6 +235,7 @@ local function update_play(dt: number)
     if shmup.paused then
         if input.pressed("bomb") then
             shmup.mode = "title"
+            shmup.paused = false
             shmup.bullets.clear()
         end
         return
@@ -285,25 +299,8 @@ function draw()
     if shmup.player.bombing > 0 and shmup.mode == "play" then
         graphics.fill_rect(0, 0, field.WIDTH, field.HEIGHT, FLASH)
     end
-    if shmup.mode == "play" then
-        hud.boss()
-    end
-
-    if shmup.mode == "title" then
-        hud.title(MENU, shmup.selected)
-    elseif shmup.mode == "over" then
-        hud.banner("Game over", `Score {hud.number(shmup.score)} - Z to go on`)
-    elseif shmup.mode == "clear" then
-        hud.banner("Stage clear!", `Score {hud.number(shmup.score)} - Z to go on`)
-    elseif shmup.paused then
-        hud.banner("Paused", "Esc to go on, X to quit")
-    elseif shmup.message then
-        hud.banner(shmup.message.headline, shmup.message.detail)
-    end
-
     graphics.set_camera(nil)
-    hud.frame()
-    hud.panel()
+    hud.draw()
 end
 
 sounds.start_music()

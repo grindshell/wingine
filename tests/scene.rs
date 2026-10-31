@@ -186,6 +186,85 @@ fn points_are_inside_nodes_as_they_are_turned() {
     assert!(!scene.contains(scene.root(), [0.0, 0.0]));
 }
 
+/// A screen: a bar along the bottom, inset by 4, with a score at its right end, and a menu in the
+/// middle, with a group in it and a node in the group anchored to the menu's corner.
+const SCREEN: &str = r##"return {
+    format = 1,
+    children = {
+        {
+            name = "bar", kind = "rect", y = -4, anchor = { 0, 1 }, width = -8, height = 12,
+            stretch = { 1, 0 }, pivot = { -4, 12 },
+            children = {
+                {
+                    name = "score", kind = "text", x = -2, anchor = { 1, 0.5 }, pivot = { 0, 5 },
+                    text = "120", align = "right",
+                },
+            },
+        },
+        {
+            name = "menu", kind = "area", anchor = { 0.5, 0.5 }, width = 80, height = 40,
+            pivot = { 40, 20 },
+            children = {
+                {
+                    name = "group", kind = "node", x = 10,
+                    children = { { name = "corner", kind = "node", anchor = { 1, 1 } } },
+                },
+            },
+        },
+    },
+}"##;
+
+#[test]
+fn nodes_anchor_and_stretch_to_their_parents() {
+    let mut headless = headless();
+    let mut scene = load(
+        &mut headless,
+        &[("screen.scene.luau", SCREEN)],
+        "screen.scene.luau",
+    )
+    .unwrap();
+    let root = scene.root();
+    let [bar, score, menu, corner] = ["bar", "bar/score", "menu", "menu/group/corner"]
+        .map(|path| scene.find(root, path).unwrap());
+    assert_eq!(scene.size(), [0.0, 0.0], "until it's drawn");
+    scene.set_size([200.0, 100.0]);
+
+    assert_eq!(scene.bounds(bar), Some(Rect::new(4.0, 84.0, 192.0, 12.0)));
+    assert_eq!(
+        scene.node(bar).size(),
+        Some([-8.0, 12.0]),
+        "before stretching"
+    );
+    assert_eq!(scene.bounds(menu), Some(Rect::new(60.0, 30.0, 80.0, 40.0)));
+    // The group passes the menu's rectangle on, carried along with it.
+    assert_near(scene.transform(corner).apply([0.0, 0.0]), [150.0, 70.0]);
+    // Right-aligned text ends at its origin, 2 in from the bar's right end, which is at 196.
+    let [width, _] = scene.node(score).size().unwrap();
+    assert_eq!(
+        scene.rect(score),
+        Some(Rect::new(-width, -5.0, width, 10.0))
+    );
+    assert_eq!(
+        scene.bounds(score),
+        Some(Rect::new(194.0 - width, 85.0, width, 10.0))
+    );
+    assert!(scene.contains(score, [193.0, 90.0]));
+
+    // On a smaller canvas, they follow its edges and middle.
+    let frame = headless.render(100, 60, |canvas| scene.draw(canvas));
+    frame.unwrap();
+    assert_eq!(scene.size(), [100.0, 60.0], "drawing fits it to the canvas");
+    assert_eq!(scene.bounds(bar), Some(Rect::new(4.0, 44.0, 92.0, 12.0)));
+    assert_eq!(scene.bounds(menu), Some(Rect::new(10.0, 10.0, 80.0, 40.0)));
+
+    // Without its anchor, it's from the bar's origin, its bottom-left corner.
+    scene.node_mut(score).set_anchor(None);
+    assert_near(scene.transform(score).apply([0.0, 0.0]), [-2.0, 56.0]);
+    // Moving the root moves everything, anchors and all.
+    scene.node_mut(root).set_position([5.0, 0.0]);
+    assert_eq!(scene.bounds(bar), Some(Rect::new(9.0, 44.0, 92.0, 12.0)));
+}
+
 #[test]
 fn props_and_kinds_come_from_the_file() {
     let mut scene = garden(&mut headless());

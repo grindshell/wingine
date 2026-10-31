@@ -12,7 +12,7 @@ use super::{
     file::{FORMAT, KindDef, NodeDef, SceneFile, SheetDef, TileDef, TilesetFile, Value},
     is_identifier,
 };
-use crate::graphics::Color;
+use crate::graphics::{Align, Color};
 
 /// `scene` as the text of a scene file, or why it can't be written: only finite numbers can.
 pub(super) fn write(scene: &SceneFile) -> Result<String, String> {
@@ -188,9 +188,15 @@ impl Writer {
         self.open();
         self.field("name", &quoted(&node.name));
         self.field("kind", &quoted(node.kind.name()));
+        for (key, value) in [("x", node.x), ("y", node.y)] {
+            if value != 0.0 {
+                self.number_field(key, value).map_err(at)?;
+            }
+        }
+        if let Some(anchor) = node.anchor {
+            self.pair_field("anchor", anchor).map_err(at)?;
+        }
         let numbers = [
-            ("x", node.x, 0.0),
-            ("y", node.y, 0.0),
             ("rotation", node.rotation, 0.0),
             ("scale_x", node.scale_x, 1.0),
             ("scale_y", node.scale_y, 1.0),
@@ -219,8 +225,8 @@ impl Writer {
         Ok(())
     }
 
-    /// The fields of what a node holds, in a fixed order: what it shows, its size, its pivot,
-    /// then its color.
+    /// The fields of what a node holds, in a fixed order: what it shows, its size and how it's
+    /// laid out, its pivot, then its color.
     fn kind(&mut self, kind: &KindDef) -> Result<(), String> {
         match kind {
             KindDef::Node => {}
@@ -232,12 +238,14 @@ impl Writer {
                     self.number_field("width", width)?;
                     self.number_field("height", height)?;
                 }
+                self.stretch(sprite.stretch)?;
                 self.pivot(sprite.pivot)?;
                 self.color("tint", sprite.tint);
             }
             KindDef::Rect(rect) => {
                 self.number_field("width", rect.size[0])?;
                 self.number_field("height", rect.size[1])?;
+                self.stretch(rect.stretch)?;
                 self.pivot(rect.pivot)?;
                 self.color("color", rect.color);
             }
@@ -249,12 +257,16 @@ impl Writer {
                 if let Some(wrap) = text.wrap {
                     self.number_field("wrap", wrap)?;
                 }
+                if text.align != Align::Left {
+                    self.field("align", &quoted(text.align.name()));
+                }
                 self.pivot(text.pivot)?;
                 self.color("color", text.color);
             }
             KindDef::Area(area) => {
                 self.number_field("width", area.size[0])?;
                 self.number_field("height", area.size[1])?;
+                self.stretch(area.stretch)?;
                 self.pivot(area.pivot)?;
             }
             KindDef::Tilemap(map) => {
@@ -308,6 +320,13 @@ impl Writer {
     fn pivot(&mut self, pivot: [f32; 2]) -> Result<(), String> {
         if pivot != [0.0, 0.0] {
             self.pair_field("pivot", pivot)?;
+        }
+        Ok(())
+    }
+
+    fn stretch(&mut self, stretch: [f32; 2]) -> Result<(), String> {
+        if stretch != [0.0, 0.0] {
+            self.pair_field("stretch", stretch)?;
         }
         Ok(())
     }
@@ -514,6 +533,7 @@ mod tests {
                 sheet: "tiles".into(),
                 cell: [1, 2],
                 size: Some([32.0, 32.0]),
+                stretch: [0.0, 0.5],
                 pivot: [0.5, 0.25],
                 tint: Color::rgba8(1, 2, 3, 4),
             }),
@@ -524,10 +544,12 @@ mod tests {
             "floor",
             KindDef::Rect(RectDef {
                 size: [8.0, 8.0],
+                stretch: [0.0, 0.0],
                 pivot: [0.0, 0.0],
                 color: Color::BLACK,
             }),
         ));
+        mill.children[0].anchor = Some([0.0, 0.0]);
         let mut props = Props::new();
         props.insert("for".into(), Value::Number(-0.5));
         let scene = SceneFile {
@@ -632,6 +654,50 @@ mod tests {
     fn levels_write_and_read_back() {
         let scene = parse(LEVEL);
         assert_eq!(scene.to_luau().unwrap(), LEVEL);
+    }
+
+    /// A screen: a bar along the bottom of the canvas, with a label at its right end, and a
+    /// panel in the middle.
+    const SCREEN: &str = r##"return {
+    format = 1,
+    children = {
+        {
+            name = "bar",
+            kind = "rect",
+            anchor = { 0, 1 },
+            width = -8,
+            height = 12,
+            stretch = { 1, 0 },
+            pivot = { -4, 16 },
+            color = "#14182c",
+            children = {
+                {
+                    name = "score",
+                    kind = "text",
+                    x = -4,
+                    y = 2,
+                    anchor = { 1, 0 },
+                    text = "0",
+                    align = "right",
+                },
+            },
+        },
+        {
+            name = "panel",
+            kind = "area",
+            anchor = { 0.5, 0.5 },
+            width = 120,
+            height = 80,
+            pivot = { 60, 40 },
+        },
+    },
+}
+"##;
+
+    #[test]
+    fn screens_write_and_read_back() {
+        let scene = parse(SCREEN);
+        assert_eq!(scene.to_luau().unwrap(), SCREEN);
     }
 
     /// A tileset in its canonical layout.

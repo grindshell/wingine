@@ -157,23 +157,32 @@ impl Font {
     /// With a `max_width`, lines wrap between words to fit it, and words too long for a line of
     /// their own break between characters. `\n` always starts a new line.
     pub fn layout(&self, text: &str, max_width: Option<f32>) -> TextLayout {
-        let mut glyphs = Vec::new();
-        let (size, lines) = self
+        self.layout_aligned(text, max_width, Align::Left)
+    }
+
+    /// [`Font::layout`], with the lines lined up by `align` across the width of the widest. Lines
+    /// move by whole pixels, so pixel fonts stay crisp.
+    pub fn layout_aligned(&self, text: &str, max_width: Option<f32>, align: Align) -> TextLayout {
+        let (glyphs, size, lines) = self
             .data
             .metrics
-            .lay_out(self.scale, text, max_width, |glyph| glyphs.push(glyph));
+            .lay_out_aligned(self.scale, text, max_width, align);
         TextLayout {
             font: self.clone(),
             glyphs,
             size,
             lines,
+            align,
         }
     }
 
     /// The width and height of `text` drawn without wrapping. The width runs to the right edge of
     /// the last glyph's ink on the longest line; the height is a whole number of lines.
     pub fn measure(&self, text: &str) -> [f32; 2] {
-        self.data.metrics.lay_out(self.scale, text, None, |_| {}).0
+        self.data
+            .metrics
+            .lay_out(self.scale, text, None, |_, _| {})
+            .0
     }
 
     pub(crate) fn texture(&self) -> &Texture {
@@ -181,8 +190,50 @@ impl Font {
     }
 
     /// Places each glyph of `text` without wrapping, passing it to `place`.
-    pub(crate) fn place_glyphs(&self, text: &str, place: impl FnMut(PlacedGlyph)) {
-        self.data.metrics.lay_out(self.scale, text, None, place);
+    pub(crate) fn place_glyphs(&self, text: &str, mut place: impl FnMut(PlacedGlyph)) {
+        self.data
+            .metrics
+            .lay_out(self.scale, text, None, |glyph, _| place(glyph));
+    }
+}
+
+/// How the lines of laid-out text line up: along their left edges, about their middles, or along
+/// their right edges.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Align {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+impl Align {
+    /// Its name in scene files and scripts, such as `"center"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Center => "center",
+            Self::Right => "right",
+        }
+    }
+
+    /// The alignment named `name`, if there is one.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "left" => Some(Self::Left),
+            "center" => Some(Self::Center),
+            "right" => Some(Self::Right),
+            _ => None,
+        }
+    }
+
+    /// How far across a line's width the point it lines up by is: 0, 0.5 or 1.
+    pub fn fraction(self) -> f32 {
+        match self {
+            Self::Left => 0.0,
+            Self::Center => 0.5,
+            Self::Right => 1.0,
+        }
     }
 }
 
@@ -191,14 +242,14 @@ impl Metrics {
         self.glyphs.get(&c).or(self.fallback.as_ref())
     }
 
-    /// Lays out `text` at `scale`, passing each glyph with something to draw to `place`, and
-    /// returns the text's size and how many lines it takes.
+    /// Lays out `text` at `scale`, passing each glyph with something to draw to `place`, with the
+    /// line it's on, counting from 0, and returns the text's size and how many lines it takes.
     fn lay_out(
         &self,
         scale: f32,
         text: &str,
         max_width: Option<f32>,
-        mut place: impl FnMut(PlacedGlyph),
+        mut place: impl FnMut(PlacedGlyph, usize),
     ) -> ([f32; 2], usize) {
         let max_width = max_width.unwrap_or(f32::INFINITY);
         let space = self.glyph(' ').map_or(0.0, |glyph| glyph.advance * scale);
@@ -245,7 +296,7 @@ impl Metrics {
                             bounds.w,
                             bounds.h,
                         );
-                        place(PlacedGlyph { rect, uv: glyph.uv });
+                        place(PlacedGlyph { rect, uv: glyph.uv }, cursor.line);
                         cursor.ink = Some(cursor.pen + bounds.right());
                     }
                     cursor.pen += glyph.advance * scale;
@@ -253,6 +304,35 @@ impl Metrics {
             }
         }
         cursor.finish()
+    }
+
+    /// Lays out `text` as [`Metrics::lay_out`] does, then moves each line by whole pixels to line
+    /// up by `align` across the width of the widest, and returns the glyphs, the text's size and
+    /// how many lines it takes.
+    fn lay_out_aligned(
+        &self,
+        scale: f32,
+        text: &str,
+        max_width: Option<f32>,
+        align: Align,
+    ) -> (Vec<PlacedGlyph>, [f32; 2], usize) {
+        let mut glyphs = Vec::new();
+        let mut lines_of = Vec::new();
+        let (size, lines) = self.lay_out(scale, text, max_width, |glyph, line| {
+            glyphs.push(glyph);
+            lines_of.push(line);
+        });
+        if align != Align::Left {
+            // Each line's ink, which ends where its last glyph's does.
+            let mut widths = vec![0.0f32; lines];
+            for (glyph, &line) in glyphs.iter().zip(&lines_of) {
+                widths[line] = widths[line].max(glyph.rect.right());
+            }
+            for (glyph, &line) in glyphs.iter_mut().zip(&lines_of) {
+                glyph.rect.x += ((size[0] - widths[line]) * align.fraction()).round();
+            }
+        }
+        (glyphs, size, lines)
     }
 
     /// How far the ink of `word` reaches from where it starts.
@@ -326,12 +406,18 @@ pub struct TextLayout {
     glyphs: Vec<PlacedGlyph>,
     size: [f32; 2],
     lines: usize,
+    align: Align,
 }
 
 impl TextLayout {
     /// The width and height the text takes up, measured as for [`Font::measure`].
     pub fn size(&self) -> [f32; 2] {
         self.size
+    }
+
+    /// How its lines line up, across the width of the widest.
+    pub fn align(&self) -> Align {
+        self.align
     }
 
     /// How many glyphs there are to draw. Spaces and other characters without ink don't count.
@@ -384,8 +470,43 @@ mod tests {
 
     fn lay_out(text: &str, max_width: Option<f32>) -> (Vec<Rect>, [f32; 2], usize) {
         let mut rects = Vec::new();
-        let (size, lines) = metrics().lay_out(1.0, text, max_width, |g| rects.push(g.rect));
+        let (size, lines) = metrics().lay_out(1.0, text, max_width, |g, _| rects.push(g.rect));
         (rects, size, lines)
+    }
+
+    /// Where each glyph of `text` starts across, with its lines lined up by `align`.
+    fn aligned(text: &str, max_width: Option<f32>, align: Align) -> Vec<f32> {
+        let (glyphs, _, _) = metrics().lay_out_aligned(1.0, text, max_width, align);
+        glyphs.iter().map(|g| g.rect.x).collect()
+    }
+
+    #[test]
+    fn lines_line_up_across_the_widest() {
+        // "abc" is 11 wide, "a" 3 and "ai" 5.
+        assert_eq!(
+            aligned("abc\na\nai", None, Align::Left),
+            [0., 4., 8., 0., 0., 4.]
+        );
+        assert_eq!(
+            aligned("abc\na\nai", None, Align::Right),
+            [0., 4., 8., 8., 6., 10.]
+        );
+        assert_eq!(
+            aligned("abc\na\nai", None, Align::Center),
+            [0., 4., 8., 4., 3., 7.]
+        );
+        // Wrapped lines line up the same way.
+        assert_eq!(aligned("ab c", Some(8.0), Align::Right), [0., 4., 4.]);
+        let (_, size, _) = metrics().lay_out_aligned(1.0, "abc\na", None, Align::Center);
+        assert_eq!(size, [11.0, 12.0], "the same size");
+    }
+
+    #[test]
+    fn alignments_have_names() {
+        for align in [Align::Left, Align::Center, Align::Right] {
+            assert_eq!(Align::from_name(align.name()), Some(align));
+        }
+        assert_eq!(Align::from_name("middle"), None);
     }
 
     #[test]
@@ -485,7 +606,7 @@ mod tests {
     #[test]
     fn scaling_scales_everything() {
         let mut rects = Vec::new();
-        let (size, _) = metrics().lay_out(2.0, "a b", Some(18.0), |g| rects.push(g.rect));
+        let (size, _) = metrics().lay_out(2.0, "a b", Some(18.0), |g, _| rects.push(g.rect));
         assert_eq!(rects[1], Rect::new(12.0, 0.0, 6.0, 8.0));
         assert_eq!(size, [18.0, 12.0]);
     }

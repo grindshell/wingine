@@ -106,6 +106,9 @@
 //!
 //! - `x` and `y`, where its origin is within its parent, 0 by default. Scene coordinates are
 //!   the coordinates the scene is drawn in: canvas pixels, or the world's with a camera.
+//! - `anchor`, the point of its parent's rectangle that `x` and `y` are measured from instead of
+//!   the parent's origin: fractions of its width and height from its top-left corner,
+//!   `{ x, y }`. See below.
 //! - `rotation`, radians clockwise about its origin, 0 by default.
 //! - `scale_x` and `scale_y`, how much it's stretched along its own axes about its origin, 1 by
 //!   default. Negative scales mirror it.
@@ -120,14 +123,20 @@
 //! - `node`: nothing but a place, for grouping nodes, turning them together, or marking a spot.
 //! - `sprite`: `sheet`, the name of one of the scene's sheets, and `cell`, the sprite's column and
 //!   row in it, `{ column, row }`, counting from 0 at the top-left. Optionally, `width` and
-//!   `height` to stretch it to (its own size by default), and `tint`, a color its colors are
-//!   multiplied by.
-//! - `rect`: a filled rectangle, `width` by `height`, of `color` (white by default).
+//!   `height` to stretch it to (its own size by default), `stretch`, as a rect's, and `tint`, a
+//!   color its colors are multiplied by.
+//! - `rect`: a filled rectangle, `width` by `height`, of `color` (white by default). `stretch`,
+//!   `{ 0, 0 }` by default, is the fractions of its parent's width and height added to its own,
+//!   so it grows and shrinks with its parent: a rect `width = 0` with `stretch = { 1, 0 }` is as
+//!   wide as its parent, and one `width = -16` is 16 narrower. It's never less than nothing.
 //! - `text`: `text` in the built-in font, `font_scale` times its size (1 by default), wrapped
-//!   between words to `wrap` if given, in `color` (white by default). Text moves with its node,
-//!   but doesn't turn or stretch.
+//!   between words to `wrap` if given, in `color` (white by default). `align`, `"left"` by
+//!   default, `"center"` or `"right"`, lines its lines up along their left edges, about their
+//!   middles or along their right edges, and puts that edge or middle at the node's origin, so
+//!   `"right"` ends the text there. Text moves with its node, but doesn't turn or stretch.
 //! - `area`: a rectangle `width` by `height` that doesn't draw, for marking out part of a scene,
-//!   such as somewhere the player can't walk or where something happens.
+//!   such as somewhere the player can't walk or where something happens, or for laying out the
+//!   nodes inside it. It has a `stretch`, as a rect does.
 //! - `tilemap`: a grid of `columns` by `rows` tiles from the tileset file `tileset`, with its
 //!   top-left corner at the node's origin. Its layers are its children of the kind `tile_layer`,
 //!   which draw in order with its other children, so a node can draw between two layers, such
@@ -147,9 +156,46 @@
 //! What a sprite, rect, text or area shows has its top-left corner at the node's origin, unless
 //! it has a `pivot`: the point of it, from its top-left corner, `{ x, y }`, that's at the origin
 //! instead, and that it turns and stretches about. A sprite of a person 16 texels tall standing
-//! at `x`, `y` has a pivot of `{ 8, 16 }`, the middle of its feet. Colors are hex strings, such as
-//! `"#f2c14e"`, or `"#00000080"` with alpha. Any field a node doesn't have is an error naming the
-//! node, as is a missing one it must have.
+//! at `x`, `y` has a pivot of `{ 8, 16 }`, the middle of its feet. Text's pivot is from the top
+//! of the edge or middle it's aligned by. Colors are hex strings, such as `"#f2c14e"`, or
+//! `"#00000080"` with alpha. Any field a node doesn't have is an error naming the node, as is a
+//! missing one it must have.
+//!
+//! Screens are laid out by anchors, so they fit canvases of any size. A node with an `anchor` is
+//! placed from that point of its parent's rectangle: `{ 0, 0 }` is its top-left corner,
+//! `{ 0.5, 0.5 }` its middle and `{ 1, 1 }` its bottom-right, so a node `anchor = { 1, 0 }` with
+//! `x = -8` is 8 in from its parent's right edge, wherever that is. A parent's rectangle is what
+//! it covers, pivot and all; a plain node passes its parent's on, carried along as it moves, so
+//! grouping nodes changes nothing; and the nodes at the top of a scene are in the canvas's, at
+//! the scene's origin. Without an anchor, a node is placed from its parent's origin, as nodes of
+//! characters are.
+//!
+//! ```lua
+//! {
+//!     name = "bar",
+//!     kind = "rect",
+//!     anchor = { 0, 1 },
+//!     width = 0,
+//!     height = 12,
+//!     stretch = { 1, 0 },
+//!     pivot = { 0, 12 },
+//!     color = "#14182c",
+//!     children = {
+//!         {
+//!             name = "score",
+//!             kind = "text",
+//!             x = -4,
+//!             y = 1,
+//!             anchor = { 1, 0 },
+//!             text = "1,250",
+//!             align = "right",
+//!         },
+//!     },
+//! }
+//! ```
+//!
+//! That's a bar 12 tall along the bottom of the canvas, as wide as it, with a score ending 4 in
+//! from its right end.
 //!
 //! A tileset file, named `*.tileset.luau` by convention, is plain data in the same way, holding
 //! the kinds of tile tilemaps are made of, by name ([`TilesetFile`]):
@@ -191,7 +237,9 @@
 //!
 //! Nodes draw in order, each before its children, so later ones are on top. A [`Scene`] is a
 //! scene loaded to play: its nodes, which a game finds by path or tag, moves, turns, changes,
-//! adds and removes, drawn with [`Scene::draw`].
+//! adds and removes, drawn with [`Scene::draw`], which fits it to the canvas. A scene drawn
+//! without a camera is in canvas pixels, so [`Scene::bounds`] and [`Scene::contains`] test where
+//! the mouse is against its nodes.
 
 mod file;
 mod writer;
@@ -210,7 +258,7 @@ pub use file::{
 
 use crate::{
     Context, Error, Result,
-    graphics::{Canvas, Color, Font, Sprite, SpriteSheet, TextLayout, Texture},
+    graphics::{Align, Canvas, Color, Font, Sprite, SpriteSheet, TextLayout, Texture},
     lua::check_tilemap_size,
     math::{Affine, Rect},
     tilemap::{Tile, TileId, Tilemap, Tileset},
@@ -300,12 +348,15 @@ impl Assets for FolderAssets<'_> {
 /// removes, and draws.
 ///
 /// The root is a plain node holding the scene's props, with the file's nodes as its children.
-/// Cloning a scene copies its nodes, sharing the images they show.
+/// Its rectangle, which the nodes at the top anchor and stretch to, is [`Scene::size`] at its
+/// origin: the canvas's size, once the scene is drawn. Cloning a scene copies its nodes, sharing
+/// the images they show.
 #[derive(Clone, Debug)]
 pub struct Scene {
     slots: Vec<Slot>,
     /// Slots whose nodes were removed, for new nodes.
     free: Vec<u32>,
+    size: [f32; 2],
 }
 
 /// Where a node is kept, and how many nodes have been kept there before it, so an ID of a removed
@@ -332,8 +383,10 @@ pub struct Node {
     position: [f32; 2],
     rotation: f32,
     scale: [f32; 2],
-    /// From the node's coordinates to its parent's, kept up to date with the three above.
+    /// From the node's coordinates to its parent's, kept up to date with the three above, as
+    /// though it had no anchor.
     local: Affine,
+    anchor: Option<[f32; 2]>,
     visible: bool,
     tags: Vec<String>,
     props: Props,
@@ -360,8 +413,10 @@ pub enum Kind {
 #[derive(Clone, Debug)]
 pub struct SpriteNode {
     pub sprite: Sprite,
-    /// The width and height it's stretched to.
+    /// The width and height it's stretched to, before `stretch`.
     pub size: [f32; 2],
+    /// As a rect's.
+    pub stretch: [f32; 2],
     /// The point of the sprite, from its top-left corner, at the node's origin.
     pub pivot: [f32; 2],
     pub tint: Color,
@@ -371,6 +426,9 @@ pub struct SpriteNode {
 #[derive(Clone, Debug)]
 pub struct RectNode {
     pub size: [f32; 2],
+    /// The fractions of its parent's rectangle's width and height added to `size`, so it grows
+    /// and shrinks with its parent, though never to less than nothing.
+    pub stretch: [f32; 2],
     /// As a sprite's.
     pub pivot: [f32; 2],
     pub color: Color,
@@ -382,7 +440,8 @@ pub struct TextNode {
     layout: TextLayout,
     text: String,
     wrap: Option<f32>,
-    /// The point of the text, from its top-left corner, at the node's origin.
+    /// The point of the text at the node's origin, from the top of the edge or middle it's
+    /// aligned by.
     pub pivot: [f32; 2],
     pub color: Color,
 }
@@ -391,6 +450,8 @@ pub struct TextNode {
 #[derive(Clone, Debug)]
 pub struct AreaNode {
     pub size: [f32; 2],
+    /// As a rect's.
+    pub stretch: [f32; 2],
     /// As a sprite's.
     pub pivot: [f32; 2],
 }
@@ -454,11 +515,12 @@ pub(crate) fn a_node_of(kind: &str) -> String {
 }
 
 impl TextNode {
-    /// `text` in `font`, wrapped between words to `wrap` if given.
-    pub fn new(text: impl Into<String>, font: &Font, wrap: Option<f32>) -> Self {
+    /// `text` in `font`, wrapped between words to `wrap` if given, its lines lined up by
+    /// `align`.
+    pub fn new(text: impl Into<String>, font: &Font, wrap: Option<f32>, align: Align) -> Self {
         let text = text.into();
         Self {
-            layout: font.layout(&text, wrap),
+            layout: font.layout_aligned(&text, wrap, align),
             text,
             wrap,
             pivot: [0.0, 0.0],
@@ -470,10 +532,30 @@ impl TextNode {
         &self.text
     }
 
-    /// Changes the text, laying it out again.
+    /// Changes the text, laying it out again unless it's the same.
     pub fn set_text(&mut self, text: impl Into<String>) {
-        self.text = text.into();
-        self.layout = self.layout.font().layout(&self.text, self.wrap);
+        let text = text.into();
+        if text != self.text {
+            self.text = text;
+            self.lay_out(self.align());
+        }
+    }
+
+    /// How its lines line up, and which part of them is at the node's origin: their left
+    /// edges, their middles or their right edges.
+    pub fn align(&self) -> Align {
+        self.layout.align()
+    }
+
+    pub fn set_align(&mut self, align: Align) {
+        if align != self.align() {
+            self.lay_out(align);
+        }
+    }
+
+    fn lay_out(&mut self, align: Align) {
+        let font = self.layout.font();
+        self.layout = font.layout_aligned(&self.text, self.wrap, align);
     }
 
     /// The text laid out, as it draws.
@@ -519,6 +601,7 @@ impl Node {
             rotation: 0.0,
             scale: [1.0, 1.0],
             local: Affine::IDENTITY,
+            anchor: None,
             visible: true,
             tags: Vec::new(),
             props: Props::new(),
@@ -541,7 +624,8 @@ impl Node {
         &self.children
     }
 
-    /// Where its origin is in its parent's coordinates.
+    /// Where its origin is in its parent's coordinates: from the parent's origin, or with an
+    /// anchor, from that point of the parent's rectangle.
     pub fn position(&self) -> [f32; 2] {
         self.position
     }
@@ -575,9 +659,17 @@ impl Node {
         self.local = Affine::from_parts(self.position, self.rotation, self.scale);
     }
 
-    /// From its coordinates to its parent's: its scale, then its rotation, then its position.
-    pub fn local_transform(&self) -> Affine {
-        self.local
+    /// The point of its parent's rectangle its position is from, as fractions of the
+    /// rectangle's width and height from its top-left corner, or `None` to place it from its
+    /// parent's origin. The rectangle is what the parent covers, or for a plain node, its own
+    /// parent's, carried along with it as it moves, turns and stretches; the root's is the
+    /// scene's size, at its origin. The root's anchor does nothing, since it has no parent.
+    pub fn anchor(&self) -> Option<[f32; 2]> {
+        self.anchor
+    }
+
+    pub fn set_anchor(&mut self, anchor: Option<[f32; 2]>) {
+        self.anchor = anchor;
     }
 
     /// Whether it and its children draw.
@@ -614,22 +706,83 @@ impl Node {
         &mut self.kind
     }
 
-    /// The rectangle a sprite, rect, text, area, tilemap or tile layer covers, in the node's own
-    /// coordinates, its pivot at the origin. A plain node covers nothing.
-    pub fn rect(&self) -> Option<Rect> {
-        let (size, [x, y]) = match &self.kind {
-            Kind::Node => return None,
-            Kind::Sprite(sprite) => (sprite.size, sprite.pivot),
-            Kind::Rect(rect) => (rect.size, rect.pivot),
-            Kind::Text(text) => (text.layout.size(), text.pivot),
-            Kind::Area(area) => (area.size, area.pivot),
+    /// The width and height of a sprite, rect, text, area, tilemap or tile layer, before
+    /// stretching with its parent. A plain node has none.
+    pub fn size(&self) -> Option<[f32; 2]> {
+        match &self.kind {
+            Kind::Node => None,
+            Kind::Sprite(sprite) => Some(sprite.size),
+            Kind::Rect(rect) => Some(rect.size),
+            Kind::Text(text) => Some(text.layout.size()),
+            Kind::Area(area) => Some(area.size),
             Kind::Tilemap(map) => {
                 let bounds = map.map.bounds();
-                ([bounds.w, bounds.h], [0.0, 0.0])
+                Some([bounds.w, bounds.h])
             }
-            Kind::TileLayer(layer) => (layer.size, [0.0, 0.0]),
+            Kind::TileLayer(layer) => Some(layer.size),
+        }
+    }
+
+    /// The rectangle the node covers in its own coordinates, its pivot at the origin, inside a
+    /// parent whose rectangle is `outer`, which it may stretch with. A plain node covers nothing.
+    fn rect_in(&self, outer: Rect) -> Option<Rect> {
+        let size = self.size()?;
+        let (stretch, [x, y]) = match &self.kind {
+            Kind::Sprite(sprite) => (sprite.stretch, sprite.pivot),
+            Kind::Rect(rect) => (rect.stretch, rect.pivot),
+            Kind::Area(area) => (area.stretch, area.pivot),
+            Kind::Text(text) => {
+                let [x, y] = text.pivot;
+                let x = x + size[0] * text.align().fraction();
+                ([0.0, 0.0], [x, y])
+            }
+            Kind::Node | Kind::Tilemap(_) | Kind::TileLayer(_) => ([0.0, 0.0], [0.0, 0.0]),
         };
-        Some(Rect::new(-x, -y, size[0], size[1]))
+        let [width, height] = if stretch == [0.0, 0.0] {
+            size
+        } else {
+            [
+                (size[0] + stretch[0] * outer.w).max(0.0),
+                (size[1] + stretch[1] * outer.h).max(0.0),
+            ]
+        };
+        Some(Rect::new(-x, -y, width, height))
+    }
+
+    /// From its coordinates to its parent's, inside a parent whose rectangle is `outer`: its
+    /// scale, then its rotation, then its position, from its anchor.
+    fn local_in(&self, outer: Rect) -> Affine {
+        let mut local = self.local;
+        if let Some([x, y]) = self.anchor {
+            local.translation[0] += outer.x + x * outer.w;
+            local.translation[1] += outer.y + y * outer.h;
+        }
+        local
+    }
+}
+
+/// Where a node is laid out in its scene.
+#[derive(Clone, Copy)]
+struct Placed {
+    /// From the node's coordinates to the scene's.
+    transform: Affine,
+    /// What it covers in its own coordinates, if anything.
+    rect: Option<Rect>,
+    /// The rectangle the nodes inside it anchor and stretch to, in its coordinates: what it
+    /// covers, or for a plain node, its parent's, carried along with it.
+    inner: Rect,
+}
+
+impl Placed {
+    /// Where `node` is, as a child of the node placed here.
+    fn child(&self, node: &Node) -> Self {
+        let local = node.local_in(self.inner);
+        let rect = node.rect_in(self.inner);
+        Self {
+            transform: self.transform * local,
+            rect,
+            inner: rect.unwrap_or(self.inner),
+        }
     }
 }
 
@@ -653,6 +806,7 @@ impl Scene {
                 node: Some(root),
             }],
             free: Vec::new(),
+            size: [0.0, 0.0],
         };
         let mut build = Build {
             path,
@@ -670,7 +824,7 @@ impl Scene {
     }
 
     /// Reads the scene file at `path` in `folder`, and the files and images it uses from
-    /// `folder`.
+    /// `folder`. Its size is the canvas's.
     pub fn load(
         ctx: &mut Context,
         folder: impl AsRef<Path>,
@@ -680,8 +834,22 @@ impl Scene {
         let path = path.as_ref();
         let file = SceneFile::read(folder.join(path))?;
         let font = ctx.default_font().clone();
+        let size = ctx.canvas_size();
         let mut assets = FolderAssets { ctx, folder };
-        Self::new(&file, &path.to_string_lossy(), &font, &mut assets)
+        let mut scene = Self::new(&file, &path.to_string_lossy(), &font, &mut assets)?;
+        scene.set_size(size);
+        Ok(scene)
+    }
+
+    /// The width and height of the root's rectangle, at its origin, which the nodes at the top
+    /// of the scene anchor and stretch to. Drawing the scene makes it the canvas's size, and
+    /// [`Scene::load`] starts it there; [`Scene::new`] starts it at 0 by 0.
+    pub fn size(&self) -> [f32; 2] {
+        self.size
+    }
+
+    pub fn set_size(&mut self, size: [f32; 2]) {
+        self.size = size;
     }
 
     /// Adds the node `def` describes, and its children, at the end of `parent`'s children.
@@ -709,6 +877,7 @@ impl Scene {
         };
         let mut node = Node::new(def.name.clone(), kind);
         node.position = [def.x, def.y];
+        node.anchor = def.anchor;
         node.rotation = def.rotation;
         node.scale = [def.scale_x, def.scale_y];
         node.update_local();
@@ -836,43 +1005,60 @@ impl Scene {
         names.join("/")
     }
 
-    /// From the node's coordinates to the scene's: its own transform, then its parent's, and so
-    /// on up to the root.
-    pub fn transform(&self, id: NodeId) -> Affine {
-        let mut transform = self.node(id).local;
-        let mut at = id;
-        while let Some(parent) = self.node(at).parent {
-            transform = self.node(parent).local * transform;
-            at = parent;
+    /// Where the node is laid out: from the root down, each node placed in its parent.
+    fn placed(&self, id: NodeId) -> Placed {
+        let node = self.node(id);
+        match node.parent {
+            Some(parent) => self.placed(parent).child(node),
+            None => Placed {
+                transform: node.local,
+                rect: None,
+                inner: Rect::new(0.0, 0.0, self.size[0], self.size[1]),
+            },
         }
-        transform
     }
 
-    /// Where what the node shows is placed in the scene: by [`Scene::transform`], or only moved
-    /// by it, for text and tilemaps, which don't turn or stretch.
-    fn placement(&self, id: NodeId) -> Affine {
-        let transform = self.transform(id);
-        if self.node(id).kind.only_moves() {
-            Affine::from_translation(transform.translation)
+    /// From the node's coordinates to the scene's: its own transform, from its anchor, then its
+    /// parent's, and so on up to the root.
+    pub fn transform(&self, id: NodeId) -> Affine {
+        self.placed(id).transform
+    }
+
+    /// The rectangle the node covers in its own coordinates, with its pivot at the origin, as
+    /// it's drawn: stretched with its parent, and for text, aligned. A plain node covers nothing.
+    pub fn rect(&self, id: NodeId) -> Option<Rect> {
+        self.placed(id).rect
+    }
+
+    /// Where what the node shows is placed in the scene, and what it covers: by
+    /// [`Scene::transform`], or only moved by it, for text and tilemaps, which don't turn or
+    /// stretch.
+    fn placement(&self, id: NodeId) -> Option<(Affine, Rect)> {
+        let placed = self.placed(id);
+        let rect = placed.rect?;
+        let transform = if self.node(id).kind.only_moves() {
+            Affine::from_translation(placed.transform.translation)
         } else {
-            transform
-        }
+            placed.transform
+        };
+        Some((transform, rect))
     }
 
     /// The smallest axis-aligned rectangle in the scene's coordinates around what the node
-    /// covers, if it covers anything: see [`Node::rect`].
+    /// covers, if it covers anything: see [`Scene::rect`]. A scene drawn without a camera is in
+    /// canvas pixels, so this is where the node is on the canvas.
     pub fn bounds(&self, id: NodeId) -> Option<Rect> {
-        let rect = self.node(id).rect()?;
-        Some(self.placement(id).bounds(rect))
+        let (transform, rect) = self.placement(id)?;
+        Some(transform.bounds(rect))
     }
 
     /// Whether `point`, in the scene's coordinates, is inside what the node covers, turned and
     /// stretched as it's drawn. Nothing is inside a plain node, or one squashed flat.
     pub fn contains(&self, id: NodeId, point: [f32; 2]) -> bool {
-        let Some(rect) = self.node(id).rect() else {
+        let Some((transform, rect)) = self.placement(id) else {
             return false;
         };
-        let Some(inverse) = self.placement(id).inverse() else {
+        let Some(inverse) = transform.inverse() else {
             return false;
         };
         rect.contains(inverse.apply(point))
@@ -1005,6 +1191,7 @@ impl Scene {
                 node: Some(Node::new(String::new(), Kind::Node)),
             }],
             free: Vec::new(),
+            size: self.size,
         };
         let root = scene.root();
         let copy = scene.copy(root, self, id);
@@ -1027,15 +1214,16 @@ impl Scene {
         Ok(())
     }
 
-    /// Draws the whole scene.
-    pub fn draw(&self, canvas: &mut Canvas) {
+    /// Draws the whole scene, first making its size the canvas's.
+    pub fn draw(&mut self, canvas: &mut Canvas) {
         self.draw_node(canvas, self.root());
     }
 
-    /// Draws `id` and the nodes inside it where they are in the scene, each before its children.
-    /// Nothing is drawn where it's off the canvas, or where a node, or a node it's inside, isn't
-    /// visible.
-    pub fn draw_node(&self, canvas: &mut Canvas, id: NodeId) {
+    /// Draws `id` and the nodes inside it where they are in the scene, each before its children,
+    /// first making the scene's size the canvas's. Nothing is drawn where it's off the canvas, or
+    /// where a node, or a node it's inside, isn't visible.
+    pub fn draw_node(&mut self, canvas: &mut Canvas, id: NodeId) {
+        self.size = [canvas.width(), canvas.height()];
         let mut at = id;
         while let Some(above) = self.node(at).parent {
             if !self.node(above).visible {
@@ -1043,21 +1231,18 @@ impl Scene {
             }
             at = above;
         }
-        let parent = match self.node(id).parent {
-            Some(above) => self.transform(above),
-            None => Affine::IDENTITY,
-        };
         let visible = canvas.visible_area();
-        self.draw_tree(canvas, id, parent, visible);
+        self.draw_tree(canvas, id, &self.placed(id), visible);
     }
 
-    fn draw_tree(&self, canvas: &mut Canvas, id: NodeId, parent: Affine, visible: Rect) {
+    /// Draws `id`, placed at `placed`, and the nodes inside it.
+    fn draw_tree(&self, canvas: &mut Canvas, id: NodeId, placed: &Placed, visible: Rect) {
         let node = self.node(id);
         if !node.visible {
             return;
         }
-        let transform = parent * node.local;
-        if let Some(rect) = node.rect() {
+        let transform = placed.transform;
+        if let Some(rect) = placed.rect {
             match &node.kind {
                 Kind::Sprite(sprite) => {
                     if transform.bounds(rect).overlaps(&visible) {
@@ -1083,21 +1268,22 @@ impl Scene {
                     }
                 }
                 Kind::TileLayer(layer) => {
-                    // Where its tilemap is, which is its parent, and only culls by cell.
+                    // Its tilemap is its parent, and only culls by cell.
                     if let Some(Kind::Tilemap(map)) = node
                         .parent
                         .and_then(|parent| self.get(parent))
                         .map(|p| &p.kind)
                     {
                         map.map
-                            .draw_layer_at(canvas, layer.layer, parent.translation);
+                            .draw_layer_at(canvas, layer.layer, transform.translation);
                     }
                 }
                 Kind::Node | Kind::Area(_) | Kind::Tilemap(_) => {}
             }
         }
         for &child in &node.children {
-            self.draw_tree(canvas, child, transform, visible);
+            let child_placed = placed.child(self.node(child));
+            self.draw_tree(canvas, child, &child_placed, visible);
         }
     }
 }
@@ -1374,12 +1560,14 @@ impl Build<'_> {
                 Kind::Sprite(SpriteNode {
                     size: sprite.size.unwrap_or([image.width(), image.height()]),
                     sprite: image,
+                    stretch: sprite.stretch,
                     pivot: sprite.pivot,
                     tint: sprite.tint,
                 })
             }
             KindDef::Rect(rect) => Kind::Rect(RectNode {
                 size: rect.size,
+                stretch: rect.stretch,
                 pivot: rect.pivot,
                 color: rect.color,
             }),
@@ -1391,11 +1579,12 @@ impl Build<'_> {
                 Kind::Text(TextNode {
                     pivot: text.pivot,
                     color: text.color,
-                    ..TextNode::new(&text.text, &font, text.wrap)
+                    ..TextNode::new(&text.text, &font, text.wrap, text.align)
                 })
             }
             KindDef::Area(area) => Kind::Area(AreaNode {
                 size: area.size,
+                stretch: area.stretch,
                 pivot: area.pivot,
             }),
             KindDef::Tilemap(map) => {
