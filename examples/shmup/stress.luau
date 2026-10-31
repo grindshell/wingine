@@ -42,7 +42,9 @@ function stress.start()
     local state = shmup.stress or { curves = {} }
     shmup.stress = state
     state.target = 0
+    -- The times of the last frames, and the bullets they had.
     state.recent = {}
+    state.recent_counts = {}
     state.last_count = 0
     state.curves[shmup.system] = { bins = {}, limit = nil, most = 0 }
     shmup.bullets.clear()
@@ -83,12 +85,17 @@ function stress.update(dt: number)
     if state.last_count > 0 and time > 0 then
         record(curve, state.last_count, time)
         table.insert(state.recent, time)
+        table.insert(state.recent_counts, state.last_count)
         if #state.recent > WINDOW then
             table.remove(state.recent, 1)
+            table.remove(state.recent_counts, 1)
         end
         if not curve.limit and #state.recent == WINDOW and median(state.recent) > stress.BUDGET then
-            curve.limit = state.last_count
-            state.target = math.floor(state.last_count * SETTLE)
+            -- The bullets of the frames measured, as they grew over them, rather than the most.
+            curve.limit = median(state.recent_counts)
+            state.target = math.floor(curve.limit * SETTLE)
+            -- For runs without a window, which can't see the plot.
+            print(`stress test: frames went over the budget at {curve.limit} bullets in {shmup.system}`)
         end
     end
     if not curve.limit then

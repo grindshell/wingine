@@ -6,7 +6,9 @@ or entirely in [Luau](https://luau.org) and run with the `wingine` executable.
 ![The village of Mossbrook, from the RPG example](docs/screenshots/rpg-village.png)
 
 Wingine's first milestone, everything needed to ship a tile-based, top-down RPG, is complete.
-The [RPG example](#rpg) is that game.
+The [RPG example](#rpg) is that game. Its second, a bullet hell that shows the engine's
+performance, is complete too: the [shmup](#shmup), whose bullets run in Luau or in a native
+library written in Rust, which [fits 3.4 times as many](#luau-and-rust-compared).
 
 ## Features
 
@@ -100,6 +102,60 @@ Then copy `target/release/danmaku.dll` (`libdanmaku.so` on Linux, `libdanmaku.dy
 into `examples/shmup/native/`, and press Tab in the game to switch between the two. The stress
 test pours out bullets until frames take longer than a 60th of a second, and plots frame time
 against the bullet count for each.
+
+#### Luau and Rust compared
+
+Bullets in Rust fit about 3.4 times as many in a frame as bullets in Luau:
+
+| Bullets in | The most a 60th of a second fits |
+|---|---|
+| Luau, `bullets.luau` | about 105,000 |
+| Rust, `danmaku` | about 360,000 |
+
+![The stress test's plot of frame time against bullets, for Luau and for Rust](docs/screenshots/shmup-stress.png)
+
+These are the stress test's limits in a release build, rendering every frame, on a Ryzen 7 5800X
+with a GeForce RTX 3080 on Windows 10. Over three runs, Luau's limit ranged from 102,700 to
+105,300 bullets and Rust's from 356,400 to 362,300. The limit is where the median of 30 frames
+spends more than 16.7 ms updating, drawing and rendering. The GPU's own work isn't counted, since
+in a window it runs while the next frame is prepared.
+
+Each bullet costs this much of a frame:
+
+| | Luau | Rust |
+|---|---:|---:|
+| Moving it | 53 ns | 16 ns |
+| Checking it against the player | 9 ns | 4.5 ns |
+| Drawing it: recording its quad | 99 ns | 23 ns |
+| Rendering it: uploading its quad and submitting the draw | 8 ns | 8 ns |
+| Waiting for the GPU | 2 ns | 3 ns |
+| **Total** | **171 ns** | **54 ns** |
+
+- **Drawing** is where Luau loses most. Each bullet it draws is a call from Luau into the engine,
+  which costs about four times what recording the sprite does. The library hands the engine all
+  its bullets in a few calls, so what's left is the engine recording quads.
+- **Moving** a bullet needs its angle's cosine and sine. Both versions take them from the same C
+  library, which keeps their bullets identical, and they take 9 of Rust's 16 ns. The rest of
+  Luau's 53 ns is Luau's own overhead around the same arithmetic.
+- **Checking** a bullet against the player is a few multiplications, so most of what it costs
+  is reading the bullet from memory.
+- **Rendering** isn't what limits either version: uploading quads and the GPU's work are a fifth
+  of Rust's time.
+
+To measure it yourself, put the library in place and run this script, which prints each limit:
+
+```text
+tap Down
+tap Down
+tap Z
+benchmark 40s
+tap Tab
+benchmark 40s
+```
+
+```bash
+WINGINE_SCRIPT=stress.txt cargo run --release -- examples/shmup
+```
 
 ### Pong
 

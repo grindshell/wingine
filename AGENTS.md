@@ -19,13 +19,13 @@ covered:
 - Lua-driven gameplay: NPC behavior, dialogue, events/triggers
 - Music and sound effects
 
-**Current: a bullet-hell shmup that shows the engine's performance.** A Touhou-style vertical
+**Done: a bullet-hell shmup that shows the engine's performance.** A Touhou-style vertical
 shooter in `examples/shmup`, built in two versions, in order: first in pure Luau, then with its
 bullets in a native library, `danmaku` (`examples/native-danmaku`), to show native libraries at
 work and what they gain over Luau. Both versions are one game: the bullet system sits behind one
 Luau interface, implemented by `bullets.luau` and by the library, and everything else is shared.
 The Luau version is written as well as Luau allows (pooled bullets, `--!native`), so the comparison
-is fair. The milestone covers:
+is fair. Bullets in Rust fit about 3.4 times as many in a frame. The milestone covered:
 
 - Measuring before optimizing: frame stats games can show (update, draw and render times, quads,
   draw calls), a setting to turn vsync off, and a headless benchmark that renders every frame,
@@ -34,7 +34,8 @@ is fair. The milestone covers:
 - A fixed update rate, set in `conf.luau`
 - Libraries a game loads only if they're present, so one folder runs with or without `danmaku`
 - Engine speedups the measurements justify, which help both versions. Instanced rendering only if
-  the native version is limited by rendering; additive blending if time allows
+  the native version is limited by rendering, which it isn't (rendering is a fifth of its frame,
+  so sprites aren't instanced); additive blending if time allows, which it didn't
 - Bullets that move by parameters (speed, angle, acceleration, angular velocity, speed limits), so
   Rust moves them without calling Luau. The game steps them itself, so both versions step at the
   same point in the frame
@@ -43,11 +44,11 @@ is fair. The milestone covers:
   against bullet count, with a key to switch versions
 - Tests of the gameplay, and that both versions produce the same bullets from the same seed. CI
   never asserts timings
-- Results in the README: the most bullets each version fits in a 16.7 ms frame, and where the
-  time goes
+- Results in the README, under the shmup: the most bullets each version fits in a 16.7 ms frame,
+  and where the time goes
 
-Ask before starting general-purpose features the milestone doesn't need, such as physics engines,
-networking, editors or 3D pipelines.
+No milestone is current: ask what's next before starting new features, and especially
+general-purpose ones such as physics engines, networking, editors or 3D pipelines.
 
 ## Tech stack
 
@@ -163,7 +164,7 @@ networking, editors or 3D pipelines.
   them, and `bag.luau` (the menu key) equips gear and uses items. `ui.luau` holds the panels'
   shared look. `story.reached(stage)` compares quest stages, which run in the order of
   `story.STAGES`. The game's state is the global `rpg`.
-- `examples/shmup/`: the current milestone's bullet hell, written entirely in Luau, at a fixed
+- `examples/shmup/`: the second milestone's bullet hell, written entirely in Luau, at a fixed
   60 updates a second. Its enemy bullets go through one interface, documented at the top of
   `bullets.luau`, which is the Luau implementation (parallel arrays of numbers: a table per
   bullet managed little more than a third as many in the stress test) and which the `danmaku`
@@ -173,7 +174,8 @@ networking, editors or 3D pipelines.
   else may take numbers from `math.random`. Enemies, the stage and the boss's attacks are
   coroutines the game resumes each update with `dt`, so the engine's `wait` works in them
   (`enemies.resume`, `enemies.frame`). `boss.luau` holds the spell cards, `stage.luau` the waves,
-  `stress.luau` the stress test, and `hud.luau` the panel and screens. `shmup.start("boss")` is
+  `stress.luau` the stress test, which prints the limit it finds for runs without a window, and
+  `hud.luau` the panel and screens. `shmup.start("boss")` is
   boss practice, and `shmup.cheats` (`invincible`, `damage`) are for tests. The game's state is
   the global `shmup`.
 - `examples/native-danmaku/`: the shmup's bullets as a native library, `danmaku`, a `cdylib` the
@@ -199,7 +201,11 @@ networking, editors or 3D pipelines.
 - `README.md`: the project's overview, with a screenshot of each example in `docs/screenshots/`.
   They were taken headlessly at 640x360 (768x432 for `sprites`, so its 256x144 canvas scales
   without bars, and 960x720 for `shmup`, twice its canvas); retake them when an example changes
-  how it looks.
+  how it looks. The shmup's results, how many bullets fit in a frame and what each costs, come
+  from the stress test, run with the script beside them, and the per-bullet costs from fitting
+  its benchmark's CSV against the quad count; the split of the update time was measured by timing
+  `step` and `collide` with `os.clock`. Measure them again on the same machine, a Ryzen 7 5800X
+  with an RTX 3080, after changes that could move them.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders.
