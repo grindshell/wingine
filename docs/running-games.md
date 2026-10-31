@@ -178,6 +178,10 @@ With vsync on, `frame` includes waiting for the display, so a frame takes a 60th
 frame really costs. [`graphics.frame_stats`](api/graphics.md#graphicsframe_stats) says what each
 number measures.
 
+Or, without writing any of that, set a [`debug_key`](project-structure.md#debug_key) in
+`conf.luau`: pressing it shows a window of the same numbers over the game, with a graph of recent
+frames.
+
 **Without a window**, the `benchmark` command renders every frame for as long as it's told, and
 reports the mean, median, 99th percentile and longest of each time, in milliseconds. This is the
 RPG's village, after `wait 1s` and `benchmark 600`:

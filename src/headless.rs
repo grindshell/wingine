@@ -44,8 +44,12 @@ impl Headless {
         let lease = GpuLease::acquire();
         let gpu = shared_gpu()?;
         let renderer = Renderer::new(&gpu.device, &gpu.queue, FORMAT);
+        #[cfg_attr(not(feature = "egui"), expect(unused_mut))]
+        let mut ctx = Context::new(gpu, renderer, Audio::silent());
+        #[cfg(feature = "egui")]
+        ctx.gui.set_predictable();
         Ok(Self {
-            ctx: Context::new(gpu, renderer, Audio::silent()),
+            ctx,
             screen: Screen::new(Resolution::Window),
             canvas: Canvas::new(),
             target: None,
@@ -93,9 +97,16 @@ impl Headless {
         draw(&mut self.canvas);
     }
 
-    /// Renders the recorded canvas onto an `output`-sized frame and reads it back.
+    /// Renders the recorded canvas, and any interface, onto an `output`-sized frame and reads it
+    /// back.
     fn capture(&mut self, output: [u32; 2]) -> Result<Image> {
-        let Context { gpu, renderer, .. } = &mut self.ctx;
+        let Context {
+            gpu,
+            renderer,
+            #[cfg(feature = "egui")]
+            gui,
+            ..
+        } = &mut self.ctx;
         let texture = create_frame(gpu, output);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.screen.render(
@@ -106,13 +117,21 @@ impl Headless {
             &view,
             output,
         );
+        #[cfg(feature = "egui")]
+        gui.render(&gpu.device, &gpu.queue, &texture);
         read_texture(gpu, &texture)
     }
 
-    /// Renders the recorded canvas onto an `output`-sized frame, as a window would, then waits
-    /// for the GPU to finish it. Returns the seconds rendering took on the CPU.
+    /// Renders the recorded canvas, and any interface, onto an `output`-sized frame, as a window
+    /// would, then waits for the GPU to finish it. Returns the seconds rendering took on the CPU.
     fn render_frame(&mut self, output: [u32; 2]) -> f32 {
-        let Context { gpu, renderer, .. } = &mut self.ctx;
+        let Context {
+            gpu,
+            renderer,
+            #[cfg(feature = "egui")]
+            gui,
+            ..
+        } = &mut self.ctx;
         let fits = |(texture, _): &(wgpu::Texture, wgpu::TextureView)| {
             [texture.width(), texture.height()] == output
         };
@@ -121,7 +140,7 @@ impl Headless {
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             self.target = Some((texture, view));
         }
-        let (_, view) = self.target.as_ref().expect("created above");
+        let (texture, view) = self.target.as_ref().expect("created above");
         let start = Instant::now();
         self.screen.render(
             &gpu.device,
@@ -131,6 +150,10 @@ impl Headless {
             view,
             output,
         );
+        #[cfg(feature = "egui")]
+        gui.render(&gpu.device, &gpu.queue, texture);
+        #[cfg(not(feature = "egui"))]
+        let _ = texture;
         let render = start.elapsed().as_secs_f32();
         if let Err(err) = gpu.device.poll(wgpu::PollType::wait_indefinitely()) {
             log::warn!("couldn't wait for the GPU to render a frame: {err}");
@@ -153,7 +176,8 @@ fn create_frame(gpu: &Gpu, [width, height]: [u32; 2]) -> wgpu::Texture {
         dimension: wgpu::TextureDimension::D2,
         format: FORMAT,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
+        // egui renders through a view without sRGB encoding, since it blends in sRGB space.
+        view_formats: &[FORMAT.remove_srgb_suffix()],
     })
 }
 
@@ -181,6 +205,9 @@ pub struct Simulation<G> {
     drawn: bool,
     render_every_frame: bool,
     frames: u64,
+    /// Input for the game's interface, gathered until the next frame.
+    #[cfg(feature = "egui")]
+    gui_input: crate::gui::SimulatedInput,
 }
 
 impl<G> Simulation<G> {
@@ -209,6 +236,11 @@ impl<G: Game> Simulation<G> {
         headless.set_resolution(config.resolution);
         let output = [config.width, config.height];
         headless.ctx.canvas_size = headless.screen.canvas_size(output, 1.0);
+        #[cfg(feature = "egui")]
+        {
+            headless.ctx.gui.debug_key = config.debug_key;
+            headless.ctx.gui.enable_labels();
+        }
         let game = init(&mut headless.ctx)?;
         Ok(Self {
             headless,
@@ -218,6 +250,8 @@ impl<G: Game> Simulation<G> {
             drawn: false,
             render_every_frame: false,
             frames: 0,
+            #[cfg(feature = "egui")]
+            gui_input: Default::default(),
         })
     }
 
@@ -243,6 +277,17 @@ impl<G: Game> Simulation<G> {
         self.frames
     }
 
+    /// Whether the game has called [`Context::quit`], which would have closed its window.
+    pub fn has_quit(&self) -> bool {
+        self.headless.ctx.quit
+    }
+
+    /// Presses the window's close button, as [`Game::close_requested`] hears it, and tells
+    /// whether the window would close.
+    pub fn request_close(&mut self) -> bool {
+        self.game.close_requested(&mut self.headless.ctx)
+    }
+
     /// Whether each frame is rendered on the GPU after it's drawn, as a window would render it,
     /// and waited for. Off by default. With it on, frames take longer, and their
     /// [`FrameStats`](crate::FrameStats) include rendering, as benchmarks want.
@@ -256,9 +301,11 @@ impl<G: Game> Simulation<G> {
         self.render_every_frame = render;
     }
 
-    /// Runs one frame: updates the game, then draws it.
+    /// Runs one frame: updates the game, runs its interface, then draws it.
     pub fn step(&mut self) {
         let start = Instant::now();
+        #[cfg(feature = "egui")]
+        self.set_gui_input(true);
         let Self {
             headless,
             game,
@@ -295,11 +342,26 @@ impl<G: Game> Simulation<G> {
         self.run_frames(Self::frames_in(seconds));
     }
 
+    /// Presses `key`. The game sees it unless the interface wants it, as a text field with focus
+    /// does, or it's the [debug key](WindowConfig::debug_key).
     pub fn key_down(&mut self, key: Key) {
+        #[cfg(feature = "egui")]
+        {
+            let gui = &mut self.headless.ctx.gui;
+            if gui.debug_key_down(key) {
+                return;
+            }
+            self.gui_input.key(key, true);
+            if gui.wants_keyboard() {
+                return;
+            }
+        }
         self.headless.ctx.input.key_down(key);
     }
 
     pub fn key_up(&mut self, key: Key) {
+        #[cfg(feature = "egui")]
+        self.gui_input.key(key, false);
         self.headless.ctx.input.key_up(key);
     }
 
@@ -325,14 +387,127 @@ impl<G: Game> Simulation<G> {
     /// Moves the cursor to `x`, `y` in canvas pixels.
     pub fn move_mouse(&mut self, x: f32, y: f32) {
         self.headless.ctx.input.set_mouse_position(Some([x, y]));
+        #[cfg(feature = "egui")]
+        {
+            let [x, y] = self.headless.screen.to_output([x, y], self.output, 1.0);
+            let pixels_per_point = self.headless.ctx.gui.egui.pixels_per_point();
+            self.gui_input
+                .move_pointer(egui::pos2(x as f32, y as f32) / pixels_per_point);
+        }
     }
 
+    /// Presses `button` where the cursor is. The game sees it unless the interface wants it, as
+    /// when the cursor is over one of its windows.
     pub fn mouse_down(&mut self, button: MouseButton) {
+        #[cfg(feature = "egui")]
+        {
+            self.gui_input.button(button, true);
+            let gui = &self.headless.ctx.gui;
+            if self
+                .gui_input
+                .pointer()
+                .is_some_and(|pos| gui.wants_pointer_at(pos))
+            {
+                return;
+            }
+        }
         self.headless.ctx.input.mouse_down(button);
     }
 
     pub fn mouse_up(&mut self, button: MouseButton) {
+        #[cfg(feature = "egui")]
+        self.gui_input.button(button, false);
         self.headless.ctx.input.mouse_up(button);
+    }
+
+    /// Types `text` into the interface, as into whichever text field has focus. The game's own
+    /// input doesn't see typing.
+    #[cfg(feature = "egui")]
+    pub fn type_text(&mut self, text: &str) {
+        self.gui_input.text(text);
+    }
+
+    /// Turns the mouse wheel by `x`, `y` points of the interface, where it scrolls whatever is
+    /// under the cursor. Positive `y` scrolls up, as turning the wheel away does.
+    #[cfg(feature = "egui")]
+    pub fn scroll(&mut self, x: f32, y: f32) {
+        self.gui_input.scroll(egui::vec2(x, y));
+    }
+
+    /// Where the widgets of the interface labelled `label` were in the last frame, in canvas
+    /// pixels, row by row from the top, and left to right along a row. A widget's label is its
+    /// text, such as a
+    /// button's, what it's [labelled by](egui::Response::labelled_by), or a text field's hint.
+    /// Click the middle of one to press it.
+    #[cfg(feature = "egui")]
+    pub fn gui_rects(&self, label: &str) -> Vec<crate::math::Rect> {
+        let pixels_per_point = self.headless.ctx.gui.egui.pixels_per_point();
+        let to_canvas = |pos: egui::Pos2| {
+            let pos = pos * pixels_per_point;
+            self.headless
+                .screen
+                .to_canvas([pos.x.into(), pos.y.into()], self.output, 1.0)
+        };
+        self.headless
+            .ctx
+            .gui
+            .labelled(label)
+            .into_iter()
+            .map(|rect| crate::gui::rect_to_canvas(rect, to_canvas))
+            .collect()
+    }
+
+    /// The first of [`Simulation::gui_rects`], if there's any.
+    #[cfg(feature = "egui")]
+    pub fn gui_rect(&self, label: &str) -> Option<crate::math::Rect> {
+        self.gui_rects(label).into_iter().next()
+    }
+
+    /// Clicks the middle of the first widget labelled `label` with the left button, as
+    /// [`Simulation::click`] does, then runs another frame, in which egui sees the release that
+    /// completes the click: a button has been pressed when this returns.
+    ///
+    /// # Panics
+    ///
+    /// If the last frame laid out no such widget.
+    #[cfg(feature = "egui")]
+    pub fn click_gui(&mut self, label: &str) {
+        let Some(rect) = self.gui_rect(label) else {
+            panic!("the interface has no widget labelled `{label}`");
+        };
+        self.click(
+            MouseButton::Left,
+            rect.x + rect.w / 2.0,
+            rect.y + rect.h / 2.0,
+        );
+        self.step();
+    }
+
+    /// Gives the interface its input for the next pass: the screen, the time, and if `events`,
+    /// the input gathered since the last frame.
+    #[cfg(feature = "egui")]
+    fn set_gui_input(&mut self, events: bool) {
+        let gui = &mut self.headless.ctx.gui;
+        let pixels_per_point = gui.egui.pixels_per_point();
+        let size = egui::vec2(self.output[0] as f32, self.output[1] as f32) / pixels_per_point;
+        let time = self.frames as f64 * f64::from(Self::FRAME_TIME);
+        let max_texture_side = self
+            .headless
+            .ctx
+            .gpu
+            .device
+            .limits()
+            .max_texture_dimension_2d as usize;
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+            max_texture_side: Some(max_texture_side),
+            time: Some(time),
+            ..Default::default()
+        };
+        if events {
+            input.events = self.gui_input.take_events();
+        }
+        gui.set_input(input);
     }
 
     /// Moves the cursor to `x`, `y` in canvas pixels, presses `button`, runs one frame, and
@@ -360,6 +535,12 @@ impl<G: Game> Simulation<G> {
     /// resize, the game draws again first, without updating.
     pub fn screenshot(&mut self) -> Result<Image> {
         if !self.drawn {
+            #[cfg(feature = "egui")]
+            {
+                // Laid out again for the current size, keeping the input for the next frame.
+                self.set_gui_input(false);
+                crate::gui::run_pass(&mut self.headless.ctx, &mut self.game);
+            }
             let Self {
                 headless,
                 game,

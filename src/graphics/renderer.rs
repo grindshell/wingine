@@ -162,6 +162,12 @@ impl Renderer {
         }
     }
 
+    /// The format of the targets this renderer renders to.
+    #[cfg_attr(not(feature = "egui"), expect(dead_code))]
+    pub fn target_format(&self) -> wgpu::TextureFormat {
+        self.target_format
+    }
+
     /// Uploads tightly packed RGBA8 pixels (sRGB) as a texture.
     pub fn create_texture(
         &self,
@@ -202,17 +208,10 @@ impl Renderer {
             // The pipeline only renders to this format.
             format: self.target_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
+            view_formats: &[self.target_format.remove_srgb_suffix()],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let texture = bind_texture(
-            device,
-            &self.texture_layout,
-            &self.sampler,
-            &view,
-            width,
-            height,
-        );
+        let texture = bind_texture(device, &self.texture_layout, &self.sampler, &texture, &view);
         RenderTarget { view, texture }
     }
 
@@ -304,24 +303,29 @@ fn create_texture(
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
+            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
         },
         wgpu::util::TextureDataOrder::LayerMajor,
         rgba,
     );
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    bind_texture(device, layout, sampler, &view, width, height)
+    bind_texture(device, layout, sampler, &texture, &view)
 }
 
-/// Wraps a texture view as a [`Texture`] the quad pipeline can draw with.
+/// Wraps `texture`, through `view`, as a [`Texture`] the quad pipeline can draw with. Its format
+/// must be sRGB, and have its format without sRGB among its view formats, which egui shows it
+/// through: egui reads the bytes as they're stored.
 fn bind_texture(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     sampler: &wgpu::Sampler,
+    texture: &wgpu::Texture,
     view: &wgpu::TextureView,
-    width: u32,
-    height: u32,
 ) -> Texture {
+    let gui_view = texture.create_view(&wgpu::TextureViewDescriptor {
+        format: Some(texture.format().remove_srgb_suffix()),
+        ..Default::default()
+    });
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout,
@@ -336,7 +340,7 @@ fn bind_texture(
             },
         ],
     });
-    Texture::new(bind_group, width, height)
+    Texture::new(bind_group, gui_view, texture.width(), texture.height())
 }
 
 /// An offscreen texture to render a canvas into, then draw like any other texture.

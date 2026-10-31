@@ -28,6 +28,8 @@
 //!     -- Updates a second, each by the same `dt`, so the game plays the same at any frame rate.
 //!     -- By default, the game updates once a frame by the frame's time.
 //!     update_rate = 60,
+//!     -- A key that shows and hides a window of how long frames take. The game never sees it.
+//!     debug_key = "F3",
 //!     -- Native libraries to load, in order, from the game's `native` folder. One marked
 //!     -- optional loads only if it's there: `if danmaku then ... end` tells whether it did.
 //!     libraries = { "particles", { name = "danmaku", optional = true } },
@@ -249,6 +251,7 @@ fn apply_setting(
         "height" => window.height = positive(lua.unpack(value)?)?,
         "resizable" => window.resizable = lua.unpack(value)?,
         "vsync" => window.vsync = lua.unpack(value)?,
+        "debug_key" => window.debug_key = Some(lua.unpack(value)?),
         "update_rate" => {
             let rate: f32 = lua.unpack(value)?;
             if !(rate > 0.0 && rate.is_finite()) {

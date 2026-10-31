@@ -33,17 +33,19 @@ When a game's levels, screens or characters are laid out rather than coded:
 4. [Scenes](scenes.md): scene files, trees of sprites, rectangles, text and areas that a game
    loads, finds its way around, and draws, with screens anchored to the canvas, and characters
    rigged from parts and animated by clips.
+5. [The editor](editor.md): laying scenes out with the mouse, the Inspector and a tree of nodes,
+   and playing the game from it.
 
 When a game needs compiled code:
 
-5. [Native libraries](native-libraries.md): what they are, how the engine loads them, and when
+6. [Native libraries](native-libraries.md): what they are, how the engine loads them, and when
    they're worth it.
-6. [Native library quick start](native-quick-start.md): build one, load it into a game, and call
+7. [Native library quick start](native-quick-start.md): build one, load it into a game, and call
    it from Luau.
 
 And to look things up:
 
-7. [API reference](api/README.md): every table, function and type scripts use, the built-ins
+8. [API reference](api/README.md): every table, function and type scripts use, the built-ins
    such as `wait` and `spawn`, and the `wingine-native` crate for native libraries.
 
 ## Examples

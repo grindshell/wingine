@@ -32,8 +32,23 @@ pub trait Game {
     /// with an [update rate](WindowConfig::update_rate), as many times as the frame's time holds.
     fn update(&mut self, _ctx: &mut Context, _dt: f32) {}
 
+    /// Lays out the game's egui interface, drawn over the frame: debug panels, or a tool's whole
+    /// window. Called once a frame, after the updates and before [`Game::draw`], with `ui`
+    /// covering the window. See the [`gui`](crate::gui) module.
+    #[cfg(feature = "egui")]
+    fn gui(&mut self, ctx: &mut Context, _ui: &mut egui::Ui) {
+        // Frames needn't run egui at all, unless the debug window is open.
+        ctx.gui.game_has_gui = false;
+    }
+
     /// Draws the current frame.
     fn draw(&mut self, canvas: &mut Canvas);
+
+    /// Called when the window's close button is pressed. Returning false keeps the window open,
+    /// as a tool does to ask about unsaved work first; [`Context::quit`] closes it later.
+    fn close_requested(&mut self, _ctx: &mut Context) -> bool {
+        true
+    }
 }
 
 /// Settings for the game window.
@@ -55,6 +70,10 @@ pub struct WindowConfig {
     /// time holds, possibly none, then draws. `None`, the default, updates once a frame by the
     /// frame's time. A rate must be above 0.
     pub update_rate: Option<f32>,
+    /// A key that shows and hides the engine's window of frame stats, drawn with egui, and never
+    /// reaches the game. `None`, the default, has no such key. Without the `egui` feature, it
+    /// does nothing.
+    pub debug_key: Option<Key>,
 }
 
 impl Default for WindowConfig {
@@ -67,6 +86,7 @@ impl Default for WindowConfig {
             resolution: Resolution::Window,
             vsync: true,
             update_rate: None,
+            debug_key: None,
         }
     }
 }
@@ -107,8 +127,8 @@ where
 
 /// Runs one frame of `game`, as both the window and a [`Simulation`] do: updates it as `timestep`
 /// says for a frame `elapsed` seconds long, with a canvas `canvas_size` canvas pixels in size,
-/// then has it draw on `canvas`. Returns the frame's stats so far: the caller adds rendering and
-/// the frame's whole time.
+/// runs its interface with the input the caller gave the GUI, then has it draw on `canvas`.
+/// Returns the frame's stats so far: the caller adds rendering and the frame's whole time.
 ///
 /// [`Simulation`]: crate::headless::Simulation
 pub(crate) fn run_frame(
@@ -131,6 +151,8 @@ pub(crate) fn run_frame(
         ctx.audio.advance(dt);
     }
     let start = Instant::now();
+    #[cfg(feature = "egui")]
+    crate::gui::run_pass(ctx, game);
     canvas.begin(canvas_size[0], canvas_size[1]);
     game.draw(canvas);
     FrameStats {
@@ -236,8 +258,18 @@ where
         let Some(state) = self.state.as_mut() else {
             return;
         };
+        // Whether egui wants the event to itself, such as a click on one of its windows.
+        #[cfg(feature = "egui")]
+        let to_gui = state
+            .gui_window
+            .on_window_event(&state.window, &event)
+            .consumed;
+        #[cfg(not(feature = "egui"))]
+        let to_gui = false;
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested if state.game.close_requested(&mut state.ctx) => {
+                event_loop.exit();
+            }
             WindowEvent::Resized(size) => {
                 state.surface.resize(&state.ctx.gpu, size);
                 state.window.request_redraw();
@@ -246,7 +278,7 @@ where
                 event,
                 is_synthetic,
                 ..
-            } => state.key_event(&event, is_synthetic),
+            } => state.key_event(&event, is_synthetic, to_gui),
             WindowEvent::CursorMoved { position, .. } => {
                 state.cursor = Some([position.x, position.y])
             }
@@ -258,7 +290,8 @@ where
             } => {
                 if let Some(button) = MouseButton::from_winit(button) {
                     match button_state {
-                        ElementState::Pressed => state.ctx.input.mouse_down(button),
+                        ElementState::Pressed if !to_gui => state.ctx.input.mouse_down(button),
+                        ElementState::Pressed => {}
                         ElementState::Released => state.ctx.input.mouse_up(button),
                     }
                 }
@@ -267,7 +300,12 @@ where
             WindowEvent::Focused(false) => state.ctx.input.release_all(),
             // Frames stop while the window is hidden, so they start again here.
             WindowEvent::Occluded(false) => state.window.request_redraw(),
-            WindowEvent::RedrawRequested => state.frame(),
+            WindowEvent::RedrawRequested => {
+                state.frame();
+                if state.ctx.quit {
+                    event_loop.exit();
+                }
+            }
             _ => {}
         }
     }
@@ -287,6 +325,9 @@ struct State<G> {
     stats: FrameStats,
     /// Cursor position in physical window pixels, while it is over the window.
     cursor: Option<[f64; 2]>,
+    /// Turns window events into egui's input, and acts on what egui asks of the window.
+    #[cfg(feature = "egui")]
+    gui_window: egui_winit::State,
 }
 
 impl<G: Game> State<G> {
@@ -321,6 +362,19 @@ impl<G: Game> State<G> {
         let screen = Screen::new(config.resolution);
         let size = window.inner_size();
         ctx.canvas_size = screen.canvas_size([size.width, size.height], window.scale_factor());
+        #[cfg(feature = "egui")]
+        let gui_window = {
+            ctx.gui.debug_key = config.debug_key;
+            let max_texture_side = ctx.gpu.device.limits().max_texture_dimension_2d as usize;
+            egui_winit::State::new(
+                ctx.gui.egui.clone(),
+                egui::ViewportId::ROOT,
+                event_loop,
+                Some(window.scale_factor() as f32),
+                window.theme(),
+                Some(max_texture_side),
+            )
+        };
         let game = init(&mut ctx)?;
 
         Ok(Self {
@@ -334,10 +388,13 @@ impl<G: Game> State<G> {
             last_frame: Instant::now(),
             stats: FrameStats::default(),
             cursor: None,
+            #[cfg(feature = "egui")]
+            gui_window,
         })
     }
 
-    fn key_event(&mut self, event: &KeyEvent, is_synthetic: bool) {
+    /// Passes a key event to the game, unless egui wanted it (`to_gui`) or it's the debug key.
+    fn key_event(&mut self, event: &KeyEvent, is_synthetic: bool, to_gui: bool) {
         let PhysicalKey::Code(code) = event.physical_key else {
             return;
         };
@@ -347,7 +404,15 @@ impl<G: Game> State<G> {
         match event.state {
             // Synthetic presses report keys already held when the window gains focus, such as
             // the Alt of an Alt+Tab. They weren't pressed for this game, so they're ignored.
-            ElementState::Pressed if !is_synthetic => self.ctx.input.key_down(key),
+            ElementState::Pressed if !is_synthetic && !to_gui => {
+                #[cfg(feature = "egui")]
+                if event.repeat && self.ctx.gui.debug_key == Some(key)
+                    || !event.repeat && self.ctx.gui.debug_key_down(key)
+                {
+                    return;
+                }
+                self.ctx.input.key_down(key);
+            }
             ElementState::Pressed => {}
             ElementState::Released => self.ctx.input.key_up(key),
         }
@@ -376,6 +441,10 @@ impl<G: Game> State<G> {
             frame: elapsed,
             ..self.stats
         };
+        #[cfg(feature = "egui")]
+        self.ctx
+            .gui
+            .set_input(self.gui_window.take_egui_input(&self.window));
         self.stats = run_frame(
             &mut self.game,
             &mut self.ctx,
@@ -384,8 +453,19 @@ impl<G: Game> State<G> {
             &mut self.timestep,
             elapsed,
         );
+        #[cfg(feature = "egui")]
+        self.gui_window.handle_platform_output(
+            &self.window,
+            std::mem::take(&mut self.ctx.gui.platform_output),
+        );
 
-        let Context { gpu, renderer, .. } = &mut self.ctx;
+        let Context {
+            gpu,
+            renderer,
+            #[cfg(feature = "egui")]
+            gui,
+            ..
+        } = &mut self.ctx;
         match self.surface.acquire_frame(gpu) {
             Acquired::Frame(frame) => {
                 let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
@@ -402,6 +482,8 @@ impl<G: Game> State<G> {
                     &view,
                     output_size,
                 );
+                #[cfg(feature = "egui")]
+                gui.render(&gpu.device, &gpu.queue, &frame.texture);
                 self.stats.render = start.elapsed().as_secs_f32();
                 self.surface.present(gpu, frame);
             }

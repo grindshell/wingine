@@ -1415,6 +1415,19 @@ impl Scene {
     /// where a node, or a node it's inside, isn't visible.
     pub fn draw_node(&mut self, canvas: &mut Canvas, id: NodeId) {
         self.size = [canvas.width(), canvas.height()];
+        self.draw_from(canvas, id);
+    }
+
+    /// Draws the whole scene laid out as it would be on a canvas `size` in size, whatever the
+    /// size of `canvas`, making that its size: as a tool shows a screen made for the game's canvas
+    /// in a view of another size.
+    pub fn draw_with_size(&mut self, canvas: &mut Canvas, size: [f32; 2]) {
+        self.size = size;
+        self.draw_from(canvas, self.root());
+    }
+
+    /// Draws `id` and the nodes inside it, laid out at the scene's size.
+    fn draw_from(&mut self, canvas: &mut Canvas, id: NodeId) {
         let mut at = id;
         while let Some(above) = self.node(at).parent {
             if !self.node(above).visible {

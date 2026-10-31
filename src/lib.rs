@@ -6,6 +6,8 @@ mod context;
 mod error;
 pub mod graphics;
 pub mod grid;
+#[cfg(feature = "egui")]
+pub mod gui;
 pub mod headless;
 pub mod input;
 pub mod lua;

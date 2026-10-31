@@ -92,8 +92,35 @@ alignment, scenes laid out on the canvas), the shmup's HUD and title menu, moved
 whose menu takes the mouse; and rigging (clips in scene files, posed with weights so games layer
 and crossfade them), the picker of `examples/orchard`.
 
+**Current: an editor, built on the engine.** The editor is itself a wingine game: a Rust program
+that runs on `wingine::run` and draws its interface with egui, which the engine gains for every
+game as a way to debug it. It's laid out like Godot's editor: a Scene dock over a FileSystem dock
+on the left, the Inspector on the right, Output and Animation in a bottom panel, and the open
+scenes as tabs over a 2D viewport in the middle. It edits scene files and writes them back in the
+canonical layout. Built in order, each part usable on its own:
+
+- egui in the engine: `Game::gui`, drawn over the canvas at the window's resolution, which takes
+  the input it wants before the game sees it; the same in `Simulation`, so tests click widgets by
+  their labels; canvases shown in egui (`GuiCanvas`); and a window of frame stats any game can
+  turn on with a key. A small Rust example shows them
+- The shell: the layout, opening a game's folder, its files, scene tabs, a viewport drawing scenes
+  through the engine, panned and zoomed, with a grid and the game's canvas, and playing the game
+  in a process of its own, with its output in the Output panel
+- Editing scenes: selecting nodes in the tree or the viewport, an Inspector for every field of
+  every kind, gizmos that move, turn and stretch nodes with snapping, adding, removing,
+  duplicating, renaming and moving nodes, undo, and saving
+- Levels: painting tiles from a palette of the tileset, resizing tilemaps, placing instances by
+  dragging scenes in, and overrides shown and reverted in the Inspector
+- UI: anchor presets, stretching, and previewing screens at other canvas sizes
+- Rigging: an Animation panel with clips' tracks and keys on a timeline, scrubbing and playing
+  them on the preview, and keying from the Inspector
+- Stretch: egui for Luau games, and a Script screen that edits Luau, with luau-lsp for
+  diagnostics, completion and hover against a definitions file of the engine's API
+- Redrawing only when something changes, docs for the editor, and tests of each part, driven
+  through `Simulation`
+
 Ask before starting features outside the current milestone, and especially general-purpose ones
-such as physics engines, networking, editors or 3D pipelines.
+such as physics engines, networking or 3D pipelines.
 
 ## Tech stack
 
@@ -104,12 +131,18 @@ such as physics engines, networking, editors or 3D pipelines.
 | Audio     | `kira`  | Music and sound effects                  |
 | Scripting | `mlua`  | Luau, with the `luau-jit` feature        |
 | Native libraries | `libloading` | Loads them, and never unloads them |
+| Interfaces | `egui` | With `egui-winit` and `egui-wgpu`, behind the default `egui` feature |
 
 - Rust edition 2024.
 - Target platforms: desktop only (Windows, macOS, Linux).
-- `wgpu`, `winit`, `mlua` and `kira` change their APIs substantially between releases. Check the
-  version pinned in `Cargo.toml` and that version's docs on docs.rs rather than relying on memory
-  of older APIs.
+- `wgpu`, `winit`, `mlua`, `kira` and `egui` change their APIs substantially between releases.
+  Check the version pinned in `Cargo.toml` and that version's docs on docs.rs rather than relying
+  on memory of older APIs. egui's crates must target the engine's wgpu and winit, so they're
+  upgraded together; egui crates outside egui's own repository, such as `egui_dock`, often lag a
+  release behind.
+- The `egui` feature, on by default, brings egui in; `default-features = false` builds the engine
+  without it, which CI lints. egui's own icon fonts are left out unless its
+  `monochrome_emoji_fonts` feature is on, as the editor turns it on.
 - `kira` is built with only the WAV and OGG Vorbis decoders. Its output, `cpal`, links against
   ALSA on Linux, so building there needs `libasound2-dev` (CI installs it).
 - Scripts are **Luau**, not standard Lua 5.x. Luau has its own syntax additions (type annotations,
@@ -126,11 +159,27 @@ such as physics engines, networking, editors or 3D pipelines.
   or with `WindowConfig::update_rate`, as many fixed steps as the frame's time holds (possibly
   none). Frames close to a whole number of steps count as exactly that, and updates fall due a
   quarter step after frames at the rate end, so jitter doesn't move updates between frames.
+  After the updates, `run_frame` runs the egui pass (`Game::gui`), then `draw`. The window's close
+  button asks `Game::close_requested`, and `Context::quit` closes the window after the frame.
 - `src/context.rs`: `Context`, the engine services passed to games: input, audio, the canvas
   size, the built-in font, texture loading, and `FrameStats` for the frame before (CPU time
   spent updating, drawing and rendering, the whole frame's time, and quads and draw calls).
   Games get it in their init closure and in `Game::update`; Luau games call
   `graphics.frame_stats()`.
+- `src/gui.rs`: egui over games, `wingine::gui`, which re-exports `egui`. `Gui` (in the
+  `Context`) holds egui's context, the input for its next pass, and what the last pass drew; its
+  renderer is made the first time there's something to draw, and games that don't override
+  `Game::gui` skip the pass entirely while the debug window is closed. egui renders over the
+  finished frame, at the output's resolution, through a non-sRGB view of the frame (egui blends in
+  sRGB space), and samples engine textures through non-sRGB views of them for the same reason,
+  which is why textures keep their format without sRGB among their view formats. The window feeds
+  it through `egui_winit`, which says which events egui wants, and those presses don't reach
+  `Input`; a `Simulation` builds its input from simulated events (`SimulatedInput`) and decides
+  the same by where the pointer is (`wants_pointer_at`). `GuiCanvas` renders a `Canvas` into a
+  texture egui shows, and `Context::gui_texture` shows a `Texture`. The debug window
+  (`WindowConfig::debug_key`, `debug_key` in `conf.luau`) shows the frame stats. Simulations turn
+  on egui's AccessKit output, which gives every widget's label and bounds, so tests find widgets
+  by label (`Simulation::gui_rect`, `click_gui`).
 - `src/audio.rs`: `Audio` (kira's mixer, with separate sound-effect and music tracks) and
   `Sound`. Sound effects are decoded into memory when loaded; music streams from its file and
   loops, crossfading when it changes. Without a sound device, and always headless, audio plays
@@ -174,7 +223,10 @@ such as physics engines, networking, editors or 3D pipelines.
   `set_render_every_frame` asks for every frame to render and wait for the GPU, as benchmarks
   want. All of them in a process share one GPU device, and
   only one thread at a time may hold any (a reentrant lease): lavapipe crashes with a device per
-  thread and WARP renders wrongly with a shared one, so parallel GPU tests take turns.
+  thread and WARP renders wrongly with a shared one, so parallel GPU tests take turns. Simulated
+  input reaches egui too, with `type_text` and `scroll` for it alone; screenshots show the
+  interface; `request_close` presses the window's close button and `has_quit` tells whether the
+  game called `Context::quit`.
 - `src/lua.rs`: `Scripts`, a sandboxed Luau VM for gameplay scripts, and its task scheduler.
   Games register Rust functions (`set_function`), load script files, and start script functions
   as tasks (`spawn`): coroutines that `update` resumes once a frame with the frame's duration.
@@ -207,7 +259,8 @@ such as physics engines, networking, editors or 3D pipelines.
   Drawing walks the tree, composing transforms from parent to child; text and tilemaps only move.
   Layout is worked out as the tree is walked, from the root down (`Placed`): a node's anchor
   places it in its parent's rectangle, and its stretch sizes it by it, where the root's is the
-  scene's `size` (the canvas's: drawing sets it, and `scene.load` starts it there) and a plain
+  scene's `size` (the canvas's: drawing sets it, and `scene.load` starts it there;
+  `draw_with_size` draws it laid out for another canvas, as the editor's viewport does) and a plain
   node passes its parent's on. So `transform`, `bounds` and `contains` walk down from the root.
   `clip.rs` holds `Clip`s, a file's tracks of keyframes on nodes' properties, which a file names
   apart from its nodes, so a clip poses whatever node it's given: `Scene::pose` finds every
@@ -228,6 +281,29 @@ such as physics engines, networking, editors or 3D pipelines.
   the `Library` and `Class` traits, a `Registry` for functions, methods and hooks, argument and
   result conversions, and `export!`. Libraries depend on it alone, never on `wingine`.
 - `src/main.rs`: the `wingine` executable, which runs a Luau game: `cargo run -- examples/pong`.
+- `crates/wingine-editor/`: the editor, a library and the `wingine-editor` executable
+  (`cargo run -p wingine-editor -- examples/garden`). `Editor` is a `Game` whose `gui` is the whole
+  interface, laid out like Godot's: the top bar (menus, the main screens, Play), the Scene dock
+  (`docks/scene_tree.rs`) over the FileSystem dock (`docks/filesystem.rs`) in a left panel, the
+  Inspector (`docks/inspector.rs`) on the right, Output (`docks/output.rs`) in a collapsible
+  bottom panel, and the open scenes' tabs over the viewport (`viewport.rs`) in the middle. It
+  edits `SceneFile`s, never live scenes: a `Document` (`document.rs`) holds the file, its undo
+  history as snapshots of the whole file (a change runs from the first `edit()` until a frame with
+  no button held and no field focused, so a drag or a field's typing is one), the selection as a
+  `NodePath` (indices into children, `edit.rs`, whose pure operations add, remove, duplicate,
+  rename and move nodes, keeping names unique and clips' tracks pointed at their nodes), and a
+  preview `Scene`, built again from the file whenever it changes, through `AssetCache`
+  (`project.rs`), which rereads a file only when its modified time changes. Docks return actions
+  that the editor applies, each a change of its own; the Inspector edits a copy of the node and
+  puts it back only if it changed. The viewport renders the preview into a `GuiCanvas` with
+  `Scene::draw_with_size` at the game's canvas size (from `conf.luau`), mapping between the
+  scene and the window as `Camera` does (`ViewMap`), and picks what can be seen before areas,
+  plain nodes' origins and tilemaps, clicking again in place reaching the next node down. Play
+  (`play.rs`) runs the editor's own executable with `--run`, which runs the game, so it's a
+  process of its own; tests point it at the built executable with `set_runner`. Its tests
+  (`tests/editor.rs`) drive it through `Simulation`, clicking widgets by label, and copy example
+  games to change them. Number fields give their name to AccessKit themselves, since egui doesn't
+  carry a label's text over to what it labels.
 - `examples/rpg/`: the milestone's RPG, written entirely in Luau. Maps in `maps/` are scenes: a
   tilemap over `world.tileset.luau` whose layers hold each cell's kind of ground (`floor`), the
   ground's sprite (`ground`) and objects (`objects`), with tiles named for their kind and sprite
@@ -305,23 +381,29 @@ such as physics engines, networking, editors or 3D pipelines.
   another copy with its people
   and creatures mid-stride (raised a pixel on stretched legs), the frame characters show for the
   first half of each step. `native-particles/` is a native library, a `cdylib` built as
-  `particles`, which `tests/native.rs` builds and loads.
+  `particles`, which `tests/native.rs` builds and loads. `gui.rs` shows egui over a game:
+  sprites bouncing about, tuned from a panel that shows a `GuiCanvas` map of them, and the debug
+  window on F3.
 - `README.md`: the project's overview, with a screenshot of each example in `docs/screenshots/`.
   They were taken headlessly at 640x360 (768x432 for `sprites`, so its 256x144 canvas scales
-  without bars, and 960x720 for `shmup`, twice its canvas); retake them when an example changes
+  without bars, 960x720 for `shmup`, twice its canvas, and 1280x720 for the editor, with the
+  garden open and its pond selected with the Move tool); retake them when an example changes
   how it looks. The shmup's results, how many bullets fit in a frame and what each costs, come
   from the stress test, run with the script beside them, and the per-bullet costs from fitting
   its benchmark's CSV against the quad count; the split of the update time was measured by timing
   `step` and `collide` with `os.clock`. Measure them again on the same machine, a Ryzen 7 5800X
   with an RTX 3080, after changes that could move them.
 - `docs/`: the user docs for making games in Luau: a quick start, a game's folder and frame,
-  running and checking games, scenes, native libraries with a quick start, and in `docs/api/` a
-  reference for every table, function and type scripts use, and for `wingine-native`. They
-  restate the module docs (`src/runtime/mod.rs`, `src/lua.rs`, `src/scene/mod.rs`,
-  `crates/wingine-native`) for game authors, so change them together. Check their examples by
-  running them headlessly.
+  running and checking games, scenes, the editor, native libraries with a quick start, and in
+  `docs/api/` a reference for every table, function and type scripts use, and for
+  `wingine-native`. They restate the module docs (`src/runtime/mod.rs`, `src/lua.rs`,
+  `src/scene/mod.rs`, `crates/wingine-native`) for game authors, so change them together; the
+  editor's (`docs/editor.md`) follows what the editor does, so change it with the editor. Check
+  their examples by running them headlessly.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
+- `tests/gui.rs`: tests for egui over games, through `Simulation`: clicking widgets by label,
+  typing into a focused field, input egui takes not reaching the game, and the debug key.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders.
 - `tests/scene.rs`: tests for scenes loaded to play: finding nodes, transforms, hit testing,
   anchors and stretching, tilemaps, instances and overrides, adding and removing nodes, and
@@ -389,9 +471,16 @@ such as physics engines, networking, editors or 3D pipelines.
   bind named actions (strings, so Lua scripts can use them too) to keys and query the actions.
 - The mouse position is in canvas pixels (through any fixed-resolution scaling and bars).
   `Camera::canvas_to_world` converts it to world coordinates, using `Context::canvas_size`.
-- wgpu and winit types stay internal (`pub(crate)`). Games use the engine's own API. `mlua` is
-  the exception: `wingine::lua` re-exports it, since registering functions and converting values
-  is its API. Engine types scripts use implement `FromLua`/`IntoLua` or `UserData` in
+- egui interfaces draw over the whole frame at the output's resolution, not on the canvas: their
+  points are logical window pixels, through any fixed resolution's scaling. Engine drawing shows
+  in them through `GuiCanvas`. Tests find their widgets by label, so give a widget whose label egui
+  doesn't know, such as a number field beside a label, one of its own (`Response::widget_info`).
+  egui sizes a new window or menu in its first frame and shows it in the next, and fades windows
+  in and out, so tests run frames before looking for them.
+- wgpu and winit types stay internal (`pub(crate)`). Games use the engine's own API. `mlua` and
+  `egui` are the exceptions: `wingine::lua` re-exports mlua, since registering functions and
+  converting values is its API, and `wingine::gui` re-exports egui, whose widgets are. Engine
+  types scripts use implement `FromLua`/`IntoLua` or `UserData` in
   `src/lua.rs` (`Direction` is a string such as `"up"`, `Color` a hex string such as
   `"#f2c14e"`, a table or a number `0xRRGGBBAA`, and `Font` userdata with methods).
 - The Luau runtime lends its functions the `Context` while the game loads and updates, and the
@@ -425,9 +514,12 @@ such as physics engines, networking, editors or 3D pipelines.
 cargo build
 cargo test
 cargo clippy --all-targets
+cargo clippy -p wingine --no-default-features --all-targets
 cargo fmt
 cargo run --example shapes
 cargo run --example sprites
+cargo run --example gui
+cargo run -p wingine-editor -- examples/garden
 cargo run -- examples/pong
 cargo run -- examples/rpg
 cargo run -- examples/garden
@@ -438,8 +530,8 @@ cargo bench
 ```
 
 Run `cargo fmt` and `cargo clippy --all-targets` before considering a change finished, and keep
-both clean. CI (`.github/workflows/ci.yml`) runs fmt, clippy with `-D warnings`, and `cargo test`
-on Linux and Windows.
+both clean, with the engine's `egui` feature off too. CI (`.github/workflows/ci.yml`) runs fmt,
+clippy with `-D warnings` with and without the feature, and `cargo test` on Linux and Windows.
 
 ## Checking game behavior
 

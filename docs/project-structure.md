@@ -208,6 +208,7 @@ return {
     resolution = { width = 320, height = 180 },
     vsync = true,
     update_rate = 60,
+    debug_key = "F3",
     libraries = { "particles", { name = "danmaku", optional = true } },
 }
 ```
@@ -264,6 +265,19 @@ behaves differently with different steps. Each update gets `dt = 1 / update_rate
 
 A frame never updates for more than a quarter of a second, so a stall, such as dragging the
 window, doesn't make the game leap forward.
+
+### `debug_key`
+
+A key, named as [`input.bind`](api/input.md) names keys, that shows and hides the engine's window
+of how long frames take: updating, drawing and rendering, a graph of the last two seconds, how many
+quads and draw calls the frame took, the canvas's size and the GPU. By default, there's no such key.
+The game never sees the key, so pick one it doesn't use:
+
+```lua
+return { debug_key = "F3" }
+```
+
+[Measuring performance](running-games.md#measuring-performance) says what the numbers mean.
 
 ### `libraries`
 

@@ -41,12 +41,17 @@ impl WindowSurface {
             .find(|format| format.add_srgb_suffix().is_srgb())
             .unwrap_or(formats[0]);
         let size = window.inner_size();
+        // Rendering goes through an sRGB view so blending happens in linear space, and egui's
+        // through one without, since it blends in sRGB space.
+        let mut view_formats = vec![format.add_srgb_suffix()];
+        if format.remove_srgb_suffix() != view_formats[0] {
+            view_formats.push(format.remove_srgb_suffix());
+        }
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             color_space: wgpu::SurfaceColorSpace::Auto,
-            // Rendering goes through an sRGB view so blending happens in linear space.
-            view_formats: vec![format.add_srgb_suffix()],
+            view_formats,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             width: size.width.max(1),
             height: size.height.max(1),

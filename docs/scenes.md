@@ -19,9 +19,10 @@ end
 ```
 
 Scene files are Luau, but only data: one table of tables, strings, numbers and booleans. That
-way a tool, such as an editor, can read a file, change it and write it back, and people can still
-write and read them by hand. [`examples/garden`](../examples/garden) is a game built around one,
-and [`examples/orchard`](../examples/orchard) one around a character animated by a scene's clips.
+way a tool, such as [the editor](editor.md), can read a file, change it and write it back, and
+people can still write and read them by hand. [`examples/garden`](../examples/garden) is a game
+built around one, and [`examples/orchard`](../examples/orchard) one around a character animated by
+a scene's clips.
 
 ## A scene file
 
@@ -482,8 +483,9 @@ changed. Reading what it writes gives back the same scene. It doesn't keep comme
 
 The scene files of [`examples/garden`](../examples/garden), the
 [RPG's maps](../examples/rpg/maps), the [shmup's HUD](../examples/shmup/hud.scene.luau) and
-[`examples/orchard`](../examples/orchard) are in that layout, as an editor would leave them, and
-tests check the garden's, the shmup's and the orchard's stay so. A clip's keys go one to a line.
+[`examples/orchard`](../examples/orchard) are in that layout, as [the editor](editor.md) leaves
+them, and tests check the garden's, the shmup's and the orchard's stay so. A clip's keys go one to
+a line.
 
 ## Using a scene
 

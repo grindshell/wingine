@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/wingine-abi",
+    "crates/wingine-editor",
     "crates/wingine-native",
     "examples/native-danmaku",
     "examples/native-particles",
@@ -9,6 +10,7 @@ members = [
 default-members = [
     ".",
     "crates/wingine-abi",
+    "crates/wingine-editor",
     "crates/wingine-native",
     "examples/native-danmaku",
     "examples/native-particles",
@@ -19,8 +21,16 @@ name = "wingine"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["egui"]
+# egui interfaces drawn over games: debug panels, and tools such as the editor.
+egui = ["dep:egui", "dep:egui-wgpu", "dep:egui-winit"]
+
 [dependencies]
 bytemuck = { version = "1.25.2", features = ["derive"] }
+egui = { version = "0.37.0", optional = true, default-features = false, features = ["default_fonts"] }
+egui-wgpu = { version = "0.37.0", optional = true, default-features = false }
+egui-winit = { version = "0.37.0", optional = true, default-features = false, features = ["clipboard", "wayland", "x11"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 # Only the formats the engine documents: WAV (PCM) and OGG Vorbis.
 kira = { version = "0.12.6", default-features = false, features = ["cpal", "ogg", "vorbis", "wav", "pcm"] }
@@ -50,6 +60,14 @@ doc = false
 [[example]]
 name = "sprites"
 test = true
+
+[[example]]
+name = "gui"
+required-features = ["egui"]
+
+[[test]]
+name = "gui"
+required-features = ["egui"]
 
 # What drawing a sprite costs from Rust, Luau and native libraries: `cargo bench`.
 [[bench]]

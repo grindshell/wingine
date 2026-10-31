@@ -36,7 +36,7 @@ fn clear() {
     let frame = headless
         .render(16, 16, |canvas| canvas.clear(Color::rgb8(0x33, 0x66, 0x99)))
         .unwrap();
-    assert_screenshot(&headless, "clear", frame);
+    assert_screenshot(&headless.adapter_name(), "clear", frame);
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn fill_rects() {
             );
         })
         .unwrap();
-    assert_screenshot(&headless, "fill_rects", frame);
+    assert_screenshot(&headless.adapter_name(), "fill_rects", frame);
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn sprites() {
             canvas.draw_sprite(&tree, Rect::new(64.0, 16.0, 32.0, 16.0), tree_tint);
         })
         .unwrap();
-    assert_screenshot(&headless, "sprites", frame);
+    assert_screenshot(&headless.adapter_name(), "sprites", frame);
 }
 
 /// Sprites rotated about their centers: unturned, a quarter turn, a half turn and an eighth back,
@@ -142,7 +142,7 @@ fn rotated_sprites() {
             canvas.draw_sprite_rotated(&hero, dest, FRAC_PI_6, Color::GREEN);
         })
         .unwrap();
-    assert_screenshot(&headless, "rotated_sprites", frame);
+    assert_screenshot(&headless.adapter_name(), "rotated_sprites", frame);
 }
 
 /// Sprites and a fill placed by transforms: a sprite standing on its feet and tipped over about
@@ -195,7 +195,7 @@ fn transformed_sprites() {
             canvas.draw_sprite_transformed(&hero, small, corner, Color::WHITE);
         })
         .unwrap();
-    assert_screenshot(&headless, "transformed_sprites", frame);
+    assert_screenshot(&headless.adapter_name(), "transformed_sprites", frame);
 }
 
 /// A scene read from a scene file: a windmill whose sails, rects, turn about a hub off the pixel
@@ -250,7 +250,7 @@ fn scene() {
             scene.draw(canvas);
         })
         .unwrap();
-    assert_screenshot(&headless, "scene", frame);
+    assert_screenshot(&headless.adapter_name(), "scene", frame);
 }
 
 /// A scene with a tilemap placed away from the origin, seen through a camera that cuts its edge
@@ -303,7 +303,7 @@ fn scene_tilemap() {
             scene.draw(canvas);
         })
         .unwrap();
-    assert_screenshot(&headless, "scene_tilemap", frame);
+    assert_screenshot(&headless.adapter_name(), "scene_tilemap", frame);
 }
 
 /// A screen laid out by anchors, drawn on a wide canvas and a narrow one: a bar stretched along
@@ -364,8 +364,24 @@ fn scene_anchors() {
                 scene.draw(canvas);
             })
             .unwrap();
-        assert_screenshot(&headless, name, frame);
+        assert_screenshot(&headless.adapter_name(), name, frame);
     }
+
+    // Laid out for the narrow canvas, but drawn on a larger one, through a camera that shows it
+    // whole, as an editor shows a screen: the same layout as the narrow screenshot, with the
+    // canvas around it.
+    let frame = headless
+        .render(128, 96, |canvas| {
+            canvas.clear(Color::rgb8(0x10, 0x10, 0x18));
+            canvas.set_camera(Some(Camera::new(48.0, 40.0)));
+            canvas.fill_rect(
+                Rect::new(0.0, 0.0, 96.0, 80.0),
+                Color::rgb8(0x2a, 0x3d, 0x2c),
+            );
+            scene.draw_with_size(canvas, [96.0, 80.0]);
+        })
+        .unwrap();
+    assert_screenshot(&headless.adapter_name(), "scene_anchors_sized", frame);
 }
 
 /// Four instances of a puppet, off the pixel grid, posed by a clip that raises its arm, the
@@ -457,7 +473,7 @@ fn scene_clips() {
             scene.draw(canvas);
         })
         .unwrap();
-    assert_screenshot(&headless, "scene_clips", frame);
+    assert_screenshot(&headless.adapter_name(), "scene_clips", frame);
 }
 
 /// The scene at the end of `files`, a path and the file's contents for each scene and tileset
@@ -519,7 +535,7 @@ fn batch_order() {
             );
         })
         .unwrap();
-    assert_screenshot(&headless, "batch_order", frame);
+    assert_screenshot(&headless.adapter_name(), "batch_order", frame);
 }
 
 /// More quads than the renderer's initial buffers hold, so they have to grow.
@@ -536,7 +552,7 @@ fn many_quads() {
             }
         })
         .unwrap();
-    assert_screenshot(&headless, "many_quads", frame);
+    assert_screenshot(&headless.adapter_name(), "many_quads", frame);
 }
 
 /// A fixed resolution scales up by the largest whole number that fits, without smoothing, and is
@@ -568,7 +584,7 @@ fn fixed_resolution() {
             canvas.fill_rect(Rect::new(8.0, 4.0, 8.0, 8.0), Color::RED);
         })
         .unwrap();
-    assert_screenshot(&headless, "fixed_resolution", frame);
+    assert_screenshot(&headless.adapter_name(), "fixed_resolution", frame);
 }
 
 /// World drawing through a zoomed camera held inside its bounds, then a HUD in canvas pixels.
@@ -604,7 +620,7 @@ fn camera() {
             canvas.fill_rect(Rect::new(2.0, 42.0, 4.0, 4.0), Color::GREEN);
         })
         .unwrap();
-    assert_screenshot(&headless, "camera", frame);
+    assert_screenshot(&headless.adapter_name(), "camera", frame);
 }
 
 /// A two-layer tilemap through a camera that cuts its edge cells in half: tints apply, an empty
@@ -653,7 +669,7 @@ fn tilemap() {
             map.draw_layer(canvas, above);
         })
         .unwrap();
-    assert_screenshot(&headless, "tilemap", frame);
+    assert_screenshot(&headless.adapter_name(), "tilemap", frame);
 }
 
 /// The built-in font: every glyph, a scaled title, text wrapped to fit a box, and a layout only
@@ -693,7 +709,87 @@ fn text() {
             canvas.draw_text_layout(&revealed, ..shown, [120.4, 69.6], blue);
         })
         .unwrap();
-    assert_screenshot(&headless, "text", frame);
+    assert_screenshot(&headless.adapter_name(), "text", frame);
+}
+
+/// An egui window over a game with a 40x30 canvas drawn 4x, at the window's own resolution, so its
+/// text is crisp over the canvas's big pixels. In it, a canvas the engine rendered, shown 2x, and
+/// one cell of a texture, shown 2x, both sampled nearest-neighbor.
+#[cfg(feature = "egui")]
+#[test]
+fn gui() {
+    use wingine::{
+        Game, WindowConfig,
+        graphics::Canvas,
+        gui::{GuiCanvas, egui},
+        headless::Simulation,
+    };
+
+    struct Tools {
+        view: GuiCanvas,
+        sheet: Texture,
+    }
+    impl Game for Tools {
+        fn gui(&mut self, ctx: &mut Context, ui: &mut egui::Ui) {
+            let canvas = self.view.begin(24, 16);
+            canvas.clear(Color::rgb8(0x14, 0x18, 0x2c));
+            canvas.fill_rect(Rect::new(2.0, 2.0, 8.0, 8.0), Color::RED);
+            canvas.fill_rect(
+                Rect::new(12.0, 6.0, 10.0, 8.0),
+                Color::rgb8(0xf2, 0xc1, 0x4e),
+            );
+            let view = self.view.render(ctx);
+            let sheet = ctx.gui_texture(&self.sheet);
+            // The cell at column 27, row 0.
+            let cell = egui::Rect::from_min_size(
+                egui::pos2(27.0 * 16.0 / sheet.size.x, 0.0),
+                egui::vec2(16.0, 16.0) / sheet.size,
+            );
+            egui::Window::new("Tools")
+                .fixed_pos([8.0, 8.0])
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Image::new(view).fit_to_exact_size(view.size * 2.0));
+                        // Sized as the cell is shown, not as the whole sheet is.
+                        let shown = egui::load::SizedTexture::new(sheet.id, [32.0, 32.0]);
+                        ui.add(egui::Image::new(shown).uv(cell));
+                    });
+                    let _ = ui.button("Apply");
+                });
+        }
+
+        fn draw(&mut self, canvas: &mut Canvas) {
+            canvas.clear(Color::rgb8(0x2a, 0x3d, 0x2c));
+            for x in (0..40).step_by(8) {
+                canvas.fill_rect(
+                    Rect::new(x as f32, 0.0, 4.0, 30.0),
+                    Color::rgb8(0x3e, 0x6b, 0x3f),
+                );
+            }
+        }
+    }
+
+    let config = WindowConfig {
+        width: 160,
+        height: 120,
+        resolution: Resolution::Fixed {
+            width: 40,
+            height: 30,
+        },
+        ..Default::default()
+    };
+    let mut simulation = Simulation::new(&config, |ctx| {
+        Ok(Tools {
+            view: GuiCanvas::new(),
+            sheet: ctx.load_texture(TILESET)?,
+        })
+    })
+    .expect("a GPU adapter is available");
+    // egui sizes a new window in its first frame, then fades it in.
+    simulation.run_for(0.5);
+    let frame = simulation.screenshot().unwrap();
+    assert_screenshot(&simulation.adapter_name(), "gui", frame);
 }
 
 fn headless() -> Headless {
@@ -705,7 +801,7 @@ fn headless() -> Headless {
 
 /// Compares `frame` with the reference screenshot `name`, panicking on a mismatch, or with
 /// `UPDATE_SCREENSHOTS` set, replacing the reference.
-fn assert_screenshot(headless: &Headless, name: &str, frame: Image) {
+fn assert_screenshot(adapter: &str, name: &str, frame: Image) {
     let actual = RgbaImage::from_raw(frame.width(), frame.height(), frame.into_pixels())
         .expect("frame dimensions match its pixel data");
     let reference_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -760,7 +856,7 @@ fn assert_screenshot(headless: &Headless, name: &str, frame: Image) {
          If the change is intended, rerun with UPDATE_SCREENSHOTS=1 and review the new reference.",
         reference_path.display(),
         actual_path.display(),
-        headless.adapter_name(),
+        adapter,
     );
 }
 

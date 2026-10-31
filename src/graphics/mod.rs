@@ -21,3 +21,5 @@ pub use font::{Align, Font, TextLayout};
 pub use screen::Resolution;
 pub use sprite::{Sprite, SpriteSheet};
 pub use texture::Texture;
+#[cfg(feature = "egui")]
+pub(crate) use texture::WeakTexture;

@@ -16,6 +16,10 @@ pub struct Context {
     pub(crate) audio: Audio,
     pub(crate) canvas_size: [f32; 2],
     pub(crate) frame_stats: FrameStats,
+    /// Whether the game has asked to close its window.
+    pub(crate) quit: bool,
+    #[cfg(feature = "egui")]
+    pub(crate) gui: crate::gui::Gui,
     default_font: Font,
 }
 
@@ -44,14 +48,24 @@ impl Context {
     pub(crate) fn new(gpu: Gpu, renderer: Renderer, audio: Audio) -> Self {
         let default_font = Font::built_in(&renderer, &gpu.device, &gpu.queue);
         Self {
+            #[cfg(feature = "egui")]
+            gui: crate::gui::Gui::new(renderer.target_format()),
             gpu,
             renderer,
             input: Input::new(),
             audio,
             canvas_size: [0.0, 0.0],
             frame_stats: FrameStats::default(),
+            quit: false,
             default_font,
         }
+    }
+
+    /// Closes the window once this frame is done, ending [`run`](crate::run). A
+    /// [`Simulation`](crate::headless::Simulation) only notes it: see
+    /// [`Simulation::has_quit`](crate::headless::Simulation::has_quit).
+    pub fn quit(&mut self) {
+        self.quit = true;
     }
 
     /// How long the frame before this one took, and how much it drew. All zero until a frame

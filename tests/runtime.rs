@@ -74,6 +74,7 @@ fn settings_come_from_conf_luau() {
                 resolution = { width = 160, height = 120 },
                 vsync = false,
                 update_rate = 60,
+                debug_key = 'F3',
                 libraries = { 'physics', { name = 'particle_fx', optional = true } },
             }",
         )],
@@ -85,6 +86,7 @@ fn settings_come_from_conf_luau() {
     assert!(!window.resizable);
     assert!(!window.vsync);
     assert_eq!(window.update_rate, Some(60.0));
+    assert_eq!(window.debug_key, Some(Key::F3));
     assert_eq!(
         window.resolution,
         Resolution::Fixed {
@@ -180,6 +182,11 @@ fn unknown_or_invalid_settings_are_errors() {
             "zero_update_rate",
             "return { update_rate = 0 }",
             "`update_rate`: runtime error: must be above 0",
+        ),
+        (
+            "debug_key",
+            "return { debug_key = 'Hyper' }",
+            "unknown key `Hyper`",
         ),
     ] {
         let folder = game(test, &[("conf.luau", conf)]);

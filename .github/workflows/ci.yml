@@ -25,6 +25,8 @@ jobs:
           sudo apt-get install -y libasound2-dev
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      # The engine builds without egui too.
+      - run: cargo clippy -p wingine --no-default-features --all-targets -- -D warnings
 
   test:
     name: Test (${{ matrix.os }})

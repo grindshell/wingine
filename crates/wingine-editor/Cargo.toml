@@ -1,0 +1,18 @@
+[package]
+name = "wingine-editor"
+version = "0.1.0"
+edition = "2024"
+description = "The Wingine editor: a wingine game that edits scenes, laid out like Godot's editor"
+
+[dependencies]
+# Only for the icons in its fonts, such as the kinds of node: the editor uses the egui wingine
+# re-exports, which this is.
+egui = { version = "0.37.0", default-features = false, features = ["monochrome_emoji_fonts"] }
+log = "0.4.34"
+wingine = { path = "../.." }
+
+# Its docs would collide with the library's, which has the same name.
+[[bin]]
+name = "wingine-editor"
+path = "src/main.rs"
+doc = false

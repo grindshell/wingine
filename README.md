@@ -9,9 +9,10 @@ Wingine's first milestone, everything needed to ship a tile-based, top-down RPG,
 The [RPG example](#rpg) is that game. Its second, a bullet hell that shows the engine's
 performance, is complete too: the [shmup](#shmup), whose bullets run in Luau or in a native
 library written in Rust, which [fits 3.4 times as many](#luau-and-rust-compared). So is its
-third, [scenes](docs/scenes.md): levels, screens and rigged characters laid out in files a future
+third, [scenes](docs/scenes.md): levels, screens and rigged characters laid out in files an
 editor can write, which the [garden](#garden), the RPG's maps, the shmup's HUD and the
-[orchard](#orchard) are made of.
+[orchard](#orchard) are made of. The fourth, under way, is that [editor](#editor), laid out like
+Godot's and built with Wingine itself.
 
 ## Features
 
@@ -41,6 +42,10 @@ editor can write, which the [garden](#garden), the RPG's maps, the shmup's HUD a
   that `wait` across frames for NPCs, dialogue and events. Whole games can be written in Luau.
 - **Headless runs**: games run without a window for tests and for scripted runs that save
   screenshots.
+- **egui** interfaces over any game, for debug panels and tools, and a window of frame stats any
+  game can show with a key. Tests click their widgets by name.
+- **An editor** for scenes, laid out like Godot's: a tree of nodes, an Inspector, a viewport with
+  gizmos, undo, and playing the game.
 
 Wingine targets desktops: Windows, macOS and Linux. CI builds and tests it on Windows and Linux.
 
@@ -69,6 +74,7 @@ The first build takes a little longer while Luau compiles.
 | [Orchard](#orchard) | Luau, around a rigged character | `cargo run -- examples/orchard` |
 | [Sprites](#sprites) | Rust, with Luau scripts | `cargo run --example sprites` |
 | [Shapes](#shapes) | Rust | `cargo run --example shapes` |
+| [egui](#egui) | Rust, with an egui panel | `cargo run --example gui` |
 
 ### RPG
 
@@ -233,6 +239,31 @@ Space, Enter or E to read the note on its door.
 square, and a translucent panel drawn over both.
 
 ![Shapes](docs/screenshots/shapes.png)
+
+### egui
+
+[`examples/gui.rs`](examples/gui.rs) bounces sprites around the window, tuned from an egui panel
+that also shows a map of them, drawn by the engine into a texture. F3 shows the engine's window of
+frame stats. Run it with `cargo run --example gui`.
+
+## Editor
+
+[`crates/wingine-editor`](crates/wingine-editor) edits a game's scenes. It's a Wingine game itself,
+written in Rust, whose interface is egui, laid out like Godot's editor: the open scene's tree of
+nodes over the game's files on the left, the Inspector on the right, Output along the bottom, and
+the scene in the middle, drawn by the engine as the game draws it.
+
+![The editor with the garden open, its pond selected](docs/screenshots/editor.png)
+
+```bash
+cargo run -p wingine-editor -- examples/garden
+```
+
+Select nodes in the tree or the viewport, change their fields in the Inspector, or move, turn and
+stretch them with the mouse; add, rename, duplicate, move and delete them in the tree; undo;
+save, in the canonical layout; and play the game, in a process of its own. See
+[the editor's docs](docs/editor.md). Painting tiles, anchor presets, editing clips and editing
+scripts come next.
 
 ## Making a game
 

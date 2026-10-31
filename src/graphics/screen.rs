@@ -63,6 +63,22 @@ impl Screen {
         }
     }
 
+    /// Converts a point in canvas pixels to a point on an output of `output` physical pixels at
+    /// `scale_factor`: the inverse of [`Screen::to_canvas`].
+    #[cfg_attr(not(any(feature = "egui", test)), expect(dead_code))]
+    pub fn to_output(&self, point: [f32; 2], output: [u32; 2], scale_factor: f64) -> [f64; 2] {
+        match self.resolution {
+            Resolution::Window => point.map(|v| f64::from(v) * scale_factor),
+            Resolution::Fixed { width, height } => {
+                let viewport = viewport([width, height], output);
+                [
+                    f64::from(viewport.x + point[0] * viewport.w / width as f32),
+                    f64::from(viewport.y + point[1] * viewport.h / height as f32),
+                ]
+            }
+        }
+    }
+
     /// Renders `canvas` onto `output`, which is `output_size` physical pixels.
     pub fn render(
         &mut self,
@@ -158,6 +174,22 @@ mod tests {
         assert_eq!(
             window.to_canvas([300.0, 150.0], [800, 600], 1.5),
             [200.0, 100.0]
+        );
+    }
+
+    #[test]
+    fn canvas_points_map_back_to_the_output() {
+        let fixed = Screen::new(Resolution::Fixed {
+            width: 32,
+            height: 16,
+        });
+        assert_eq!(fixed.to_output([0.0, 0.0], [100, 60], 1.0), [2.0, 6.0]);
+        assert_eq!(fixed.to_output([16.0, 8.0], [100, 60], 1.0), [50.0, 30.0]);
+
+        let window = Screen::new(Resolution::Window);
+        assert_eq!(
+            window.to_output([200.0, 100.0], [800, 600], 1.5),
+            [300.0, 150.0]
         );
     }
 
