@@ -167,7 +167,7 @@ networking, editors or 3D pipelines.
   60 updates a second. Its enemy bullets go through one interface, documented at the top of
   `bullets.luau`, which is the Luau implementation (parallel arrays of numbers: a table per
   bullet managed little more than a third as many in the stress test) and which the `danmaku`
-  library will implement too; `main.luau` lists the systems there are, registers the bullet kinds
+  library implements too; `main.luau` lists the systems there are, registers the bullet kinds
   of `art.luau` with each in the same order, and `shmup.bullets` is the one running. Bullets move
   by parameters alone, so a game's bullets depend only on its inputs and `shmup.seed`: nothing
   else may take numbers from `math.random`. Enemies, the stage and the boss's attacks are
@@ -176,6 +176,11 @@ networking, editors or 3D pipelines.
   `stress.luau` the stress test, and `hud.luau` the panel and screens. `shmup.start("boss")` is
   boss practice, and `shmup.cheats` (`invincible`, `damage`) are for tests. The game's state is
   the global `shmup`.
+- `examples/native-danmaku/`: the shmup's bullets as a native library, `danmaku`, a `cdylib` the
+  game loads if it's in `examples/shmup/native/` (which git ignores). Its arithmetic follows
+  `bullets.luau` step for step in `f64`, so the two produce the same bullets to the bit: change
+  them together. It draws bullets in their order, with a `draw_sprites` call for each run of one
+  kind, so both draw the same pixels.
 - `src/script.rs`: scripted runs, which drive a game with simulated input from a text file
   (unrelated to Luau scripts), built on `Simulation`. Their `benchmark` command renders every
   frame for a while and reports how long frames took.
@@ -204,9 +209,13 @@ networking, editors or 3D pipelines.
 - `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
   expressions such as `pong.ball.vx`.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest.
-- `tests/shmup.rs`: tests for the `shmup` example, the same way: the player, the bullet system
+- `tests/shmup.rs`: tests for the `shmup` example, the same way: the player, the bullet systems
   through `shmup.bullets`, spell cards, clearing the stage with cheats, the same seed firing the
-  same bullets, and the stress test.
+  same bullets, and the stress test. They run copies of the game in `target/tmp`, one with the
+  `danmaku` library, which they build with a nested `cargo build` as `tests/native.rs` builds
+  `particles`, and one without, so a library in `examples/shmup/native` changes nothing. Tests
+  of the bullet systems run each of them, and others check that both fire the same bullets, to
+  the bit, through the stage and the boss, and draw the same pixels.
 - `benches/drawing.rs`: what drawing a sprite costs from Rust, from Luau, and through a native
   library linked in, what moving a bullet costs in Luau, and what rendering 10,000 sprites costs,
   measured with frame stats in a `Simulation`. A plain program (`harness = false`); CI doesn't
@@ -264,6 +273,12 @@ networking, editors or 3D pipelines.
   string's bytes, which is why scripts that draw a lot pass colors as numbers. Each update runs `update(dt)`, then resumes tasks; each frame runs its
   updates (one, or with an update rate, as many as its time holds), then `draw()`. Presses and
   releases last until an update has seen them.
+- Luau reads a global's fields named in a chunk, such as `shmup.system`, when the chunk loads,
+  if the global exists then (its "imports": the sandbox lets it assume globals don't change). A
+  chunk that changes such a field, such as by calling a function, and reads it back sees the old
+  value, and so does a module loaded after a game's global table exists, if the field is replaced
+  later. Games create their global table after requiring their modules, and tests read state
+  back with a chunk of its own (`eval`), not in the chunk that changed it.
 - Native libraries reach the engine only through the ABI's function pointers, and get the same
   lent services scripts do: a library function called from `draw` gets the canvas, not the
   context. Hooks run in the order libraries are listed, before and after each `update` (and its
@@ -286,6 +301,7 @@ cargo run --example sprites
 cargo run -- examples/pong
 cargo run -- examples/rpg
 cargo run --release -- examples/shmup
+cargo build --release -p native-danmaku
 cargo bench
 ```
 

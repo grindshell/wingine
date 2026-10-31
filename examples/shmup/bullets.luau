@@ -6,8 +6,10 @@
 -- don't fit in the CPU's cache, where arrays of numbers do far better.
 --
 -- The rest of the game reaches bullets only through this interface, which the `danmaku` native
--- library implements too, so either can run them. A bullet moves by its parameters alone, so
--- moving one never calls back into the game:
+-- library implements too, so either can run them. Both do the same arithmetic in the same order,
+-- so from the same calls they produce the same bullets, to the bit: change one, and change the
+-- other to match. A bullet moves by its parameters alone, so moving one never calls back into the
+-- game:
 --
 -- - `system.kind(sprite, radius, rotates)` registers a look for bullets and returns its number,
 --   counting from 1 in the order they're registered. A bullet of it is drawn as `sprite`,
@@ -20,7 +22,8 @@
 --   radians apart, centered on `angle`, at `speed` pixels a second. Angles are radians clockwise
 --   from the right, since `y` grows downward. Each second, a bullet's speed changes by
 --   `acceleration`, staying from `min_speed` to `max_speed`, and its angle by `turn`. Leaving out
---   the rest means 0, apart from the speed limits, which then don't limit.
+--   the rest means 0, apart from the speed limits, which then don't limit. It fails for a kind
+--   that isn't registered, or a `min_speed` above `max_speed`.
 -- - `system.step(dt)` moves every bullet on by `dt` seconds: first its speed changes, then its
 --   angle, then it moves by both. Bullets that end up out of bounds are removed: each removed
 --   bullet's place goes to the last bullet, which is moved next.
@@ -29,7 +32,7 @@
 --   `graze_radius` without touching. A bullet grazes once.
 -- - `system.clear()` removes every bullet and returns how many there were.
 -- - `system.count()` returns how many bullets there are.
--- - `system.draw()` draws every bullet.
+-- - `system.draw()` draws every bullet, in their order.
 -- - `system.positions()` returns a list of every bullet's `x` and `y`, for tests.
 
 local bullets = {}
@@ -101,6 +104,9 @@ function bullets.spawn(
     local first = angle - step * (n - 1) / 2
     local a, t = acceleration or 0, turn or 0
     local low, high = min_speed or -math.huge, max_speed or math.huge
+    if low > high then
+        error("min_speed is more than max_speed", 2)
+    end
     for i = 0, n - 1 do
         count += 1
         xs[count] = x

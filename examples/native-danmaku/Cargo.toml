@@ -1,0 +1,16 @@
+[package]
+name = "native-danmaku"
+version = "0.1.0"
+edition = "2024"
+description = "The shmup example's enemy bullets as a native library for Wingine's Luau runtime"
+publish = false
+
+[lib]
+# Built as `danmaku.dll`, `libdanmaku.so` or `libdanmaku.dylib`, for the shmup's `native` folder.
+name = "danmaku"
+crate-type = ["cdylib"]
+test = false
+doctest = false
+
+[dependencies]
+wingine-native = { path = "../../crates/wingine-native" }

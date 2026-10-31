@@ -14,7 +14,8 @@
 -- the stress test and `hud.luau` the panel and screens. The game's state is in the global table
 -- `shmup`, where tests can see it.
 --
--- Run with `cargo run -- examples/shmup`.
+-- Run with `cargo run --release -- examples/shmup`. `examples/native-danmaku` says how to build
+-- the library and where to put it.
 
 local art = require("./art")
 local bullets = require("./bullets")
@@ -63,6 +64,8 @@ for _, system in systems do
     system.bullets.set_bounds(0, 0, field.WIDTH, field.HEIGHT, field.BULLET_MARGIN)
 end
 
+-- The same stars each time the game runs, so that it looks the same each time.
+math.randomseed(0)
 local stars = {}
 for i = 1, STARS do
     stars[i] = {

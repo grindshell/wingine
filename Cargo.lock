@@ -1234,6 +1234,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "native-danmaku"
+version = "0.1.0"
+dependencies = [
+ "wingine-native",
+]
+
+[[package]]
 name = "native-particles"
 version = "0.1.0"
 dependencies = [

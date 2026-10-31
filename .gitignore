@@ -1,1 +1,3 @@
 /target
+# Where the shmup loads the `danmaku` library from, once it's built and copied there.
+/examples/shmup/native/

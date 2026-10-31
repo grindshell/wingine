@@ -1,7 +1,18 @@
 [workspace]
-members = ["crates/wingine-abi", "crates/wingine-native", "examples/native-particles"]
+members = [
+    "crates/wingine-abi",
+    "crates/wingine-native",
+    "examples/native-danmaku",
+    "examples/native-particles",
+]
 # `cargo build`, `test` and `clippy` cover the whole workspace, not just the engine.
-default-members = [".", "crates/wingine-abi", "crates/wingine-native", "examples/native-particles"]
+default-members = [
+    ".",
+    "crates/wingine-abi",
+    "crates/wingine-native",
+    "examples/native-danmaku",
+    "examples/native-particles",
+]
 
 [package]
 name = "wingine"

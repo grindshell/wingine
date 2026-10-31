@@ -1,17 +1,28 @@
 //! Tests for the shmup example, a bullet hell written in Luau, in `examples/shmup`. They run it
 //! headlessly and check its state, which `main.luau` keeps in the global table `shmup`, and drive
-//! its bullet system, `shmup.bullets`, directly.
+//! its bullet system, `shmup.bullets`, directly. Tests of the bullet systems run each of them:
+//! `bullets.luau`, and the `danmaku` native library, which they build from
+//! `examples/native-danmaku`.
 
-use std::f64::consts::{FRAC_PI_2, PI};
+use std::{
+    env::consts::{DLL_PREFIX, DLL_SUFFIX},
+    f64::consts::{FRAC_PI_2, PI},
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::OnceLock,
+};
 
 use wingine::{
-    headless::Simulation,
+    headless::{Image, Simulation},
     input::Key,
     lua::mlua::FromLuaMulti,
     runtime::{self, LuauGame},
 };
 
 const GAME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/shmup");
+/// The bullet systems, by the names the game gives them.
+const SYSTEMS: [&str; 2] = ["Luau", "native"];
 
 // The game's tuning, as in its scripts.
 const DT: f64 = 1.0 / 60.0;
@@ -31,9 +42,94 @@ const BOMB_BONUS: u64 = 500_000;
 /// The first kind of bullet: a red pellet.
 const PELLET: u32 = 1;
 
+/// The shmup, copied to a folder of its own with the `danmaku` library in its `native` folder, or
+/// without it. Tests run copies so that a library someone put in `examples/shmup/native` doesn't
+/// change what they test.
+fn game(with_danmaku: bool) -> &'static Path {
+    static WITH: OnceLock<PathBuf> = OnceLock::new();
+    static WITHOUT: OnceLock<PathBuf> = OnceLock::new();
+    let (copy, name) = if with_danmaku {
+        (&WITH, "shmup-danmaku")
+    } else {
+        (&WITHOUT, "shmup")
+    };
+    copy.get_or_init(|| {
+        let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+        if folder.exists() {
+            fs::remove_dir_all(&folder).unwrap();
+        }
+        copy_files(Path::new(GAME), &folder);
+        if with_danmaku {
+            let library = build_danmaku();
+            let native = folder.join("native");
+            fs::create_dir_all(&native).unwrap();
+            fs::copy(&library, native.join(library.file_name().unwrap())).unwrap();
+        }
+        folder
+    })
+}
+
+/// Copies the files in `from` to `to`, and those in its folders but `native`.
+fn copy_files(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let (path, name) = (entry.path(), entry.file_name());
+        if path.is_dir() {
+            if name != "native" {
+                copy_files(&path, &to.join(name));
+            }
+        } else {
+            fs::copy(&path, to.join(name)).unwrap();
+        }
+    }
+}
+
+/// Builds the `danmaku` library, returning its file. It builds in a target folder of its own,
+/// since the one running the tests is busy.
+fn build_danmaku() -> PathBuf {
+    let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("native-build");
+    let output = Command::new(env!("CARGO"))
+        .args(["build", "--package", "native-danmaku", "--target-dir"])
+        .arg(&target)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("cargo runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    target
+        .join("debug")
+        .join(format!("{DLL_PREFIX}danmaku{DLL_SUFFIX}"))
+}
+
+fn load(folder: &Path) -> Simulation<LuauGame> {
+    let config = runtime::config(folder).expect("settings load");
+    Simulation::new(&config.window, |ctx| LuauGame::load(ctx, folder)).expect("game starts")
+}
+
+/// The game, with both bullet systems, running bullets in Luau.
 fn simulation() -> Simulation<LuauGame> {
-    let config = runtime::config(GAME).expect("settings load");
-    Simulation::new(&config.window, |ctx| LuauGame::load(ctx, GAME)).expect("game starts")
+    load(game(true))
+}
+
+/// The game, running its bullets in `system`.
+fn simulation_with(system: &str) -> Simulation<LuauGame> {
+    let simulation = simulation();
+    use_system(&simulation, system);
+    simulation
+}
+
+/// Switches the game's bullets to `system`, clearing those there are.
+fn use_system(simulation: &Simulation<LuauGame>, system: &str) {
+    for _ in SYSTEMS {
+        if eval::<String>(simulation, "shmup.system") != system {
+            exec(simulation, "shmup.switch_system()");
+        }
+    }
+    assert_eq!(eval::<String>(simulation, "shmup.system"), system);
 }
 
 /// The value of the Luau `expression`, such as `"shmup.score"`.
@@ -50,6 +146,15 @@ fn exec(simulation: &Simulation<LuauGame>, code: &str) {
     scripts
         .load_source("test", code)
         .unwrap_or_else(|err| panic!("{err}"));
+}
+
+/// The error running the Luau `code` fails with.
+fn exec_error(simulation: &Simulation<LuauGame>, code: &str) -> String {
+    let scripts = simulation.game().scripts();
+    match scripts.load_source("test", code) {
+        Ok(_) => panic!("`{code}` runs"),
+        Err(err) => err.to_string(),
+    }
 }
 
 fn step(simulation: &mut Simulation<LuauGame>) {
@@ -76,9 +181,9 @@ fn run_for(simulation: &mut Simulation<LuauGame>, seconds: f32) {
     }
 }
 
-/// A game in play with no enemies coming, so tests choose the bullets.
-fn quiet_game() -> Simulation<LuauGame> {
-    let simulation = simulation();
+/// A game in play with no enemies coming, so tests choose the bullets, which run in `system`.
+fn quiet_game(system: &str) -> Simulation<LuauGame> {
+    let simulation = simulation_with(system);
     exec(&simulation, "shmup.start() shmup.stage = nil");
     simulation
 }
@@ -147,7 +252,7 @@ fn the_title_menu_starts_each_mode() {
 
 #[test]
 fn the_player_moves_and_focusing_slows_them() {
-    let mut simulation = quiet_game();
+    let mut simulation = quiet_game("Luau");
     simulation.hold(Key::Right, 0.5);
     let [x, y] = player(&simulation);
     assert!(near(x, START[0] + SPEED * 0.5), "at {x}");
@@ -166,7 +271,7 @@ fn the_player_moves_and_focusing_slows_them() {
 
 #[test]
 fn moving_diagonally_is_no_faster() {
-    let mut simulation = quiet_game();
+    let mut simulation = quiet_game("Luau");
     simulation.key_down(Key::Up);
     simulation.hold(Key::Left, 0.5);
     simulation.key_up(Key::Up);
@@ -191,78 +296,112 @@ fn shots_shoot_down_fairies_for_points() {
 
 #[test]
 fn bullets_move_by_their_parameters() {
-    let mut simulation = simulation();
-    // Speeding up by 60 a second to at most 90, turning by half a radian a second.
-    spawn(
-        &simulation,
-        &format!("{PELLET}, 100, 100, 0, 60, 1, 0, 60, 0.5, 0, 90"),
-    );
-    exec(
-        &simulation,
-        "for _ = 1, 60 do shmup.bullets.step(1 / 60) end",
-    );
-    let [mut x, mut y, mut angle, mut speed] = [100.0, 100.0, 0.0, 60.0_f64];
-    for _ in 0..60 {
-        speed = (speed + 60.0 * DT).clamp(0.0, 90.0);
-        angle += 0.5 * DT;
-        x += angle.cos() * speed * DT;
-        y += angle.sin() * speed * DT;
-    }
-    let [[bx, by]] = positions(&simulation)[..] else {
-        panic!("one bullet");
-    };
-    assert!(close(bx, x) && close(by, y), "at {bx}, {by}, not {x}, {y}");
-    assert_eq!(speed, 90.0, "the limit was reached");
+    for system in SYSTEMS {
+        let mut simulation = simulation_with(system);
+        // Speeding up by 60 a second to at most 90, turning by half a radian a second.
+        spawn(
+            &simulation,
+            &format!("{PELLET}, 100, 100, 0, 60, 1, 0, 60, 0.5, 0, 90"),
+        );
+        exec(
+            &simulation,
+            "for _ = 1, 60 do shmup.bullets.step(1 / 60) end",
+        );
+        let [mut x, mut y, mut angle, mut speed] = [100.0, 100.0, 0.0, 60.0_f64];
+        for _ in 0..60 {
+            speed = (speed + 60.0 * DT).clamp(0.0, 90.0);
+            angle += 0.5 * DT;
+            x += angle.cos() * speed * DT;
+            y += angle.sin() * speed * DT;
+        }
+        let [[bx, by]] = positions(&simulation)[..] else {
+            panic!("{system}: one bullet");
+        };
+        assert!(
+            close(bx, x) && close(by, y),
+            "{system}: at {bx}, {by}, not {x}, {y}"
+        );
+        assert_eq!(speed, 90.0, "the limit was reached");
 
-    // The title screen doesn't move bullets, but play does.
-    step(&mut simulation);
-    assert_eq!(positions(&simulation), [[bx, by]]);
+        // The title screen doesn't move bullets.
+        step(&mut simulation);
+        assert_eq!(positions(&simulation), [[bx, by]], "{system}");
+    }
 }
 
 #[test]
 fn bullets_spawn_spaced_around_their_angle() {
-    let simulation = simulation();
-    spawn(
-        &simulation,
-        &format!("{PELLET}, 100, 100, {FRAC_PI_2}, 60, 3, 0.5"),
-    );
-    exec(&simulation, "shmup.bullets.step(1)");
-    let positions = positions(&simulation);
-    for (position, angle) in positions
-        .iter()
-        .zip([FRAC_PI_2 - 0.5, FRAC_PI_2, FRAC_PI_2 + 0.5])
-    {
-        let [x, y] = [100.0 + angle.cos() * 60.0, 100.0 + angle.sin() * 60.0];
-        assert!(
-            close(position[0], x) && close(position[1], y),
-            "{positions:?}"
+    for system in SYSTEMS {
+        let simulation = simulation_with(system);
+        spawn(
+            &simulation,
+            &format!("{PELLET}, 100, 100, {FRAC_PI_2}, 60, 3, 0.5"),
         );
+        exec(&simulation, "shmup.bullets.step(1)");
+        let positions = positions(&simulation);
+        assert_eq!(positions.len(), 3, "{system}");
+        for (position, angle) in positions
+            .iter()
+            .zip([FRAC_PI_2 - 0.5, FRAC_PI_2, FRAC_PI_2 + 0.5])
+        {
+            let [x, y] = [100.0 + angle.cos() * 60.0, 100.0 + angle.sin() * 60.0];
+            assert!(
+                close(position[0], x) && close(position[1], y),
+                "{system}: {positions:?}"
+            );
+        }
     }
 }
 
 #[test]
 fn bullets_leaving_the_field_are_removed() {
-    let simulation = simulation();
-    let edge = FIELD[0] + BULLET_MARGIN;
-    // One heading off the right, one staying, one heading off the left.
-    spawn(
-        &simulation,
-        &format!("{PELLET}, {}, 100, 0, 60", edge - 0.5),
-    );
-    spawn(&simulation, &format!("{PELLET}, 100, 120, 0, 0"));
-    spawn(
-        &simulation,
-        &format!("{PELLET}, {}, 140, {PI}, 60", -BULLET_MARGIN + 0.5),
-    );
-    exec(&simulation, "shmup.bullets.step(1 / 60)");
-    assert_eq!(positions(&simulation), [[100.0, 120.0]]);
-    assert_eq!(eval::<u32>(&simulation, "shmup.bullets.clear()"), 1);
-    assert_eq!(bullets(&simulation), 0);
+    for system in SYSTEMS {
+        let simulation = simulation_with(system);
+        let edge = FIELD[0] + BULLET_MARGIN;
+        // One heading off the right, one staying, one heading off the left.
+        spawn(
+            &simulation,
+            &format!("{PELLET}, {}, 100, 0, 60", edge - 0.5),
+        );
+        spawn(&simulation, &format!("{PELLET}, 100, 120, 0, 0"));
+        spawn(
+            &simulation,
+            &format!("{PELLET}, {}, 140, {PI}, 60", -BULLET_MARGIN + 0.5),
+        );
+        exec(&simulation, "shmup.bullets.step(1 / 60)");
+        assert_eq!(positions(&simulation), [[100.0, 120.0]], "{system}");
+        assert_eq!(eval::<u32>(&simulation, "shmup.bullets.clear()"), 1);
+        assert_eq!(bullets(&simulation), 0, "{system}");
+    }
+}
+
+#[test]
+fn bullets_that_cannot_spawn_are_errors() {
+    for system in SYSTEMS {
+        let simulation = simulation_with(system);
+        for (args, expected) in [
+            ("99, 0, 0, 0, 0".to_owned(), "there's no bullet kind 99"),
+            (
+                format!("{PELLET}, 0, 0, 0, 10, 1, 0, 0, 0, 50, 20"),
+                "min_speed is more than max_speed",
+            ),
+        ] {
+            let err = exec_error(&simulation, &format!("shmup.bullets.spawn({args})"));
+            assert!(err.contains(expected), "{system}: {err}");
+        }
+        assert_eq!(bullets(&simulation), 0, "{system}");
+    }
 }
 
 #[test]
 fn bullets_graze_the_player_once_and_hits_cost_a_life() {
-    let mut simulation = quiet_game();
+    for system in SYSTEMS {
+        graze_and_hit(system);
+    }
+}
+
+fn graze_and_hit(system: &str) {
+    let mut simulation = quiet_game(system);
     let [x, y] = player(&simulation);
     // Straight down past the player, 8 pixels to their right.
     spawn(
@@ -270,7 +409,7 @@ fn bullets_graze_the_player_once_and_hits_cost_a_life() {
         &format!("{PELLET}, {}, {}, {FRAC_PI_2}, 240", x + 8.0, y - 60.0),
     );
     run_for(&mut simulation, 1.0);
-    assert_eq!(eval::<u32>(&simulation, "shmup.graze"), 1);
+    assert_eq!(eval::<u32>(&simulation, "shmup.graze"), 1, "{system}");
     assert_eq!(eval::<u64>(&simulation, "shmup.score"), GRAZE_POINTS);
     assert_eq!(eval::<u32>(&simulation, "shmup.player.lives"), LIVES);
 
@@ -280,9 +419,16 @@ fn bullets_graze_the_player_once_and_hits_cost_a_life() {
         &format!("{PELLET}, {x}, {}, {FRAC_PI_2}, 240", y - 60.0),
     );
     spawn(&simulation, &format!("{PELLET}, 20, 20, 0, 0"));
-    assert!(run_until(&mut simulation, 1.0, "shmup.player.dead > 0"));
+    assert!(
+        run_until(&mut simulation, 1.0, "shmup.player.dead > 0"),
+        "{system}: hit"
+    );
     assert_eq!(eval::<u32>(&simulation, "shmup.player.lives"), LIVES - 1);
-    assert_eq!(bullets(&simulation), 0, "a hit clears the bullets");
+    assert_eq!(
+        bullets(&simulation),
+        0,
+        "{system}: a hit clears the bullets"
+    );
     assert_eq!(eval::<u32>(&simulation, "shmup.player.bombs"), BOMBS);
 
     // Back after a second, unhittable for a while.
@@ -298,7 +444,7 @@ fn bullets_graze_the_player_once_and_hits_cost_a_life() {
 
 #[test]
 fn a_bomb_clears_bullets_and_keeps_the_player_safe() {
-    let mut simulation = quiet_game();
+    let mut simulation = quiet_game("Luau");
     exec(
         &simulation,
         &format!("shmup.bullets.spawn({PELLET}, 144, 100, 0, 30, 20, 0.3)"),
@@ -324,7 +470,7 @@ fn a_bomb_clears_bullets_and_keeps_the_player_safe() {
 
 #[test]
 fn losing_the_last_life_ends_the_game() {
-    let mut simulation = quiet_game();
+    let mut simulation = quiet_game("Luau");
     exec(&simulation, "shmup.player.lives = 0");
     let [x, y] = player(&simulation);
     spawn(&simulation, &format!("{PELLET}, {x}, {y}, 0, 0"));
@@ -448,6 +594,124 @@ fn the_same_seed_fires_the_same_bullets() {
     assert_ne!(first, run(2));
 }
 
+/// What a game with its bullets in `system` does from the `practice` given to `shmup.start`,
+/// shooting with `damage` and weaving from side to side, with a player who can't be hit: every
+/// bullet's position each second, and the score and graze at the end.
+fn play(system: &str, practice: &str, damage: u32, seconds: u32) -> (Vec<Vec<[f64; 2]>>, u64, u32) {
+    let mut simulation = simulation_with(system);
+    exec(
+        &simulation,
+        &format!(
+            "shmup.start({practice})
+            shmup.cheats.damage = {damage}
+            shmup.cheats.invincible = true"
+        ),
+    );
+    simulation.key_down(Key::Z);
+    let mut seconds_of_bullets = Vec::new();
+    for second in 0..seconds {
+        let (from, to) = if second % 2 == 0 {
+            (Key::Right, Key::Left)
+        } else {
+            (Key::Left, Key::Right)
+        };
+        simulation.key_up(from);
+        simulation.key_down(to);
+        for _ in 0..60 {
+            step(&mut simulation);
+        }
+        seconds_of_bullets.push(positions(&simulation));
+    }
+    let score = eval(&simulation, "shmup.score");
+    let graze = eval(&simulation, "shmup.graze");
+    (seconds_of_bullets, score, graze)
+}
+
+#[test]
+fn both_systems_fire_the_same_bullets() {
+    // The stage's fairies, and the boss's attacks.
+    for (practice, damage, seconds) in [("nil", 1, 30), ("'boss'", 10, 40)] {
+        let (luau, luau_score, luau_graze) = play("Luau", practice, damage, seconds);
+        let (native, native_score, native_graze) = play("native", practice, damage, seconds);
+        for (second, (luau, native)) in luau.iter().zip(&native).enumerate() {
+            // Exactly the same, since their arithmetic is.
+            assert!(
+                luau == native,
+                "{practice}: after {} seconds, {} bullets in Luau and {} native, \
+                 the first different at {:?}",
+                second + 1,
+                luau.len(),
+                native.len(),
+                luau.iter().zip(native).find(|(a, b)| a != b),
+            );
+        }
+        let most = luau.iter().map(Vec::len).max().unwrap();
+        assert!(most > 100, "{practice}: at most {most} bullets");
+        assert!(luau_graze > 0, "{practice}: no grazes");
+        assert_eq!(luau_graze, native_graze, "{practice}");
+        assert_eq!(luau_score, native_score, "{practice}");
+    }
+}
+
+/// The bullets' field in `image`, a screenshot, without the panel beside it, which names the
+/// bullet system.
+fn field_pixels(image: &Image) -> Vec<u8> {
+    // Screenshots are twice the canvas's size, and the field is 16 canvas pixels from the left
+    // and 12 from the top.
+    let scale = 2;
+    let [x, y] = [16 * scale, 12 * scale];
+    let [width, height] = [FIELD[0] as usize * scale, FIELD[1] as usize * scale];
+    let row = image.width() as usize * 4;
+    image
+        .pixels()
+        .chunks(row)
+        .skip(y)
+        .take(height)
+        .flat_map(|pixels| &pixels[x * 4..(x + width) * 4])
+        .copied()
+        .collect()
+}
+
+#[test]
+fn both_systems_draw_bullets_alike() {
+    let draw = |system: &str| {
+        let mut simulation = quiet_game(system);
+        // A ring of each kind, overlapping and turning, so that the order they're drawn in shows.
+        exec(
+            &simulation,
+            "for kind = 1, 24 do
+                shmup.bullets.spawn(kind, 144, 150, kind * 0.3, 40, 8, 0.8, 0, 1)
+            end",
+        );
+        run_for(&mut simulation, 0.5);
+        assert_eq!(bullets(&simulation), 24 * 8, "{system}");
+        field_pixels(&simulation.screenshot().unwrap())
+    };
+    let (luau, native) = (draw("Luau"), draw("native"));
+    let different = luau
+        .chunks(4)
+        .zip(native.chunks(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    assert_eq!(different, 0, "pixels differ");
+}
+
+#[test]
+fn tab_switches_the_bullet_system() {
+    let mut simulation = quiet_game("Luau");
+    spawn(&simulation, &format!("{PELLET}, 100, 100, 0, 0, 5, 0.1"));
+    simulation.tap(Key::Tab);
+    assert_eq!(eval::<String>(&simulation, "shmup.system"), "native");
+    assert!(eval::<bool>(&simulation, "shmup.bullets == danmaku"));
+    assert_eq!(bullets(&simulation), 0, "switching clears the bullets");
+
+    spawn(&simulation, &format!("{PELLET}, 100, 100, 0, 0, 3, 0.1"));
+    assert_eq!(bullets(&simulation), 3);
+    simulation.tap(Key::Tab);
+    assert_eq!(eval::<String>(&simulation, "shmup.system"), "Luau");
+    assert_eq!(bullets(&simulation), 0);
+}
+
 #[test]
 fn the_stress_test_pours_out_bullets_and_plots_them() {
     let mut simulation = simulation();
@@ -462,6 +726,20 @@ fn the_stress_test_pours_out_bullets_and_plots_them() {
 
     simulation.tap(Key::R);
     assert!(bullets(&simulation) < count, "running again starts over");
+    run_for(&mut simulation, 0.5);
+
+    // The other system starts from nothing, and both are plotted.
+    simulation.tap(Key::Tab);
+    assert_eq!(eval::<String>(&simulation, "shmup.system"), "native");
+    run_for(&mut simulation, 2.0);
+    let count = bullets(&simulation);
+    assert!(count >= 7000, "{count} native bullets");
+    assert!(eval::<bool>(
+        &simulation,
+        "next(shmup.stress.curves.native.bins) ~= nil
+            and next(shmup.stress.curves.Luau.bins) ~= nil"
+    ));
+
     simulation.tap(Key::Escape);
     assert_eq!(mode(&simulation), "title");
     assert_eq!(bullets(&simulation), 0);
@@ -469,7 +747,9 @@ fn the_stress_test_pours_out_bullets_and_plots_them() {
 
 #[test]
 fn without_the_library_bullets_stay_in_luau() {
-    let mut simulation = quiet_game();
+    let mut simulation = load(game(false));
+    exec(&simulation, "shmup.start() shmup.stage = nil");
+    assert!(eval::<bool>(&simulation, "danmaku == nil"));
     simulation.tap(Key::Tab);
     assert_eq!(eval::<String>(&simulation, "shmup.system"), "Luau");
     assert_eq!(

@@ -87,9 +87,19 @@ shoot and press X to bomb, which clears the bullets and keeps you safe for a mom
 bullets scores. Escape pauses. The title screen also offers boss practice and a stress test.
 
 The game is a benchmark too, and is best run as a release build. Its enemy bullets go through one
-interface, implemented in Luau by [`bullets.luau`](examples/shmup/bullets.luau). The stress test
-pours out bullets until frames take longer than a 60th of a second, and plots frame time against
-the bullet count.
+interface, implemented in Luau by [`bullets.luau`](examples/shmup/bullets.luau) and in Rust by
+[`danmaku`](examples/native-danmaku/src/lib.rs), a native library the game loads if it's in its
+`native` folder. Both do the same arithmetic, so from the same seed they fire the same bullets, to
+the bit. To run bullets in Rust too, build the library:
+
+```bash
+cargo build --release -p native-danmaku
+```
+
+Then copy `target/release/danmaku.dll` (`libdanmaku.so` on Linux, `libdanmaku.dylib` on macOS)
+into `examples/shmup/native/`, and press Tab in the game to switch between the two. The stress
+test pours out bullets until frames take longer than a 60th of a second, and plots frame time
+against the bullet count for each.
 
 ### Pong
 
@@ -182,7 +192,8 @@ sparks:burst(160, 90, 24)
 A library listed as `{ name = "particles", optional = true }` loads only if it's there, so one
 game can run with it or without it.
 
-[`examples/native-particles`](examples/native-particles/src/lib.rs) is that library. Unlike
+[`examples/native-particles`](examples/native-particles/src/lib.rs) is that library, and
+[`examples/native-danmaku`](examples/native-danmaku/src/lib.rs) runs the shmup's bullets. Unlike
 scripts, native libraries aren't sandboxed: a game that loads one runs it with the player's full
 permissions.
 
