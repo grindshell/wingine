@@ -23,8 +23,14 @@ pub(crate) struct WindowSurface {
 }
 
 impl WindowSurface {
-    /// Configures `surface`, which must have been created for `window` from `gpu`'s instance.
-    pub fn new(gpu: &Gpu, window: Arc<Window>, surface: wgpu::Surface<'static>) -> Self {
+    /// Configures `surface`, which must have been created for `window` from `gpu`'s instance, to
+    /// present frames in time with the display's refresh if `vsync`.
+    pub fn new(
+        gpu: &Gpu,
+        window: Arc<Window>,
+        surface: wgpu::Surface<'static>,
+        vsync: bool,
+    ) -> Self {
         // The adapter was chosen to be compatible with this surface, so it supports some format.
         // The first is preferred, but it may have no sRGB view, as a 10-bit or float format
         // doesn't, and colors would then be written without being encoded.
@@ -45,7 +51,11 @@ impl WindowSurface {
             width: size.width.max(1),
             height: size.height.max(1),
             desired_maximum_frame_latency: 2,
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode: if vsync {
+                wgpu::PresentMode::AutoVsync
+            } else {
+                wgpu::PresentMode::AutoNoVsync
+            },
         };
         surface.configure(&gpu.device, &config);
         Self {

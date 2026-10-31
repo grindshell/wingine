@@ -10,7 +10,7 @@ use winit::{
 };
 
 use crate::{
-    Context, Error, Result,
+    Context, Error, FrameStats, Result,
     audio::Audio,
     graphics::{
         Canvas, Resolution,
@@ -46,6 +46,9 @@ pub struct WindowConfig {
     pub resizable: bool,
     /// The size of the canvas the game draws on.
     pub resolution: Resolution,
+    /// Whether frames wait for the display's refresh. Without vsync, frames come as fast as the
+    /// game can make them (and may tear), which shows how much time a frame really takes.
+    pub vsync: bool,
 }
 
 impl Default for WindowConfig {
@@ -56,6 +59,7 @@ impl Default for WindowConfig {
             height: 720,
             resizable: true,
             resolution: Resolution::Window,
+            vsync: true,
         }
     }
 }
@@ -95,7 +99,8 @@ where
 }
 
 /// Runs one frame of `game`, as both the window and a [`Simulation`] do: updates it by `dt` with
-/// a canvas `canvas_size` canvas pixels in size, then has it draw on `canvas`.
+/// a canvas `canvas_size` canvas pixels in size, then has it draw on `canvas`. Returns the
+/// frame's stats so far: the caller adds rendering and the frame's whole time.
 ///
 /// [`Simulation`]: crate::headless::Simulation
 pub(crate) fn run_frame(
@@ -104,13 +109,23 @@ pub(crate) fn run_frame(
     canvas: &mut Canvas,
     canvas_size: [f32; 2],
     dt: f32,
-) {
+) -> FrameStats {
     ctx.canvas_size = canvas_size;
+    let start = Instant::now();
     game.update(ctx, dt);
+    let update = start.elapsed().as_secs_f32();
     ctx.input.end_frame();
     ctx.audio.advance(dt);
+    let start = Instant::now();
     canvas.begin(canvas_size[0], canvas_size[1]);
     game.draw(canvas);
+    FrameStats {
+        update,
+        draw: start.elapsed().as_secs_f32(),
+        quads: canvas.quad_count(),
+        draw_calls: canvas.draw_call_count(),
+        ..Default::default()
+    }
 }
 
 struct App<G, F> {
@@ -193,6 +208,9 @@ struct State<G> {
     canvas: Canvas,
     game: G,
     last_frame: Instant,
+    /// The stats of the last frame, which become the context's once its whole time is known, at
+    /// the start of the next.
+    stats: FrameStats,
     /// Cursor position in physical window pixels, while it is over the window.
     cursor: Option<[f64; 2]>,
 }
@@ -221,7 +239,7 @@ impl<G: Game> State<G> {
             .create_surface(window.clone())
             .map_err(|err| Error::CreateSurface(err.into()))?;
         let gpu = pollster::block_on(Gpu::new(instance, Some(&surface)))?;
-        let surface = WindowSurface::new(&gpu, window.clone(), surface);
+        let surface = WindowSurface::new(&gpu, window.clone(), surface, config.vsync);
         let renderer = Renderer::new(&gpu.device, &gpu.queue, surface.view_format());
         let mut ctx = Context::new(gpu, renderer, Audio::new());
         // The game is built knowing the canvas size, as it is in a `Simulation`.
@@ -238,6 +256,7 @@ impl<G: Game> State<G> {
             canvas: Canvas::new(),
             game,
             last_frame: Instant::now(),
+            stats: FrameStats::default(),
             cursor: None,
         })
     }
@@ -275,9 +294,14 @@ impl<G: Game> State<G> {
         let canvas_size = self.screen.canvas_size(output, scale_factor);
 
         let now = Instant::now();
-        let dt = (now - self.last_frame).as_secs_f32().min(MAX_FRAME_TIME);
+        let elapsed = (now - self.last_frame).as_secs_f32();
+        let dt = elapsed.min(MAX_FRAME_TIME);
         self.last_frame = now;
-        run_frame(
+        self.ctx.frame_stats = FrameStats {
+            frame: elapsed,
+            ..self.stats
+        };
+        self.stats = run_frame(
             &mut self.game,
             &mut self.ctx,
             &mut self.canvas,
@@ -293,6 +317,7 @@ impl<G: Game> State<G> {
                     ..Default::default()
                 });
                 let output_size = [frame.texture.width(), frame.texture.height()];
+                let start = Instant::now();
                 self.screen.render(
                     &gpu.device,
                     &gpu.queue,
@@ -301,6 +326,7 @@ impl<G: Game> State<G> {
                     &view,
                     output_size,
                 );
+                self.stats.render = start.elapsed().as_secs_f32();
                 self.surface.present(gpu, frame);
             }
             Acquired::Skip => {}

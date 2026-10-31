@@ -5,6 +5,7 @@ use std::{
     path::Path,
     sync::{Condvar, Mutex, PoisonError, mpsc},
     thread::{self, ThreadId},
+    time::Instant,
 };
 
 use crate::{
@@ -32,6 +33,8 @@ pub struct Headless {
     ctx: Context,
     screen: Screen,
     canvas: Canvas,
+    /// What frames render to when they aren't read back, kept while frames stay the same size.
+    target: Option<(wgpu::Texture, wgpu::TextureView)>,
     /// Declared last so it's released after the GPU resources above are dropped.
     _lease: GpuLease,
 }
@@ -45,6 +48,7 @@ impl Headless {
             ctx: Context::new(gpu, renderer, Audio::silent()),
             screen: Screen::new(Resolution::Window),
             canvas: Canvas::new(),
+            target: None,
             _lease: lease,
         })
     }
@@ -91,22 +95,8 @@ impl Headless {
 
     /// Renders the recorded canvas onto an `output`-sized frame and reads it back.
     fn capture(&mut self, output: [u32; 2]) -> Result<Image> {
-        let [width, height] = output;
         let Context { gpu, renderer, .. } = &mut self.ctx;
-        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("headless frame"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+        let texture = create_frame(gpu, output);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.screen.render(
             &gpu.device,
@@ -114,10 +104,57 @@ impl Headless {
             renderer,
             &self.canvas,
             &view,
-            [width, height],
+            output,
         );
         read_texture(gpu, &texture)
     }
+
+    /// Renders the recorded canvas onto an `output`-sized frame, as a window would, then waits
+    /// for the GPU to finish it. Returns the seconds rendering took on the CPU.
+    fn render_frame(&mut self, output: [u32; 2]) -> f32 {
+        let Context { gpu, renderer, .. } = &mut self.ctx;
+        let fits = |(texture, _): &(wgpu::Texture, wgpu::TextureView)| {
+            [texture.width(), texture.height()] == output
+        };
+        if !self.target.as_ref().is_some_and(fits) {
+            let texture = create_frame(gpu, output);
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.target = Some((texture, view));
+        }
+        let (_, view) = self.target.as_ref().expect("created above");
+        let start = Instant::now();
+        self.screen.render(
+            &gpu.device,
+            &gpu.queue,
+            renderer,
+            &self.canvas,
+            view,
+            output,
+        );
+        let render = start.elapsed().as_secs_f32();
+        if let Err(err) = gpu.device.poll(wgpu::PollType::wait_indefinitely()) {
+            log::warn!("couldn't wait for the GPU to render a frame: {err}");
+        }
+        render
+    }
+}
+
+/// A texture to render an `output`-sized frame on, which can be read back.
+fn create_frame(gpu: &Gpu, [width, height]: [u32; 2]) -> wgpu::Texture {
+    gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("headless frame"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
 }
 
 /// Runs a [`Game`] without a window, driven by simulated input: for tests of game behavior, and
@@ -126,6 +163,9 @@ impl Headless {
 /// Frames only advance when asked to, each by exactly [`Simulation::FRAME_TIME`], so runs are
 /// deterministic. Input takes effect on the next frame, as events from a window would: for
 /// example, a key held down is pressed on the next frame and held until released.
+///
+/// Frames are drawn but not rendered, unless [`Simulation::set_render_every_frame`] says to:
+/// only screenshots render.
 ///
 /// Like [`Headless`], only one thread at a time can have simulations.
 pub struct Simulation<G> {
@@ -136,6 +176,7 @@ pub struct Simulation<G> {
     output: [u32; 2],
     /// Whether the canvas holds a frame drawn at the current output size.
     drawn: bool,
+    render_every_frame: bool,
     frames: u64,
 }
 
@@ -166,6 +207,7 @@ impl<G: Game> Simulation<G> {
             game,
             output,
             drawn: false,
+            render_every_frame: false,
             frames: 0,
         })
     }
@@ -192,8 +234,22 @@ impl<G: Game> Simulation<G> {
         self.frames
     }
 
+    /// Whether each frame is rendered on the GPU after it's drawn, as a window would render it,
+    /// and waited for. Off by default. With it on, frames take longer, and their
+    /// [`FrameStats`](crate::FrameStats) include rendering, as benchmarks want.
+    ///
+    /// Turning it on renders the latest frame once, without counting it, so that setting up to
+    /// render doesn't slow the next frame.
+    pub fn set_render_every_frame(&mut self, render: bool) {
+        if render && !self.render_every_frame {
+            self.headless.render_frame(self.output);
+        }
+        self.render_every_frame = render;
+    }
+
     /// Runs one frame: updates the game, then draws it.
     pub fn step(&mut self) {
+        let start = Instant::now();
         let Self {
             headless,
             game,
@@ -201,13 +257,18 @@ impl<G: Game> Simulation<G> {
             ..
         } = self;
         let canvas_size = headless.screen.canvas_size(*output, 1.0);
-        run_frame(
+        let mut stats = run_frame(
             game,
             &mut headless.ctx,
             &mut headless.canvas,
             canvas_size,
             Self::FRAME_TIME,
         );
+        if self.render_every_frame {
+            stats.render = self.headless.render_frame(self.output);
+        }
+        stats.frame = start.elapsed().as_secs_f32();
+        self.headless.ctx.frame_stats = stats;
         self.drawn = true;
         self.frames += 1;
     }

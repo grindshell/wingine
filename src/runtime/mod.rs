@@ -19,6 +19,9 @@
 //!     resizable = true,
 //!     -- A fixed canvas size, scaled up by whole numbers. By default, the canvas is the window.
 //!     resolution = { width = 320, height = 180 },
+//!     -- Whether frames wait for the display's refresh (true by default). Turning it off shows
+//!     -- how long frames really take.
+//!     vsync = false,
 //!     -- Native libraries to load, in order, from the game's `native` folder.
 //!     libraries = { "particles" },
 //! }
@@ -37,9 +40,9 @@
 //!
 //! The engine's API is in five global tables:
 //!
-//! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.default_font` and
-//! `graphics.new_animation` work anywhere, and `graphics.load_sprite_sheet` while the game loads
-//! and in `update`.
+//! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.default_font`,
+//! `graphics.frame_stats` and `graphics.new_animation` work anywhere, and
+//! `graphics.load_sprite_sheet` while the game loads and in `update`.
 //!
 //! - `graphics.clear(color)` fills the canvas with `color`, discarding anything drawn so far.
 //! - `graphics.fill_rect(x, y, width, height, color)`
@@ -59,6 +62,10 @@
 //!   as for a HUD.
 //! - `graphics.size()` returns the canvas's width and height.
 //! - `graphics.default_font()` returns the built-in pixel font.
+//! - `graphics.frame_stats()` returns how long the frame before took, and how much it drew, as a
+//!   table: `frame`, `update`, `draw` and `render` are seconds, and `quads` and `draw_calls`
+//!   counts. Before the first frame has finished, all are 0. See `FrameStats` for what each
+//!   measures.
 //! - `graphics.load_sprite_sheet(path, tile_width, tile_height)` loads a PNG divided into a grid
 //!   of sprites `tile_width` by `tile_height` texels, starting at its top-left corner. Each image
 //!   is read once; loading it again, even divided differently, reuses it.
@@ -201,6 +208,7 @@ fn apply_setting(
         "width" => window.width = positive(lua.unpack(value)?)?,
         "height" => window.height = positive(lua.unpack(value)?)?,
         "resizable" => window.resizable = lua.unpack(value)?,
+        "vsync" => window.vsync = lua.unpack(value)?,
         "resolution" => {
             let size: mlua::Table = lua.unpack(value)?;
             window.resolution = Resolution::Fixed {
@@ -325,8 +333,10 @@ impl LuauGame {
     /// Runs the libraries' hooks before `update`, the script's `update` and its tasks, then the
     /// hooks after.
     fn run_update(&mut self, ctx: &mut Context, dt: f32) -> Result<()> {
-        self.natives.update(Phase::BEFORE, ctx, dt)?;
         let lua = self.scripts.lua().clone();
+        // For `graphics.frame_stats`, which works in `draw` too, where the context isn't lent.
+        lua.set_app_data(ctx.frame_stats());
+        self.natives.update(Phase::BEFORE, ctx, dt)?;
         // Tasks started before this frame, such as while the game loaded, resume in it. Those
         // `update` starts have run until they first waited, and resume from the next frame.
         self.scripts.adopt_spawned();

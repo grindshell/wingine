@@ -19,8 +19,35 @@ covered:
 - Lua-driven gameplay: NPC behavior, dialogue, events/triggers
 - Music and sound effects
 
-No next milestone has been set. Until one is, ask before starting general-purpose features such
-as physics engines, networking, editors or 3D pipelines.
+**Current: a bullet-hell shmup that shows the engine's performance.** A Touhou-style vertical
+shooter in `examples/shmup`, built in two versions, in order: first in pure Luau, then with its
+bullets in a native library, `danmaku` (`examples/native-danmaku`), to show native libraries at
+work and what they gain over Luau. Both versions are one game: the bullet system sits behind one
+Luau interface, implemented by `bullets.luau` and by the library, and everything else is shared.
+The Luau version is written as well as Luau allows (pooled bullets, `--!native`), so the comparison
+is fair. The milestone covers:
+
+- Measuring before optimizing: frame stats games can show (update, draw and render times, quads,
+  draw calls), a setting to turn vsync off, and a headless benchmark that renders every frame,
+  run in release builds
+- Rotated sprites, and a batched sprite call in the ABI that rotates them (`ABI_MINOR` 2)
+- A fixed update rate, set in `conf.luau`
+- Libraries a game loads only if they're present, so one folder runs with or without `danmaku`
+- Engine speedups the measurements justify, which help both versions. Instanced rendering only if
+  the native version is limited by rendering; additive blending if time allows
+- Bullets that move by parameters (speed, angle, acceleration, angular velocity, speed limits), so
+  Rust moves them without calling Luau. The game steps them itself, so both versions step at the
+  same point in the frame
+- The game: move, focus, shoot and bomb; lives, graze and score; waves of fairies and a boss with
+  spell cards; clearing bullets on bombs and spell ends; a stress mode that plots frame time
+  against bullet count, with a key to switch versions
+- Tests of the gameplay, and that both versions produce the same bullets from the same seed. CI
+  never asserts timings
+- Results in the README: the most bullets each version fits in a 16.7 ms frame, and where the
+  time goes
+
+Ask before starting general-purpose features the milestone doesn't need, such as physics engines,
+networking, editors or 3D pipelines.
 
 ## Tech stack
 
@@ -50,8 +77,10 @@ as physics engines, networking, editors or 3D pipelines.
   takes an init closure that builds the game once the GPU is ready. With `WINGINE_SCRIPT` set,
   `run` hands off to the script runner instead of opening a window.
 - `src/context.rs`: `Context`, the engine services passed to games: input, audio, the canvas
-  size, the built-in font, and texture loading. Games get it in their init closure and in
-  `Game::update`.
+  size, the built-in font, texture loading, and `FrameStats` for the frame before (CPU time
+  spent updating, drawing and rendering, the whole frame's time, and quads and draw calls).
+  Games get it in their init closure and in `Game::update`; Luau games call
+  `graphics.frame_stats()`.
 - `src/audio.rs`: `Audio` (kira's mixer, with separate sound-effect and music tracks) and
   `Sound`. Sound effects are decoded into memory when loaded; music streams from its file and
   loops, crossfading when it changes. Without a sound device, and always headless, audio plays
@@ -85,7 +114,9 @@ as physics engines, networking, editors or 3D pipelines.
   one before, so continuous walking keeps an even pace.
 - `src/headless.rs`: `Headless`, which renders a `Canvas` to an in-memory image without a window,
   and `Simulation`, which runs a whole `Game` without a window: fixed 60 fps frames, simulated
-  keys and mouse, and screenshots on demand. All of them in a process share one GPU device, and
+  keys and mouse, and screenshots on demand. Its frames render only for screenshots, unless
+  `set_render_every_frame` asks for every frame to render and wait for the GPU, as benchmarks
+  want. All of them in a process share one GPU device, and
   only one thread at a time may hold any (a reentrant lease): lavapipe crashes with a device per
   thread and WARP renders wrongly with a shared one, so parallel GPU tests take turns.
 - `src/lua.rs`: `Scripts`, a sandboxed Luau VM for gameplay scripts, and its task scheduler.
@@ -123,7 +154,8 @@ as physics engines, networking, editors or 3D pipelines.
   shared look. `story.reached(stage)` compares quest stages, which run in the order of
   `story.STAGES`. The game's state is the global `rpg`.
 - `src/script.rs`: scripted runs, which drive a game with simulated input from a text file
-  (unrelated to Luau scripts), built on `Simulation`.
+  (unrelated to Luau scripts), built on `Simulation`. Their `benchmark` command renders every
+  frame for a while and reports how long frames took.
 - `src/math.rs`: geometry types such as `Rect`.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
   `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
@@ -146,6 +178,9 @@ as physics engines, networking, editors or 3D pipelines.
 - `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
   expressions such as `pong.ball.vx`.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest.
+- `benches/drawing.rs`: what drawing a sprite costs from Rust, from Luau, and through a native
+  library linked in, and what rendering 10,000 costs, measured with frame stats in a
+  `Simulation`. A plain program (`harness = false`); CI doesn't run it.
 
 ## Conventions
 
@@ -208,6 +243,7 @@ cargo run --example shapes
 cargo run --example sprites
 cargo run -- examples/pong
 cargo run -- examples/rpg
+cargo bench
 ```
 
 Run `cargo fmt` and `cargo clippy --all-targets` before considering a change finished, and keep
@@ -239,6 +275,10 @@ Check how a game behaves headlessly instead of opening a window and driving it b
 
   Mouse positions are canvas pixels; screenshots are window-sized, so with a fixed resolution
   divide screenshot coordinates by the scale (and subtract the bars) to aim a click.
+
+  `benchmark 10s results.csv` renders every frame for that long and prints the mean, median,
+  99th percentile and longest of each frame time, optionally saving each frame's stats as CSV.
+  Benchmark release builds (`cargo run --release`): Luau and the engine are far slower in debug.
 - **As tests:** drive the game with `Simulation` (`tap`, `hold`, `click`, `run_for`, `game()`)
   and assert on its state, as `examples/sprites.rs` does. For a Luau game, evaluate Luau
   expressions against its state, as `tests/pong.rs` does. Prefer this for anything worth

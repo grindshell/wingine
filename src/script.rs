@@ -21,21 +21,28 @@
 //! click Right            # the same with another button, where the cursor already is
 //! resize 640 360         # resize the virtual window, in physical pixels
 //! screenshot walk.png    # save the latest frame, relative to the script's directory
+//! benchmark 10s          # run 10 seconds, rendering every frame, and report how long they took
+//! benchmark 600 run.csv  # the same, also saving each frame's stats to a CSV file
 //! ```
 //!
-//! Each saved screenshot is reported on standard output.
+//! Each saved screenshot is reported on standard output, as is each benchmark: the mean, median,
+//! 99th percentile and longest of each [`FrameStats`] time, as a window would see them (with
+//! vsync off), except that each frame waits for the GPU to finish it before the next starts.
+//! Benchmark a release build: `cargo run --release`.
 //!
 //! [`Simulation`]: crate::headless::Simulation
 //! [`WindowConfig`]: crate::WindowConfig
 
 use std::{
-    fmt, fs,
+    fmt,
+    fmt::Write as _,
+    fs,
     path::{Path, PathBuf},
     str::FromStr,
 };
 
 use crate::{
-    Context, Error, Game, Result, WindowConfig,
+    Context, Error, FrameStats, Game, Result, WindowConfig,
     headless::Simulation,
     input::{Key, MouseButton},
 };
@@ -58,6 +65,7 @@ enum Command {
     Click(MouseButton, Option<[f32; 2]>),
     Resize(u32, u32),
     Screenshot(PathBuf),
+    Benchmark(u32, Option<PathBuf>),
 }
 
 /// Runs the script at `path` against the game built by `init`, as [`run`](crate::run) does when
@@ -95,13 +103,7 @@ pub fn run<G: Game>(
             }
             Command::Resize(width, height) => simulation.resize(width, height),
             Command::Screenshot(file) => {
-                // Rebuilt from components so separators match the platform's.
-                let file: PathBuf = directory.join(file).components().collect();
-                if let Some(parent) = file.parent() {
-                    fs::create_dir_all(parent).map_err(|err| {
-                        fail(format!("could not create {}: {err}", parent.display()))
-                    })?;
-                }
+                let file = output_file(directory, &file).map_err(fail)?;
                 simulation.screenshot()?.save_png(&file)?;
                 println!(
                     "frame {}: saved {}",
@@ -109,9 +111,108 @@ pub fn run<G: Game>(
                     file.display()
                 );
             }
+            Command::Benchmark(frames, file) => {
+                let first = simulation.frame_count() + 1;
+                simulation.set_render_every_frame(true);
+                let stats: Vec<FrameStats> = (0..frames)
+                    .map(|_| {
+                        simulation.step();
+                        simulation.context().frame_stats()
+                    })
+                    .collect();
+                simulation.set_render_every_frame(false);
+                println!(
+                    "frames {first} to {}, rendered on {}:",
+                    simulation.frame_count(),
+                    simulation.adapter_name()
+                );
+                print!("{}", summary(&stats));
+                if cfg!(debug_assertions) {
+                    println!("  (a debug build: benchmark a release build instead)");
+                }
+                if let Some(file) = file {
+                    let file = output_file(directory, &file).map_err(fail)?;
+                    fs::write(&file, csv(first, &stats)).map_err(|err| {
+                        fail(format!("could not write {}: {err}", file.display()))
+                    })?;
+                    println!("  saved {}", file.display());
+                }
+            }
         }
     }
     Ok(())
+}
+
+/// The path of `file`, relative to the script's `directory`, with its folder created.
+fn output_file(directory: &Path, file: &Path) -> Result<PathBuf, String> {
+    // Rebuilt from components so separators match the platform's.
+    let file: PathBuf = directory.join(file).components().collect();
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("could not create {}: {err}", parent.display()))?;
+    }
+    Ok(file)
+}
+
+/// Reads one of a frame's stats.
+type Stat<T> = fn(&FrameStats) -> T;
+
+/// A table of the frames' times in milliseconds, and what they drew.
+fn summary(stats: &[FrameStats]) -> String {
+    let mut text = String::from("              mean   median      99%      max  (ms)\n");
+    let times: [(&str, Stat<f32>); 4] = [
+        ("frame", |stats| stats.frame),
+        ("update", |stats| stats.update),
+        ("draw", |stats| stats.draw),
+        ("render", |stats| stats.render),
+    ];
+    for (name, time) in times {
+        let mut ms: Vec<f32> = stats.iter().map(|stats| time(stats) * 1000.0).collect();
+        ms.sort_by(f32::total_cmp);
+        let mean = ms.iter().sum::<f32>() / ms.len() as f32;
+        let _ = writeln!(
+            text,
+            "  {name:<8}{mean:>8.3}{:>9.3}{:>9.3}{:>9.3}",
+            percentile(&ms, 0.5),
+            percentile(&ms, 0.99),
+            percentile(&ms, 1.0),
+        );
+    }
+    let counts: [(&str, Stat<u32>); 2] = [
+        ("quads", |stats| stats.quads),
+        ("draw calls", |stats| stats.draw_calls),
+    ];
+    for (name, count) in counts {
+        let total: u64 = stats.iter().map(|stats| u64::from(count(stats))).sum();
+        let most = stats.iter().map(count).max().unwrap_or(0);
+        let mean = total as f64 / stats.len() as f64;
+        let _ = writeln!(text, "  {name}: {mean:.0} on average, {most} at most");
+    }
+    text
+}
+
+/// The value at `fraction` of the way through `sorted`, by the nearest-rank method.
+fn percentile(sorted: &[f32], fraction: f32) -> f32 {
+    let rank = (fraction * sorted.len() as f32).ceil() as usize;
+    sorted[rank.clamp(1, sorted.len()) - 1]
+}
+
+/// The frames' stats as CSV, numbering them from `first`, with times in milliseconds.
+fn csv(first: u64, stats: &[FrameStats]) -> String {
+    let mut text = String::from("frame,frame_ms,update_ms,draw_ms,render_ms,quads,draw_calls\n");
+    for (number, stats) in (first..).zip(stats) {
+        let _ = writeln!(
+            text,
+            "{number},{},{},{},{},{},{}",
+            stats.frame * 1000.0,
+            stats.update * 1000.0,
+            stats.draw * 1000.0,
+            stats.render * 1000.0,
+            stats.quads,
+            stats.draw_calls
+        );
+    }
+    text
 }
 
 /// Parses a script, or describes the first problem with its line number.
@@ -148,9 +249,13 @@ fn parse_command(name: &str, args: &[&str]) -> Result<Command, String> {
         }
         ("resize", [width, height]) => Command::Resize(size(width)?, size(height)?),
         ("screenshot", [file]) => Command::Screenshot(PathBuf::from(file)),
+        ("benchmark", [duration]) => Command::Benchmark(some_frames(duration)?, None),
+        ("benchmark", [duration, file]) => {
+            Command::Benchmark(some_frames(duration)?, Some(PathBuf::from(file)))
+        }
         (
             "wait" | "press" | "release" | "tap" | "hold" | "mouse" | "mouse-down" | "mouse-up"
-            | "click" | "resize" | "screenshot",
+            | "click" | "resize" | "screenshot" | "benchmark",
             _,
         ) => return Err(format!("wrong arguments for `{name}`")),
         _ => return Err(format!("unknown command `{name}`")),
@@ -171,6 +276,14 @@ fn frames(duration: &str) -> Result<u32, String> {
             Ok(Simulation::<()>::frames_in(seconds))
         }
         None => duration.parse().map_err(|_| invalid()),
+    }
+}
+
+/// Parses a duration of at least one frame.
+fn some_frames(duration: &str) -> Result<u32, String> {
+    match frames(duration)? {
+        0 => Err(format!("`{duration}` is less than a frame")),
+        frames => Ok(frames),
     }
 }
 
@@ -218,6 +331,8 @@ mod tests {
             click middle 3 4
             resize 640 360
             screenshot shots/a.png
+            benchmark 2s
+            benchmark 10 stats/run.csv
         ";
         assert_eq!(
             parse(script),
@@ -237,8 +352,19 @@ mod tests {
                 Command::Click(MouseButton::Middle, Some([3.0, 4.0])),
                 Command::Resize(640, 360),
                 Command::Screenshot(PathBuf::from("shots/a.png")),
+                Command::Benchmark(120, None),
+                Command::Benchmark(10, Some(PathBuf::from("stats/run.csv"))),
             ])
         );
+    }
+
+    #[test]
+    fn percentiles_take_the_nearest_rank() {
+        let sorted = [1.0, 2.0, 3.0, 4.0];
+        assert_eq!(percentile(&sorted, 0.5), 2.0);
+        assert_eq!(percentile(&sorted, 0.99), 4.0);
+        assert_eq!(percentile(&sorted, 1.0), 4.0);
+        assert_eq!(percentile(&sorted, 0.0), 1.0);
     }
 
     #[test]
@@ -258,6 +384,7 @@ mod tests {
                 .starts_with("line 1: `soon`")
         );
         assert!(parse("wait -1s").is_err());
+        assert!(parse("benchmark 0").is_err());
         assert!(parse("resize 0 10").is_err());
     }
 }

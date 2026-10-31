@@ -72,6 +72,7 @@ fn settings_come_from_conf_luau() {
                 height = 480,
                 resizable = false,
                 resolution = { width = 160, height = 120 },
+                vsync = false,
                 libraries = { 'physics', 'particle_fx' },
             }",
         )],
@@ -81,6 +82,7 @@ fn settings_come_from_conf_luau() {
     assert_eq!(window.title, "Settings");
     assert_eq!([window.width, window.height], [640, 480]);
     assert!(!window.resizable);
+    assert!(!window.vsync);
     assert_eq!(
         window.resolution,
         Resolution::Fixed {
@@ -97,7 +99,38 @@ fn without_settings_the_title_is_the_folders_name() {
     let config = runtime::config(&folder).unwrap();
     assert_eq!(config.window.title, "untitled");
     assert_eq!(config.window.resolution, Resolution::Window);
+    assert!(config.window.vsync);
     assert!(config.libraries.is_empty());
+}
+
+#[test]
+fn scripts_see_the_stats_of_the_frame_before() {
+    let folder = game(
+        "frame_stats",
+        &[(
+            "main.luau",
+            "loading = graphics.frame_stats()
+            seen = {}
+            function update()
+                table.insert(seen, graphics.frame_stats())
+            end
+            function draw()
+                drawing = graphics.frame_stats()
+                graphics.fill_rect(0, 0, 1, 1, '#ffffff')
+                graphics.fill_rect(1, 1, 1, 1, '#ffffff')
+            end",
+        )],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.run_frames(2);
+    assert_eq!(eval::<u32>(&simulation, "loading.quads"), 0);
+    assert_eq!(eval::<f32>(&simulation, "seen[1].frame"), 0.0);
+    assert_eq!(
+        eval::<(u32, u32)>(&simulation, "seen[2].quads, seen[2].draw_calls"),
+        (2, 1)
+    );
+    assert!(eval::<f32>(&simulation, "seen[2].frame") > 0.0);
+    assert_eq!(eval::<u32>(&simulation, "drawing.quads"), 2);
 }
 
 #[test]

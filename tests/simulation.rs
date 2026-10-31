@@ -3,7 +3,7 @@
 use std::{fs, path::Path};
 
 use wingine::{
-    Context, Error, Game, WindowConfig,
+    Context, Error, FrameStats, Game, WindowConfig,
     graphics::{Canvas, Color, Resolution},
     headless::Simulation,
     input::{Key, MouseButton},
@@ -135,6 +135,65 @@ fn a_script_drives_the_game_and_saves_screenshots() {
     let dimensions = |name: &str| image::image_dimensions(directory.join("shots").join(name));
     assert_eq!(dimensions("start.png").unwrap(), (100, 60));
     assert_eq!(dimensions("small.png").unwrap(), (64, 32));
+}
+
+/// Draws five rectangles a frame, and records the frame stats it sees.
+#[derive(Default)]
+struct Counter {
+    seen: Vec<FrameStats>,
+}
+
+impl Game for Counter {
+    fn update(&mut self, ctx: &mut Context, _dt: f32) {
+        self.seen.push(ctx.frame_stats());
+    }
+
+    fn draw(&mut self, canvas: &mut Canvas) {
+        for x in 0..5 {
+            canvas.fill_rect(Rect::new(x as f32, 0.0, 1.0, 1.0), Color::WHITE);
+        }
+    }
+}
+
+#[test]
+fn frame_stats_describe_the_frame_before() {
+    let mut simulation = Simulation::new(&config(), |_| Ok(Counter::default())).unwrap();
+    simulation.run_frames(2);
+    let seen = &simulation.game().seen;
+    assert_eq!(seen[0], FrameStats::default());
+    assert_eq!((seen[1].quads, seen[1].draw_calls), (5, 1));
+    let stats = simulation.context().frame_stats();
+    assert!(stats.frame > 0.0);
+    assert_eq!(stats.render, 0.0, "frames render only when asked to");
+
+    simulation.set_render_every_frame(true);
+    simulation.step();
+    let stats = simulation.context().frame_stats();
+    assert!(stats.render > 0.0);
+    assert!(stats.frame >= stats.render);
+}
+
+#[test]
+fn a_script_benchmarks_frames() {
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("simulation-benchmark");
+    let _ = fs::remove_dir_all(&directory);
+    fs::create_dir_all(&directory).unwrap();
+    let script = directory.join("bench.txt");
+    fs::write(&script, "wait 2\nbenchmark 3 stats/run.csv\n").unwrap();
+
+    wingine::script::run(&config(), |_| Ok(Counter::default()), &script).unwrap();
+
+    let csv = fs::read_to_string(directory.join("stats").join("run.csv")).unwrap();
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(
+        lines[0],
+        "frame,frame_ms,update_ms,draw_ms,render_ms,quads,draw_calls"
+    );
+    assert_eq!(lines.len(), 4);
+    let first: Vec<&str> = lines[1].split(',').collect();
+    assert_eq!(first[0], "3");
+    assert!(first[4].parse::<f32>().unwrap() > 0.0, "frames render");
+    assert_eq!(first[5..], ["5", "1"]);
 }
 
 #[test]

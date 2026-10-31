@@ -39,3 +39,8 @@ doc = false
 [[example]]
 name = "sprites"
 test = true
+
+# What drawing a sprite costs from Rust, Luau and native libraries: `cargo bench`.
+[[bench]]
+name = "drawing"
+harness = false

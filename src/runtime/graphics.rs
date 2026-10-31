@@ -10,6 +10,7 @@ use mlua::{Lua, Table, UserDataRef};
 
 use super::{CANVAS, with_canvas, with_context, with_lent};
 use crate::{
+    FrameStats,
     graphics::{Animation, Camera, Canvas, Color, Font, Sprite, SpriteSheet, TextLayout, Texture},
     lua::check_layer,
     math::Rect,
@@ -126,6 +127,22 @@ pub(super) fn module(lua: &Lua, folder: &Path, default_font: Font) -> mlua::Resu
     graphics.set(
         "default_font",
         lua.create_function(move |_, ()| Ok(default_font.clone()))?,
+    )?;
+    graphics.set(
+        "frame_stats",
+        lua.create_function(|lua, ()| {
+            let stats = lua
+                .app_data_ref::<FrameStats>()
+                .map_or_else(FrameStats::default, |stats| *stats);
+            let table = lua.create_table()?;
+            table.set("frame", stats.frame)?;
+            table.set("update", stats.update)?;
+            table.set("draw", stats.draw)?;
+            table.set("render", stats.render)?;
+            table.set("quads", stats.quads)?;
+            table.set("draw_calls", stats.draw_calls)?;
+            Ok(table)
+        })?,
     )?;
     graphics.set(
         "new_animation",

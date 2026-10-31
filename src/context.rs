@@ -7,15 +7,37 @@ use crate::{
     input::Input,
 };
 
-/// Engine services available to a game: input, audio, the canvas size, the built-in font, and
-/// asset loading.
+/// Engine services available to a game: input, audio, the canvas size, the built-in font, asset
+/// loading, and how long frames take.
 pub struct Context {
     pub(crate) gpu: Gpu,
     pub(crate) renderer: Renderer,
     pub(crate) input: Input,
     pub(crate) audio: Audio,
     pub(crate) canvas_size: [f32; 2],
+    pub(crate) frame_stats: FrameStats,
     default_font: Font,
+}
+
+/// How long the engine took over a frame, and how much it drew, for games to show how they
+/// perform. Times are wall-clock seconds measured on the CPU.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FrameStats {
+    /// The whole frame. In a window, from its start to the next frame's, including waiting for
+    /// vsync and the GPU. In a [`Simulation`](crate::headless::Simulation), the frame alone,
+    /// including waiting for the GPU when it renders every frame.
+    pub frame: f32,
+    /// [`Game::update`](crate::Game::update).
+    pub update: f32,
+    /// [`Game::draw`](crate::Game::draw), recording what to draw.
+    pub draw: f32,
+    /// Rendering what was drawn: uploading it and submitting draw calls to the GPU, but not the
+    /// GPU's own work. Zero for a frame that wasn't rendered.
+    pub render: f32,
+    /// The quads the game drew: sprites, rectangles and glyphs.
+    pub quads: u32,
+    /// The draw calls they took: one for each run of quads drawn with the same texture.
+    pub draw_calls: u32,
 }
 
 impl Context {
@@ -27,8 +49,15 @@ impl Context {
             input: Input::new(),
             audio,
             canvas_size: [0.0, 0.0],
+            frame_stats: FrameStats::default(),
             default_font,
         }
+    }
+
+    /// How long the frame before this one took, and how much it drew. All zero until a frame
+    /// has finished.
+    pub fn frame_stats(&self) -> FrameStats {
+        self.frame_stats
     }
 
     /// Sound effects and music. Silent when running headless.

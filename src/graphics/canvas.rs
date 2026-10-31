@@ -86,6 +86,16 @@ impl Canvas {
         self.transform.visible_area(self.width, self.height)
     }
 
+    /// The quads drawn so far this frame.
+    pub(crate) fn quad_count(&self) -> u32 {
+        (self.vertices.len() / 4) as u32
+    }
+
+    /// The draw calls rendering the quads drawn so far this frame will take.
+    pub(crate) fn draw_call_count(&self) -> u32 {
+        self.batches.len() as u32
+    }
+
     /// Fills the whole canvas with `color`, discarding anything drawn so far this frame.
     pub fn clear(&mut self, color: Color) {
         self.clear_color = color;
