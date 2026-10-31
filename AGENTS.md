@@ -47,8 +47,46 @@ is fair. Bullets in Rust fit about 3.4 times as many in a frame. The milestone c
 - Results in the README, under the shmup: the most bullets each version fits in a 16.7 ms frame,
   and where the time goes
 
-No milestone is current: ask what's next before starting new features, and especially
-general-purpose ones such as physics engines, networking, editors or 3D pipelines.
+**Current: a scene format, for a future editor to write and games to load.** Scenes are for
+level design, UI design and character rigging. The editor isn't part of the milestone, but the
+format is built for one: files it can read, change and write back. Built in order: the format and
+drawing first, then levels, UI and rigging, each finished with a game that uses it. The milestone
+covers:
+
+- Scene files as Luau data: one `return { ... }` of tables, strings, numbers and booleans, with
+  no calls, variables or expressions, so an editor can write back what it reads. Each has a
+  `format` version. The engine evaluates them in an empty environment and converts them to Rust,
+  as it reads `conf.luau`, and an unknown field is an error naming the node's path
+- A writer that puts scenes in one canonical layout (a stable field order, a field per line), so
+  diffs stay small. Loading what it writes gives the same scene, and writing that gives the same
+  bytes. It drops comments; keeping them through an editor's saves is the editor's problem
+- A tree of nodes, each with a name unique among its siblings (paths such as `torso/arm_l`
+  address nodes), a kind, a transform (`x`, `y`, `rotation` in radians, `scale_x`, `scale_y`),
+  and optional tags, children and `props`, free-form data for the game. The kinds: `node` (empty:
+  groups, bones, spawn points), `sprite`, `text`, `rect`, `area` (an invisible rectangle, such as
+  an exit or a trigger), `tilemap` with `tile_layer` children, and `instance`
+- Scenes are data: behavior stays in games, which find nodes by path, tag or kind and read their
+  props. Nodes don't have scripts
+- Sprites drawn with a full 2D transform, composed from parent to child, about a pivot, with sine
+  and cosine computed once per node rather than per quad. Text and tilemaps only translate
+- Levels: tilemap nodes whose layers are their children, so other nodes draw between layers (such
+  as characters under roofs), drawn at an offset, from tileset files that scenes share; and
+  instances of other scenes, with overrides by node path. The RPG's maps become scenes
+- UI: anchors at a fraction of the parent's size (the canvas's, for the root), sizes, text
+  alignment, and a node's bounds in canvas pixels, for hit testing. A menu or HUD from the
+  examples becomes a scene
+- Rigging: cutout animation, rigid sprites turning about their pivots, not meshes. Clips are
+  tracks of keyframes on node properties, linear or stepped, which games sample at a time they
+  keep, as with `Animation`. A rigged character shows it
+- The runtime: a `scene` table for Luau, and the same API in Rust. `scene.load` parses a file
+  once and caches it; instances are live copies that games change (moving, adding and removing
+  nodes, posing); `graphics.draw_scene` draws one, culled. The tree lives in Rust, so drawing a
+  scene is one call from Luau, not one per node
+- Docs for scene files and their API, screenshot tests for the new drawing, and round-trip tests
+  of the writer
+
+Ask before starting features outside the current milestone, and especially general-purpose ones
+such as physics engines, networking, editors or 3D pipelines.
 
 ## Tech stack
 
