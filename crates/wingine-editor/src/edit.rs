@@ -2,6 +2,8 @@
 //! them. Nodes are addressed by [`NodePath`]s, so these work on the file alone, without a scene
 //! loaded to play.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use wingine::{
     graphics::{Align, Color},
     scene::{
@@ -307,6 +309,182 @@ pub fn tile_layer(name: &str, columns: u32, rows: u32) -> NodeDef {
     )
 }
 
+/// The tilemap that the node at `path` is, or is a layer of, with its path.
+pub fn tilemap_at<'a>(file: &'a SceneFile, path: &[usize]) -> Option<(NodePath, &'a TilemapDef)> {
+    let at = match &node(file, path)?.kind {
+        KindDef::Tilemap(_) => path,
+        KindDef::TileLayer(_) => path.split_last()?.1,
+        _ => return None,
+    };
+    match &node(file, at)?.kind {
+        KindDef::Tilemap(map) => Some((at.to_vec(), map)),
+        _ => None,
+    }
+}
+
+/// The tile layer at `path`, if the node there is one.
+pub fn tile_layer_mut<'a>(file: &'a mut SceneFile, path: &[usize]) -> Option<&'a mut TileLayerDef> {
+    match &mut node_mut(file, path)?.kind {
+        KindDef::TileLayer(layer) => Some(layer),
+        _ => None,
+    }
+}
+
+/// Characters for tiles' legend entries, tried after the letters and digits of their names.
+const SYMBOLS: &str =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&*+-.:;=?@^_~!$|<>";
+
+/// The character that stands for the tile `name` in `legend`, giving it one if it has none: the
+/// first letter or digit of its name, or the same in the other case, or another of its name's,
+/// or failing those, the first one free. `None` if every character is taken.
+pub fn symbol_for(legend: &mut BTreeMap<char, String>, name: &str) -> Option<char> {
+    if let Some((&symbol, _)) = legend.iter().find(|(_, tile)| *tile == name) {
+        return Some(symbol);
+    }
+    let own = name.chars().filter(char::is_ascii_alphanumeric);
+    let first = own.clone().next();
+    let candidates = first
+        .into_iter()
+        .chain(first.map(|c| {
+            if c.is_ascii_lowercase() {
+                c.to_ascii_uppercase()
+            } else {
+                c.to_ascii_lowercase()
+            }
+        }))
+        .chain(own)
+        .chain(SYMBOLS.chars());
+    let symbol = candidates
+        .into_iter()
+        .find(|symbol| !legend.contains_key(symbol))?;
+    legend.insert(symbol, name.to_owned());
+    Some(symbol)
+}
+
+/// The tile in cell `[column, row]` of `layer`, by its name, if the cell has one.
+pub fn cell(layer: &TileLayerDef, [column, row]: [i32; 2]) -> Option<&str> {
+    let row = usize::try_from(row).ok()?;
+    let column = usize::try_from(column).ok()?;
+    let symbol = layer.tiles.get(row)?.chars().nth(column)?;
+    layer.legend.get(&symbol).map(String::as_str)
+}
+
+/// Puts the tile `tile`, by its name in the tileset, in `cells` of `layer`, or empties them for
+/// `None`, leaving alone cells off the map. The tile gets a character in the legend if it has none,
+/// and characters no cell holds any more, because these held the last of them, leave it. Returns
+/// whether any cell changed.
+pub fn set_cells(
+    layer: &mut TileLayerDef,
+    cells: impl IntoIterator<Item = [i32; 2]>,
+    tile: Option<&str>,
+) -> bool {
+    let mut rows: Vec<Vec<char>> = layer
+        .tiles
+        .iter()
+        .map(|row| row.chars().collect())
+        .collect();
+    let mut symbol = None;
+    let mut replaced = BTreeSet::new();
+    for [column, row] in cells {
+        let (Ok(row), Ok(column)) = (usize::try_from(row), usize::try_from(column)) else {
+            continue;
+        };
+        let Some(at) = rows.get_mut(row).and_then(|row| row.get_mut(column)) else {
+            continue;
+        };
+        if layer.legend.get(at).map(String::as_str) == tile {
+            continue;
+        }
+        let new = match tile {
+            Some(name) => match symbol {
+                Some(symbol) => symbol,
+                None => {
+                    let Some(found) = symbol_for(&mut layer.legend, name) else {
+                        return false;
+                    };
+                    symbol = Some(found);
+                    found
+                }
+            },
+            None => ' ',
+        };
+        replaced.insert(*at);
+        *at = new;
+    }
+    if replaced.is_empty() {
+        return false;
+    }
+    layer.tiles = rows.into_iter().map(String::from_iter).collect();
+    for old in replaced {
+        if old != ' ' && !layer.tiles.iter().any(|row| row.contains(old)) {
+            layer.legend.remove(&old);
+        }
+    }
+    true
+}
+
+/// The cells reached from `start` across the edges of cells holding the same tile as it, or
+/// nothing, on a map `columns` by `rows` in size: what a bucket fills.
+pub fn flood(layer: &TileLayerDef, start: [i32; 2], [columns, rows]: [u32; 2]) -> Vec<[i32; 2]> {
+    let on_map = |[column, row]: [i32; 2]| {
+        (0..columns as i32).contains(&column) && (0..rows as i32).contains(&row)
+    };
+    if !on_map(start) {
+        return Vec::new();
+    }
+    let tile = cell(layer, start);
+    let mut seen = BTreeSet::from([start]);
+    let mut to_visit = vec![start];
+    let mut found = Vec::new();
+    while let Some(at) = to_visit.pop() {
+        found.push(at);
+        let [column, row] = at;
+        for next in [
+            [column - 1, row],
+            [column + 1, row],
+            [column, row - 1],
+            [column, row + 1],
+        ] {
+            if on_map(next) && cell(layer, next) == tile && seen.insert(next) {
+                to_visit.push(next);
+            }
+        }
+    }
+    found
+}
+
+/// The cells on a line from `from` to `to`, both included, each beside the one before: what a
+/// stroke covers between two frames.
+pub fn line(from: [i32; 2], to: [i32; 2]) -> Vec<[i32; 2]> {
+    let [mut x, mut y] = from;
+    let [dx, dy] = [(to[0] - x).abs(), -(to[1] - y).abs()];
+    let [sx, sy] = [(to[0] - x).signum(), (to[1] - y).signum()];
+    let mut error = dx + dy;
+    let mut cells = vec![[x, y]];
+    while [x, y] != to {
+        let twice = 2 * error;
+        if twice >= dy {
+            error += dy;
+            x += sx;
+        }
+        if twice <= dx {
+            error += dx;
+            y += sy;
+        }
+        cells.push([x, y]);
+    }
+    cells
+}
+
+/// The cells of the rectangle with corners `a` and `b`, both included.
+pub fn rect_cells(a: [i32; 2], b: [i32; 2]) -> Vec<[i32; 2]> {
+    let (left, right) = (a[0].min(b[0]), a[0].max(b[0]));
+    let (top, bottom) = (a[1].min(b[1]), a[1].max(b[1]));
+    (top..=bottom)
+        .flat_map(|row| (left..=right).map(move |column| [column, row]))
+        .collect()
+}
+
 /// Resizes the layers of the tilemap at `path` to `columns` by `rows`, keeping the cells that
 /// are still on the map and leaving new ones empty.
 pub fn resize_tilemap(file: &mut SceneFile, path: &[usize], columns: u32, rows: u32) {
@@ -500,5 +678,68 @@ mod tests {
             unreachable!()
         };
         assert_eq!(layer.tiles, ["ab "]);
+    }
+
+    /// A 4 by 3 layer of grass, with a tree.
+    fn layer() -> TileLayerDef {
+        TileLayerDef {
+            legend: [('.', "grass".to_owned()), ('T', "tree.1".to_owned())].into(),
+            tiles: vec!["....".into(), ".T..".into(), "....".into()],
+        }
+    }
+
+    #[test]
+    fn tiles_get_characters_from_their_names() {
+        let mut legend = layer().legend;
+        assert_eq!(symbol_for(&mut legend, "grass"), Some('.'));
+        assert_eq!(symbol_for(&mut legend, "water"), Some('w'));
+        assert_eq!(symbol_for(&mut legend, "wall"), Some('W'));
+        // Then the rest of its name.
+        assert_eq!(symbol_for(&mut legend, "Wood"), Some('o'));
+        // `t` is free, though `T` isn't.
+        assert_eq!(symbol_for(&mut legend, "tree.2"), Some('t'));
+        assert_eq!(legend[&'t'], "tree.2");
+    }
+
+    #[test]
+    fn painting_cells_keeps_the_legend_tidy() {
+        let mut layer = layer();
+        assert!(set_cells(
+            &mut layer,
+            [[0, 0], [1, 0], [9, 9], [-1, 0]],
+            Some("water")
+        ));
+        assert_eq!(layer.tiles, ["ww..", ".T..", "...."]);
+        assert_eq!(layer.legend[&'w'], "water");
+        // Painting what's there changes nothing.
+        assert!(!set_cells(&mut layer, [[0, 0]], Some("water")));
+
+        // The last tree goes, and its character with it.
+        assert!(set_cells(&mut layer, [[1, 1]], None));
+        assert_eq!(layer.tiles, ["ww..", ". ..", "...."]);
+        assert!(!layer.legend.contains_key(&'T'));
+        assert_eq!(cell(&layer, [0, 0]), Some("water"));
+        assert_eq!(cell(&layer, [1, 1]), None);
+    }
+
+    #[test]
+    fn filling_stops_at_other_tiles() {
+        let mut layer = layer();
+        set_cells(&mut layer, [[1, 0], [0, 1], [2, 1], [1, 2]], Some("wall"));
+        // The tree is walled in.
+        let mut inside = flood(&layer, [1, 1], [4, 3]);
+        inside.sort();
+        assert_eq!(inside, [[1, 1]]);
+        // The grass outside, but not the two corners the walls cut off.
+        assert_eq!(flood(&layer, [3, 0], [4, 3]).len(), 12 - 5 - 2);
+        assert!(flood(&layer, [4, 0], [4, 3]).is_empty());
+    }
+
+    #[test]
+    fn lines_and_rects_cover_their_cells() {
+        assert_eq!(line([0, 0], [3, 1]), [[0, 0], [1, 0], [2, 1], [3, 1]]);
+        assert_eq!(line([2, 2], [2, 2]), [[2, 2]]);
+        assert_eq!(line([0, 2], [0, 0]), [[0, 2], [0, 1], [0, 0]]);
+        assert_eq!(rect_cells([2, 1], [1, 2]), [[1, 1], [2, 1], [1, 2], [2, 2]]);
     }
 }

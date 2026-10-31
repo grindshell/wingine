@@ -102,6 +102,55 @@ impl NodeDef {
             children: Vec::new(),
         }
     }
+
+    /// The node's own fields, as a scene file holds them, without its children: what an
+    /// instance's `overrides` change.
+    pub fn fields(&self) -> BTreeMap<String, Value> {
+        node_fields(self)
+    }
+
+    /// The node with the fields `change` sets, as an instance's `overrides` set them: its props
+    /// one by one, and any other field but its `name`, `kind` and `children` replaced. `sheets`
+    /// are the sheets of the file it's from, and `tilemap` the columns and rows of the tilemap
+    /// it's in, if it's a layer. Fails as reading the changed node from a file would.
+    pub fn overridden(
+        &self,
+        change: &BTreeMap<String, Value>,
+        sheets: &BTreeMap<String, SheetDef>,
+        tilemap: Option<[u32; 2]>,
+    ) -> Result<NodeDef, String> {
+        let parent = Parent { path: "", tilemap };
+        let mut node = override_node(self, change, sheets, &parent)?;
+        node.children = self.children.clone();
+        Ok(node)
+    }
+}
+
+/// `node`, inside `parent`, with the fields `change` sets, as [`NodeDef::overridden`] says, but
+/// without its children.
+pub(super) fn override_node(
+    node: &NodeDef,
+    change: &BTreeMap<String, Value>,
+    sheets: &BTreeMap<String, SheetDef>,
+    parent: &Parent,
+) -> Result<NodeDef, String> {
+    let mut fields = node_fields(node);
+    for (field, value) in change {
+        match (field.as_str(), value) {
+            ("name" | "kind" | "children", _) => {
+                return Err(format!("a node's `{field}` can't be overridden"));
+            }
+            ("props", Value::Map(props)) => {
+                if let Some(Value::Map(old)) = fields.get_mut("props") {
+                    old.extend(props.clone());
+                }
+            }
+            _ => {
+                fields.insert(field.clone(), value.clone());
+            }
+        }
+    }
+    read_node(Value::Map(fields), parent, 1, sheets, 0)
 }
 
 /// What a node is, and what it holds.
@@ -1694,6 +1743,48 @@ mod tests {
             Value::List(Vec::new()),
             "empty tables are lists"
         );
+    }
+
+    #[test]
+    fn overriding_a_node_sets_its_fields_and_props_one_by_one() {
+        let scene = parse(
+            "return { format = 1,
+                sheets = { tiles = { path = 't.png', tile_width = 8, tile_height = 8 },
+                           more = { path = 'm.png', tile_width = 8, tile_height = 8 } },
+                children = { { name = 'hat', kind = 'sprite', sheet = 'tiles', cell = { 1, 2 },
+                               props = { size = 1, style = 'straw' },
+                               children = { { name = 'band', kind = 'node' } } } } }",
+        )
+        .unwrap();
+        let hat = &scene.children[0];
+        let change: BTreeMap<String, Value> = [
+            ("x".to_owned(), Value::Number(4.0)),
+            ("sheet".to_owned(), Value::String("more".into())),
+            (
+                "props".to_owned(),
+                Value::Map([("size".to_owned(), Value::Number(2.0))].into()),
+            ),
+        ]
+        .into();
+        let changed = hat.overridden(&change, &scene.sheets, None).unwrap();
+        assert_eq!(changed.x, 4.0);
+        assert!(matches!(&changed.kind, KindDef::Sprite(sprite) if sprite.sheet == "more"));
+        assert_eq!(changed.props["size"], Value::Number(2.0));
+        assert_eq!(changed.props["style"], Value::String("straw".into()));
+        assert_eq!(changed.children, hat.children);
+        // Its fields read back as it is.
+        assert_eq!(
+            hat.overridden(&BTreeMap::new(), &scene.sheets, None)
+                .unwrap(),
+            *hat
+        );
+
+        let bad = |field: &str, value: Value| {
+            let change = [(field.to_owned(), value)].into();
+            hat.overridden(&change, &scene.sheets, None).unwrap_err()
+        };
+        assert!(bad("sheet", Value::String("none".into())).contains("none"));
+        assert!(bad("name", Value::String("cap".into())).contains("can't be overridden"));
     }
 
     #[test]

@@ -1,9 +1,15 @@
 //! The Scene dock: the open scene's tree of nodes. Clicking selects, dragging moves a node into
-//! another or between two, and its menus add, rename, duplicate and delete nodes.
+//! another or between two, and its menus add, rename, duplicate and delete nodes. An instance
+//! opens to show the nodes of the scene it places, in italics, to select and override; scenes
+//! dragged in from the FileSystem dock are placed in the node they're dropped on.
 
-use wingine::{gui::egui, scene::NodeDef};
+use wingine::{
+    gui::egui,
+    scene::{KindDef, NodeDef, NodeId, Scene},
+};
 
 use crate::{
+    docks::filesystem::ScenePath,
     document::Document,
     edit::{self, KINDS, NodePath},
     theme,
@@ -12,6 +18,12 @@ use crate::{
 /// What the dock asks of the editor.
 pub enum Action {
     Select(NodePath),
+    /// Select the node at `names`, a path of names from the top of the scene the instance at
+    /// `instance` places.
+    SelectInner {
+        instance: NodePath,
+        names: String,
+    },
     /// Add a node of this kind, one of [`KINDS`], as the last child of `parent`.
     Add {
         parent: NodePath,
@@ -48,6 +60,12 @@ pub struct SceneTree {
     renaming: Option<(NodePath, String)>,
     /// Whether the field for renaming needs the keyboard, the frame it appears.
     focus_rename: bool,
+    /// The selection as the dock last showed it: a node of the file, and one inside it if it's an
+    /// instance.
+    shown: (Option<NodePath>, Option<String>),
+    /// Whether the selection changed this frame, so the rows on the way to it open and it scrolls
+    /// into view.
+    reveal: bool,
 }
 
 /// Where a node dragged over another lands.
@@ -71,6 +89,9 @@ impl SceneTree {
         let mut actions = Vec::new();
         let selected = document.selected.clone();
         let target = selected.clone().unwrap_or_default();
+        let selection = (selected.clone(), document.inner().map(str::to_owned));
+        self.reveal = selection != self.shown;
+        self.shown = selection;
         ui.horizontal(|ui| {
             ui.strong("Scene");
             ui.menu_button("➕", |ui| {
@@ -121,14 +142,15 @@ impl SceneTree {
                     index,
                 });
             }
+            drop_scene(ui, &response, &[], &mut actions);
             let filter = self.filter.to_lowercase();
             ui.indent("nodes", |ui| {
                 let mut path = Vec::new();
                 self.nodes(
                     ui,
+                    document,
                     &document.file().children,
                     &mut path,
-                    &selected,
                     &filter,
                     addable,
                     &mut actions,
@@ -142,37 +164,83 @@ impl SceneTree {
     fn nodes(
         &mut self,
         ui: &mut egui::Ui,
+        document: &Document,
         nodes: &[NodeDef],
         path: &mut NodePath,
-        selected: &Option<NodePath>,
         filter: &str,
         addable: &Addable,
         actions: &mut Vec<Action>,
     ) {
+        // A node inside an instance shows as selected rather than the instance.
+        let none = None;
+        let selected = match document.inner() {
+            Some(_) => &none,
+            None => &document.selected,
+        };
         for (i, node) in nodes.iter().enumerate() {
             if !matches(node, filter) {
                 continue;
             }
             path.push(i);
             let id = ui.make_persistent_id(("node", path.as_slice()));
-            if node.children.is_empty() {
+            // The nodes of the scene an instance places, which aren't in the file.
+            let placed = match &node.kind {
+                KindDef::Instance(_) => document
+                    .preview
+                    .as_ref()
+                    .zip(document.live_node(path))
+                    .filter(|(scene, id)| scene.node(*id).children().len() > node.children.len()),
+                _ => None,
+            };
+            if node.children.is_empty() && placed.is_none() {
                 ui.horizontal(|ui| {
                     // Lined up with the names of nodes that can open.
                     ui.add_space(ui.spacing().icon_width + ui.spacing().item_spacing.x);
                     self.row(ui, node, path, selected, addable, actions);
                 });
             } else {
-                egui::collapsing_header::CollapsingState::load_with_default_open(
+                // Instances start closed: what they place is usually left as it is.
+                let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
                     ui.ctx(),
                     id,
-                    true,
-                )
-                .show_header(ui, |ui| {
-                    self.row(ui, node, path, selected, addable, actions);
-                })
-                .body(|ui| {
-                    self.nodes(ui, &node.children, path, selected, filter, addable, actions);
-                });
+                    placed.is_none(),
+                );
+                // Open on the way to the selection.
+                if self.reveal
+                    && let Some(selected) = &document.selected
+                    && selected.starts_with(path)
+                    && (selected.len() > path.len() || document.inner().is_some())
+                {
+                    state.set_open(true);
+                }
+                state
+                    .show_header(ui, |ui| {
+                        self.row(ui, node, path, selected, addable, actions);
+                    })
+                    .body(|ui| {
+                        if let Some((scene, live)) = placed {
+                            let own: Vec<&str> = node
+                                .children
+                                .iter()
+                                .map(|child| child.name.as_str())
+                                .collect();
+                            let inner = document.inner();
+                            let children = scene.node(live).children();
+                            let selected = document
+                                .selected
+                                .as_ref()
+                                .filter(|selected| *selected == path)
+                                .and(inner);
+                            let reveal = self.reveal;
+                            for &child in children
+                                .iter()
+                                .filter(|&&child| !own.contains(&scene.node(child).name()))
+                            {
+                                inner_nodes(ui, scene, child, path, "", selected, reveal, actions);
+                            }
+                        }
+                        self.nodes(ui, document, &node.children, path, filter, addable, actions);
+                    });
             }
             path.pop();
         }
@@ -230,6 +298,9 @@ impl SceneTree {
         }
         if dragged.clicked() {
             actions.push(Action::Select(path.clone()));
+        }
+        if is_selected && self.reveal {
+            dragged.scroll_to_me(None);
         }
         if dragged.double_clicked() {
             self.renaming = Some((path.clone(), node.name.clone()));
@@ -315,7 +386,89 @@ impl SceneTree {
                 index,
             });
         }
+        drop_scene(ui, &dragged, path, actions);
     }
+}
+
+/// A scene dragged from the FileSystem dock over `response`, a node's row, to place in the node
+/// at `parent`.
+fn drop_scene(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    parent: &[usize],
+    actions: &mut Vec<Action>,
+) {
+    if response.dnd_hover_payload::<ScenePath>().is_some() {
+        let stroke = egui::Stroke::new(2.0, theme::ACCENT);
+        ui.painter()
+            .rect_stroke(response.rect, 2.0, stroke, egui::StrokeKind::Inside);
+    }
+    if let Some(scene) = response.dnd_release_payload::<ScenePath>() {
+        actions.push(Action::Instance {
+            parent: parent.to_vec(),
+            scene: scene.0.clone(),
+        });
+    }
+}
+
+/// The row of `id`, a node an instance at `instance` placed, and the rows of the nodes inside it.
+/// `names` is the path of names to its parent, from the top of the scene the instance places, and
+/// `selected` the node selected inside the instance, if any, which `reveal` opens the rows on the
+/// way to and scrolls to.
+#[expect(clippy::too_many_arguments)]
+fn inner_nodes(
+    ui: &mut egui::Ui,
+    scene: &Scene,
+    id: NodeId,
+    instance: &NodePath,
+    names: &str,
+    selected: Option<&str>,
+    reveal: bool,
+    actions: &mut Vec<Action>,
+) {
+    let node = scene.node(id);
+    let names = if names.is_empty() {
+        node.name().to_owned()
+    } else {
+        format!("{names}/{}", node.name())
+    };
+    let row = |ui: &mut egui::Ui, actions: &mut Vec<Action>| {
+        ui.label(theme::kind_icon(node.kind().name()))
+            .on_hover_text(format!("{}, placed by the instance", node.kind().name()));
+        let text = egui::RichText::new(node.name()).italics();
+        let text = if node.is_visible() { text } else { text.weak() };
+        let is_selected = selected == Some(names.as_str());
+        let response = ui.selectable_label(is_selected, text);
+        if response.clicked() {
+            actions.push(Action::SelectInner {
+                instance: instance.clone(),
+                names: names.clone(),
+            });
+        }
+        if is_selected && reveal {
+            response.scroll_to_me(None);
+        }
+    };
+    if node.children().is_empty() {
+        ui.horizontal(|ui| {
+            ui.add_space(ui.spacing().icon_width + ui.spacing().item_spacing.x);
+            row(ui, actions);
+        });
+        return;
+    }
+    let state_id = ui.make_persistent_id(("inner", instance.as_slice(), names.as_str()));
+    let mut state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), state_id, false);
+    if reveal && selected.is_some_and(|selected| selected.starts_with(&format!("{names}/"))) {
+        state.set_open(true);
+    }
+    state.show_header(ui, |ui| row(ui, actions)).body(|ui| {
+        for &child in node.children() {
+            inner_nodes(
+                ui, scene, child, instance, &names, selected, reveal, actions,
+            );
+        }
+    });
 }
 
 /// The kinds of node to add to the node at `parent`. Instances have a menu of their own.

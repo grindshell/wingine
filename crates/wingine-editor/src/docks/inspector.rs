@@ -1,20 +1,26 @@
 //! The Inspector: every field of the selected node, or of the scene itself, to change.
 //!
 //! It edits a copy of what's selected, and puts the copy into the file only if something
-//! changed, so the file's history holds changes and nothing else.
+//! changed, so the file's history holds changes and nothing else. A node an instance places shows
+//! as the instance makes it, and changing it changes the instance's overrides of it: fields they
+//! change are marked, with a button that puts each back as the scene has it.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use wingine::{
     Context,
     graphics::{Align, Color},
     gui::egui,
-    scene::{KindDef, NodeDef, Props, SceneFile, SheetDef, Value},
+    scene::{KindDef, NodeDef, Props, SheetDef, Value},
 };
 
 use crate::{
     document::Document,
     edit::{self, NodePath},
+    instance,
     project::AssetCache,
     theme,
 };
@@ -38,6 +44,44 @@ pub struct Inspector {
     new_sheet: String,
     /// Whether the sheet of the selected sprite is shown to pick a cell from.
     picking_cell: bool,
+    /// A node inside the selected instance to select, by its path of names, once its overrides'
+    /// list has been shown.
+    select_inner: Option<String>,
+}
+
+/// The fields an instance's override of a node changes, and those asked to be put back as the
+/// scene has them. A node of the file has none.
+#[derive(Default)]
+struct Overrides {
+    fields: BTreeSet<String>,
+    props: BTreeSet<String>,
+    reverted: Vec<String>,
+    reverted_props: Vec<String>,
+}
+
+impl Overrides {
+    /// `text`, the label of the field that's `keys` in a scene file, marked if the override
+    /// changes any of them, with a button that reverts them.
+    fn label(&mut self, ui: &mut egui::Ui, text: &str, keys: &[&str]) {
+        if !keys.iter().any(|key| self.fields.contains(*key)) {
+            ui.label(text);
+            return;
+        }
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(text).color(theme::ACCENT))
+                .on_hover_text("Overridden by the instance");
+            if revert_button(ui) {
+                self.reverted.extend(keys.iter().map(|key| key.to_string()));
+            }
+        });
+    }
+}
+
+/// A button that puts a field back as the scene has it, returning whether it was clicked.
+fn revert_button(ui: &mut egui::Ui) -> bool {
+    ui.small_button("⟲")
+        .on_hover_text("Revert to the scene's value")
+        .clicked()
 }
 
 impl Inspector {
@@ -46,10 +90,13 @@ impl Inspector {
             ui.weak("Select a node in the Scene dock or the viewport to see its fields.");
             return;
         };
+        let inner = document.inner().map(str::to_owned);
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
-                if path.is_empty() {
+                if let Some(names) = inner {
+                    self.inner(ui, document, &path, &names, services);
+                } else if path.is_empty() {
                     self.scene(ui, document, services);
                 } else {
                     self.node(ui, document, &path, services);
@@ -122,7 +169,13 @@ impl Inspector {
             });
         });
         section(ui, "Props", |ui| {
-            props_editor(ui, "scene props", &mut props, &mut self.new_key);
+            props_editor(
+                ui,
+                "scene props",
+                &mut props,
+                &mut self.new_key,
+                &mut Overrides::default(),
+            );
         });
         if file.clips.is_empty() {
             ui.weak("No clips.");
@@ -156,32 +209,20 @@ impl Inspector {
         let Some(original) = edit::node(document.file(), path).cloned() else {
             return;
         };
-        let sheet_names: Vec<String> = document.file().sheets.keys().cloned().collect();
+        let sheets = document.file().sheets.clone();
         let mut node = original.clone();
         header(ui, node.kind.name(), &node.name, node.kind.name());
-
-        section(ui, "Node", |ui| {
-            grid(ui, "node", |ui| {
-                ui.label("visible");
-                ui.checkbox(&mut node.visible, "");
-                ui.end_row();
-                ui.label("tags");
-                ui.vertical(|ui| tags_editor(ui, &mut node.tags, &mut self.new_tag));
-                ui.end_row();
-            });
-        });
-        if !matches!(node.kind, KindDef::TileLayer(_)) {
-            section(ui, "Transform", |ui| transform(ui, &mut node));
+        self.fields(
+            ui,
+            &mut node,
+            &sheets,
+            ("props", path.as_slice()),
+            services,
+            &mut Overrides::default(),
+        );
+        if let Some(names) = self.select_inner.take() {
+            document.select_inner(path.clone(), names);
         }
-        self.kind(ui, &mut node, &sheet_names, document.file(), services);
-        section(ui, "Props", |ui| {
-            props_editor(
-                ui,
-                ("props", path.as_slice()),
-                &mut node.props,
-                &mut self.new_key,
-            );
-        });
 
         if node == original {
             return;
@@ -201,14 +242,144 @@ impl Inspector {
         }
     }
 
+    /// The node at `names` inside the instance at `instance`, as the instance makes it, whose
+    /// changes go into the instance's overrides.
+    fn inner(
+        &mut self,
+        ui: &mut egui::Ui,
+        document: &mut Document,
+        instance: &NodePath,
+        names: &str,
+        services: &mut Services,
+    ) {
+        let Some((instance_name, def)) =
+            edit::node(document.file(), instance).and_then(|node| match &node.kind {
+                KindDef::Instance(def) => Some((node.name.clone(), def.clone())),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        let change = def.overrides.get(names).cloned().unwrap_or_default();
+        let placed = instance::placed(
+            &mut services.cache.loader(services.ctx, services.folder),
+            &def.scene,
+            names,
+        );
+        let placed = match placed {
+            Ok(placed) => placed,
+            Err(err) => {
+                ui.colored_label(ui.visuals().error_fg_color, err);
+                return;
+            }
+        };
+        let name = names.rsplit('/').next().unwrap_or(names);
+        let kind = placed.node.kind.name();
+        header(ui, kind, name, &format!("{kind} in {}", def.scene));
+        ui.horizontal_wrapped(|ui| {
+            ui.weak(format!(
+                "Placed by `{instance_name}`: changes are kept as its overrides."
+            ));
+        });
+        let mut revert_all = false;
+        let before = match placed.overridden(&change) {
+            Ok(before) => before,
+            Err(err) => {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    format!("Its overrides don't fit it: {err}"),
+                );
+                revert_all = ui.button("Revert All").clicked();
+                placed.node.clone()
+            }
+        };
+        if !change.is_empty() && !revert_all {
+            revert_all = ui
+                .button("Revert All")
+                .on_hover_text("Put every field back as the scene has it")
+                .clicked();
+        }
+        ui.separator();
+
+        let mut over = Overrides {
+            fields: change
+                .keys()
+                .filter(|key| *key != "props")
+                .cloned()
+                .collect(),
+            props: match change.get("props") {
+                Some(Value::Map(props)) => props.keys().cloned().collect(),
+                _ => BTreeSet::new(),
+            },
+            ..Overrides::default()
+        };
+        let mut after = before.clone();
+        self.fields(
+            ui,
+            &mut after,
+            &placed.sheets,
+            ("props", instance.as_slice(), names),
+            services,
+            &mut over,
+        );
+
+        let changed = if revert_all {
+            BTreeMap::new()
+        } else {
+            changed_override(&change, &placed.node, &before, &after, &over)
+        };
+        if changed == change {
+            return;
+        }
+        let file = document.edit();
+        if let Some(KindDef::Instance(def)) =
+            edit::node_mut(file, instance).map(|node| &mut node.kind)
+        {
+            if changed.is_empty() {
+                def.overrides.remove(names);
+            } else {
+                def.overrides.insert(names.to_owned(), changed);
+            }
+        }
+    }
+
+    /// The sections of a node's fields, with sprites' sheets from `sheets`.
+    fn fields(
+        &mut self,
+        ui: &mut egui::Ui,
+        node: &mut NodeDef,
+        sheets: &BTreeMap<String, SheetDef>,
+        props_id: impl egui::AsIdSalt,
+        services: &mut Services,
+        over: &mut Overrides,
+    ) {
+        section(ui, "Node", |ui| {
+            grid(ui, "node", |ui| {
+                over.label(ui, "visible", &["visible"]);
+                ui.checkbox(&mut node.visible, "");
+                ui.end_row();
+                over.label(ui, "tags", &["tags"]);
+                ui.vertical(|ui| tags_editor(ui, &mut node.tags, &mut self.new_tag));
+                ui.end_row();
+            });
+        });
+        if !matches!(node.kind, KindDef::TileLayer(_)) {
+            section(ui, "Transform", |ui| transform(ui, node, over));
+        }
+        self.kind(ui, node, sheets, services, over);
+        section(ui, "Props", |ui| {
+            props_editor(ui, props_id, &mut node.props, &mut self.new_key, over);
+        });
+    }
+
     /// The fields of what the node is.
     fn kind(
         &mut self,
         ui: &mut egui::Ui,
         node: &mut NodeDef,
-        sheet_names: &[String],
-        file: &SceneFile,
+        sheets: &BTreeMap<String, SheetDef>,
         services: &mut Services,
+        over: &mut Overrides,
     ) {
         let title = format!(
             "{} {}",
@@ -219,23 +390,23 @@ impl Inspector {
             KindDef::Node => {}
             KindDef::Sprite(sprite) => section(ui, &title, |ui| {
                 grid(ui, "sprite", |ui| {
-                    ui.label("sheet");
+                    over.label(ui, "sheet", &["sheet"]);
                     egui::ComboBox::from_id_salt("sheet")
                         .selected_text(&sprite.sheet)
                         .show_ui(ui, |ui| {
-                            for name in sheet_names {
+                            for name in sheets.keys() {
                                 ui.selectable_value(&mut sprite.sheet, name.clone(), name);
                             }
                         });
                     ui.end_row();
-                    ui.label("cell");
+                    over.label(ui, "cell", &["cell"]);
                     ui.horizontal(|ui| {
                         ui.add(egui::DragValue::new(&mut sprite.cell[0]).prefix("column "));
                         ui.add(egui::DragValue::new(&mut sprite.cell[1]).prefix("row "));
                         ui.toggle_value(&mut self.picking_cell, "Pick…");
                     });
                     ui.end_row();
-                    ui.label("size");
+                    over.label(ui, "size", &["width", "height"]);
                     ui.horizontal(|ui| {
                         let mut own = sprite.size.is_none();
                         if ui.checkbox(&mut own, "its own").changed() {
@@ -246,51 +417,51 @@ impl Inspector {
                         }
                     });
                     ui.end_row();
-                    ui.label("stretch");
+                    over.label(ui, "stretch", &["stretch"]);
                     pair(ui, &mut sprite.stretch, 0.01);
                     ui.end_row();
-                    ui.label("pivot");
+                    over.label(ui, "pivot", &["pivot"]);
                     pair(ui, &mut sprite.pivot, 1.0);
                     ui.end_row();
-                    ui.label("tint");
+                    over.label(ui, "tint", &["tint"]);
                     color(ui, &mut sprite.tint);
                     ui.end_row();
                 });
                 if self.picking_cell
-                    && let Some(sheet) = file.sheets.get(&sprite.sheet)
+                    && let Some(sheet) = sheets.get(&sprite.sheet)
                 {
                     cell_picker(ui, sheet, &mut sprite.cell, services);
                 }
             }),
             KindDef::Rect(rect) => section(ui, &title, |ui| {
                 grid(ui, "rect", |ui| {
-                    ui.label("size");
+                    over.label(ui, "size", &["width", "height"]);
                     pair(ui, &mut rect.size, 1.0);
                     ui.end_row();
-                    ui.label("stretch");
+                    over.label(ui, "stretch", &["stretch"]);
                     pair(ui, &mut rect.stretch, 0.01);
                     ui.end_row();
-                    ui.label("pivot");
+                    over.label(ui, "pivot", &["pivot"]);
                     pair(ui, &mut rect.pivot, 1.0);
                     ui.end_row();
-                    ui.label("color");
+                    over.label(ui, "color", &["color"]);
                     color(ui, &mut rect.color);
                     ui.end_row();
                 });
             }),
             KindDef::Text(text) => section(ui, &title, |ui| {
                 grid(ui, "text", |ui| {
-                    ui.label("text");
+                    over.label(ui, "text", &["text"]);
                     ui.add(egui::TextEdit::multiline(&mut text.text).desired_rows(2));
                     ui.end_row();
-                    ui.label("font scale");
+                    over.label(ui, "font scale", &["font_scale"]);
                     ui.add(
                         egui::DragValue::new(&mut text.font_scale)
                             .speed(0.05)
                             .range(0.1..=64.0),
                     );
                     ui.end_row();
-                    ui.label("wrap");
+                    over.label(ui, "wrap", &["wrap"]);
                     ui.horizontal(|ui| {
                         let mut wraps = text.wrap.is_some();
                         if ui.checkbox(&mut wraps, "").changed() {
@@ -301,7 +472,7 @@ impl Inspector {
                         }
                     });
                     ui.end_row();
-                    ui.label("align");
+                    over.label(ui, "align", &["align"]);
                     egui::ComboBox::from_id_salt("align")
                         .selected_text(text.align.name())
                         .show_ui(ui, |ui| {
@@ -310,43 +481,43 @@ impl Inspector {
                             }
                         });
                     ui.end_row();
-                    ui.label("pivot");
+                    over.label(ui, "pivot", &["pivot"]);
                     pair(ui, &mut text.pivot, 1.0);
                     ui.end_row();
-                    ui.label("color");
+                    over.label(ui, "color", &["color"]);
                     color(ui, &mut text.color);
                     ui.end_row();
                 });
             }),
             KindDef::Area(area) => section(ui, &title, |ui| {
                 grid(ui, "area", |ui| {
-                    ui.label("size");
+                    over.label(ui, "size", &["width", "height"]);
                     pair(ui, &mut area.size, 1.0);
                     ui.end_row();
-                    ui.label("stretch");
+                    over.label(ui, "stretch", &["stretch"]);
                     pair(ui, &mut area.stretch, 0.01);
                     ui.end_row();
-                    ui.label("pivot");
+                    over.label(ui, "pivot", &["pivot"]);
                     pair(ui, &mut area.pivot, 1.0);
                     ui.end_row();
                 });
             }),
             KindDef::Tilemap(map) => section(ui, &title, |ui| {
                 grid(ui, "tilemap", |ui| {
-                    ui.label("tileset");
+                    over.label(ui, "tileset", &["tileset"]);
                     file_choice(ui, "tileset", &mut map.tileset, services.tilesets);
                     ui.end_row();
-                    ui.label("columns");
+                    over.label(ui, "columns", &["columns"]);
                     ui.add(egui::DragValue::new(&mut map.columns).range(1..=4096));
                     ui.end_row();
-                    ui.label("rows");
+                    over.label(ui, "rows", &["rows"]);
                     ui.add(egui::DragValue::new(&mut map.rows).range(1..=4096));
                     ui.end_row();
                 });
             }),
             KindDef::TileLayer(layer) => section(ui, &title, |ui| {
                 ui.label(format!(
-                    "{} rows, {} kinds of tile",
+                    "{} rows, {} kinds of tile. Paint it from the Tiles panel.",
                     layer.tiles.len(),
                     layer.legend.len()
                 ));
@@ -358,20 +529,146 @@ impl Inspector {
                     }
                 });
             }),
-            KindDef::Instance(instance) => section(ui, &title, |ui| {
-                grid(ui, "instance", |ui| {
-                    ui.label("scene");
-                    file_choice(ui, "instance scene", &mut instance.scene, services.scenes);
-                    ui.end_row();
-                });
-                if !instance.overrides.is_empty() {
-                    ui.label("Overrides");
-                    for (path, fields) in &instance.overrides {
-                        let fields: Vec<&str> = fields.keys().map(String::as_str).collect();
-                        ui.label(format!("{path}: {}", fields.join(", ")));
+            KindDef::Instance(instance) => {
+                section(ui, &title, |ui| {
+                    grid(ui, "instance", |ui| {
+                        over.label(ui, "scene", &["scene"]);
+                        file_choice(ui, "instance scene", &mut instance.scene, services.scenes);
+                        ui.end_row();
+                    });
+                    if instance.overrides.is_empty() {
+                        ui.weak("No overrides: open the instance in the Scene dock to change its nodes.");
+                        return;
                     }
-                }
-            }),
+                    ui.strong("Overrides");
+                    let mut reverted = None;
+                    for (target, change) in &instance.overrides {
+                        ui.horizontal(|ui| {
+                            if ui.link(target).on_hover_text("Select it").clicked() {
+                                self.select_inner = Some(target.clone());
+                            }
+                            if ui
+                                .small_button("⟲")
+                                .on_hover_text("Revert its overrides")
+                                .clicked()
+                            {
+                                reverted = Some(target.clone());
+                            }
+                        });
+                        ui.indent(target, |ui| {
+                            for (field, value) in change {
+                                ui.weak(format!("{field} = {}", describe(value)));
+                            }
+                        });
+                    }
+                    if let Some(target) = reverted {
+                        instance.overrides.remove(&target);
+                    }
+                })
+            }
+        }
+    }
+}
+
+/// An instance's override of a node, `change`, after the node as the instance made it, `before`,
+/// became `after` in the Inspector, and fields in `over` were reverted. A field changed back to
+/// what the scene has, as `base`, leaves the override, and a field changed to anything else joins
+/// it. Props are changed one by one.
+fn changed_override(
+    change: &BTreeMap<String, Value>,
+    base: &NodeDef,
+    before: &NodeDef,
+    after: &NodeDef,
+    over: &Overrides,
+) -> BTreeMap<String, Value> {
+    let mut change = change.clone();
+    let (base, before, after) = (base.fields(), before.fields(), after.fields());
+    for (key, value) in &after {
+        if key == "props" || before.get(key) == Some(value) {
+            continue;
+        }
+        if base.get(key) == Some(value) {
+            change.remove(key);
+        } else {
+            change.insert(key.clone(), tidy(key, value));
+        }
+    }
+    // Fields that went, such as a sprite's own size, can only go back to the scene's.
+    for key in before.keys() {
+        if !after.contains_key(key) && !base.contains_key(key) {
+            change.remove(key);
+        }
+    }
+    let props = |fields: &BTreeMap<String, Value>| match fields.get("props") {
+        Some(Value::Map(props)) => props.clone(),
+        _ => BTreeMap::new(),
+    };
+    let (base_props, before_props) = (props(&base), props(&before));
+    let mut changed_props = match change.remove("props") {
+        Some(Value::Map(props)) => props,
+        _ => BTreeMap::new(),
+    };
+    for (key, value) in props(&after) {
+        if before_props.get(&key) == Some(&value) {
+            continue;
+        }
+        if base_props.get(&key) == Some(&value) {
+            changed_props.remove(&key);
+        } else {
+            changed_props.insert(key, value);
+        }
+    }
+    for key in &over.reverted {
+        change.remove(key);
+    }
+    for key in &over.reverted_props {
+        changed_props.remove(key);
+    }
+    if !changed_props.is_empty() {
+        change.insert("props".into(), Value::Map(changed_props));
+    }
+    change
+}
+
+/// A field's value as a person would write it: numbers as short as reads back the same, and
+/// opaque colors without their alpha.
+fn tidy(key: &str, value: &Value) -> Value {
+    match value {
+        Value::Number(number) => {
+            let single = *number as f32;
+            let short = if f64::from(single) == *number {
+                format!("{single}").parse().unwrap_or(*number)
+            } else {
+                *number
+            };
+            Value::Number(short)
+        }
+        Value::List(items) => Value::List(items.iter().map(|item| tidy(key, item)).collect()),
+        Value::String(hex)
+            if matches!(key, "tint" | "color") && hex.len() == 9 && hex.ends_with("ff") =>
+        {
+            Value::String(hex[..7].to_owned())
+        }
+        value => value.clone(),
+    }
+}
+
+/// `value` as a scene file would write it, on one line.
+fn describe(value: &Value) -> String {
+    match value {
+        Value::Bool(on) => on.to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::String(text) => format!("{text:?}"),
+        Value::List(items) => {
+            let items: Vec<String> = items.iter().map(describe).collect();
+            format!("{{ {} }}", items.join(", "))
+        }
+        Value::Map(entries) => {
+            let entries: Vec<String> = entries
+                .iter()
+                .map(|(key, value)| format!("{key} = {}", describe(value)))
+                .collect();
+            format!("{{ {} }}", entries.join(", "))
         }
     }
 }
@@ -412,32 +709,32 @@ fn number(ui: &mut egui::Ui, name: &str, value: &mut f32, speed: f32) -> egui::R
 }
 
 /// A node's position, anchor, rotation and scale.
-fn transform(ui: &mut egui::Ui, node: &mut NodeDef) {
+fn transform(ui: &mut egui::Ui, node: &mut NodeDef, over: &mut Overrides) {
     grid(ui, "transform", |ui| {
-        ui.label("x");
+        over.label(ui, "x", &["x"]);
         number(ui, "x", &mut node.x, 1.0);
         ui.end_row();
-        ui.label("y");
+        over.label(ui, "y", &["y"]);
         number(ui, "y", &mut node.y, 1.0);
         ui.end_row();
         if matches!(node.kind, KindDef::Tilemap(_) | KindDef::Text(_)) {
             // They move with their node, but don't turn or stretch.
         } else {
-            ui.label("rotation");
+            over.label(ui, "rotation", &["rotation"]);
             let mut degrees = node.rotation.to_degrees();
             let response = ui.add(egui::DragValue::new(&mut degrees).speed(1.0).suffix("°"));
             if response.changed() {
                 node.rotation = degrees.to_radians();
             }
             ui.end_row();
-            ui.label("scale");
+            over.label(ui, "scale", &["scale_x", "scale_y"]);
             ui.horizontal(|ui| {
                 number(ui, "scale x", &mut node.scale_x, 0.01);
                 number(ui, "scale y", &mut node.scale_y, 0.01);
             });
             ui.end_row();
         }
-        ui.label("anchor");
+        over.label(ui, "anchor", &["anchor"]);
         ui.horizontal(|ui| {
             let mut anchored = node.anchor.is_some();
             if ui.checkbox(&mut anchored, "").changed() {
@@ -519,15 +816,17 @@ fn tags_editor(ui: &mut egui::Ui, tags: &mut Vec<String>, new_tag: &mut String) 
     });
 }
 
-/// Props: each one's value, to change or remove, and a way to add more.
+/// Props: each one's value, to change or remove, and a way to add more. Props an override changes
+/// are marked, with a button that reverts each.
 fn props_editor(
     ui: &mut egui::Ui,
     id: impl egui::AsIdSalt,
     props: &mut Props,
     new_key: &mut String,
+    over: &mut Overrides,
 ) {
     let id = ui.make_persistent_id(id);
-    map_entries(ui, id, props);
+    map_entries(ui, id, props, Some(over));
     ui.horizontal(|ui| {
         ui.add(
             egui::TextEdit::singleline(new_key)
@@ -547,12 +846,31 @@ fn props_editor(
     });
 }
 
-/// The entries of a table with strings for keys, each removable.
-fn map_entries(ui: &mut egui::Ui, id: egui::Id, map: &mut BTreeMap<String, Value>) {
+/// The entries of a table with strings for keys, each removable, and for props, marked if an
+/// override changes them.
+fn map_entries(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    map: &mut BTreeMap<String, Value>,
+    mut over: Option<&mut Overrides>,
+) {
     let mut removed = None;
     egui::Grid::new(id).num_columns(3).show(ui, |ui| {
         for (key, value) in map.iter_mut() {
-            ui.label(key);
+            match over.as_deref_mut().filter(|over| over.props.contains(key)) {
+                Some(over) => {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(key).color(theme::ACCENT))
+                            .on_hover_text("Overridden by the instance");
+                        if revert_button(ui) {
+                            over.reverted_props.push(key.clone());
+                        }
+                    });
+                }
+                None => {
+                    ui.label(key);
+                }
+            }
             value_editor(ui, id.with(key), value);
             if ui.small_button("🗑").on_hover_text("Remove").clicked() {
                 removed = Some(key.clone());
@@ -604,7 +922,7 @@ fn value_editor(ui: &mut egui::Ui, id: egui::Id, value: &mut Value) {
             egui::CollapsingHeader::new(format!("table of {}", entries.len()))
                 .id_salt(id)
                 .show(ui, |ui| {
-                    map_entries(ui, id.with("entries"), entries);
+                    map_entries(ui, id.with("entries"), entries, None);
                     let key_id = id.with("new key");
                     let mut key: String =
                         ui.data_mut(|data| data.get_temp(key_id).unwrap_or_default());
@@ -701,4 +1019,71 @@ fn cell_picker(ui: &mut egui::Ui, sheet: &SheetDef, cell: &mut [u32; 2], service
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use wingine::scene::SceneFile;
+
+    use super::*;
+
+    fn flower() -> NodeDef {
+        let file = SceneFile::parse(
+            r##"return { format = 1,
+                sheets = { tiles = { path = "tiles.png", tile_width = 16, tile_height = 16 } },
+                children = {
+                    { name = "flower", kind = "sprite", sheet = "tiles", cell = { 15, 6 },
+                      tint = "#e8a0b0", props = { scent = 1 } },
+                } }"##,
+            "flower.scene.luau",
+        )
+        .unwrap();
+        file.children[0].clone()
+    }
+
+    #[test]
+    fn overrides_keep_what_differs_from_the_scene() {
+        let base = flower();
+        let change: BTreeMap<String, Value> =
+            [("tint".to_owned(), Value::String("#e0c070".into()))].into();
+        let mut before = base.clone();
+        let KindDef::Sprite(sprite) = &mut before.kind else {
+            unreachable!()
+        };
+        sprite.tint = Color::rgba8(0xe0, 0xc0, 0x70, 0xff);
+
+        // Moving it adds its position, tidily.
+        let mut after = before.clone();
+        after.x = 12.3;
+        let changed = changed_override(&change, &base, &before, &after, &Overrides::default());
+        assert_eq!(changed["x"], Value::Number(12.3));
+        assert_eq!(changed["tint"], Value::String("#e0c070".into()));
+        assert!(!changed.contains_key("y"));
+
+        // Tinting it as the scene does takes the tint out.
+        let mut after = before.clone();
+        let KindDef::Sprite(sprite) = &mut after.kind else {
+            unreachable!()
+        };
+        sprite.tint = Color::rgba8(0xe8, 0xa0, 0xb0, 0xff);
+        let changed = changed_override(&change, &base, &before, &after, &Overrides::default());
+        assert!(changed.is_empty(), "{changed:?}");
+
+        // Props one by one, and reverting.
+        let mut after = before.clone();
+        after.props.insert("scent".into(), Value::Number(2.0));
+        let over = Overrides {
+            reverted: vec!["tint".into()],
+            ..Overrides::default()
+        };
+        let changed = changed_override(&change, &base, &before, &after, &over);
+        assert_eq!(
+            changed,
+            [(
+                "props".to_owned(),
+                Value::Map([("scent".to_owned(), Value::Number(2.0))].into())
+            )]
+            .into()
+        );
+    }
 }

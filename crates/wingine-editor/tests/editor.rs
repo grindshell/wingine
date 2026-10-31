@@ -12,9 +12,16 @@ use wingine::{
     WindowConfig,
     headless::Simulation,
     input::{Key, MouseButton},
-    scene::{KindDef, SceneFile},
+    scene::{KindDef, SceneFile, TileLayerDef, Value},
 };
-use wingine_editor::{Editor, docks::output::Level, edit, viewport::Tool};
+use wingine_editor::{
+    Editor,
+    docks::{output::Level, tiles::TileTool},
+    document::View,
+    edit,
+    editor::BottomTab,
+    viewport::Tool,
+};
 
 fn examples() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples")
@@ -93,6 +100,85 @@ fn control(simulation: &mut Simulation<Editor>, key: Key) {
 fn double_click_gui(simulation: &mut Simulation<Editor>, label: &str) {
     simulation.click_gui(label);
     simulation.click_gui(label);
+}
+
+/// Presses the left button at `from`, moves to `to` over a few frames, as a hand does, and lets
+/// go there.
+fn drag(simulation: &mut Simulation<Editor>, from: [f32; 2], to: [f32; 2]) {
+    simulation.move_mouse(from[0], from[1]);
+    simulation.mouse_down(MouseButton::Left);
+    simulation.step();
+    for i in 1..=6 {
+        let t = i as f32 / 6.0;
+        simulation.move_mouse(
+            from[0] + (to[0] - from[0]) * t,
+            from[1] + (to[1] - from[1]) * t,
+        );
+        simulation.step();
+    }
+    simulation.mouse_up(MouseButton::Left);
+    simulation.run_frames(2);
+}
+
+fn middle(rect: wingine::math::Rect) -> [f32; 2] {
+    [rect.x + rect.w / 2.0, rect.y + rect.h / 2.0]
+}
+
+/// The editor with the RPG's village open, and its layer `floor` selected, in a copy of the game
+/// of the test's own.
+fn village(test: &str) -> Simulation<Editor> {
+    let mut simulation = editor(Some(copy_of("rpg", test)));
+    simulation
+        .game_mut()
+        .open_scene("maps/village.scene.luau")
+        .unwrap();
+    simulation.run_frames(2);
+    select(&mut simulation, "map/floor");
+    simulation
+}
+
+fn select(simulation: &mut Simulation<Editor>, names: &str) {
+    let path = edit::path_of(file(simulation), names);
+    simulation
+        .game_mut()
+        .document_mut()
+        .unwrap()
+        .select(Some(path));
+    simulation.run_frames(2);
+}
+
+fn floor(simulation: &Simulation<Editor>) -> &TileLayerDef {
+    match &node(simulation, "map/floor").kind {
+        KindDef::TileLayer(layer) => layer,
+        _ => panic!("the floor is a tile layer"),
+    }
+}
+
+/// The tile in `cell` of the village's floor.
+fn floor_cell(simulation: &Simulation<Editor>, cell: [i32; 2]) -> Option<String> {
+    edit::cell(floor(simulation), cell).map(str::to_owned)
+}
+
+/// The middle of `cell` of the village's map, in the window.
+fn cell_middle(simulation: &Simulation<Editor>, [column, row]: [i32; 2]) -> [f32; 2] {
+    simulation
+        .game()
+        .scene_to_window([column as f32 * 16.0 + 8.0, row as f32 * 16.0 + 8.0])
+        .unwrap()
+}
+
+/// Clicks the tile `name` in the Tiles panel's palette, at the bottom, rather than its line in the
+/// layer's legend in the Inspector.
+fn choose_tile(simulation: &mut Simulation<Editor>, name: &str) {
+    let rects = simulation.gui_rects(name);
+    let tile = rects
+        .iter()
+        .max_by(|a, b| a.y.total_cmp(&b.y))
+        .unwrap_or_else(|| panic!("no tile `{name}`"));
+    let [x, y] = middle(*tile);
+    simulation.click(MouseButton::Left, x, y);
+    simulation.step();
+    assert_eq!(simulation.game().tiles().tile.as_deref(), Some(name));
 }
 
 #[test]
@@ -333,6 +419,183 @@ fn saving_writes_the_canonical_layout() {
         .filter(|(a, b)| a != b)
         .count();
     assert_eq!(changed, 1);
+}
+
+#[test]
+fn painting_a_tile_layer_in_strokes() {
+    let mut simulation = village("painting");
+    // Selecting the layer shows its tileset's tiles.
+    assert_eq!(simulation.game().bottom_tab(), BottomTab::Tiles);
+    choose_tile(&mut simulation, "water");
+
+    // A stroke along the row, across grass and the path.
+    let (from, to) = (
+        cell_middle(&simulation, [2, 1]),
+        cell_middle(&simulation, [5, 1]),
+    );
+    drag(&mut simulation, from, to);
+    for column in 2..=5 {
+        assert_eq!(
+            floor_cell(&simulation, [column, 1]).as_deref(),
+            Some("water")
+        );
+    }
+    assert_eq!(floor_cell(&simulation, [6, 1]).as_deref(), Some("grass"));
+    // The preview has it too, without the scene being built again.
+    let document = simulation.game().document().unwrap();
+    let layer = document
+        .live_node(&edit::path_of(document.file(), "map/floor"))
+        .unwrap();
+    let scene = document.preview.as_ref().unwrap();
+    assert_eq!(scene.tile(layer, [3, 1]), Some("water"));
+
+    // The right button empties a cell, and Control picks the tile in one.
+    let [x, y] = cell_middle(&simulation, [2, 1]);
+    simulation.click(MouseButton::Right, x, y);
+    simulation.step();
+    assert_eq!(floor_cell(&simulation, [2, 1]), None);
+    let [x, y] = cell_middle(&simulation, [6, 1]);
+    simulation.key_down(Key::LeftControl);
+    simulation.click(MouseButton::Left, x, y);
+    simulation.key_up(Key::LeftControl);
+    simulation.step();
+    assert_eq!(simulation.game().tiles().tile.as_deref(), Some("grass"));
+    assert_eq!(floor_cell(&simulation, [6, 1]).as_deref(), Some("grass"));
+
+    // Each stroke is a change of its own.
+    control(&mut simulation, Key::Z);
+    assert_eq!(floor_cell(&simulation, [2, 1]).as_deref(), Some("water"));
+    control(&mut simulation, Key::Z);
+    assert_eq!(floor_cell(&simulation, [3, 1]).as_deref(), Some("grass"));
+    assert!(!simulation.game().document().unwrap().is_dirty());
+}
+
+#[test]
+fn filling_rectangles_and_regions_of_tiles() {
+    let mut simulation = village("filling");
+    choose_tile(&mut simulation, "water");
+    simulation.click_gui("Rect");
+    assert_eq!(simulation.game().tiles().tool, TileTool::Rect);
+    // Dragged out from its bottom-right corner to its top-left.
+    let (from, to) = (
+        cell_middle(&simulation, [3, 4]),
+        cell_middle(&simulation, [1, 3]),
+    );
+    drag(&mut simulation, from, to);
+    let pond: Vec<[i32; 2]> = (3..=4)
+        .flat_map(|row| (1..=3).map(move |column| [column, row]))
+        .collect();
+    for &cell in &pond {
+        assert_eq!(floor_cell(&simulation, cell).as_deref(), Some("water"));
+    }
+    assert_eq!(floor_cell(&simulation, [4, 3]).as_deref(), Some("grass"));
+
+    // Filling the water fills what joins it, and nothing else.
+    simulation.click_gui("Fill");
+    choose_tile(&mut simulation, "path");
+    let mut joined = edit::flood(floor(&simulation), [2, 3], [40, 26]);
+    joined.sort();
+    let [x, y] = cell_middle(&simulation, [2, 3]);
+    simulation.click(MouseButton::Left, x, y);
+    simulation.step();
+    for &cell in &joined {
+        assert_eq!(floor_cell(&simulation, cell).as_deref(), Some("path"));
+    }
+    assert!(pond.iter().all(|cell| joined.contains(cell)));
+    assert_eq!(floor_cell(&simulation, [4, 3]).as_deref(), Some("grass"));
+}
+
+#[test]
+fn dragging_a_handle_resizes_a_tilemap() {
+    let mut simulation = village("resizing");
+    select(&mut simulation, "map");
+    // Zoomed out, with the whole map in view: 40 columns by 26 rows of 16.
+    simulation.game_mut().document_mut().unwrap().view = Some(View {
+        center: [320.0, 208.0],
+        zoom: 1.0,
+    });
+    simulation.step();
+    let from = simulation.game().scene_to_window([640.0, 208.0]).unwrap();
+    // Two columns wider.
+    drag(&mut simulation, from, [from[0] + 33.0, from[1]]);
+    let KindDef::Tilemap(map) = &node(&simulation, "map").kind else {
+        panic!("the map is a tilemap");
+    };
+    assert_eq!([map.columns, map.rows], [42, 26]);
+    assert!(floor(&simulation).tiles.iter().all(|row| row.len() == 42));
+    assert_eq!(simulation.game().document().unwrap().error, None);
+
+    control(&mut simulation, Key::Z);
+    assert!(!simulation.game().document().unwrap().is_dirty());
+}
+
+#[test]
+fn dragging_a_scene_in_places_it_where_it_is_dropped() {
+    let mut simulation = garden(examples().join("garden"));
+    let row = middle(simulation.gui_rect("flower.scene.luau").unwrap());
+    let to = simulation.game().scene_to_window([100.0, 50.0]).unwrap();
+    drag(&mut simulation, row, to);
+
+    let document = simulation.game().document().unwrap();
+    let path = document.selected.clone().expect("the new node is selected");
+    let placed = edit::node(document.file(), &path).unwrap();
+    assert_eq!(path.len(), 1, "it's at the top of the scene");
+    assert_eq!(placed.name, "flower");
+    assert!(
+        matches!(&placed.kind, KindDef::Instance(def) if def.scene == "flower.scene.luau"),
+        "{:?}",
+        placed.kind
+    );
+    let zoom = document.view.unwrap().zoom;
+    assert!((placed.x - 100.0).abs() <= 1.0 / zoom, "{}", placed.x);
+    assert!((placed.y - 50.0).abs() <= 1.0 / zoom, "{}", placed.y);
+}
+
+#[test]
+fn the_inspector_overrides_nodes_inside_instances_and_reverts_them() {
+    let mut simulation = garden(examples().join("garden"));
+    select(&mut simulation, "flowers/2");
+    let overrides = |simulation: &Simulation<Editor>| match &node(simulation, "flowers/2").kind {
+        KindDef::Instance(def) => def.overrides.get("flower").cloned().unwrap_or_default(),
+        _ => panic!("the flower is an instance"),
+    };
+    // The instance lists what it overrides, and clicking one selects it.
+    simulation.click_gui("flower");
+    assert_eq!(
+        simulation.game().document().unwrap().inner(),
+        Some("flower")
+    );
+    simulation.run_frames(2);
+
+    // Its cell and tint are marked, each with a button to put it back; the cell's is first.
+    let reverts = simulation.gui_rects("⟲");
+    assert_eq!(reverts.len(), 2);
+    let [x, y] = middle(reverts[0]);
+    simulation.click(MouseButton::Left, x, y);
+    simulation.run_frames(2);
+    let tint: Vec<String> = overrides(&simulation).into_keys().collect();
+    assert_eq!(tint, ["tint"]);
+
+    // Changing a field overrides it.
+    let field = simulation.gui_rects("x")[1];
+    let [x, y] = middle(field);
+    simulation.click(MouseButton::Left, x, y);
+    simulation.step();
+    control(&mut simulation, Key::A);
+    simulation.type_text("5");
+    simulation.tap(Key::Enter);
+    simulation.run_frames(2);
+    assert_eq!(overrides(&simulation)["x"], Value::Number(5.0));
+
+    simulation.click_gui("Revert All");
+    assert!(
+        matches!(&node(&simulation, "flowers/2").kind, KindDef::Instance(def) if def.overrides.is_empty())
+    );
+    // Each was a change of its own.
+    for _ in 0..3 {
+        control(&mut simulation, Key::Z);
+    }
+    assert!(!simulation.game().document().unwrap().is_dirty());
 }
 
 #[test]

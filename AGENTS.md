@@ -95,9 +95,9 @@ and crossfade them), the picker of `examples/orchard`.
 **Current: an editor, built on the engine.** The editor is itself a wingine game: a Rust program
 that runs on `wingine::run` and draws its interface with egui, which the engine gains for every
 game as a way to debug it. It's laid out like Godot's editor: a Scene dock over a FileSystem dock
-on the left, the Inspector on the right, Output and Animation in a bottom panel, and the open
-scenes as tabs over a 2D viewport in the middle. It edits scene files and writes them back in the
-canonical layout. Built in order, each part usable on its own:
+on the left, the Inspector on the right, Output, Tiles and Animation in a bottom panel, and the
+open scenes as tabs over a 2D viewport in the middle. It edits scene files and writes them back in
+the canonical layout. Built in order, each part usable on its own:
 
 - egui in the engine: `Game::gui`, drawn over the canvas at the window's resolution, which takes
   the input it wants before the game sees it; the same in `Simulation`, so tests click widgets by
@@ -250,7 +250,8 @@ such as physics engines, networking or 3D pipelines.
   the formats' reference. `Scene::new` builds a scene in two passes: `Expand` replaces instances
   with the nodes of the files they place, then makes their overrides by turning the node back
   into `Value`s (`node_fields`), setting the fields and reading it again, so overrides are
-  checked as files are; sprites then name sheets `file#sheet`, since nodes from many files are
+  checked as files are (`NodeDef::overridden` does the same for tools, and `NodeDef::fields`
+  gives the values); sprites then name sheets `file#sheet`, since nodes from many files are
   together. `Build` then makes the live nodes, loading sheets and tilesets through `Assets`
   (`FolderAssets` reads a folder; the runtime caches files). `Scene` keeps nodes in slots with
   generations, so `NodeId`s of removed nodes never reach nodes added since; each node keeps its
@@ -285,20 +286,32 @@ such as physics engines, networking or 3D pipelines.
   (`cargo run -p wingine-editor -- examples/garden`). `Editor` is a `Game` whose `gui` is the whole
   interface, laid out like Godot's: the top bar (menus, the main screens, Play), the Scene dock
   (`docks/scene_tree.rs`) over the FileSystem dock (`docks/filesystem.rs`) in a left panel, the
-  Inspector (`docks/inspector.rs`) on the right, Output (`docks/output.rs`) in a collapsible
-  bottom panel, and the open scenes' tabs over the viewport (`viewport.rs`) in the middle. It
+  Inspector (`docks/inspector.rs`) on the right, Output (`docks/output.rs`) and Tiles in a
+  collapsible bottom panel, and the open scenes' tabs over the viewport (`viewport.rs`) in the
+  middle. It
   edits `SceneFile`s, never live scenes: a `Document` (`document.rs`) holds the file, its undo
   history as snapshots of the whole file (a change runs from the first `edit()` until a frame with
   no button held and no field focused, so a drag or a field's typing is one), the selection as a
   `NodePath` (indices into children, `edit.rs`, whose pure operations add, remove, duplicate,
-  rename and move nodes, keeping names unique and clips' tracks pointed at their nodes), and a
+  rename and move nodes, keeping names unique and clips' tracks pointed at their nodes, and paint
+  tile layers' cells, keeping their legends to the characters used), and a
   preview `Scene`, built again from the file whenever it changes, through `AssetCache`
-  (`project.rs`), which rereads a file only when its modified time changes. Docks return actions
+  (`project.rs`), which rereads a file only when its modified time changes; painting changes the
+  preview's tiles alike instead (`Document::edit_with_preview`), so strokes don't rebuild it. A
+  selection can be a node inside an instance, by its path of names (`Document::select_inner`):
+  the Scene dock lists an instance's nodes from the preview, `instance.rs` finds the node in the
+  file it's from, through nested instances and their overrides, and the Inspector shows it with
+  the instance's override made, writing back as the override whatever differs from the scene's
+  node. Docks return actions
   that the editor applies, each a change of its own; the Inspector edits a copy of the node and
   puts it back only if it changed. The viewport renders the preview into a `GuiCanvas` with
   `Scene::draw_with_size` at the game's canvas size (from `conf.luau`), mapping between the
   scene and the window as `Camera` does (`ViewMap`), and picks what can be seen before areas,
-  plain nodes' origins and tilemaps, clicking again in place reaching the next node down. Play
+  plain nodes' origins and tilemaps, clicking again in place reaching the next node down. With a
+  tile layer selected, it paints instead, by the Tiles panel's tool (`docks/tiles.rs`, in the
+  bottom panel, with a `Palette` of the tileset's tiles), and a selected tilemap has handles that
+  resize it. Scene files dragged from the FileSystem dock carry a `ScenePath`, which the viewport
+  and the Scene dock take as a drop. Play
   (`play.rs`) runs the editor's own executable with `--run`, which runs the game, so it's a
   process of its own; tests point it at the built executable with `set_runner`. Its tests
   (`tests/editor.rs`) drive it through `Simulation`, clicking widgets by label, and copy example

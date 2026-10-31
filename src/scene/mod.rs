@@ -1644,28 +1644,19 @@ impl Expand<'_> {
             };
             list = &mut node.children;
         };
-        let mut fields = file::node_fields(node);
-        for (field, value) in change {
-            match (field.as_str(), value, &node.kind) {
-                ("props", Value::Map(props), _) => {
-                    if let Some(Value::Map(old)) = fields.get_mut("props") {
-                        old.extend(props.clone());
-                    }
-                }
-                ("sheet", Value::String(sheet), KindDef::Sprite(sprite)) => {
-                    let (file, _) = sprite.sheet.rsplit_once('#').unwrap_or_default();
-                    fields.insert(field.clone(), Value::String(sheet_key(file, sheet)));
-                }
-                _ => {
-                    fields.insert(field.clone(), value.clone());
-                }
-            }
+        // Sprites name their sheets with their files' paths here.
+        let mut change = change.clone();
+        if let (Some(Value::String(sheet)), KindDef::Sprite(sprite)) =
+            (change.get_mut("sheet"), &node.kind)
+        {
+            let (file, _) = sprite.sheet.rsplit_once('#').unwrap_or_default();
+            *sheet = sheet_key(file, sheet);
         }
         let inside = file::Parent {
             path: &parent,
             tilemap,
         };
-        let mut changed = file::read_node(Value::Map(fields), &inside, 1, &self.sheets, 0)?;
+        let mut changed = file::override_node(node, &change, &self.sheets, &inside)?;
         changed.children = std::mem::take(&mut node.children);
         *node = changed;
         Ok(())

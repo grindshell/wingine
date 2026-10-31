@@ -1,8 +1,12 @@
-//! The FileSystem dock: the files in the game's folder. Double-clicking a scene opens it.
+//! The FileSystem dock: the files in the game's folder. Double-clicking a scene opens it, and
+//! dragging one into the viewport or onto a node of the Scene dock places it there.
 
 use wingine::gui::egui;
 
 use crate::{project::Entry, theme};
+
+/// A scene file being dragged, by its path in the project.
+pub struct ScenePath(pub String);
 
 /// What the dock asks of the editor.
 pub enum Action {
@@ -84,7 +88,12 @@ impl FileSystem {
         let response = ui
             .horizontal(|ui| {
                 ui.label(theme::file_icon(&entry.name));
-                ui.selectable_label(selected, &entry.name)
+                let label = ui.selectable_label(selected, &entry.name);
+                if is_scene {
+                    label.interact(egui::Sense::click_and_drag())
+                } else {
+                    label
+                }
             })
             .inner;
         if response.clicked() {
@@ -94,6 +103,18 @@ impl FileSystem {
             *action = Some(Action::Open(entry.path.clone()));
         }
         if is_scene {
+            response.dnd_set_drag_payload(ScenePath(entry.path.clone()));
+            if response.dragged()
+                && let Some(pointer) = ui.ctx().pointer_interact_pos()
+            {
+                egui::Area::new(ui.make_persistent_id("dragged scene"))
+                    .order(egui::Order::Tooltip)
+                    .fixed_pos(pointer + egui::vec2(12.0, 4.0))
+                    .interactable(false)
+                    .show(ui.ctx(), |ui| {
+                        egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(&entry.name));
+                    });
+            }
             response.context_menu(|ui| {
                 if ui.button("Open").clicked() {
                     *action = Some(Action::Open(entry.path.clone()));

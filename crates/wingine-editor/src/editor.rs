@@ -1,7 +1,7 @@
 //! The editor: a wingine game whose interface is all egui, laid out as Godot's editor is. The
 //! menus, the main screens and Play run along the top; the Scene dock sits over the FileSystem
-//! dock on the left, the Inspector on the right, and Output in a panel along the bottom; the open
-//! scenes are tabs over the viewport in the middle.
+//! dock on the left, the Inspector on the right, and Output and Tiles in a panel along the bottom;
+//! the open scenes are tabs over the viewport in the middle.
 
 use std::{
     ffi::OsString,
@@ -13,6 +13,8 @@ use wingine::{
     Context, Game,
     graphics::Canvas,
     gui::egui::{self, Key, KeyboardShortcut, Modifiers},
+    math::Affine,
+    scene::KindDef,
 };
 
 use crate::{
@@ -21,13 +23,14 @@ use crate::{
         inspector::{Inspector, Services},
         output::{Level, Output},
         scene_tree::{self, Addable, SceneTree},
+        tiles::{Palette, Target, Tiles},
     },
     document::Document,
-    edit,
+    edit::{self, NodePath},
     play::Play,
     project::{AssetCache, Project},
     theme,
-    viewport::{Tool, Viewport},
+    viewport::{self, Tool, Viewport},
 };
 
 /// How often the project's folder is read again, in seconds, to see files changed elsewhere.
@@ -40,6 +43,13 @@ pub enum MainScreen {
     TwoD,
     /// Editing scripts, which a later part of the milestone brings.
     Script,
+}
+
+/// The panels of the bottom panel, switched between by the tabs along its bottom.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BottomTab {
+    Output,
+    Tiles,
 }
 
 /// What's waiting for an answer about unsaved changes before it closes.
@@ -60,8 +70,12 @@ pub struct Editor {
     inspector: Inspector,
     viewport: Viewport,
     output: Output,
-    /// Whether the panel along the bottom is open.
+    tiles: Tiles,
+    /// Whether the panel along the bottom is open, and which of its panels it shows.
     bottom_open: bool,
+    bottom_tab: BottomTab,
+    /// The scene and node selected last frame, to notice a tile layer being selected.
+    last_selected: Option<(String, NodePath)>,
     play: Option<Play>,
     /// What plays the game: an executable that runs the game it's given after `--run`.
     runner: PathBuf,
@@ -89,7 +103,10 @@ impl Editor {
             inspector: Inspector::default(),
             viewport: Viewport::default(),
             output: Output::default(),
+            tiles: Tiles::default(),
             bottom_open: true,
+            bottom_tab: BottomTab::Output,
+            last_selected: None,
             play: None,
             runner: std::env::current_exe().unwrap_or_else(|_| "wingine-editor".into()),
             play_env: Vec::new(),
@@ -165,6 +182,15 @@ impl Editor {
 
     pub fn tool(&self) -> Tool {
         self.viewport.tool
+    }
+
+    /// What painting tiles paints with.
+    pub fn tiles(&self) -> &Tiles {
+        &self.tiles
+    }
+
+    pub fn bottom_tab(&self) -> BottomTab {
+        self.bottom_tab
     }
 
     /// Where `point` of the open scene was in the window, in points, as the viewport last showed
@@ -288,7 +314,11 @@ impl Editor {
         };
         let result = match action {
             scene_tree::Action::Select(path) => {
-                document.selected = Some(path);
+                document.select(Some(path));
+                Ok(())
+            }
+            scene_tree::Action::SelectInner { instance, names } => {
+                document.select_inner(instance, names);
                 Ok(())
             }
             scene_tree::Action::Add { parent, kind } => {
@@ -301,22 +331,22 @@ impl Editor {
                     .unwrap_or_default();
                 let node = edit::new_node(kind, &sheet, &tileset, "");
                 edit::add(document.edit(), &parent, node).map(|path| {
-                    document.selected = Some(path);
+                    document.select(Some(path));
                 })
             }
             scene_tree::Action::Instance { parent, scene } => {
-                add_instance(document, &parent, &scene)
+                add_instance(document, &parent, &scene, [0.0, 0.0])
             }
             scene_tree::Action::Rename(path, name) => edit::rename(document.edit(), &path, &name),
             scene_tree::Action::Duplicate(path) => {
                 if let Some(copy) = edit::duplicate(document.edit(), &path) {
-                    document.selected = Some(copy);
+                    document.select(Some(copy));
                 }
                 Ok(())
             }
             scene_tree::Action::Delete(path) => {
                 edit::remove(document.edit(), &path);
-                document.selected = None;
+                document.select(None);
                 Ok(())
             }
             scene_tree::Action::Move {
@@ -324,7 +354,7 @@ impl Editor {
                 parent,
                 index,
             } => edit::move_node(document.edit(), &from, &parent, index).map(|path| {
-                document.selected = Some(path);
+                document.select(Some(path));
             }),
         };
         // Each is a change of its own.
@@ -366,6 +396,13 @@ impl Editor {
             .document()
             .and_then(|document| document.selected.clone())
             .filter(|path| !path.is_empty());
+        // Escape closes menus first.
+        if !egui::Popup::is_any_open(ui.ctx())
+            && pressed(ui, Modifiers::NONE, Key::Escape)
+            && let Some(document) = self.document_mut()
+        {
+            document.select(None);
+        }
         if let Some(path) = selected {
             if pressed(ui, Modifiers::COMMAND, Key::D) {
                 self.apply(scene_tree::Action::Duplicate(path.clone()));
@@ -492,6 +529,9 @@ impl Editor {
                 ui.menu_button("Help", |ui| {
                     ui.label("Wingine's editor, laid out like Godot's.");
                     ui.label("Middle-drag pans, the wheel zooms, Q W E S pick tools.");
+                    ui.label(
+                        "Select a tile layer to paint it: the right button erases, Ctrl picks.",
+                    );
                 });
             });
         }
@@ -679,15 +719,75 @@ impl Editor {
     }
 }
 
-/// Places the scene file at `scene` in `document`, as the last child of `parent`.
-fn add_instance(document: &mut Document, parent: &[usize], scene: &str) -> Result<(), String> {
+/// Places the scene file at `scene` in `document`, as the last child of `parent`, at `at` in the
+/// parent's coordinates.
+fn add_instance(
+    document: &mut Document,
+    parent: &[usize],
+    scene: &str,
+    [x, y]: [f32; 2],
+) -> Result<(), String> {
     if scene == document.path {
         return Err("a scene can't be placed in itself".into());
     }
-    let node = edit::new_node("instance", "", "", scene);
+    let mut node = edit::new_node("instance", "", "", scene);
+    node.x = x;
+    node.y = y;
     let path = edit::add(document.edit(), parent, node)?;
-    document.selected = Some(path);
+    document.select(Some(path));
     Ok(())
+}
+
+/// Places the scene file at `scene` in `document` at `at`, a point of the scene, in the selected
+/// node, or the tilemap of a selected layer, or the scene itself if nothing is selected.
+fn place_instance(document: &mut Document, scene: &str, at: [f32; 2]) -> Result<(), String> {
+    let mut parent = document.selected.clone().unwrap_or_default();
+    if let Some(node) = edit::node(document.file(), &parent)
+        && matches!(node.kind, KindDef::TileLayer(_))
+    {
+        parent.pop();
+    }
+    // From the scene's coordinates to the parent's.
+    let to_parent = document
+        .live_node(&parent)
+        .zip(document.preview.as_ref())
+        .and_then(|(id, scene)| scene.transform(id).inverse())
+        .unwrap_or(Affine::IDENTITY);
+    add_instance(document, &parent, scene, to_parent.apply(at))
+}
+
+/// What the Tiles panel paints: the selected layer of `document`, with the tiles of its map's
+/// tileset, `palette`, or the layers of a selected tilemap.
+fn tiles_target<'a>(
+    document: Option<&'a Document>,
+    selected: Option<&(String, NodePath)>,
+    palette: Option<&'a Result<Palette, String>>,
+) -> Target<'a> {
+    let (Some(document), Some((_, path))) = (document, selected) else {
+        return Target::Nothing;
+    };
+    let Some(node) = edit::node(document.file(), path) else {
+        return Target::Nothing;
+    };
+    match (&node.kind, palette) {
+        (KindDef::TileLayer(_), Some(palette)) => Target::Layer {
+            name: &node.name,
+            palette: palette.as_ref().map_err(String::as_str),
+        },
+        (KindDef::Tilemap(_), _) => Target::Map(
+            node.children
+                .iter()
+                .enumerate()
+                .filter(|(_, child)| matches!(child.kind, KindDef::TileLayer(_)))
+                .map(|(i, child)| {
+                    let mut layer = path.clone();
+                    layer.push(i);
+                    (child.name.clone(), layer)
+                })
+                .collect(),
+        ),
+        _ => Target::Nothing,
+    }
 }
 
 /// The folders in `folder`, by name, with their paths and whether each holds a game.
@@ -804,7 +904,7 @@ impl Game for Editor {
             Some(filesystem::Action::Instance(scene)) => {
                 if let Some(document) = self.documents.get_mut(self.current) {
                     let parent = document.selected.clone().unwrap_or_default();
-                    let result = add_instance(document, &parent, &scene);
+                    let result = add_instance(document, &parent, &scene, [0.0, 0.0]);
                     document.end_change();
                     if let Err(err) = result {
                         self.output.push(Level::Error, err);
@@ -844,27 +944,81 @@ impl Game for Editor {
                 self.inspector.ui(ui, document, &mut services);
             });
 
+        // Selecting a tile layer shows the tiles to paint it with, as Godot does.
+        let selected = self.documents.get(self.current).and_then(|document| {
+            let path = document
+                .selected
+                .clone()
+                .filter(|_| document.inner().is_none())?;
+            Some((document.path.clone(), path))
+        });
+        if selected != self.last_selected {
+            if let Some((_, path)) = &selected
+                && let Some(document) = self.documents.get(self.current)
+                && let Some(node) = edit::node(document.file(), path)
+                && matches!(node.kind, KindDef::TileLayer(_))
+            {
+                self.bottom_tab = BottomTab::Tiles;
+                self.bottom_open = true;
+            }
+            self.last_selected = selected.clone();
+        }
+        // The tileset of the selected tilemap, or of the map of the selected layer.
+        let tileset = self.documents.get(self.current).and_then(|document| {
+            let (_, path) = selected.as_ref()?;
+            let (_, map) = edit::tilemap_at(document.file(), path)?;
+            Some(map.tileset.clone())
+        });
+        let palette = tileset.map(|tileset| Palette::load(ctx, &mut self.cache, &folder, &tileset));
+
         egui::Panel::bottom("bottom tabs").show(ui, |ui| {
             ui.horizontal(|ui| {
-                if ui.selectable_label(self.bottom_open, "Output").clicked() {
-                    self.bottom_open = !self.bottom_open;
+                for (tab, name) in [(BottomTab::Output, "Output"), (BottomTab::Tiles, "Tiles")] {
+                    let shown = self.bottom_open && self.bottom_tab == tab;
+                    if ui.selectable_label(shown, name).clicked() {
+                        self.bottom_open = !shown;
+                        self.bottom_tab = tab;
+                    }
                 }
                 ui.add_enabled(false, egui::Button::selectable(false, "Animation"))
                     .on_disabled_hover_text("Editing clips comes in a later part of the milestone");
             });
         });
+        let mut select_layer = None;
         egui::Panel::bottom("bottom panel")
             .resizable(true)
             .default_size(180.0)
-            .show_collapsible(ui, &mut self.bottom_open, |ui| self.output.ui(ui));
+            .show_collapsible(ui, &mut self.bottom_open, |ui| {
+                match self.bottom_tab {
+                    BottomTab::Output => self.output.ui(ui),
+                    BottomTab::Tiles => {
+                        let document = self.documents.get(self.current);
+                        let target = tiles_target(document, selected.as_ref(), palette.as_ref());
+                        select_layer = self.tiles.ui(ui, target);
+                    }
+                }
+                // Its size stays put whatever it shows.
+                ui.expand_to_include_rect(ui.max_rect());
+            });
+        if let Some(path) = select_layer
+            && let Some(document) = self.documents.get_mut(self.current)
+        {
+            document.select(Some(path));
+        }
 
+        let mut viewport_action = None;
         egui::CentralPanel::default().show(ui, |ui| {
             self.tabs(ui);
             let document = self.documents.get_mut(self.current);
             self.viewport.toolbar(ui, document, canvas_size);
             ui.separator();
             match self.documents.get_mut(self.current) {
-                Some(document) => self.viewport.ui(ui, ctx, document, canvas_size),
+                Some(document) => {
+                    let palette = palette.as_ref().and_then(|palette| palette.as_ref().ok());
+                    viewport_action =
+                        self.viewport
+                            .ui(ui, ctx, document, canvas_size, &mut self.tiles, palette);
+                }
                 None => {
                     ui.centered_and_justified(|ui| {
                         ui.weak("Double-click a scene in the FileSystem dock to open it.");
@@ -872,6 +1026,15 @@ impl Game for Editor {
                 }
             }
         });
+        if let Some(viewport::Action::Instance { scene, at }) = viewport_action
+            && let Some(document) = self.documents.get_mut(self.current)
+        {
+            let result = place_instance(document, &scene, at);
+            document.end_change();
+            if let Err(err) = result {
+                self.output.push(Level::Error, err);
+            }
+        }
 
         self.open_dialog(ui);
         self.closing_dialog(ui, ctx);

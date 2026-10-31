@@ -32,6 +32,10 @@ pub struct Document {
     before: Option<SceneFile>,
     /// The selected node, or the scene itself for the empty path.
     pub selected: Option<NodePath>,
+    /// A node an instance places, selected inside it: the instance's path, and the node's path of
+    /// names from the top of the scene it places. It counts only while that instance is
+    /// `selected`.
+    inner: Option<(NodePath, String)>,
     /// The scene the file makes, as it was last built without an error.
     pub preview: Option<Scene>,
     /// Why the file doesn't make a scene, if it doesn't.
@@ -68,6 +72,7 @@ impl Document {
             redo: Vec::new(),
             before: None,
             selected: None,
+            inner: None,
             preview: None,
             error: None,
             stale: true,
@@ -91,6 +96,45 @@ impl Document {
         }
         self.stale = true;
         &mut self.file
+    }
+
+    /// The file and the preview, to change alike, as painting tiles does, so the scene needn't be
+    /// built again. Every change until [`Document::end_change`] is undone as one.
+    pub fn edit_with_preview(&mut self) -> (&mut SceneFile, Option<&mut Scene>) {
+        if self.before.is_none() {
+            self.before = Some(self.file.clone());
+        }
+        (&mut self.file, self.preview.as_mut())
+    }
+
+    /// Selects the node at `path`, or the scene itself for the empty path, or nothing.
+    pub fn select(&mut self, path: Option<NodePath>) {
+        self.selected = path;
+        self.inner = None;
+    }
+
+    /// Selects the node at `names`, a path of names from the top of the scene the instance at
+    /// `instance` places, inside that instance.
+    pub fn select_inner(&mut self, instance: NodePath, names: String) {
+        self.selected = Some(instance.clone());
+        self.inner = Some((instance, names));
+    }
+
+    /// The path of names, from the top of the scene it places, of the node selected inside the
+    /// selected instance, if one is.
+    pub fn inner(&self) -> Option<&str> {
+        let (instance, names) = self.inner.as_ref()?;
+        (self.selected.as_ref() == Some(instance)).then_some(names.as_str())
+    }
+
+    /// The node of the preview that's selected: one made from a node of the file, or one an
+    /// instance placed.
+    pub fn selected_live(&self) -> Option<NodeId> {
+        let id = self.live_node(self.selected.as_ref()?)?;
+        match self.inner() {
+            Some(names) => self.preview.as_ref()?.find(id, names),
+            None => Some(id),
+        }
     }
 
     /// Ends the change being made, if any, keeping it to undo if it changed anything.

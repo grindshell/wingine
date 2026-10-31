@@ -1,7 +1,9 @@
 //! The 2D viewport: the open scene, drawn by the engine as the game draws it, panned with the
 //! middle button and zoomed with the wheel, over a grid and with the game's canvas outlined.
 //! Clicking selects the node under the pointer, and dragging moves, turns or stretches the
-//! selected node, by the tool chosen.
+//! selected node, by the tool chosen. With a tile layer selected, pressing paints it instead, by
+//! the Tiles panel's tool, and a selected tilemap has handles that resize it. Scenes dragged in
+//! from the FileSystem dock are placed where they're dropped.
 
 use std::f32::consts::PI;
 
@@ -10,10 +12,14 @@ use wingine::{
     graphics::{Camera, Canvas},
     gui::{GuiCanvas, egui},
     math::{Affine, Rect},
-    scene::{Kind, NodeDef, NodeId, Scene},
+    scene::{Kind, KindDef, NodeDef, NodeId, Scene},
 };
 
 use crate::{
+    docks::{
+        filesystem::ScenePath,
+        tiles::{Palette, TileTool, Tiles},
+    },
     document::{Document, View},
     edit::{self, NodePath},
     theme,
@@ -21,6 +27,10 @@ use crate::{
 
 /// How far from a plain node's origin, in points, a click still picks it.
 const PICK_DISTANCE: f32 = 6.0;
+/// How far from a handle's middle, in points, a press still takes it.
+const HANDLE_SIZE: f32 = 6.0;
+/// The most columns or rows a tilemap can be resized to, as the Inspector allows.
+const MAX_CELLS: u32 = 4096;
 /// The angle turning snaps to.
 const ANGLE_STEP: f32 = PI / 12.0;
 /// The amount stretching snaps to.
@@ -55,10 +65,88 @@ pub struct Viewport {
     /// The grid's spacing, in the scene's units.
     pub step: f32,
     drag: Option<Drag>,
+    /// Painting a tile layer, in progress.
+    stroke: Option<Stroke>,
+    /// Resizing a tilemap, in progress.
+    resize: Option<Resize>,
     /// How the scene mapped to the viewport when it was last shown.
     shown: Option<ViewMap>,
     /// Where the last click selected something, in points.
     last_click: Option<egui::Pos2>,
+}
+
+/// What the viewport asks of the editor.
+pub enum Action {
+    /// Place the scene file at `scene` at `at`, a point of the scene.
+    Instance { scene: String, at: [f32; 2] },
+}
+
+/// Painting a tile layer while a button is held.
+struct Stroke {
+    tool: TileTool,
+    /// The tile put down, by its name, or none to empty cells.
+    tile: Option<String>,
+    /// The cell the stroke started in, and the one the pointer was last in.
+    from: [i32; 2],
+    last: [i32; 2],
+}
+
+/// Resizing a tilemap by dragging one of its handles.
+struct Resize {
+    path: NodePath,
+    /// Whether the drag changes the map's columns, and its rows.
+    axes: [bool; 2],
+}
+
+/// Where a tilemap is in the scene: its top-left corner and the size of its cells, with its
+/// columns and rows.
+#[derive(Clone, Copy)]
+struct Grid {
+    origin: [f32; 2],
+    cell: [f32; 2],
+    size: [u32; 2],
+}
+
+impl Grid {
+    /// The grid of the tilemap at `path` in the file, as the preview has it.
+    fn of(document: &Document, path: &[usize]) -> Option<Grid> {
+        let scene = document.preview.as_ref()?;
+        let id = document.live_node(path)?;
+        let (_, map) = scene.tilemap(id)?;
+        let size = [map.map.columns(), map.map.rows()];
+        let bounds = map.map.bounds();
+        Some(Grid {
+            origin: scene.transform(id).translation,
+            cell: [bounds.w / size[0] as f32, bounds.h / size[1] as f32],
+            size,
+        })
+    }
+
+    /// The cell `point` of the scene is in, which may be off the map.
+    fn cell_at(&self, point: [f32; 2]) -> [i32; 2] {
+        [0, 1].map(|i| ((point[i] - self.origin[i]) / self.cell[i]).floor() as i32)
+    }
+
+    fn contains(&self, [column, row]: [i32; 2]) -> bool {
+        (0..self.size[0] as i32).contains(&column) && (0..self.size[1] as i32).contains(&row)
+    }
+
+    /// The point of the scene at the top-left corner of `cell`.
+    fn corner(&self, cell: [i32; 2]) -> [f32; 2] {
+        [0, 1].map(|i| self.origin[i] + cell[i] as f32 * self.cell[i])
+    }
+
+    /// The handles that resize the map, by the sizes they change and where they are: the middle of
+    /// its right edge, of its bottom edge, and its bottom-right corner.
+    fn handles(&self) -> [([bool; 2], [f32; 2]); 3] {
+        let [right, bottom] = self.corner(self.size.map(|n| n as i32));
+        let middle = [0, 1].map(|i| (self.origin[i] + [right, bottom][i]) / 2.0);
+        [
+            ([true, false], [right, middle[1]]),
+            ([false, true], [middle[0], bottom]),
+            ([true, true], [right, bottom]),
+        ]
+    }
 }
 
 /// A drag changing a node, in progress.
@@ -89,6 +177,8 @@ impl Default for Viewport {
             snap: false,
             step: 8.0,
             drag: None,
+            stroke: None,
+            resize: None,
             shown: None,
             last_click: None,
         }
@@ -189,17 +279,21 @@ impl Viewport {
         });
     }
 
+    /// The viewport, painting the selected tile layer with what `tiles` says, from `palette`,
+    /// the tiles of its tileset.
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
         ctx: &mut Context,
         document: &mut Document,
         canvas_size: [f32; 2],
-    ) {
+        tiles: &mut Tiles,
+        palette: Option<&Palette>,
+    ) -> Option<Action> {
         let (rect, response) =
             ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
         if rect.width() < 1.0 || rect.height() < 1.0 {
-            return;
+            return None;
         }
         let pixels_per_point = ui.ctx().pixels_per_point();
         let pixels = [rect.width(), rect.height()].map(|v| (v * pixels_per_point).round() as u32);
@@ -245,8 +339,43 @@ impl Viewport {
         let map = ViewMap::new(rect, pixels_per_point, view, pixels);
         self.shown = Some(map);
 
-        if !panning {
-            self.interact(ui, &response, &map, document);
+        let mut action = None;
+        let pointer = ui.ctx().pointer_latest_pos();
+        if let Some(scene) = response.dnd_release_payload::<ScenePath>()
+            && let Some(pointer) = pointer
+        {
+            action = Some(Action::Instance {
+                scene: scene.0.clone(),
+                at: self.snapped(map.to_scene(pointer)),
+            });
+        }
+        let dropping = response
+            .dnd_hover_payload::<ScenePath>()
+            .zip(pointer.filter(|pointer| rect.contains(*pointer)));
+
+        // What the selection is, for tiles: a tilemap, or a layer of one.
+        let selected = document
+            .selected
+            .clone()
+            .filter(|_| document.inner().is_none());
+        let tilemap = selected.as_ref().and_then(|path| {
+            let (map_path, _) = edit::tilemap_at(document.file(), path)?;
+            let grid = Grid::of(document, &map_path)?;
+            Some((map_path, grid))
+        });
+        let layer = selected.filter(|path| {
+            matches!(
+                edit::node(document.file(), path).map(|node| &node.kind),
+                Some(KindDef::TileLayer(_))
+            )
+        });
+        if !panning && !self.resize(ui, &response, &map, document, tilemap.as_ref()) {
+            match (&layer, &tilemap) {
+                (Some(layer), Some((_, grid))) => {
+                    self.paint(ui, &response, &map, document, layer, *grid, tiles);
+                }
+                _ => self.interact(ui, &response, &map, document),
+            }
         }
 
         let canvas = self.canvas.begin(pixels[0], pixels[1]);
@@ -266,6 +395,38 @@ impl Viewport {
             egui::StrokeKind::Middle,
         );
         self.overlay(&painter, &map, document);
+        if let Some((_, grid)) = &tilemap {
+            let hovered = response
+                .hover_pos()
+                .map(|pos| grid.cell_at(map.to_scene(pos)));
+            self.tiles_overlay(
+                &painter,
+                &map,
+                grid,
+                hovered,
+                layer.is_some(),
+                tiles,
+                palette,
+            );
+        }
+        if let Some((scene, pointer)) = dropping {
+            let name = scene.0.rsplit('/').next().unwrap_or(&scene.0);
+            let at = map.to_screen(self.snapped(map.to_scene(pointer)));
+            cross(&painter, at, 8.0, egui::Stroke::new(1.5, theme::ACCENT));
+            // Above the pointer, as the name being dragged is below it.
+            let galley = painter.layout_no_wrap(
+                format!("Place {name} here"),
+                egui::FontId::proportional(13.0),
+                theme::ACCENT,
+            );
+            let corner = at + egui::vec2(12.0, -8.0 - galley.size().y);
+            painter.rect_filled(
+                egui::Rect::from_min_size(corner, galley.size()).expand(3.0),
+                3.0,
+                egui::Color32::from_black_alpha(200),
+            );
+            painter.galley(corner, galley, theme::ACCENT);
+        }
         if let Some(error) = &document.error {
             let galley = painter.layout(
                 error.clone(),
@@ -281,6 +442,263 @@ impl Viewport {
             );
             painter.galley(at, galley, egui::Color32::WHITE);
         }
+        action
+    }
+
+    /// `point` snapped to the grid, if snapping's on.
+    fn snapped(&self, point: [f32; 2]) -> [f32; 2] {
+        if self.snap {
+            point.map(|v| (v / self.step).round() * self.step)
+        } else {
+            point
+        }
+    }
+
+    /// Resizing the selected tilemap, `tilemap`, by its handles. Returns whether the pointer is
+    /// the resize's, so nothing else takes it.
+    fn resize(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        map: &ViewMap,
+        document: &mut Document,
+        tilemap: Option<&(NodePath, Grid)>,
+    ) -> bool {
+        let primary = egui::PointerButton::Primary;
+        let origin = ui.input(|input| input.pointer.press_origin());
+        let on_handle = |grid: &Grid, at: egui::Pos2| {
+            grid.handles()
+                .into_iter()
+                .find(|(_, handle)| map.to_screen(*handle).distance(at) <= HANDLE_SIZE)
+                .map(|(axes, _)| axes)
+        };
+        if self.resize.is_none()
+            && response.is_pointer_button_down_on()
+            && ui.input(|input| input.pointer.button_down(primary))
+            && let (Some((path, grid)), Some(origin)) = (tilemap, origin)
+            && let Some(axes) = on_handle(grid, origin)
+        {
+            self.resize = Some(Resize {
+                path: path.clone(),
+                axes,
+            });
+        }
+        let Some(resize) = &self.resize else {
+            return false;
+        };
+        if let (Some(pointer), Some((path, grid))) = (response.interact_pointer_pos(), tilemap)
+            && *path == resize.path
+            && response.dragged_by(primary)
+            && let Some((_, def)) = edit::tilemap_at(document.file(), path)
+        {
+            let point = map.to_scene(pointer);
+            let mut size = [def.columns, def.rows];
+            for i in 0..2 {
+                if resize.axes[i] {
+                    let cells = ((point[i] - grid.origin[i]) / grid.cell[i]).round();
+                    size[i] = (cells.max(1.0) as u32).min(MAX_CELLS);
+                }
+            }
+            if size != [def.columns, def.rows] {
+                edit::resize_tilemap(document.edit(), path, size[0], size[1]);
+            }
+        }
+        if !response.is_pointer_button_down_on() {
+            self.resize = None;
+        }
+        true
+    }
+
+    /// Painting the tile layer at `layer`, on the map `grid`, by the Tiles panel's tool: the
+    /// right button empties cells, and Control picks the tile in a cell.
+    #[expect(clippy::too_many_arguments)]
+    fn paint(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        map: &ViewMap,
+        document: &mut Document,
+        layer: &NodePath,
+        grid: Grid,
+        tiles: &mut Tiles,
+    ) {
+        let (primary, secondary) = (egui::PointerButton::Primary, egui::PointerButton::Secondary);
+        let (down, pressed, erasing, control) = ui.input(|input| {
+            let pointer = &input.pointer;
+            (
+                pointer.button_down(primary) || pointer.button_down(secondary),
+                pointer.button_pressed(primary) || pointer.button_pressed(secondary),
+                pointer.button_down(secondary),
+                input.modifiers.command,
+            )
+        });
+        let down = down && response.is_pointer_button_down_on();
+        let cell = response
+            .interact_pointer_pos()
+            .map(|pointer| grid.cell_at(map.to_scene(pointer)));
+        if let Some(cell) = cell
+            && down
+            && pressed
+            && self.stroke.is_none()
+        {
+            let def = match &edit::node(document.file(), layer).map(|node| &node.kind) {
+                Some(KindDef::TileLayer(def)) => def.clone(),
+                _ => return,
+            };
+            if control || tiles.tool == TileTool::Pick {
+                if grid.contains(cell) {
+                    match edit::cell(&def, cell) {
+                        Some(tile) => tiles.choose(tile.to_owned()),
+                        None => {
+                            tiles.erase = true;
+                            if tiles.tool == TileTool::Pick {
+                                tiles.tool = TileTool::Paint;
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+            let tile = if erasing || tiles.erase {
+                None
+            } else {
+                match &tiles.tile {
+                    Some(tile) => Some(tile.clone()),
+                    // Nothing to paint with yet.
+                    None => return,
+                }
+            };
+            match tiles.tool {
+                TileTool::Fill => {
+                    let cells = edit::flood(&def, cell, grid.size);
+                    paint_cells(document, layer, grid, cells, tile.as_deref());
+                }
+                tool => {
+                    if tool == TileTool::Paint {
+                        paint_cells(document, layer, grid, vec![cell], tile.as_deref());
+                    }
+                    self.stroke = Some(Stroke {
+                        tool,
+                        tile,
+                        from: cell,
+                        last: cell,
+                    });
+                }
+            }
+            return;
+        }
+        let Some(stroke) = &mut self.stroke else {
+            return;
+        };
+        if down && let Some(cell) = cell {
+            if stroke.tool == TileTool::Paint && cell != stroke.last {
+                let cells = edit::line(stroke.last, cell);
+                paint_cells(document, layer, grid, cells, stroke.tile.as_deref());
+            }
+            stroke.last = cell;
+        }
+        if !down {
+            let stroke = self.stroke.take().expect("there's a stroke");
+            if stroke.tool == TileTool::Rect {
+                let cells = edit::rect_cells(stroke.from, stroke.last);
+                paint_cells(document, layer, grid, cells, stroke.tile.as_deref());
+            }
+        }
+    }
+
+    /// Over a tilemap: its cells, the handles that resize it, and when painting one of its layers,
+    /// the cell the pointer's over, `hovered`, with the tile it would get, or the rectangle being
+    /// dragged out.
+    #[expect(clippy::too_many_arguments)]
+    fn tiles_overlay(
+        &self,
+        painter: &egui::Painter,
+        map: &ViewMap,
+        grid: &Grid,
+        hovered: Option<[i32; 2]>,
+        painting: bool,
+        tiles: &Tiles,
+        palette: Option<&Palette>,
+    ) {
+        let [right, bottom] = grid.corner(grid.size.map(|n| n as i32));
+        let faint = egui::Stroke::new(1.0, theme::ACCENT.gamma_multiply(0.25));
+        // Lines closer than a few points would be a haze.
+        let spacing = map.to_screen(grid.corner([1, 1])) - map.to_screen(grid.origin);
+        if painting && spacing.x.min(spacing.y) >= 6.0 {
+            for column in 1..grid.size[0] as i32 {
+                let [x, _] = grid.corner([column, 0]);
+                painter.line_segment(
+                    [
+                        map.to_screen([x, grid.origin[1]]),
+                        map.to_screen([x, bottom]),
+                    ],
+                    faint,
+                );
+            }
+            for row in 1..grid.size[1] as i32 {
+                let [_, y] = grid.corner([0, row]);
+                painter.line_segment(
+                    [
+                        map.to_screen([grid.origin[0], y]),
+                        map.to_screen([right, y]),
+                    ],
+                    faint,
+                );
+            }
+        }
+        for (_, handle) in grid.handles() {
+            let at = map.to_screen(handle);
+            painter.rect_filled(
+                egui::Rect::from_center_size(at, egui::vec2(HANDLE_SIZE, HANDLE_SIZE)),
+                1.0,
+                theme::ACCENT,
+            );
+        }
+        if !painting {
+            return;
+        }
+        let cells_rect = |a: [i32; 2], b: [i32; 2]| {
+            let min = [a[0].min(b[0]), a[1].min(b[1])];
+            let max = [a[0].max(b[0]) + 1, a[1].max(b[1]) + 1];
+            egui::Rect::from_min_max(
+                map.to_screen(grid.corner(min)),
+                map.to_screen(grid.corner(max)),
+            )
+        };
+        let stroke = egui::Stroke::new(1.5, theme::ACCENT);
+        if let Some(Stroke {
+            tool: TileTool::Rect,
+            from,
+            last,
+            ..
+        }) = &self.stroke
+        {
+            painter.rect_stroke(
+                cells_rect(*from, *last),
+                0.0,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            return;
+        }
+        let Some(cell) = hovered.filter(|cell| grid.contains(*cell)) else {
+            return;
+        };
+        let rect = cells_rect(cell, cell);
+        let tile = tiles
+            .tile
+            .as_deref()
+            .filter(|_| !tiles.erase && tiles.tool != TileTool::Pick)
+            .and_then(|tile| palette?.tile(tile));
+        if let Some(tile) = tile {
+            painter.image(
+                tile.texture.id,
+                rect,
+                tile.uv,
+                tile.tint.gamma_multiply(0.6),
+            );
+        }
+        painter.rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Inside);
     }
 
     /// Selecting with clicks, and changing the selected node with drags.
@@ -307,7 +725,7 @@ impl Viewport {
                 .filter(|_| again)
                 .and_then(|selected| under.iter().position(|path| path == selected))
                 .map_or(0, |i| (i + 1) % under.len());
-            document.selected = under.into_iter().nth(next);
+            document.select(under.into_iter().nth(next));
             self.last_click = Some(pointer);
         }
         if response.drag_started_by(primary)
@@ -335,7 +753,7 @@ impl Viewport {
                 tool => tool,
             };
             self.drag = path.and_then(|path| {
-                document.selected = Some(path.clone());
+                document.select(Some(path.clone()));
                 start_drag(document, tool, path, map.to_scene(origin))
             });
         }
@@ -434,7 +852,7 @@ impl Viewport {
         if path.is_empty() {
             return;
         }
-        let Some(id) = document.live_node(path) else {
+        let Some(id) = document.selected_live() else {
             return;
         };
         let stroke = egui::Stroke::new(1.5, theme::ACCENT);
@@ -447,15 +865,11 @@ impl Viewport {
             painter.add(egui::Shape::closed_line(corners, stroke));
         }
         let origin = map.to_screen(transform.translation);
-        let arm = 6.0;
-        painter.line_segment(
-            [origin - egui::vec2(arm, 0.0), origin + egui::vec2(arm, 0.0)],
-            stroke,
-        );
-        painter.line_segment(
-            [origin - egui::vec2(0.0, arm), origin + egui::vec2(0.0, arm)],
-            stroke,
-        );
+        cross(painter, origin, 6.0, stroke);
+        // Tools change the nodes of the file, not those instances place.
+        if document.inner().is_some() {
+            return;
+        }
         match self.tool {
             Tool::Select => {}
             Tool::Move => {
@@ -626,6 +1040,47 @@ fn under(document: &Document, map: &ViewMap, pos: egui::Pos2) -> Vec<NodePath> {
         }
     }
     found
+}
+
+/// Puts `tile`, or nothing, in `cells` of the tile layer at `layer`, on the map `grid`, in the file
+/// and the preview alike, so painting doesn't build the scene again with every cell.
+fn paint_cells(
+    document: &mut Document,
+    layer: &[usize],
+    grid: Grid,
+    mut cells: Vec<[i32; 2]>,
+    tile: Option<&str>,
+) {
+    cells.retain(|&cell| grid.contains(cell));
+    let live = document.live_node(layer);
+    let (file, preview) = document.edit_with_preview();
+    let Some(def) = edit::tile_layer_mut(file, layer) else {
+        return;
+    };
+    if !edit::set_cells(def, cells.iter().copied(), tile) {
+        return;
+    }
+    let patched = match (preview, live) {
+        (Some(scene), Some(id)) => cells
+            .iter()
+            .all(|&cell| scene.set_tile(id, cell, tile).is_ok()),
+        _ => false,
+    };
+    if !patched {
+        document.rebuild();
+    }
+}
+
+/// A cross centered on `at`, its arms `arm` long.
+fn cross(painter: &egui::Painter, at: egui::Pos2, arm: f32, stroke: egui::Stroke) {
+    painter.line_segment(
+        [at - egui::vec2(arm, 0.0), at + egui::vec2(arm, 0.0)],
+        stroke,
+    );
+    painter.line_segment(
+        [at - egui::vec2(0.0, arm), at + egui::vec2(0.0, arm)],
+        stroke,
+    );
 }
 
 /// A drag changing the node at `path` with `tool`, from how it is now, with the pointer at

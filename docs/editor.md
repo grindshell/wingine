@@ -17,10 +17,10 @@ cargo run -p wingine-editor -- examples/garden
 Without a folder, it starts with a choice of the repository's examples, and **Project > Open
 Folder…** opens any game.
 
-The editor is new, and grows with each part of the current milestone. It edits scenes' nodes and
-the scene's sheets and props now. Painting tiles, anchor presets, editing clips and editing scripts
-come next. Until then, edit those in the scene file, and the editor shows the change once it's
-saved.
+The editor is new, and grows with each part of the current milestone. It edits scenes' nodes, the
+scene's sheets and props, tilemaps' tiles, and instances' overrides now. Anchor presets, editing
+clips and editing scripts come next. Until then, edit those in the scene file, and the editor shows
+the change once it's saved.
 
 ## The layout
 
@@ -28,10 +28,11 @@ saved.
   open scene, and later **Script**; and **Play** and **Stop** on the right.
 - **The Scene dock**, at the top left: the open scene's tree of nodes.
 - **The FileSystem dock**, below it: the files in the game's folder. Double-click a scene to open
-  it.
+  it, or drag it into the viewport or onto a node to place it there.
 - **The Inspector**, on the right: every field of the selected node.
 - **The bottom panel**: **Output**, with what the editor says and what a game played from it
-  prints. Click its tab to hide it, and again to show it.
+  prints, and **Tiles**, to [paint tilemaps](#painting-tiles) with. Click a tab to show it, and
+  click it again to hide the panel.
 - **The middle**: a tab for each open scene, the viewport's toolbar, and the viewport.
 
 Drag the edges between them to resize them.
@@ -76,7 +77,8 @@ The **Inspector** shows the selected node's fields, as scene files name them:
 - **Its kind's fields**: a sprite's sheet and cell (**Pick…** shows the sheet to click a cell
   in), its size, stretch, pivot and tint; a rect's size, stretch, pivot and color; text's text,
   scale, wrap, alignment, pivot and color; an area's size, stretch and pivot; a tilemap's tileset
-  and size, which resizes its layers; an instance's scene, and the overrides it has.
+  and size, which resizes its layers; an instance's scene, and the overrides it has, each of
+  which selects the node it changes when clicked.
 - **Props**: the node's data for the game. Add one by typing its name and choosing its kind of
   value; lists and tables hold more values.
 
@@ -92,6 +94,42 @@ Select the scene itself, at the top of the Scene dock, to change its sheets and 
 - **Drag** a node onto another to move it inside it, onto the top edge of one to move it before it,
   or onto the bottom edge to move it after it. **Move Up** and **Move Down**, in its menu, change
   its place among its siblings: later nodes draw over earlier ones.
+
+## Painting tiles
+
+Select a tilemap's layer, in the Scene dock or with **Tiles** after selecting the tilemap, and the
+**Tiles** panel shows the tiles of the map's tileset. Click one to paint with it; the viewport shows
+it under the pointer, over a grid of the map's cells. Pressing in the viewport then paints the
+layer, by the panel's tool:
+
+| Tool | Pressing |
+|---|---|
+| Paint | Puts the tile in each cell dragged across |
+| Rect | Fills the rectangle dragged out |
+| Fill | Fills the cell clicked and the cells joined to it that hold the same tile |
+| Pick | Chooses the tile in the cell clicked, then paints with it |
+
+The right button empties cells instead, as **Erase** does with the left, and Control picks with any
+tool. Each stroke is one change to undo. The editor keeps the layer's `legend` for you: a tile
+painted for the first time gets a character, from its name where it can, and a character no cell
+holds any more leaves it.
+
+A selected tilemap, or a selected layer's, has handles on its right edge, its bottom edge and its
+bottom-right corner: drag them to give it more or fewer columns and rows. Cells off the new edges
+go, and new cells are empty.
+
+## Instances and overrides
+
+Drag a scene file from the FileSystem dock into the viewport to place it where it's dropped, as a
+child of the selected node, or onto a node in the Scene dock to place it in that node. **⛓**, and
+**Instance Child Scene** in a node's menu, place one too.
+
+An instance in the Scene dock opens to show the nodes of the scene it places, in italics. Select
+one to see it in the Inspector as the instance makes it, and change it there: the changes go into
+the instance's `overrides`, as the scene file names them, and leave the scene it places alone.
+Fields the overrides change are marked in blue, each with **⟲** to put it back as the scene has it,
+and **Revert All** puts back every field. Changing a field back to the scene's value takes it out
+of the overrides too.
 
 ## Saving, undo and playing
 
@@ -117,8 +155,10 @@ images, show up without opening them again.
 | Ctrl+Z, Ctrl+Y | Undo, redo |
 | Ctrl+D | Duplicate the selected node |
 | Delete | Delete the selected node |
+| Escape | Select nothing |
 | F2 | Rename the selected node |
 | Q, W, E, S | The Select, Move, Rotate and Scale tools |
 | F5, F8 | Play, stop |
+| Right button, Ctrl+click | Erase, pick, while painting tiles |
 | Middle drag, Space+drag | Pan the viewport |
 | Wheel | Zoom the viewport |
