@@ -103,7 +103,14 @@ pub fn check_name(siblings: &[NodeDef], name: &str, except: Option<usize>) -> Re
 /// `name`, or if a sibling has it, `name` with the first number from 2 up that makes it unique.
 /// A name that ends in a number counts on from it, so copies of `tree2` are `tree3` and up.
 pub fn unique_name(siblings: &[NodeDef], name: &str) -> String {
-    let taken = |name: &str| siblings.iter().any(|sibling| sibling.name == name);
+    unique(name, |name| {
+        siblings.iter().any(|sibling| sibling.name == name)
+    })
+}
+
+/// `name`, or if it's `taken`, `name` with the first number from 2 up that isn't, counting on from
+/// a number it ends in.
+pub fn unique(name: &str, taken: impl Fn(&str) -> bool) -> String {
     if !taken(name) {
         return name.to_owned();
     }

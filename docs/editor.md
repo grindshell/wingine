@@ -18,9 +18,8 @@ Without a folder, it starts with a choice of the repository's examples, and **Pr
 Folder…** opens any game.
 
 The editor is new, and grows with each part of the current milestone. It edits scenes' nodes, the
-scene's sheets and props, tilemaps' tiles, instances' overrides, and screens' layouts now. Editing
-clips and editing scripts come next. Until then, edit those in the scene file, and the editor shows
-the change once it's saved.
+scene's sheets and props, tilemaps' tiles, instances' overrides, screens' layouts and clips now.
+Editing scripts comes next.
 
 ## The layout
 
@@ -31,8 +30,8 @@ the change once it's saved.
   it, or drag it into the viewport or onto a node to place it there.
 - **The Inspector**, on the right: every field of the selected node.
 - **The bottom panel**: **Output**, with what the editor says and what a game played from it
-  prints, and **Tiles**, to [paint tilemaps](#painting-tiles) with. Click a tab to show it, and
-  click it again to hide the panel.
+  prints, **Tiles**, to [paint tilemaps](#painting-tiles) with, and **Animation**, to
+  [animate rigs](#animating-rigs). Click a tab to show it, and click it again to hide the panel.
 - **The middle**: a tab for each open scene, the viewport's toolbar, and the viewport.
 
 Drag the edges between them to resize them.
@@ -153,6 +152,38 @@ Fields the overrides change are marked in blue, each with **⟲** to put it back
 and **Revert All** puts back every field. Changing a field back to the scene's value takes it out
 of the overrides too.
 
+## Animating rigs
+
+A scene's [clips](scenes.md) animate its nodes, as a character's walk turns its limbs. The
+**Animation** panel shows one at a time, chosen at its left; **New Clip** adds one a second long,
+and **Rename Clip** and **Delete Clip** do what they say. Beside them are the clip's length, which
+can't be shorter than its last key, and **Loop**, whether it starts over at its end.
+
+While the panel shows, the clip poses the open scene in the viewport, as the game would at the
+time its playhead is at, shown at the viewport's top right. Only the viewport is posed: the scene
+file keeps its nodes as they were. Below the ruler of seconds, each of the clip's tracks is a row,
+named for its node and property, with its keys along it: diamonds for numbers that move in a
+straight line, squares for those that jump, and for visibility and cells.
+
+- **Scrub** by clicking or dragging along the ruler or a row. **▶** plays the clip from the
+  playhead, round and round if it loops, and **⏮** goes back to its start. With **Snap** on, the
+  playhead and keys snap to the step beside it.
+- **Click a key** to select it and move the playhead to it, and **drag** it to move it in time.
+  Right-click it to delete it, or with the pointer over the panel, press Delete. Right-click a row
+  to insert a key at that time, of the value the track has then.
+- **Click a track's name** to select its node. A track whose node isn't in the scene is red.
+  **linear** or **step** beside it switches how a number gets from key to key, and **🗑** removes
+  the track.
+
+Key nodes' properties from the Inspector. While the panel shows a clip, each property a clip can
+change, `visible`, `x`, `y`, `rotation`, `scale` and a sprite's `cell`, has a **♦** beside it,
+which puts a key of its value at the playhead, adding a track for it if the clip has none.
+Properties the clip has tracks of are marked in yellow, and show as the clip poses them. Changing
+one, in the Inspector or with the viewport's tools, keys it at the playhead: it changes the key
+there, or adds one. Changing a property the clip has no track of changes the node itself, as it
+does without a clip. The Inspector keys the scene's own nodes: to animate the nodes of a scene an
+instance places, open that scene and give it clips of its own.
+
 ## Saving, undo and playing
 
 - **Ctrl+Z** undoes a change and **Ctrl+Y** (or Ctrl+Shift+Z) redoes it. A drag, or typing in a
@@ -176,7 +207,7 @@ images, show up without opening them again.
 | Ctrl+S | Save the open scene |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
 | Ctrl+D | Duplicate the selected node |
-| Delete | Delete the selected node |
+| Delete | Delete the selected node, or over the timeline, the selected key |
 | Escape | Select nothing |
 | F2 | Rename the selected node |
 | Q, W, E, S | The Select, Move, Rotate and Scale tools |

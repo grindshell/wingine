@@ -12,12 +12,14 @@ use wingine::{
     WindowConfig,
     headless::Simulation,
     input::{Key, MouseButton},
-    scene::{KindDef, SceneFile, TileLayerDef, Value},
+    scene::{
+        Clip, Interpolation, KeyValue, Keys, KindDef, Property, SceneFile, TileLayerDef, Value,
+    },
 };
 use wingine_editor::{
-    Editor,
+    Editor, clips,
     docks::{output::Level, tiles::TileTool},
-    document::View,
+    document::{Timeline, View},
     edit,
     editor::BottomTab,
     viewport::Tool,
@@ -736,6 +738,311 @@ fn dragging_the_canvas_corner_previews_another_size() {
     );
     // Only a preview: the scene hasn't changed.
     assert!(!simulation.game().document().unwrap().is_dirty());
+}
+
+/// The editor with the orchard's picker open and the Animation panel showing its clip `clip`, in
+/// a copy of the game of the test's own.
+fn picker(test: &str, clip: &str) -> Simulation<Editor> {
+    let mut simulation = editor(Some(copy_of("orchard", test)));
+    simulation
+        .game_mut()
+        .open_scene("picker.scene.luau")
+        .unwrap();
+    simulation.run_frames(2);
+    simulation.click_gui("Animation");
+    simulation.run_frames(2);
+    assert_eq!(simulation.game().bottom_tab(), BottomTab::Animation);
+    menu(&mut simulation, "Clip", clip);
+    assert_eq!(timeline(&simulation).clip.as_deref(), Some(clip));
+    simulation
+}
+
+fn timeline(simulation: &Simulation<Editor>) -> &Timeline {
+    &simulation.game().document().unwrap().timeline
+}
+
+/// Moves the playhead to `time` seconds.
+fn set_time(simulation: &mut Simulation<Editor>, time: f32) {
+    simulation.game_mut().document_mut().unwrap().timeline.time = time;
+    simulation.run_frames(2);
+}
+
+fn clip<'a>(simulation: &'a Simulation<Editor>, name: &str) -> &'a Clip {
+    &file(simulation).clips[name]
+}
+
+/// The keys of the track of `property` of the node at `names` in the clip `clip`.
+fn keys(simulation: &Simulation<Editor>, clip_name: &str, names: &str, property: &str) -> Keys {
+    let clip = clip(simulation, clip_name);
+    let track = clips::track(clip, names, property)
+        .unwrap_or_else(|| panic!("`{clip_name}` has no track of {names}'s {property}"));
+    clip.tracks[track].keys.clone()
+}
+
+/// The node of the preview made from the node at `names`, as it's posed.
+fn live<'a>(simulation: &'a Simulation<Editor>, names: &str) -> &'a wingine::scene::Node {
+    let document = simulation.game().document().unwrap();
+    let scene = document.preview.as_ref().unwrap();
+    scene.node(scene.find(scene.root(), names).unwrap())
+}
+
+/// Where the ruler puts `time` seconds of a clip `duration` long, in the window, on the row
+/// whose middle is at `y`.
+fn on_timeline(simulation: &Simulation<Editor>, time: f32, duration: f32, y: f32) -> [f32; 2] {
+    let ruler = simulation.gui_rect("Timeline").unwrap();
+    // As far in from its ends as the panel leaves room.
+    let pad = 10.0;
+    [ruler.x + pad + time / duration * (ruler.w - 2.0 * pad), y]
+}
+
+/// Clicks the field named `name` in the Inspector, and types `text` into it.
+fn type_into(simulation: &mut Simulation<Editor>, name: &str, text: &str) {
+    // The field after the label.
+    let field = *simulation.gui_rects(name).last().unwrap();
+    let [x, y] = middle(field);
+    simulation.click(MouseButton::Left, x, y);
+    simulation.step();
+    control(simulation, Key::A);
+    simulation.type_text(text);
+    simulation.tap(Key::Enter);
+    simulation.run_frames(2);
+}
+
+#[test]
+fn scrubbing_and_playing_a_clip_poses_the_preview() {
+    let mut simulation = picker("scrubbing", "walk");
+    let rest = node(&simulation, "hips/body/head").rotation;
+    let head = keys(&simulation, "walk", "hips/body/head", "rotation");
+    let duration = clip(&simulation, "walk").duration;
+
+    // Halfway along the ruler, snapped to its step.
+    let ruler = simulation.gui_rect("Timeline").unwrap();
+    let [x, y] = on_timeline(
+        &simulation,
+        duration / 2.0 + 0.01,
+        duration,
+        middle(ruler)[1],
+    );
+    simulation.click(MouseButton::Left, x, y);
+    simulation.run_frames(2);
+    let time = timeline(&simulation).time;
+    assert_eq!(time, duration / 2.0);
+    let Some(KeyValue::Number(posed)) = head.value_at(time) else {
+        panic!("the head turns")
+    };
+    assert_eq!(live(&simulation, "hips/body/head").rotation(), posed);
+    assert_ne!(posed, rest);
+    // Only the preview is posed.
+    assert_eq!(node(&simulation, "hips/body/head").rotation, rest);
+    assert!(!simulation.game().document().unwrap().is_dirty());
+
+    // Playing moves the playhead on, and the walk loops.
+    simulation.click_gui("Play Clip");
+    simulation.run_frames(30);
+    assert!(simulation.game().animation().playing);
+    let played = timeline(&simulation).time;
+    let expected = (time + 31.0 / 60.0) % duration;
+    assert!((played - expected).abs() < 0.03, "{played} {expected}");
+    simulation.click_gui("Pause Clip");
+    simulation.step();
+    assert!(!simulation.game().animation().playing);
+
+    // Another panel puts the preview back as the file has it.
+    simulation.click_gui("Output");
+    simulation.run_frames(2);
+    assert_eq!(live(&simulation, "hips/body/head").rotation(), rest);
+}
+
+#[test]
+fn keying_from_the_inspector_puts_keys_at_the_playhead() {
+    // Blink changes only the face, so the rest of the picker is free to key.
+    let mut simulation = picker("keying", "blink");
+    select(&mut simulation, "hips/body/head");
+    let rest = node(&simulation, "hips/body/head").clone();
+    set_time(&mut simulation, 1.2);
+
+    simulation.click_gui("Key x");
+    simulation.run_frames(2);
+    assert_eq!(
+        keys(&simulation, "blink", "hips/body/head", "x"),
+        Keys::Number {
+            property: Property::X,
+            interpolation: Interpolation::Linear,
+            keys: vec![(1.2, rest.x)],
+        }
+    );
+
+    // A field the clip keys changes its key at the playhead, or adds one there, not the node.
+    type_into(&mut simulation, "x", "5");
+    set_time(&mut simulation, 0.6);
+    type_into(&mut simulation, "x", "9");
+    assert_eq!(
+        keys(&simulation, "blink", "hips/body/head", "x").times(),
+        [0.6, 1.2]
+    );
+    assert_eq!(
+        keys(&simulation, "blink", "hips/body/head", "x").value_at(1.2),
+        Some(KeyValue::Number(5.0))
+    );
+    assert_eq!(node(&simulation, "hips/body/head").x, rest.x);
+    assert_eq!(live(&simulation, "hips/body/head").position()[0], 9.0);
+
+    // One it doesn't key changes the node.
+    type_into(&mut simulation, "y", "-20");
+    assert_eq!(node(&simulation, "hips/body/head").y, -20.0);
+    assert!(clips::track(clip(&simulation, "blink"), "hips/body/head", "y").is_none());
+
+    // Each was a change of its own.
+    control(&mut simulation, Key::Z);
+    control(&mut simulation, Key::Z);
+    assert_eq!(
+        keys(&simulation, "blink", "hips/body/head", "x").times(),
+        [1.2]
+    );
+
+    // Keys belong to the clip on the timeline, so without it, there's nothing to key.
+    simulation.click_gui("Output");
+    simulation.run_frames(2);
+    assert!(simulation.gui_rect("Key x").is_none());
+}
+
+#[test]
+fn turning_a_keyed_node_in_the_viewport_keys_it() {
+    let mut simulation = picker("turning", "walk");
+    select(&mut simulation, "hips/body/head");
+    set_time(&mut simulation, 0.2);
+    let rest = node(&simulation, "hips/body/head").rotation;
+    let Some(KeyValue::Number(before)) =
+        keys(&simulation, "walk", "hips/body/head", "rotation").value_at(0.2)
+    else {
+        panic!("the head turns")
+    };
+    simulation.tap(Key::E);
+    assert_eq!(simulation.game().tool(), Tool::Rotate);
+
+    // An eighth of a turn about its origin, from below and right of it to straight below.
+    let document = simulation.game().document().unwrap();
+    let id = document
+        .live_node(&edit::path_of(document.file(), "hips/body/head"))
+        .unwrap();
+    let origin = document.preview.as_ref().unwrap().transform(id).translation;
+    let center = simulation.game().scene_to_window(origin).unwrap();
+    drag(
+        &mut simulation,
+        [center[0] + 200.0, center[1] + 200.0],
+        [center[0], center[1] + 280.0],
+    );
+    let turned = keys(&simulation, "walk", "hips/body/head", "rotation");
+    let Some(KeyValue::Number(after)) = turned.value_at(0.2) else {
+        panic!("the head turns")
+    };
+    let eighth = std::f32::consts::FRAC_PI_4;
+    assert!((after - (before + eighth)).abs() < 1e-3, "{after} {before}");
+    assert!(turned.times().contains(&0.2));
+    assert_eq!(node(&simulation, "hips/body/head").rotation, rest);
+}
+
+#[test]
+fn keys_move_and_go_on_the_timeline() {
+    let mut simulation = picker("timeline", "blink");
+    let times = |simulation: &Simulation<Editor>| {
+        keys(simulation, "blink", "hips/body/head/face", "cell").times()
+    };
+    let start = times(&simulation);
+    assert_eq!(start.len(), 3);
+    let duration = clip(&simulation, "blink").duration;
+
+    // Dragging the second key to 2 seconds in.
+    let key = simulation.gui_rect("face:cell key 2").unwrap();
+    let from = middle(key);
+    let to = on_timeline(&simulation, 2.0, duration, from[1]);
+    drag(&mut simulation, from, to);
+    assert_eq!(times(&simulation), [start[0], 2.0, start[2]]);
+
+    // Its menu takes it out.
+    let [x, y] = middle(simulation.gui_rect("face:cell key 2").unwrap());
+    simulation.click(MouseButton::Right, x, y);
+    simulation.run_frames(2);
+    simulation.click_gui("Delete Key");
+    simulation.run_frames(2);
+    assert_eq!(times(&simulation), [start[0], start[2]]);
+
+    // Over the timeline, Delete takes out the selected key rather than the selected node.
+    select(&mut simulation, "hips/body/head/face");
+    simulation.click_gui("face:cell key 2");
+    simulation.step();
+    assert_eq!(timeline(&simulation).time, start[2]);
+    simulation.tap(Key::Delete);
+    simulation.run_frames(2);
+    assert_eq!(times(&simulation), [start[0]]);
+    assert!(
+        edit::node(
+            file(&simulation),
+            &edit::path_of(file(&simulation), "hips/body/head/face")
+        )
+        .is_some()
+    );
+
+    // Each was a change of its own.
+    for _ in 0..3 {
+        control(&mut simulation, Key::Z);
+    }
+    assert_eq!(times(&simulation), start);
+    assert!(!simulation.game().document().unwrap().is_dirty());
+}
+
+#[test]
+fn clips_are_made_named_lengthened_looped_and_saved() {
+    let folder = copy_of("orchard", "clips");
+    let mut simulation = editor(Some(folder.clone()));
+    simulation
+        .game_mut()
+        .open_scene("orchard.scene.luau")
+        .unwrap();
+    simulation.run_frames(2);
+    simulation.click_gui("Animation");
+    simulation.run_frames(2);
+    assert!(file(&simulation).clips.is_empty());
+
+    simulation.click_gui("New Clip");
+    simulation.run_frames(2);
+    assert_eq!(timeline(&simulation).clip.as_deref(), Some("clip"));
+    type_into(&mut simulation, "duration", "2.5");
+    simulation.click_gui("Loop");
+    simulation.run_frames(2);
+    simulation.click_gui("Rename Clip");
+    simulation.run_frames(2);
+    control(&mut simulation, Key::A);
+    simulation.type_text("sway");
+    simulation.tap(Key::Enter);
+    simulation.run_frames(2);
+    assert_eq!(timeline(&simulation).clip.as_deref(), Some("sway"));
+    let sway = clip(&simulation, "sway");
+    assert_eq!((sway.duration, sway.looping), (2.5, true));
+
+    // Keying the picker the scene places, at the end of the clip.
+    select(&mut simulation, "picker");
+    set_time(&mut simulation, 2.5);
+    simulation.click_gui("Key rotation");
+    simulation.run_frames(2);
+    assert_eq!(
+        keys(&simulation, "sway", "picker", "rotation").times(),
+        [2.5]
+    );
+
+    // Saved in the canonical layout, it reads back the same.
+    control(&mut simulation, Key::S);
+    let saved = SceneFile::read(folder.join("orchard.scene.luau")).unwrap();
+    assert_eq!(&saved, file(&simulation));
+    assert_eq!(
+        fs::read_to_string(folder.join("orchard.scene.luau")).unwrap(),
+        saved.to_luau().unwrap()
+    );
+
+    simulation.click_gui("Delete Clip");
+    simulation.run_frames(2);
+    assert!(file(&simulation).clips.is_empty());
+    assert_eq!(timeline(&simulation).clip, None);
 }
 
 #[test]

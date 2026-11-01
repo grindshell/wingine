@@ -45,8 +45,8 @@ Godot's and built with Wingine itself.
 - **egui** interfaces over any game, for debug panels and tools, and a window of frame stats any
   game can show with a key. Tests click their widgets by name.
 - **An editor** for scenes, laid out like Godot's: a tree of nodes, an Inspector, a viewport with
-  gizmos, painting tilemaps, placing and overriding instances, laying out screens, undo, and
-  playing the game.
+  gizmos, painting tilemaps, placing and overriding instances, laying out screens, animating rigs
+  on a timeline, undo, and playing the game.
 
 Wingine targets desktops: Windows, macOS and Linux. CI builds and tests it on Windows and Linux.
 
@@ -264,9 +264,10 @@ Select nodes in the tree or the viewport, change their fields in the Inspector, 
 stretch them with the mouse; add, rename, duplicate, move and delete them in the tree; paint
 tilemaps' layers from their tilesets and resize them; drag scenes in to place them, and override
 the nodes they place, from the Inspector; lay screens out with anchor presets and resize handles,
-and preview them on canvases of other sizes; undo; save, in the canonical layout; and play the
-game, in a process of its own. See [the editor's docs](docs/editor.md). Editing clips and editing
-scripts come next.
+and preview them on canvases of other sizes; animate rigs, scrubbing and playing clips on a
+timeline that poses the scene, and keying nodes' properties from the Inspector and the viewport;
+undo; save, in the canonical layout; and play the game, in a process of its own. See
+[the editor's docs](docs/editor.md). Editing scripts comes next.
 
 ## Making a game
 

@@ -374,9 +374,8 @@ impl Viewport {
             .filter(|path| !path.is_empty() && document.inner().is_none());
         let node = selected
             .as_ref()
-            .and_then(|path| edit::node(document.file(), path))
-            .filter(|node| !matches!(node.kind, KindDef::TileLayer(_)))
-            .cloned();
+            .and_then(|path| document.shown_node(path))
+            .filter(|node| !matches!(node.kind, KindDef::TileLayer(_)));
         let (Some(path), Some(node)) = (selected, node) else {
             ui.add_enabled(false, egui::Button::new("Anchors"))
                 .on_disabled_hover_text("Select a node to lay it out in its parent");
@@ -437,7 +436,7 @@ impl Viewport {
             }
         }
         if changed != node {
-            *edit::node_mut(document.edit(), &path).expect("the node is there") = changed;
+            document.set_node(&path, changed);
             document.end_change();
         }
     }
@@ -602,6 +601,22 @@ impl Viewport {
                 egui::Color32::from_black_alpha(200),
             );
             painter.galley(corner, galley, theme::ACCENT);
+        }
+        // What's posing the scene, so it isn't taken for how the file has it.
+        if let Some((clip, _, time)) = document.posing() {
+            let galley = painter.layout_no_wrap(
+                format!("♦ {clip}  {time:.2} s"),
+                egui::FontId::proportional(13.0),
+                theme::KEY,
+            );
+            // At the top right, out of the way of scenes about the origin.
+            let at = rect.right_top() + egui::vec2(-8.0 - galley.size().x, 8.0);
+            painter.rect_filled(
+                egui::Rect::from_min_size(at, galley.size()).expand(4.0),
+                3.0,
+                egui::Color32::from_black_alpha(200),
+            );
+            painter.galley(at, galley, theme::KEY);
         }
         if let Some(error) = &document.error {
             let galley = painter.layout(
@@ -1095,23 +1110,16 @@ impl Viewport {
                 node.scale_y = snap(start.scale_y * ry, SCALE_STEP);
             }
         }
-        let current = edit::node(document.file(), path);
-        if current.is_some_and(|current| {
-            [
-                current.x,
-                current.y,
-                current.rotation,
-                current.scale_x,
-                current.scale_y,
-            ] != [node.x, node.y, node.rotation, node.scale_x, node.scale_y]
-        }) {
-            let target = edit::node_mut(document.edit(), path).expect("the node is there");
-            target.x = node.x;
-            target.y = node.y;
-            target.rotation = node.rotation;
-            target.scale_x = node.scale_x;
-            target.scale_y = node.scale_y;
-        }
+        // Only its transform, as it's shown, keyed if a clip posing the preview moves it.
+        let Some(mut target) = document.shown_node(path) else {
+            return;
+        };
+        target.x = node.x;
+        target.y = node.y;
+        target.rotation = node.rotation;
+        target.scale_x = node.scale_x;
+        target.scale_y = node.scale_y;
+        document.set_node(path, target);
     }
 
     /// The selected node's outline and origin, and the handle of the tool.
@@ -1448,7 +1456,7 @@ fn node_handles(document: &Document) -> Option<(NodePath, Vec<Handle>)> {
 
 /// A resize of the node at `path` by the handle on `edges`, from how it is now.
 fn start_sizing(document: &Document, path: NodePath, edges: [i8; 2]) -> Option<Sizing> {
-    let start = edit::node(document.file(), &path)?.clone();
+    let start = document.shown_node(&path)?;
     let scene = document.preview.as_ref()?;
     let id = document.live_node(&path)?;
     let transform = scene.transform(id);
@@ -1504,9 +1512,8 @@ fn size_to(document: &mut Document, sizing: &Sizing, point: [f32; 2]) {
         KindDef::Area(area) => area.size = own,
         _ => return,
     }
-    if edit::node(document.file(), &sizing.path) != Some(&node) {
-        *edit::node_mut(document.edit(), &sizing.path).expect("the node is there") = node;
-    }
+    // Keyed, if a clip posing the preview moves it.
+    document.set_node(&sizing.path, node);
 }
 
 /// The cursor for resizing by a handle on `edges`.
@@ -1534,7 +1541,7 @@ fn cross(painter: &egui::Painter, at: egui::Pos2, arm: f32, stroke: egui::Stroke
 /// A drag changing the node at `path` with `tool`, from how it is now, with the pointer at
 /// `from` in the scene.
 fn start_drag(document: &Document, tool: Tool, path: NodePath, from: [f32; 2]) -> Option<Drag> {
-    let start = edit::node(document.file(), &path)?.clone();
+    let start = document.shown_node(&path)?;
     let scene = document.preview.as_ref()?;
     let id = document.live_node(&path)?;
     let parent = scene

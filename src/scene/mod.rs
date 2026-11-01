@@ -296,7 +296,7 @@ use std::{
     rc::Rc,
 };
 
-pub use clip::{Clip, Interpolation, Keys, Property, Track};
+pub use clip::{Clip, Interpolation, KeyValue, Keys, Property, Track};
 pub use file::{
     AreaDef, FORMAT, InstanceDef, KindDef, NodeDef, Props, RectDef, SceneFile, SheetDef, SpriteDef,
     TextDef, TileDef, TileLayerDef, TilemapDef, TilesetFile, Value,

@@ -266,8 +266,9 @@ such as physics engines, networking or 3D pipelines.
   `clip.rs` holds `Clip`s, a file's tracks of keyframes on nodes' properties, which a file names
   apart from its nodes, so a clip poses whatever node it's given: `Scene::pose` finds every
   track's node first, failing before changing anything, then samples each, moving numbers by its
-  weight. Sprite nodes keep the sheet their file gave them, so cell tracks and `set_cell` pick
-  from it. Scripts hold nodes as `lua::SceneNode`, an `Rc<RefCell<Scene>>` and a `NodeId`, so
+  weight (`Keys::value_at` samples one track, as tools do). Sprite nodes keep the sheet their file
+  gave them, so cell tracks and `set_cell` pick from it. Scripts hold nodes as `lua::SceneNode`,
+  an `Rc<RefCell<Scene>>` and a `NodeId`, so
   every node of a scene shares it, and clips as `Clip` userdata, copied from the cached file. Live
   scenes' tests are in `tests/scene.rs` and need a GPU; the formats' are unit tests that don't.
 - `src/runtime/native.rs`: native libraries, compiled Rust that adds a global table of functions
@@ -286,8 +287,8 @@ such as physics engines, networking or 3D pipelines.
   (`cargo run -p wingine-editor -- examples/garden`). `Editor` is a `Game` whose `gui` is the whole
   interface, laid out like Godot's: the top bar (menus, the main screens, Play), the Scene dock
   (`docks/scene_tree.rs`) over the FileSystem dock (`docks/filesystem.rs`) in a left panel, the
-  Inspector (`docks/inspector.rs`) on the right, Output (`docks/output.rs`) and Tiles in a
-  collapsible bottom panel, and the open scenes' tabs over the viewport (`viewport.rs`) in the
+  Inspector (`docks/inspector.rs`) on the right, Output (`docks/output.rs`), Tiles and Animation
+  in a collapsible bottom panel, and the open scenes' tabs over the viewport (`viewport.rs`) in the
   middle. It
   edits `SceneFile`s, never live scenes: a `Document` (`document.rs`) holds the file, its undo
   history as snapshots of the whole file (a change runs from the first `edit()` until a frame with
@@ -316,7 +317,15 @@ such as physics engines, networking or 3D pipelines.
   at the same point of the node, and its size and stretch), the Select tool resizes sprites,
   rects and areas by handles on their edges, and the toolbar's canvas size, or dragging the
   canvas's corner, previews scenes laid out on canvases of other sizes (`Viewport::preview`),
-  which never changes the file. Play
+  which never changes the file. For rigs, the Animation panel (`docks/animation.rs`) shows one of
+  the file's clips on a timeline (`Document::timeline`, the clip and the playhead), whose tracks'
+  keys it moves and removes through `clips.rs`, pure operations on clips that keep keys in order
+  and a key to a time. While the panel shows, the clip poses the preview at the playhead
+  (`Document::posing`; the preview is built again when the clip changes or stops posing), and
+  nodes are read and changed through `Document::shown_node` and `set_node`: as they're posed, with
+  changes to properties the clip tracks keyed at the playhead and the rest made to the node, so
+  the Inspector's fields and the viewport's tools key what the clip animates. The Inspector's ♦
+  buttons key a property, adding a track (`Document::key`). Play
   (`play.rs`) runs the editor's own executable with `--run`, which runs the game, so it's a
   process of its own; tests point it at the built executable with `set_runner`. Its tests
   (`tests/editor.rs`) drive it through `Simulation`, clicking widgets by label, and copy example

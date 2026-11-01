@@ -5,10 +5,11 @@ use std::{mem, path::Path};
 
 use wingine::{
     Context,
-    scene::{NodeId, Scene, SceneFile},
+    scene::{Clip, NodeDef, NodeId, Scene, SceneFile},
 };
 
 use crate::{
+    clips,
     edit::{self, NodePath},
     project::AssetCache,
 };
@@ -45,6 +46,22 @@ pub struct Document {
     /// Where the viewport looks, in the scene's coordinates, and its zoom: `None` until it's
     /// first shown, when it frames the canvas.
     pub view: Option<View>,
+    /// The clip open in the Animation panel, and where its playhead is.
+    pub timeline: Timeline,
+    /// Whether the timeline's clip poses the preview, as it does while the Animation panel shows.
+    posing: bool,
+    /// The clip the preview has been posed by since it was built, if any.
+    posed: Option<String>,
+    /// Why the clip can't pose the preview, if it can't.
+    pub pose_error: Option<String>,
+}
+
+/// A clip open in the Animation panel, and when in it its playhead is.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Timeline {
+    pub clip: Option<String>,
+    /// Seconds from the clip's start, up to its duration.
+    pub time: f32,
 }
 
 /// Where a viewport looks.
@@ -77,6 +94,10 @@ impl Document {
             error: None,
             stale: true,
             view: None,
+            timeline: Timeline::default(),
+            posing: false,
+            posed: None,
+            pose_error: None,
         }
     }
 
@@ -199,8 +220,118 @@ impl Document {
         Ok(())
     }
 
-    /// Builds the scene again if the file changed, laid out on a canvas `canvas_size` in size.
-    /// Returns the error building it, if it's a new one.
+    /// Poses the preview by the timeline's clip from now on, or stops posing it.
+    pub fn set_posing(&mut self, posing: bool) {
+        self.posing = posing;
+    }
+
+    /// The clip posing the preview, by name, and when in it, while one is.
+    pub fn posing(&self) -> Option<(&str, &Clip, f32)> {
+        if !self.posing {
+            return None;
+        }
+        let (name, clip) = self
+            .file
+            .clips
+            .get_key_value(self.timeline.clip.as_deref()?)?;
+        Some((name, clip, self.timeline.time.clamp(0.0, clip.duration)))
+    }
+
+    /// The node at `path` as the preview shows it: as the file has it, with the properties the
+    /// clip posing the preview has tracks of as they are then.
+    pub fn shown_node(&self, path: &[usize]) -> Option<NodeDef> {
+        let mut node = edit::node(&self.file, path)?.clone();
+        if let Some((_, clip, time)) = self.posing() {
+            let names = edit::name_path(&self.file, path)?;
+            for track in clip.tracks.iter().filter(|track| track.node == names) {
+                if let Some(value) = track.keys.value_at(time) {
+                    clips::set_value(&mut node, track.keys.property_name(), value);
+                }
+            }
+        }
+        Some(node)
+    }
+
+    /// The properties of the node at `path` the clip posing the preview has tracks of.
+    pub fn keyed(&self, path: &[usize]) -> Vec<&'static str> {
+        let (Some((_, clip, _)), Some(names)) = (self.posing(), edit::name_path(&self.file, path))
+        else {
+            return Vec::new();
+        };
+        clip.tracks
+            .iter()
+            .filter(|track| track.node == names)
+            .map(|track| track.keys.property_name())
+            .collect()
+    }
+
+    /// Changes the node at `path` to `node`, the node [`Document::shown_node`] gave, changed:
+    /// properties the clip posing the preview has tracks of are keyed at the playhead, and the
+    /// rest change in the node.
+    pub fn set_node(&mut self, path: &[usize], mut node: NodeDef) {
+        let (Some(shown), Some(original)) =
+            (self.shown_node(path), edit::node(&self.file, path).cloned())
+        else {
+            return;
+        };
+        if node == shown {
+            return;
+        }
+        let mut keys = Vec::new();
+        let mut keying = None;
+        if let Some((name, clip, time)) = self.posing() {
+            let names = edit::name_path(&self.file, path).expect("the node is there");
+            for track in clip.tracks.iter().filter(|track| track.node == names) {
+                let property = track.keys.property_name();
+                let value = clips::value(&node, property);
+                if value != clips::value(&shown, property)
+                    && let Some(value) = value
+                {
+                    keys.push((property, value));
+                }
+                // The node keeps its own value, which the clip covers.
+                if let Some(own) = clips::value(&original, property) {
+                    clips::set_value(&mut node, property, own);
+                }
+            }
+            keying = Some((name.to_owned(), names, time));
+        }
+        let file = self.edit();
+        if let Some((name, names, time)) = keying
+            && let Some(clip) = file.clips.get_mut(&name)
+        {
+            for (property, value) in keys {
+                clips::set_key(clip, &names, property, time, value)
+                    .expect("the value is the property's own");
+            }
+        }
+        if node != original {
+            *edit::node_mut(file, path).expect("the node is there") = node;
+        }
+    }
+
+    /// Keys `properties` of the node at `path` as the preview shows them, at the playhead of the
+    /// clip posing it, adding tracks for those it has none of.
+    pub fn key(&mut self, path: &[usize], properties: &[&str]) {
+        let (Some(node), Some(names)) = (self.shown_node(path), edit::name_path(&self.file, path))
+        else {
+            return;
+        };
+        let Some((name, _, time)) = self.posing() else {
+            return;
+        };
+        let name = name.to_owned();
+        let clip = self.edit().clips.get_mut(&name).expect("the clip is there");
+        for property in properties {
+            if let Some(value) = clips::value(&node, property) {
+                clips::set_key(clip, &names, property, time, value)
+                    .expect("the value is the property's own");
+            }
+        }
+    }
+
+    /// Builds the scene again if the file changed, laid out on a canvas `canvas_size` in size, and
+    /// poses it by the clip posing it. Returns the error building it, if it's a new one.
     pub fn refresh(
         &mut self,
         ctx: &mut Context,
@@ -211,10 +342,53 @@ impl Document {
         if let Some(scene) = &mut self.preview {
             scene.set_size(canvas_size);
         }
-        if !self.stale {
-            return None;
+        // Another clip, or none, needs the scene as the file has it.
+        let posing = self.posing().map(|(name, ..)| name.to_owned());
+        if self.posed.is_some() && self.posed != posing {
+            self.stale = true;
         }
+        let error = if self.stale {
+            self.build(ctx, cache, folder, canvas_size)
+        } else {
+            None
+        };
+        self.pose();
+        error
+    }
+
+    /// Poses the preview by the clip posing it, as it is at the playhead: a clip that loops
+    /// shows its end there, rather than its start.
+    fn pose(&mut self) {
+        let posing = self
+            .timeline
+            .clip
+            .as_ref()
+            .filter(|_| self.posing)
+            .and_then(|name| self.file.clips.get_key_value(name));
+        let (Some(scene), Some((name, clip))) = (&mut self.preview, posing) else {
+            self.pose_error = None;
+            return;
+        };
+        let held = Clip {
+            looping: false,
+            ..clip.clone()
+        };
+        let time = self.timeline.time.clamp(0.0, clip.duration);
+        self.pose_error = scene.pose(scene.root(), &held, time, 1.0).err();
+        self.posed = Some(name.clone());
+    }
+
+    /// Builds the scene from the file, returning the error if it's a new one.
+    fn build(
+        &mut self,
+        ctx: &mut Context,
+        cache: &mut AssetCache,
+        folder: &Path,
+        canvas_size: [f32; 2],
+    ) -> Option<String> {
         self.stale = false;
+        // A scene that fails to build keeps the one before, posed as it is.
+        self.posed = None;
         let font = ctx.default_font().clone();
         let built = Scene::new(
             &self.file,
@@ -264,7 +438,7 @@ impl Document {
 
 #[cfg(test)]
 mod tests {
-    use wingine::scene::{KindDef, NodeDef};
+    use wingine::scene::{Interpolation, Keys, KindDef, NodeDef, Property};
 
     use super::*;
 
@@ -317,6 +491,60 @@ mod tests {
         edit::node_mut(document.edit(), &[0]).unwrap().y = 1.0;
         document.end_change();
         assert!(!document.can_redo());
+    }
+
+    #[test]
+    fn a_clip_posing_the_preview_keys_what_it_tracks() {
+        let file = SceneFile::parse(
+            r#"return { format = 1,
+                children = { { name = "arm", kind = "node", rotation = 1 } },
+                clips = { wave = { duration = 2, tracks = {
+                    { node = "arm", property = "rotation", keys = { { 0, 0 }, { 2, 2 } } },
+                } } } }"#,
+            "test.scene.luau",
+        )
+        .unwrap();
+        let mut document = Document::new("test.scene.luau", file);
+        document.timeline = Timeline {
+            clip: Some("wave".into()),
+            time: 0.5,
+        };
+        // Without posing, nodes are as the file has them.
+        assert_eq!(document.shown_node(&[0]).unwrap().rotation, 1.0);
+        document.set_posing(true);
+        let mut arm = document.shown_node(&[0]).unwrap();
+        assert_eq!(arm.rotation, 0.5);
+        assert_eq!(document.keyed(&[0]), ["rotation"]);
+
+        // Turning it keys it; moving it, which the clip doesn't track, moves it.
+        arm.rotation = -1.0;
+        arm.x = 4.0;
+        document.set_node(&[0], arm);
+        document.end_change();
+        let node = edit::node(document.file(), &[0]).unwrap();
+        assert_eq!([node.rotation, node.x], [1.0, 4.0]);
+        assert_eq!(
+            document.file().clips["wave"].tracks[0].keys,
+            Keys::Number {
+                property: Property::Rotation,
+                interpolation: Interpolation::Linear,
+                keys: vec![(0.0, 0.0), (0.5, -1.0), (2.0, 2.0)],
+            }
+        );
+
+        // Keying what it doesn't track yet adds a track.
+        document.key(&[0], &["x", "visible"]);
+        let tracks = &document.file().clips["wave"].tracks;
+        assert_eq!(tracks.len(), 3);
+        assert_eq!(
+            tracks[1].keys,
+            Keys::Number {
+                property: Property::X,
+                interpolation: Interpolation::Linear,
+                keys: vec![(0.5, 4.0)],
+            }
+        );
+        assert_eq!(tracks[2].keys, Keys::Visible(vec![(0.5, true)]));
     }
 
     #[test]

@@ -20,6 +20,8 @@ pub const VIEWPORT: Color = Color::rgb8(0x40, 0x40, 0x46);
 pub const GRID: Color = Color::rgba8(0xff, 0xff, 0xff, 0x14);
 /// The outline of the game's canvas in the viewport, Godot's for the viewport's rectangle.
 pub const CANVAS: Color32 = Color32::from_rgb(0xb2, 0x8c, 0xf0);
+/// Keys on the timeline, and the fields a clip keys in the Inspector.
+pub const KEY: Color32 = Color32::from_rgb(0xf2, 0xc1, 0x4e);
 /// The scene's x axis and y axis through its origin.
 pub const X_AXIS: Color = Color::rgba8(0xf0, 0x60, 0x70, 0x80);
 pub const Y_AXIS: Color = Color::rgba8(0x80, 0xe0, 0x70, 0x80);

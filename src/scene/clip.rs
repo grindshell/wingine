@@ -41,6 +41,15 @@ pub enum Keys {
     Cell(Vec<(f32, [u32; 2])>),
 }
 
+/// What a track sets its property to at some time: one of its keys' values, or for numbers, one
+/// between them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum KeyValue {
+    Number(f32),
+    Visible(bool),
+    Cell([u32; 2]),
+}
+
 /// A number of a node a track changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Property {
@@ -86,6 +95,29 @@ impl Keys {
             Self::Number { property, .. } => property.name(),
             Self::Visible(_) => "visible",
             Self::Cell(_) => "cell",
+        }
+    }
+
+    /// What the keys set the property to `time` seconds into the clip, as posing does, if there
+    /// are any keys.
+    pub fn value_at(&self, time: f32) -> Option<KeyValue> {
+        match self {
+            Self::Number {
+                interpolation,
+                keys,
+                ..
+            } => number(keys, *interpolation, time).map(KeyValue::Number),
+            Self::Visible(keys) => step(keys, time).map(KeyValue::Visible),
+            Self::Cell(keys) => step(keys, time).map(KeyValue::Cell),
+        }
+    }
+
+    /// The times of the keys, in order.
+    pub fn times(&self) -> Vec<f32> {
+        match self {
+            Self::Number { keys, .. } => keys.iter().map(|key| key.0).collect(),
+            Self::Visible(keys) => keys.iter().map(|key| key.0).collect(),
+            Self::Cell(keys) => keys.iter().map(|key| key.0).collect(),
         }
     }
 }
@@ -185,6 +217,20 @@ mod tests {
         assert_eq!(step(&keys, 2.95), Some([1, 0]));
         assert_eq!(step(&keys, 3.0), Some([0, 0]));
         assert_eq!(step::<bool>(&[], 3.0), None);
+    }
+
+    #[test]
+    fn tracks_give_their_values_as_posing_does() {
+        let keys = Keys::Number {
+            property: Property::Rotation,
+            interpolation: Interpolation::Linear,
+            keys: vec![(0.0, 0.0), (1.0, 2.0)],
+        };
+        assert_eq!(keys.value_at(0.25), Some(KeyValue::Number(0.5)));
+        assert_eq!(keys.times(), [0.0, 1.0]);
+        let keys = Keys::Cell(vec![(0.0, [1, 0]), (0.5, [2, 0])]);
+        assert_eq!(keys.value_at(0.75), Some(KeyValue::Cell([2, 0])));
+        assert_eq!(Keys::Visible(Vec::new()).value_at(0.0), None);
     }
 
     #[test]

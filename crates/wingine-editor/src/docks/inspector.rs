@@ -3,7 +3,9 @@
 //! It edits a copy of what's selected, and puts the copy into the file only if something
 //! changed, so the file's history holds changes and nothing else. A node an instance places shows
 //! as the instance makes it, and changing it changes the instance's overrides of it: fields they
-//! change are marked, with a button that puts each back as the scene has it.
+//! change are marked, with a button that puts each back as the scene has it. While a clip poses
+//! the preview, nodes show posed, the properties it has tracks of are marked, and each property a
+//! clip can change has a button that keys it.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -18,6 +20,7 @@ use wingine::{
 };
 
 use crate::{
+    clips,
     document::Document,
     edit::{self, NodePath},
     instance,
@@ -49,29 +52,66 @@ pub struct Inspector {
     select_inner: Option<String>,
 }
 
-/// The fields an instance's override of a node changes, and those asked to be put back as the
-/// scene has them. A node of the file has none.
+/// What the Inspector marks beside fields: those an instance's override of a node changes, and
+/// those asked to be put back as the scene has them, or the properties the clip posing the
+/// preview keys.
 #[derive(Default)]
-struct Overrides {
+struct Marks {
     fields: BTreeSet<String>,
     props: BTreeSet<String>,
     reverted: Vec<String>,
     reverted_props: Vec<String>,
+    keying: Option<Keying>,
 }
 
-impl Overrides {
+/// A clip posing the preview: the properties of the node it has tracks of, and those asked to be
+/// keyed.
+struct Keying {
+    clip: String,
+    time: f32,
+    tracked: Vec<&'static str>,
+    keyed: Vec<String>,
+}
+
+impl Marks {
     /// `text`, the label of the field that's `keys` in a scene file, marked if the override
-    /// changes any of them, with a button that reverts them.
+    /// changes any of them, with a button that reverts them, or while a clip poses the preview,
+    /// if the clip has tracks of them, with a button that keys them.
     fn label(&mut self, ui: &mut egui::Ui, text: &str, keys: &[&str]) {
-        if !keys.iter().any(|key| self.fields.contains(*key)) {
-            ui.label(text);
+        if keys.iter().any(|key| self.fields.contains(*key)) {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(text).color(theme::ACCENT))
+                    .on_hover_text("Overridden by the instance");
+                if revert_button(ui) {
+                    self.reverted.extend(keys.iter().map(|key| key.to_string()));
+                }
+            });
             return;
         }
+        let Some(keying) = self
+            .keying
+            .as_mut()
+            .filter(|_| keys.iter().all(|key| clips::PROPERTIES.contains(key)))
+        else {
+            ui.label(text);
+            return;
+        };
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(text).color(theme::ACCENT))
-                .on_hover_text("Overridden by the instance");
-            if revert_button(ui) {
-                self.reverted.extend(keys.iter().map(|key| key.to_string()));
+            if keys.iter().any(|key| keying.tracked.contains(key)) {
+                ui.label(egui::RichText::new(text).color(theme::KEY))
+                    .on_hover_text(format!("Keyed by `{}`", keying.clip));
+            } else {
+                ui.label(text);
+            }
+            let response = ui.small_button("♦").on_hover_text(format!(
+                "Key it at {:.2} s of `{}`",
+                keying.time, keying.clip
+            ));
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Key {text}"))
+            });
+            if response.clicked() {
+                keying.keyed.extend(keys.iter().map(|key| key.to_string()));
             }
         });
     }
@@ -174,7 +214,7 @@ impl Inspector {
                 "scene props",
                 &mut props,
                 &mut self.new_key,
-                &mut Overrides::default(),
+                &mut Marks::default(),
             );
         });
         if file.clips.is_empty() {
@@ -189,6 +229,7 @@ impl Inspector {
                         if clip.looping { ", looping" } else { "" }
                     ));
                 }
+                ui.weak("Edit them in the Animation panel.");
             });
         }
 
@@ -206,11 +247,21 @@ impl Inspector {
         path: &NodePath,
         services: &mut Services,
     ) {
-        let Some(original) = edit::node(document.file(), path).cloned() else {
+        // As the preview shows it, posed.
+        let Some(original) = document.shown_node(path) else {
             return;
         };
         let sheets = document.file().sheets.clone();
         let mut node = original.clone();
+        let mut marks = Marks {
+            keying: document.posing().map(|(clip, _, time)| Keying {
+                clip: clip.to_owned(),
+                time,
+                tracked: document.keyed(path),
+                keyed: Vec::new(),
+            }),
+            ..Marks::default()
+        };
         header(ui, node.kind.name(), &node.name, node.kind.name());
         self.fields(
             ui,
@@ -218,27 +269,31 @@ impl Inspector {
             &sheets,
             ("props", path.as_slice()),
             services,
-            &mut Overrides::default(),
+            &mut marks,
         );
         if let Some(names) = self.select_inner.take() {
             document.select_inner(path.clone(), names);
         }
 
-        if node == original {
-            return;
-        }
-        let resized = match (&original.kind, &node.kind) {
-            (KindDef::Tilemap(old), KindDef::Tilemap(new))
-                if [old.columns, old.rows] != [new.columns, new.rows] =>
-            {
-                Some([new.columns, new.rows])
+        if node != original {
+            let resized = match (&original.kind, &node.kind) {
+                (KindDef::Tilemap(old), KindDef::Tilemap(new))
+                    if [old.columns, old.rows] != [new.columns, new.rows] =>
+                {
+                    Some([new.columns, new.rows])
+                }
+                _ => None,
+            };
+            document.set_node(path, node);
+            if let Some([columns, rows]) = resized {
+                edit::resize_tilemap(document.edit(), path, columns, rows);
             }
-            _ => None,
-        };
-        let file = document.edit();
-        *edit::node_mut(file, path).expect("the node is there") = node;
-        if let Some([columns, rows]) = resized {
-            edit::resize_tilemap(file, path, columns, rows);
+        }
+        if let Some(keying) = marks.keying
+            && !keying.keyed.is_empty()
+        {
+            let keyed: Vec<&str> = keying.keyed.iter().map(String::as_str).collect();
+            document.key(path, &keyed);
         }
     }
 
@@ -301,7 +356,7 @@ impl Inspector {
         }
         ui.separator();
 
-        let mut over = Overrides {
+        let mut over = Marks {
             fields: change
                 .keys()
                 .filter(|key| *key != "props")
@@ -311,7 +366,7 @@ impl Inspector {
                 Some(Value::Map(props)) => props.keys().cloned().collect(),
                 _ => BTreeSet::new(),
             },
-            ..Overrides::default()
+            ..Marks::default()
         };
         let mut after = before.clone();
         self.fields(
@@ -351,7 +406,7 @@ impl Inspector {
         sheets: &BTreeMap<String, SheetDef>,
         props_id: impl egui::AsIdSalt,
         services: &mut Services,
-        over: &mut Overrides,
+        over: &mut Marks,
     ) {
         section(ui, "Node", |ui| {
             grid(ui, "node", |ui| {
@@ -379,7 +434,7 @@ impl Inspector {
         node: &mut NodeDef,
         sheets: &BTreeMap<String, SheetDef>,
         services: &mut Services,
-        over: &mut Overrides,
+        over: &mut Marks,
     ) {
         let title = format!(
             "{} {}",
@@ -579,7 +634,7 @@ fn changed_override(
     base: &NodeDef,
     before: &NodeDef,
     after: &NodeDef,
-    over: &Overrides,
+    over: &Marks,
 ) -> BTreeMap<String, Value> {
     let mut change = change.clone();
     let (base, before, after) = (base.fields(), before.fields(), after.fields());
@@ -709,7 +764,7 @@ fn number(ui: &mut egui::Ui, name: &str, value: &mut f32, speed: f32) -> egui::R
 }
 
 /// A node's position, anchor, rotation and scale.
-fn transform(ui: &mut egui::Ui, node: &mut NodeDef, over: &mut Overrides) {
+fn transform(ui: &mut egui::Ui, node: &mut NodeDef, over: &mut Marks) {
     grid(ui, "transform", |ui| {
         over.label(ui, "x", &["x"]);
         number(ui, "x", &mut node.x, 1.0);
@@ -823,7 +878,7 @@ fn props_editor(
     id: impl egui::AsIdSalt,
     props: &mut Props,
     new_key: &mut String,
-    over: &mut Overrides,
+    over: &mut Marks,
 ) {
     let id = ui.make_persistent_id(id);
     map_entries(ui, id, props, Some(over));
@@ -852,7 +907,7 @@ fn map_entries(
     ui: &mut egui::Ui,
     id: egui::Id,
     map: &mut BTreeMap<String, Value>,
-    mut over: Option<&mut Overrides>,
+    mut over: Option<&mut Marks>,
 ) {
     let mut removed = None;
     egui::Grid::new(id).num_columns(3).show(ui, |ui| {
@@ -1055,7 +1110,7 @@ mod tests {
         // Moving it adds its position, tidily.
         let mut after = before.clone();
         after.x = 12.3;
-        let changed = changed_override(&change, &base, &before, &after, &Overrides::default());
+        let changed = changed_override(&change, &base, &before, &after, &Marks::default());
         assert_eq!(changed["x"], Value::Number(12.3));
         assert_eq!(changed["tint"], Value::String("#e0c070".into()));
         assert!(!changed.contains_key("y"));
@@ -1066,15 +1121,15 @@ mod tests {
             unreachable!()
         };
         sprite.tint = Color::rgba8(0xe8, 0xa0, 0xb0, 0xff);
-        let changed = changed_override(&change, &base, &before, &after, &Overrides::default());
+        let changed = changed_override(&change, &base, &before, &after, &Marks::default());
         assert!(changed.is_empty(), "{changed:?}");
 
         // Props one by one, and reverting.
         let mut after = before.clone();
         after.props.insert("scent".into(), Value::Number(2.0));
-        let over = Overrides {
+        let over = Marks {
             reverted: vec!["tint".into()],
-            ..Overrides::default()
+            ..Marks::default()
         };
         let changed = changed_override(&change, &base, &before, &after, &over);
         assert_eq!(

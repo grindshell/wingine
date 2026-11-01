@@ -1,7 +1,7 @@
 //! The editor: a wingine game whose interface is all egui, laid out as Godot's editor is. The
 //! menus, the main screens and Play run along the top; the Scene dock sits over the FileSystem
-//! dock on the left, the Inspector on the right, and Output and Tiles in a panel along the bottom;
-//! the open scenes are tabs over the viewport in the middle.
+//! dock on the left, the Inspector on the right, and Output, Tiles and Animation in a panel along
+//! the bottom; the open scenes are tabs over the viewport in the middle.
 
 use std::{
     ffi::OsString,
@@ -19,6 +19,7 @@ use wingine::{
 
 use crate::{
     docks::{
+        animation::Animation,
         filesystem::{self, FileSystem},
         inspector::{Inspector, Services},
         output::{Level, Output},
@@ -50,6 +51,8 @@ pub enum MainScreen {
 pub enum BottomTab {
     Output,
     Tiles,
+    /// The clips of the open scene, one on a timeline that poses the preview.
+    Animation,
 }
 
 /// What's waiting for an answer about unsaved changes before it closes.
@@ -71,6 +74,9 @@ pub struct Editor {
     viewport: Viewport,
     output: Output,
     tiles: Tiles,
+    animation: Animation,
+    /// Seconds the last frame took, which a clip playing moves on by.
+    dt: f32,
     /// Whether the panel along the bottom is open, and which of its panels it shows.
     bottom_open: bool,
     bottom_tab: BottomTab,
@@ -104,6 +110,8 @@ impl Editor {
             viewport: Viewport::default(),
             output: Output::default(),
             tiles: Tiles::default(),
+            animation: Animation::default(),
+            dt: 0.0,
             bottom_open: true,
             bottom_tab: BottomTab::Output,
             last_selected: None,
@@ -191,6 +199,16 @@ impl Editor {
 
     pub fn bottom_tab(&self) -> BottomTab {
         self.bottom_tab
+    }
+
+    /// The Animation panel's playing and snapping.
+    pub fn animation(&self) -> &Animation {
+        &self.animation
+    }
+
+    /// Whether the Animation panel shows, so its clip poses the open scene.
+    fn animating(&self) -> bool {
+        self.bottom_open && self.bottom_tab == BottomTab::Animation
     }
 
     /// Where `point` of the open scene was in the window, in points, as the viewport last showed
@@ -403,6 +421,14 @@ impl Editor {
         {
             document.select(None);
         }
+        // Over the timeline, Delete takes out the selected key, not the node.
+        if self.animating()
+            && self.animation.wants_delete()
+            && pressed(ui, Modifiers::NONE, Key::Delete)
+            && let Some(document) = self.documents.get_mut(self.current)
+        {
+            self.animation.delete_selected(document);
+        }
         if let Some(path) = selected {
             if pressed(ui, Modifiers::COMMAND, Key::D) {
                 self.apply(scene_tree::Action::Duplicate(path.clone()));
@@ -531,6 +557,10 @@ impl Editor {
                     ui.label("Middle-drag pans, the wheel zooms, Q W E S pick tools.");
                     ui.label(
                         "Select a tile layer to paint it: the right button erases, Ctrl picks.",
+                    );
+                    ui.label(
+                        "The Animation panel poses the scene by a clip: the Inspector's ♦ keys \
+                         a property.",
                     );
                 });
             });
@@ -811,6 +841,7 @@ fn subfolders(folder: &Path) -> Vec<(String, PathBuf, bool)> {
 
 impl Game for Editor {
     fn update(&mut self, _ctx: &mut Context, dt: f32) {
+        self.dt = dt;
         if let Some(mut play) = self.play.take() {
             self.take_play_output(&play);
             match play.exited() {
@@ -857,6 +888,11 @@ impl Game for Editor {
         let game_size = project.canvas_size();
         let canvas_size = self.viewport.canvas_size(game_size);
         let folder = project.folder.clone();
+        // Only the scene shown is posed, while the Animation panel shows.
+        let animating = self.animating();
+        for (i, document) in self.documents.iter_mut().enumerate() {
+            document.set_posing(animating && i == self.current);
+        }
         if let Some(document) = self.documents.get_mut(self.current)
             && let Some(error) = document.refresh(ctx, &mut self.cache, &folder, canvas_size)
         {
@@ -974,15 +1010,17 @@ impl Game for Editor {
 
         egui::Panel::bottom("bottom tabs").show(ui, |ui| {
             ui.horizontal(|ui| {
-                for (tab, name) in [(BottomTab::Output, "Output"), (BottomTab::Tiles, "Tiles")] {
+                for (tab, name) in [
+                    (BottomTab::Output, "Output"),
+                    (BottomTab::Tiles, "Tiles"),
+                    (BottomTab::Animation, "Animation"),
+                ] {
                     let shown = self.bottom_open && self.bottom_tab == tab;
                     if ui.selectable_label(shown, name).clicked() {
                         self.bottom_open = !shown;
                         self.bottom_tab = tab;
                     }
                 }
-                ui.add_enabled(false, egui::Button::selectable(false, "Animation"))
-                    .on_disabled_hover_text("Editing clips comes in a later part of the milestone");
             });
         });
         let mut select_layer = None;
@@ -996,6 +1034,10 @@ impl Game for Editor {
                         let document = self.documents.get(self.current);
                         let target = tiles_target(document, selected.as_ref(), palette.as_ref());
                         select_layer = self.tiles.ui(ui, target);
+                    }
+                    BottomTab::Animation => {
+                        let document = self.documents.get_mut(self.current);
+                        self.animation.ui(ui, document, self.dt);
                     }
                 }
                 // Its size stays put whatever it shows.
