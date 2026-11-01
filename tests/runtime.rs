@@ -407,7 +407,9 @@ fn scripts_require_modules_relative_to_themselves() {
 /// The fields of the table `name` declares in the definitions file, a line each.
 fn declared_fields(name: &str) -> Vec<String> {
     let start = format!("\ndeclare {name}: {{\n");
-    let block = runtime::DEFINITIONS
+    // As checked out, which may have turned line endings into CRLF.
+    let definitions = runtime::DEFINITIONS.replace("\r\n", "\n");
+    let block = definitions
         .split_once(&start)
         .and_then(|(_, rest)| rest.split_once("\n}"))
         .unwrap_or_else(|| panic!("the definitions declare `{name}`"))

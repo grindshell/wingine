@@ -377,7 +377,8 @@ mod tests {
 
     /// The methods `Ui` is declared with in the definitions file.
     fn declared_methods() -> Vec<String> {
-        let definitions = super::super::DEFINITIONS;
+        // As checked out, which may have turned line endings into CRLF.
+        let definitions = super::super::DEFINITIONS.replace("\r\n", "\n");
         let start = definitions
             .find("declare extern type Ui with\n")
             .expect("the definitions declare `Ui`");
