@@ -149,6 +149,11 @@ such as physics engines, networking or 3D pipelines.
   compound assignment, `continue`, generalized `for ... in t`) and a sandboxed standard library.
 - `mlua` builds Luau from C++ source, so building needs a C++ compiler (MSVC on Windows, `g++` or
   `clang` elsewhere). The first build takes about 30 seconds longer because of it.
+- The editor's Script screen runs [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp), the Luau
+  language server, if it's installed: a program on the `PATH`, or `WINGINE_LUAU_LSP`. Tests that
+  need it check nothing without it, unless `WINGINE_LUAU_LSP` is set, as CI sets it to the release
+  it downloads (pinned in `ci.yml`). Its definitions syntax is unstable, so check
+  `wingine.d.luau` still loads after upgrading it.
 
 ## Layout
 
@@ -242,7 +247,10 @@ such as physics engines, networking or 3D pipelines.
   reference for script authors; the engine types those tables hand out (sprites, animations,
   tilemaps, grid movers, text layouts, scene nodes) are userdata, documented with their methods in
   `src/lua.rs`. Sprite sheets and scenes share one cache of images (`Textures`), so each is read
-  once.
+  once. `wingine.d.luau` (`runtime::DEFINITIONS`) declares that API's types, with short docs, as
+  a definitions file for luau-lsp (`declare extern type ... with` for userdata, `declare name: {}`
+  for tables); `tests/runtime.rs` checks it declares exactly the functions the tables hold, and
+  the editor's tests that the examples type-check against it.
 - `src/scene/`: scenes. `SceneFile` is what a scene file holds (`NodeDef`s, `SheetDef`s and props
   of `Value`s), and `TilesetFile` a tileset file: `file.rs` reads one by running it as Luau in an
   empty environment, turning what it returns into plain `Value`s, then reading those, with errors
@@ -325,12 +333,25 @@ such as physics engines, networking or 3D pipelines.
   nodes are read and changed through `Document::shown_node` and `set_node`: as they're posed, with
   changes to properties the clip tracks keyed at the playhead and the rest made to the node, so
   the Inspector's fields and the viewport's tools key what the clip animates. The Inspector's ♦
-  buttons key a property, adding a track (`Document::key`). Play
+  buttons key a property, adding a track (`Document::key`). The Script screen
+  (`script_editor.rs`, `ScriptEditor`) edits `Script`s (`script.rs`: the text with `\n` line
+  endings, kept as the file had them when saved, and the language server's diagnostics) in an
+  egui `TextEdit` whose layouter colors `luau.rs`'s tokens and underlines problems, with line
+  numbers painted over the scroll area's left edge so they stay put scrolling sideways. It takes
+  Tab and the keys of the completion list before the field sees them, and indents new lines after
+  the field puts them in, so typing in the same frame keeps its order. `lsp.rs` runs luau-lsp in a
+  process of its own with the engine's definitions and a base `.luaurc`
+  (`lsp::support_files`, written to a temporary folder), threads writing and reading its framed
+  JSON, and `LanguageServer::poll` turning what it says into `Event`s; scripts are sent to it
+  whole each time they change (`send_changes`, before any request about them), and positions
+  convert between characters and UTF-16 columns. Without luau-lsp, scripts are edited unchecked.
+  Play
   (`play.rs`) runs the editor's own executable with `--run`, which runs the game, so it's a
   process of its own; tests point it at the built executable with `set_runner`. Its tests
   (`tests/editor.rs`) drive it through `Simulation`, clicking widgets by label, and copy example
-  games to change them. Number fields give their name to AccessKit themselves, since egui doesn't
-  carry a label's text over to what it labels.
+  games to change them; those of luau-lsp wait on it in real time (`wait_for`). Number fields give
+  their name to AccessKit themselves, since egui doesn't carry a label's text over to what it
+  labels.
 - `examples/rpg/`: the milestone's RPG, written entirely in Luau. Maps in `maps/` are scenes: a
   tilemap over `world.tileset.luau` whose layers hold each cell's kind of ground (`floor`), the
   ground's sprite (`ground`) and objects (`objects`), with tiles named for their kind and sprite
@@ -347,7 +368,8 @@ such as physics engines, networking or 3D pipelines.
   to use and gear, whose bonuses `items.stats` adds to the player's; `shop.luau` buys and sells
   them, and `bag.luau` (the menu key) equips gear and uses items. `ui.luau` holds the panels'
   shared look. `story.reached(stage)` compares quest stages, which run in the order of
-  `story.STAGES`. The game's state is the global `rpg`.
+  `story.STAGES`. The game's state is the global `rpg`, which its `.luaurc` names for luau-lsp,
+  as the shmup's names `shmup` and `danmaku`.
 - `examples/shmup/`: the second milestone's bullet hell, written entirely in Luau, at a fixed
   60 updates a second. Its enemy bullets go through one interface, documented at the top of
   `bullets.luau`, which is the Luau implementation (parallel arrays of numbers: a table per
@@ -424,7 +446,8 @@ such as physics engines, networking or 3D pipelines.
   running and checking games, scenes, the editor, native libraries with a quick start, and in
   `docs/api/` a reference for every table, function and type scripts use, and for
   `wingine-native`. They restate the module docs (`src/runtime/mod.rs`, `src/lua.rs`,
-  `src/scene/mod.rs`, `crates/wingine-native`) for game authors, so change them together; the
+  `src/scene/mod.rs`, `crates/wingine-native`) for game authors, and the definitions file
+  (`src/runtime/wingine.d.luau`) gives the same API its types, so change them together; the
   editor's (`docs/editor.md`) follows what the editor does, so change it with the editor. Check
   their examples by running them headlessly.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.

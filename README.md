@@ -44,9 +44,10 @@ Godot's and built with Wingine itself.
   screenshots.
 - **egui** interfaces over any game, for debug panels and tools, and a window of frame stats any
   game can show with a key. Tests click their widgets by name.
-- **An editor** for scenes, laid out like Godot's: a tree of nodes, an Inspector, a viewport with
-  gizmos, painting tilemaps, placing and overriding instances, laying out screens, animating rigs
-  on a timeline, undo, and playing the game.
+- **An editor** for scenes and scripts, laid out like Godot's: a tree of nodes, an Inspector, a
+  viewport with gizmos, painting tilemaps, placing and overriding instances, laying out screens,
+  animating rigs on a timeline, undo, playing the game, and a script editor that checks scripts
+  against the engine's API with luau-lsp.
 
 Wingine targets desktops: Windows, macOS and Linux. CI builds and tests it on Windows and Linux.
 
@@ -249,7 +250,8 @@ frame stats. Run it with `cargo run --example gui`.
 
 ## Editor
 
-[`crates/wingine-editor`](crates/wingine-editor) edits a game's scenes. It's a Wingine game itself,
+[`crates/wingine-editor`](crates/wingine-editor) edits a game's scenes and scripts. It's a Wingine
+game itself,
 written in Rust, whose interface is egui, laid out like Godot's editor: the open scene's tree of
 nodes over the game's files on the left, the Inspector on the right, Output along the bottom, and
 the scene in the middle, drawn by the engine as the game draws it.
@@ -266,8 +268,10 @@ tilemaps' layers from their tilesets and resize them; drag scenes in to place th
 the nodes they place, from the Inspector; lay screens out with anchor presets and resize handles,
 and preview them on canvases of other sizes; animate rigs, scrubbing and playing clips on a
 timeline that poses the scene, and keying nodes' properties from the Inspector and the viewport;
-undo; save, in the canonical layout; and play the game, in a process of its own. See
-[the editor's docs](docs/editor.md). Editing scripts comes next.
+undo; save, in the canonical layout; and play the game, in a process of its own. Its Script screen
+edits the game's Luau, colored, and with [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp)
+installed, checks it against the engine's API as it's typed: problems underlined, names' types and
+docs on hover, completion, and the parameters of calls. See [the editor's docs](docs/editor.md).
 
 ## Making a game
 

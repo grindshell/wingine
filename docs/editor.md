@@ -2,7 +2,8 @@
 
 The editor edits a game's [scenes](scenes.md): it shows them as the game draws them, and changes
 their nodes with the mouse and the Inspector instead of by hand. It writes scene files back in
-the canonical layout, so what it saves stays easy to read and diffs stay small. It's laid out like
+the canonical layout, so what it saves stays easy to read and diffs stay small. It edits the game's
+scripts too, checking them against the engine's API as they're typed. It's laid out like
 [Godot](https://godotengine.org)'s editor, and is itself a game made with Wingine, drawing its
 interface with [egui](https://github.com/emilk/egui).
 
@@ -18,21 +19,23 @@ Without a folder, it starts with a choice of the repository's examples, and **Pr
 Folder…** opens any game.
 
 The editor is new, and grows with each part of the current milestone. It edits scenes' nodes, the
-scene's sheets and props, tilemaps' tiles, instances' overrides, screens' layouts and clips now.
-Editing scripts comes next.
+scene's sheets and props, tilemaps' tiles, instances' overrides, screens' layouts, clips and
+scripts now.
 
 ## The layout
 
 - **The top bar**: the menus on the left; the main screens in the middle, the **2D** view of the
-  open scene, and later **Script**; and **Play** and **Stop** on the right.
+  open scene and the **Script** screen of the open scripts; and **Play** and **Stop** on the right.
 - **The Scene dock**, at the top left: the open scene's tree of nodes.
 - **The FileSystem dock**, below it: the files in the game's folder. Double-click a scene to open
-  it, or drag it into the viewport or onto a node to place it there.
+  it, or drag it into the viewport or onto a node to place it there. Double-click any other Luau
+  file to [edit it](#editing-scripts).
 - **The Inspector**, on the right: every field of the selected node.
 - **The bottom panel**: **Output**, with what the editor says and what a game played from it
   prints, **Tiles**, to [paint tilemaps](#painting-tiles) with, and **Animation**, to
   [animate rigs](#animating-rigs). Click a tab to show it, and click it again to hide the panel.
-- **The middle**: a tab for each open scene, the viewport's toolbar, and the viewport.
+- **The middle**: in the 2D screen, a tab for each open scene, the viewport's toolbar, and the
+  viewport; in the Script screen, the open scripts and the one being edited.
 
 Drag the edges between them to resize them.
 
@@ -184,13 +187,82 @@ there, or adds one. Changing a property the clip has no track of changes the nod
 does without a clip. The Inspector keys the scene's own nodes: to animate the nodes of a scene an
 instance places, open that scene and give it clips of its own.
 
+## Editing scripts
+
+Double-click a script in the FileSystem dock to open it in the **Script** screen, which lists the
+open scripts on its left and edits the one chosen. **File > New Script…** makes a script, at a path
+in the game's folder, and opens it. Scripts are colored as Godot colors its own: keywords, names
+of the engine's tables, functions called, strings, numbers and comments each in a color of their
+own.
+
+- **Enter** starts a line indented as the one before, and a level more after a line that opens a
+  block, such as one ending in `then` or `do`.
+- **Tab** indents by four spaces, or with lines selected, indents them all; **Shift+Tab** takes a
+  level away.
+- **Ctrl+Z** and **Ctrl+Y** undo and redo typing.
+- **Ctrl+S** saves the script shown. Its name shows `*` while it has unsaved changes, and closing it
+  or the editor asks first. A script changed on disk by another program is read again, unless it
+  has changes of its own.
+
+The status line under the script shows where the cursor is and how luau-lsp is doing.
+
+### Checking scripts with luau-lsp
+
+With [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp), the Luau language server, installed
+and on the `PATH` (or `WINGINE_LUAU_LSP` set to it), the editor checks scripts as they're typed,
+against the engine's API:
+
+- **Problems** are underlined, in red for errors and yellow for warnings, their line numbers are
+  colored, and they're listed under the script; click one to go to it. **⛔ ⚠** in the status line
+  shows and hides the list.
+- **Resting the pointer** on a name shows what it is: its type, and for the engine's functions and
+  types, their docs.
+- **Typing** a name, or `.` or `:` after one, offers what could come next, narrowed as more is
+  typed. **Up** and **Down** choose, **Enter** or **Tab** takes one, and **Escape** closes the list.
+  **Ctrl+Space** offers them anywhere.
+- **Typing `(`** in a call shows the function's parameters, the one the cursor is at underlined.
+
+Without luau-lsp, scripts are edited all the same, unchecked, and Output says how to install it.
+luau-lsp knows the engine from its definitions file,
+[`src/runtime/wingine.d.luau`](../src/runtime/wingine.d.luau), which declares every table,
+function and type scripts use, with their docs; the editor hands it to luau-lsp itself.
+
+A game whose modules share a global table, as the RPG's do with `rpg`, names it in a `.luaurc` in
+its folder, so luau-lsp knows it, and lets `main.luau` set it:
+
+```json
+{
+    "globals": ["rpg"],
+    "lint": { "BuiltinGlobalWrite": false }
+}
+```
+
+### Other editors
+
+luau-lsp checks scripts the same way in other editors, such as VS Code with its
+[Luau Language Server](https://marketplace.visualstudio.com/items?itemName=JohnnyMorganz.luau-lsp)
+extension, given the engine's definitions file. In VS Code's settings for the game's folder,
+`.vscode/settings.json`:
+
+```json
+{
+    "luau-lsp.platform.type": "standard",
+    "luau-lsp.sourcemap.enabled": false,
+    "luau-lsp.types.definitionFiles": { "@wingine": "path/to/wingine/src/runtime/wingine.d.luau" }
+}
+```
+
+The engine calls a game's `update` and `draw`, so luau-lsp would warn they're never used; the
+editor turns that warning off, and a `.luaurc` can too, with `"FunctionUnused": false` in its
+`lint`.
+
 ## Saving, undo and playing
 
 - **Ctrl+Z** undoes a change and **Ctrl+Y** (or Ctrl+Shift+Z) redoes it. A drag, or typing in a
   field, is one change.
-- **Ctrl+S** saves the open scene. A tab shows `*` while its scene has unsaved changes, and closing
-  it or the editor asks first.
-- **F5**, or **Play**, saves every scene and plays the game in a window of its own, as
+- **Ctrl+S** saves the open scene, or in the Script screen, the script shown. A tab shows `*` while
+  its scene has unsaved changes, and closing it or the editor asks first.
+- **F5**, or **Play**, saves every scene and script and plays the game in a window of its own, as
   `cargo run -- path/to/game` would. What it prints shows in Output. **F8**, or **Stop**, ends it.
 
 The editor writes scene files in the canonical layout, as
@@ -204,8 +276,10 @@ images, show up without opening them again.
 
 | Keys | |
 |---|---|
-| Ctrl+S | Save the open scene |
+| Ctrl+S | Save the open scene, or the script shown |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
+| Ctrl+Space | Offer what could be typed, in a script |
+| Tab, Shift+Tab | Indent and unindent lines, in a script |
 | Ctrl+D | Duplicate the selected node |
 | Delete | Delete the selected node, or over the timeline, the selected key |
 | Escape | Select nothing |

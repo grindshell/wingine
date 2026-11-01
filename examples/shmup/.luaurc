@@ -1,0 +1,4 @@
+{
+    "globals": ["shmup", "danmaku"],
+    "lint": { "BuiltinGlobalWrite": false }
+}

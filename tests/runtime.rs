@@ -404,6 +404,59 @@ fn scripts_require_modules_relative_to_themselves() {
     assert!(simulation.context().input().released("confirm"));
 }
 
+/// The fields of the table `name` declares in the definitions file, a line each.
+fn declared_fields(name: &str) -> Vec<String> {
+    let start = format!("\ndeclare {name}: {{\n");
+    let block = runtime::DEFINITIONS
+        .split_once(&start)
+        .and_then(|(_, rest)| rest.split_once("\n}"))
+        .unwrap_or_else(|| panic!("the definitions declare `{name}`"))
+        .0;
+    let mut fields: Vec<String> = block
+        .lines()
+        .filter_map(|line| line.strip_prefix("    "))
+        .filter(|line| !line.starts_with("--"))
+        .filter_map(|line| line.split_once(": ").map(|(name, _)| name))
+        .map(str::to_owned)
+        .collect();
+    fields.sort();
+    fields
+}
+
+#[test]
+fn the_definitions_declare_every_function_of_the_engine() {
+    let folder = game(
+        "definitions",
+        &[(
+            "main.luau",
+            "local tables = { graphics = graphics, input = input, audio = audio,
+                tilemap = tilemap, grid = grid, scene = scene }
+            names = {}
+            for table_name, functions in tables do
+                local found = {}
+                for name in functions do
+                    table.insert(found, name)
+                end
+                table.sort(found)
+                names[table_name] = found
+            end",
+        )],
+    );
+    let simulation = simulation(&folder);
+    for table in ["graphics", "input", "audio", "tilemap", "grid", "scene"] {
+        let functions: Vec<String> = eval(&simulation, &format!("names.{table}"));
+        assert_eq!(declared_fields(table), functions, "the fields of `{table}`");
+    }
+    for built_in in ["spawn", "wait", "wait_until"] {
+        assert_eq!(
+            eval::<String>(&simulation, &format!("type({built_in})")),
+            "function"
+        );
+        let declared = format!("\ndeclare function {built_in}");
+        assert!(runtime::DEFINITIONS.contains(&declared), "{built_in}");
+    }
+}
+
 #[test]
 fn sounds_load_from_the_game_folder() {
     let folder = game(

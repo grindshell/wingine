@@ -1,7 +1,8 @@
 //! The editor: a wingine game whose interface is all egui, laid out as Godot's editor is. The
 //! menus, the main screens and Play run along the top; the Scene dock sits over the FileSystem
 //! dock on the left, the Inspector on the right, and Output, Tiles and Animation in a panel along
-//! the bottom; the open scenes are tabs over the viewport in the middle.
+//! the bottom; in the middle, the 2D screen shows the open scenes as tabs over the viewport, and
+//! the Script screen the open scripts.
 
 use std::{
     ffi::OsString,
@@ -30,6 +31,7 @@ use crate::{
     edit::{self, NodePath},
     play::Play,
     project::{AssetCache, Project},
+    script_editor::{self, ScriptEditor},
     theme,
     viewport::{self, Tool, Viewport},
 };
@@ -42,7 +44,7 @@ const RESCAN_TIME: f32 = 3.0;
 pub enum MainScreen {
     /// The viewport of the open scene.
     TwoD,
-    /// Editing scripts, which a later part of the milestone brings.
+    /// The open scripts, edited.
     Script,
 }
 
@@ -59,6 +61,7 @@ pub enum BottomTab {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Closing {
     Tab(usize),
+    Script(usize),
     Window,
 }
 
@@ -75,6 +78,7 @@ pub struct Editor {
     output: Output,
     tiles: Tiles,
     animation: Animation,
+    scripts: ScriptEditor,
     /// Seconds the last frame took, which a clip playing moves on by.
     dt: f32,
     /// Whether the panel along the bottom is open, and which of its panels it shows.
@@ -111,6 +115,7 @@ impl Editor {
             output: Output::default(),
             tiles: Tiles::default(),
             animation: Animation::default(),
+            scripts: ScriptEditor::default(),
             dt: 0.0,
             bottom_open: true,
             bottom_tab: BottomTab::Output,
@@ -139,6 +144,7 @@ impl Editor {
         self.documents.clear();
         self.current = 0;
         self.cache = AssetCache::default();
+        self.scripts.set_project(Some(project.folder.clone()));
         let message = format!("Opened {}", project.name);
         if let Err(err) = &project.config {
             self.output.push(Level::Error, format!("conf.luau: {err}"));
@@ -167,8 +173,32 @@ impl Editor {
         Ok(())
     }
 
+    /// Opens the script at `path` in the project in the Script screen, and shows it.
+    pub fn open_script(&mut self, path: &str) -> Result<(), String> {
+        self.scripts.open(path)?;
+        self.screen = MainScreen::Script;
+        Ok(())
+    }
+
     pub fn project(&self) -> Option<&Project> {
         self.project.as_ref()
+    }
+
+    pub fn screen(&self) -> MainScreen {
+        self.screen
+    }
+
+    pub fn set_screen(&mut self, screen: MainScreen) {
+        self.screen = screen;
+    }
+
+    /// The Script screen, and the scripts open in it.
+    pub fn scripts(&self) -> &ScriptEditor {
+        &self.scripts
+    }
+
+    pub fn scripts_mut(&mut self) -> &mut ScriptEditor {
+        &mut self.scripts
     }
 
     pub fn documents(&self) -> &[Document] {
@@ -248,7 +278,17 @@ impl Editor {
         }
     }
 
-    /// Saves every scene with unsaved changes.
+    /// Saves the script shown, in the Script screen, or the scene shown.
+    pub fn save_shown(&mut self) {
+        if self.screen == MainScreen::Script {
+            let (level, message) = self.scripts.save_current();
+            self.output.push(level, message);
+        } else {
+            self.save();
+        }
+    }
+
+    /// Saves every scene and script with unsaved changes.
     pub fn save_all(&mut self) {
         let current = self.current;
         for i in 0..self.documents.len() {
@@ -258,9 +298,12 @@ impl Editor {
             }
         }
         self.current = current;
+        for (level, message) in self.scripts.save_all() {
+            self.output.push(level, message);
+        }
     }
 
-    /// Plays the game, saving every scene first, as Godot does.
+    /// Plays the game, saving every scene and script first, as Godot does.
     pub fn play(&mut self) {
         let Some(project) = &self.project else {
             return;
@@ -317,6 +360,20 @@ impl Editor {
         self.documents.remove(index);
         if self.current > index || self.current == self.documents.len() {
             self.current = self.current.saturating_sub(1);
+        }
+    }
+
+    /// Closes the script at `index`, asking first if it has unsaved changes, unless `force`.
+    fn close_script(&mut self, index: usize, force: bool) {
+        let dirty = self
+            .scripts
+            .scripts()
+            .get(index)
+            .map(|script| script.is_dirty());
+        match dirty {
+            Some(true) if !force => self.closing = Some(Closing::Script(index)),
+            Some(_) => self.scripts.close(index),
+            None => {}
         }
     }
 
@@ -389,7 +446,7 @@ impl Editor {
             ui.input_mut(|input| input.consume_shortcut(&shortcut(modifiers, key)))
         };
         if pressed(ui, Modifiers::COMMAND, Key::S) {
-            self.save();
+            self.save_shown();
         }
         if pressed(ui, Modifiers::NONE, Key::F5) {
             self.play();
@@ -397,7 +454,8 @@ impl Editor {
         if pressed(ui, Modifiers::NONE, Key::F8) {
             self.stop();
         }
-        if typing {
+        // The rest are the 2D screen's.
+        if typing || self.screen == MainScreen::Script {
             return;
         }
         let redo = pressed(ui, Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)
@@ -465,12 +523,7 @@ impl Editor {
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         middle.selectable_value(&mut self.screen, MainScreen::TwoD, "🖼 2D");
-        middle
-            .add_enabled(
-                false,
-                egui::Button::selectable(self.screen == MainScreen::Script, "📜 Script"),
-            )
-            .on_disabled_hover_text("Editing scripts comes in a later part of the milestone");
+        middle.selectable_value(&mut self.screen, MainScreen::Script, "📜 Script");
         let mut right = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(bar)
@@ -562,6 +615,10 @@ impl Editor {
                         "The Animation panel poses the scene by a clip: the Inspector's ♦ keys \
                          a property.",
                     );
+                    ui.label(
+                        "Double-click a script to edit it in the Script screen, checked by \
+                         luau-lsp if it's installed.",
+                    );
                 });
             });
         }
@@ -645,12 +702,21 @@ impl Editor {
                 .map(|doc| doc.name().to_owned())
                 .into_iter()
                 .collect(),
-            Closing::Window => self
-                .documents
-                .iter()
-                .filter(|doc| doc.is_dirty())
-                .map(|doc| doc.name().to_owned())
+            Closing::Script(i) => self
+                .scripts
+                .scripts()
+                .get(i)
+                .map(|script| script.name().to_owned())
+                .into_iter()
                 .collect(),
+            Closing::Window => {
+                let scenes = self.documents.iter().filter(|doc| doc.is_dirty());
+                let scripts = self.scripts.scripts().iter().filter(|s| s.is_dirty());
+                scenes
+                    .map(|doc| doc.name().to_owned())
+                    .chain(scripts.map(|script| script.name().to_owned()))
+                    .collect()
+            }
         };
         let mut answer = None;
         egui::Modal::new(egui::Id::unique("closing dialog")).show(ui.ctx(), |ui| {
@@ -681,6 +747,13 @@ impl Editor {
                     self.current = current;
                 }
                 self.close_tab(i, true);
+            }
+            Closing::Script(i) => {
+                if save {
+                    let (level, message) = self.scripts.save(i);
+                    self.output.push(level, message);
+                }
+                self.close_script(i, true);
             }
             Closing::Window => {
                 if save {
@@ -724,7 +797,7 @@ impl Editor {
             ui.vertical_centered(|ui| {
                 ui.add_space(ui.available_height() / 4.0);
                 ui.heading("Wingine");
-                ui.label("Open a game's folder to edit its scenes.");
+                ui.label("Open a game's folder to edit its scenes and scripts.");
                 if ui.button("Open Folder…").clicked() {
                     self.start_opening();
                 }
@@ -861,10 +934,11 @@ impl Game for Editor {
             self.rescan_in = RESCAN_TIME;
             if let Some(project) = &mut self.project {
                 project.rescan();
-                // Images and files the scenes use may have changed.
+                // Images and files the scenes use may have changed, and scripts.
                 for document in &mut self.documents {
                     document.rebuild();
                 }
+                self.scripts.rescan();
             }
         }
     }
@@ -875,6 +949,9 @@ impl Game for Editor {
             self.themed = true;
         }
         self.output.take_logged();
+        for (level, message) in self.scripts.take_messages() {
+            self.output.push(level, message);
+        }
         self.shortcuts(ui);
 
         egui::Panel::top("top bar").show(ui, |ui| self.top_bar(ui, ctx));
@@ -933,8 +1010,12 @@ impl Game for Editor {
             self.apply(action);
         }
         match file_action {
-            Some(filesystem::Action::Open(path)) => {
-                if let Err(err) = self.open_scene(&path) {
+            Some(filesystem::Action::Open(path)) => match self.open_scene(&path) {
+                Ok(()) => self.screen = MainScreen::TwoD,
+                Err(err) => self.output.push(Level::Error, err),
+            },
+            Some(filesystem::Action::OpenScript(path)) => {
+                if let Err(err) = self.open_script(&path) {
                     self.output.push(Level::Error, err);
                 }
             }
@@ -1050,25 +1131,47 @@ impl Game for Editor {
         }
 
         let mut viewport_action = None;
-        egui::CentralPanel::default().show(ui, |ui| {
-            self.tabs(ui);
-            let document = self.documents.get_mut(self.current);
-            self.viewport.toolbar(ui, document, game_size);
-            ui.separator();
-            match self.documents.get_mut(self.current) {
-                Some(document) => {
-                    let palette = palette.as_ref().and_then(|palette| palette.as_ref().ok());
-                    viewport_action =
-                        self.viewport
-                            .ui(ui, ctx, document, canvas_size, &mut self.tiles, palette);
+        let mut script_action = None;
+        if self.screen == MainScreen::Script {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| script_action = self.scripts.ui(ui));
+        } else {
+            egui::CentralPanel::default().show(ui, |ui| {
+                self.tabs(ui);
+                let document = self.documents.get_mut(self.current);
+                self.viewport.toolbar(ui, document, game_size);
+                ui.separator();
+                match self.documents.get_mut(self.current) {
+                    Some(document) => {
+                        let palette = palette.as_ref().and_then(|palette| palette.as_ref().ok());
+                        viewport_action = self.viewport.ui(
+                            ui,
+                            ctx,
+                            document,
+                            canvas_size,
+                            &mut self.tiles,
+                            palette,
+                        );
+                    }
+                    None => {
+                        ui.centered_and_justified(|ui| {
+                            ui.weak("Double-click a scene in the FileSystem dock to open it.");
+                        });
+                    }
                 }
-                None => {
-                    ui.centered_and_justified(|ui| {
-                        ui.weak("Double-click a scene in the FileSystem dock to open it.");
-                    });
+            });
+        }
+        match script_action {
+            Some(script_editor::Action::Close(i)) => self.close_script(i, false),
+            Some(script_editor::Action::Save) => self.save_shown(),
+            Some(script_editor::Action::Rescan) => {
+                if let Some(project) = &mut self.project {
+                    project.rescan();
                 }
             }
-        });
+            None => {}
+        }
         if let Some(viewport::Action::Instance { scene, at }) = viewport_action
             && let Some(document) = self.documents.get_mut(self.current)
         {
@@ -1097,7 +1200,7 @@ impl Game for Editor {
     }
 
     fn close_requested(&mut self, _ctx: &mut Context) -> bool {
-        if self.documents.iter().any(Document::is_dirty) {
+        if self.documents.iter().any(Document::is_dirty) || self.scripts.is_dirty() {
             self.closing = Some(Closing::Window);
             return false;
         }

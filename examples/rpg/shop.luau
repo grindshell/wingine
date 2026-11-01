@@ -32,7 +32,7 @@ local function buy(stock: { string }, keeper: string)
         if rpg.coins < item.price then
             dialogue.say("Oh dear, you're a little short for that one.", keeper)
         else
-            local question = `The {item.name}? That'll be {item.price} coins.`
+            question = `The {item.name}? That'll be {item.price} coins.`
             local yes = dialogue.ask(question, { "Buy it", "No thanks" }, { speaker = keeper })
             if yes == 1 then
                 rpg.coins -= item.price

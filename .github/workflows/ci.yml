@@ -38,12 +38,18 @@ jobs:
           # lavapipe: Mesa's software Vulkan driver.
           - os: ubuntu-latest
             wgpu_backend: vulkan
+            luau_lsp: linux-x86_64
+            exe: ""
           # WARP: the software DX12 adapter that ships with Windows.
           - os: windows-latest
             wgpu_backend: dx12
+            luau_lsp: win64
+            exe: .exe
     runs-on: ${{ matrix.os }}
     env:
       WGPU_BACKEND: ${{ matrix.wgpu_backend }}
+      # The Luau language server the editor's Script screen runs, which its tests check it with.
+      LUAU_LSP_VERSION: 1.70.1
       # Use the DX12 shader compiler built into Windows rather than whatever dxcompiler.dll is on
       # PATH; some builds of it crash on WARP.
       WGPU_DX12_COMPILER: fxc
@@ -57,6 +63,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y mesa-vulkan-drivers libasound2-dev
+      # With WINGINE_LUAU_LSP set, the tests that need luau-lsp fail rather than skip without it.
+      - name: Install luau-lsp
+        shell: bash
+        run: |
+          curl -sSfL -o luau-lsp.zip \
+            "https://github.com/JohnnyMorganz/luau-lsp/releases/download/$LUAU_LSP_VERSION/luau-lsp-${{ matrix.luau_lsp }}.zip"
+          mkdir -p "$RUNNER_TEMP/luau-lsp"
+          unzip -q luau-lsp.zip -d "$RUNNER_TEMP/luau-lsp"
+          chmod +x "$RUNNER_TEMP/luau-lsp/luau-lsp${{ matrix.exe }}"
+          echo "WINGINE_LUAU_LSP=$RUNNER_TEMP/luau-lsp/luau-lsp${{ matrix.exe }}" >> "$GITHUB_ENV"
       - run: cargo test
       - name: Upload screenshot mismatches
         if: failure()

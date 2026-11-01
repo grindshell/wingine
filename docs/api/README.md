@@ -36,7 +36,9 @@ with `clock`, `date`, `difftime` and `time`, but nothing that reads or writes fi
 
 Signatures are written as Luau types: `graphics.fill_rect(x: number, y: number, ...)`. Objects the
 engine hands out, such as `Sprite` and `Tilemap`, are userdata with methods, called with `:`, as
-`sprite:size()`.
+`sprite:size()`. The same types, with short docs, are in the engine's definitions file,
+[`src/runtime/wingine.d.luau`](../../src/runtime/wingine.d.luau), which luau-lsp checks scripts
+against, in [the editor](../editor.md#checking-scripts-with-luau-lsp) or another.
 
 ## When functions work
 

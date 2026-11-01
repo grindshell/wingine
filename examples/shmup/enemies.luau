@@ -4,7 +4,7 @@
 
 local art = require("./art")
 local field = require("./field")
-local sounds = require("./sounds")
+local sounds = require("./sfx")
 
 local enemies = {}
 

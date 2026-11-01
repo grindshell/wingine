@@ -4,8 +4,9 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use wingine::{
@@ -21,7 +22,8 @@ use wingine_editor::{
     docks::{output::Level, tiles::TileTool},
     document::{Timeline, View},
     edit,
-    editor::BottomTab,
+    editor::{BottomTab, MainScreen},
+    lsp::{self, Severity},
     viewport::Tool,
 };
 
@@ -1091,4 +1093,240 @@ fn playing_runs_the_game_in_its_own_process() {
         lines.iter().any(|line| line.text == "The game ended."),
         "{lines:?}"
     );
+}
+
+/// The text of the script shown.
+fn script_text(simulation: &Simulation<Editor>) -> &str {
+    &simulation.game().scripts().script().unwrap().text
+}
+
+/// Whether luau-lsp can be run, so tests that need it can say they're skipped if not. CI installs
+/// it, and sets `WINGINE_LUAU_LSP` to it, which makes it a failure to be without it.
+fn luau_lsp_runs() -> bool {
+    let runs = Command::new(lsp::program())
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !runs {
+        assert!(
+            std::env::var_os("WINGINE_LUAU_LSP").is_none(),
+            "WINGINE_LUAU_LSP is set, but doesn't run"
+        );
+        eprintln!("luau-lsp isn't installed, so this test checks nothing");
+    }
+    runs
+}
+
+/// Runs frames, waiting for luau-lsp as it works in real time, until `done` is true of the editor.
+fn wait_for(simulation: &mut Simulation<Editor>, what: &str, done: impl Fn(&Editor) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !done(simulation.game()) {
+        let lines = simulation.game().output().lines();
+        let script = simulation.game().scripts().script();
+        let text = script.map(|script| (&script.text, &script.diagnostics));
+        assert!(
+            Instant::now() < deadline,
+            "waited for {what}: {lines:?}\n{text:#?}"
+        );
+        thread::sleep(Duration::from_millis(10));
+        simulation.step();
+    }
+}
+
+#[test]
+fn double_clicking_a_script_opens_it_to_edit_and_save() {
+    let folder = copy_of("pong", "script-edit");
+    let mut simulation = editor(Some(folder.clone()));
+    simulation.game_mut().scripts_mut().set_program(None);
+    double_click_gui(&mut simulation, "opponent.luau");
+    simulation.run_frames(2);
+    assert_eq!(simulation.game().screen(), MainScreen::Script);
+    let on_disk = fs::read_to_string(folder.join("opponent.luau")).unwrap();
+    assert_eq!(script_text(&simulation), on_disk.replace("\r\n", "\n"));
+
+    // Typing at the end, where Enter keeps the indentation and indents blocks.
+    let end = script_text(&simulation).chars().count();
+    simulation.game_mut().scripts_mut().go_to(end);
+    simulation.run_frames(2);
+    simulation.type_text("if ready then");
+    simulation.tap(Key::Enter);
+    simulation.type_text("serve()");
+    simulation.tap(Key::Enter);
+    simulation.run_frames(2);
+    assert!(
+        script_text(&simulation).ends_with("\nif ready then\n    serve()\n    "),
+        "{:?}",
+        script_text(&simulation)
+    );
+    assert!(simulation.gui_rect("opponent.luau*").is_some());
+
+    control(&mut simulation, Key::S);
+    let saved = fs::read_to_string(folder.join("opponent.luau")).unwrap();
+    assert_eq!(saved.replace("\r\n", "\n"), script_text(&simulation));
+    assert!(!simulation.game().scripts().is_dirty());
+    assert!(simulation.gui_rect("opponent.luau").is_some());
+
+    // The 2D screen is a click away, and the script stays open.
+    simulation.click_gui("🖼 2D");
+    assert_eq!(simulation.game().screen(), MainScreen::TwoD);
+    assert_eq!(simulation.game().scripts().scripts().len(), 1);
+}
+
+#[test]
+fn without_luau_lsp_scripts_are_edited_unchecked() {
+    let mut simulation = editor(Some(copy_of("pong", "script-unchecked")));
+    simulation
+        .game_mut()
+        .scripts_mut()
+        .set_program(Some("no-such-luau-lsp".into()));
+    simulation.game_mut().open_script("main.luau").unwrap();
+    simulation.run_frames(3);
+    let lines = simulation.game().output().lines();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.level == Level::Warning && line.text.contains("isn't installed")),
+        "{lines:?}"
+    );
+    simulation.game_mut().scripts_mut().go_to(0);
+    simulation.run_frames(2);
+    simulation.type_text("--");
+    simulation.run_frames(2);
+    assert!(script_text(&simulation).starts_with("---- Pong"));
+}
+
+#[test]
+fn luau_lsp_checks_scripts_as_they_are_typed() {
+    if !luau_lsp_runs() {
+        return;
+    }
+    let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join("editor/script-checked");
+    let _ = fs::remove_dir_all(&folder);
+    fs::create_dir_all(&folder).unwrap();
+    let main = "local font = graphics.default_font()\n\nfunction draw()\n    graphics.draw_text(font, \"hi\", 0, 0, \"#ffffff\")\nend\n";
+    fs::write(folder.join("main.luau"), main).unwrap();
+    let mut simulation = editor(Some(folder));
+    simulation.game_mut().open_script("main.luau").unwrap();
+    wait_for(&mut simulation, "luau-lsp to start", |editor| {
+        editor.scripts().is_checking()
+    });
+    simulation.run_frames(10);
+    assert!(
+        simulation
+            .game()
+            .scripts()
+            .script()
+            .unwrap()
+            .diagnostics
+            .is_empty()
+    );
+
+    // Resting the pointer on a name shows its type and docs, from the engine's definitions.
+    let at = main.find("default_font").unwrap() + 3;
+    let [x, y] = simulation.game().scripts().screen_pos(at).unwrap();
+    simulation.move_mouse(x, y);
+    wait_for(&mut simulation, "the hover", |editor| {
+        editor
+            .scripts()
+            .hover_text()
+            .is_some_and(|text| text.contains("built-in pixel font"))
+    });
+    let hover = simulation.game().scripts().hover_text().unwrap();
+    assert!(hover.contains("default_font(): Font"), "{hover}");
+    simulation.move_mouse(1.0, 1.0);
+
+    // Typing a field of the engine's tables offers them, narrowed as more is typed.
+    let end = main.chars().count();
+    simulation.game_mut().scripts_mut().go_to(end);
+    simulation.run_frames(2);
+    simulation.type_text("graphics.draw_t");
+    wait_for(&mut simulation, "completions", |editor| {
+        !editor.scripts().completions().is_empty()
+    });
+    let offered = simulation.game().scripts().completions();
+    assert!(offered.contains(&"draw_text"), "{offered:?}");
+    assert!(
+        offered.iter().all(|label| label.contains("draw_t")),
+        "{offered:?}"
+    );
+    simulation.type_text("e");
+    simulation.run_frames(2);
+    assert_eq!(
+        simulation.game().scripts().completions(),
+        ["draw_text", "draw_text_layout"]
+    );
+    simulation.tap(Key::Enter);
+    simulation.run_frames(2);
+    assert!(script_text(&simulation).ends_with("graphics.draw_text"));
+
+    // Opening its call shows its parameters.
+    simulation.type_text("(");
+    wait_for(&mut simulation, "the signature", |editor| {
+        editor.scripts().signature_text().is_some()
+    });
+    let signature = simulation.game().scripts().signature_text().unwrap();
+    assert!(signature.contains("font: Font"), "{signature}");
+
+    // A mistake is found, and shown where it is.
+    simulation.type_text("1)");
+    let wrong_font = |editor: &Editor| {
+        let problems = &editor.scripts().script().unwrap().diagnostics;
+        problems
+            .iter()
+            .find(|problem| problem.message.contains("Expected this to be 'Font'"))
+            .cloned()
+    };
+    wait_for(&mut simulation, "the problem", |editor| {
+        wrong_font(editor).is_some()
+    });
+    let problem = wrong_font(simulation.game()).unwrap();
+    assert_eq!((problem.start.line, problem.start.character), (5, 19));
+    assert_eq!(problem.severity, Severity::Error);
+}
+
+#[test]
+fn the_examples_scripts_check_against_the_engines_definitions() {
+    if !luau_lsp_runs() {
+        return;
+    }
+    let (definitions, luaurc) = lsp::support_files().unwrap();
+    for game in ["pong", "rpg", "shmup", "garden", "orchard"] {
+        let folder = examples().join(game);
+        let scripts: Vec<String> = project_scripts(&folder, "");
+        let output = Command::new(lsp::program())
+            .arg("analyze")
+            .arg("--platform=standard")
+            .arg(format!("--definitions=@wingine={}", definitions.display()))
+            .arg(format!("--base-luaurc={}", luaurc.display()))
+            .args(&scripts)
+            .current_dir(&folder)
+            .output()
+            .unwrap();
+        let printed = String::from_utf8_lossy(&output.stdout).into_owned()
+            + &String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{game}:\n{printed}");
+    }
+}
+
+/// The scripts in the game in `folder`, apart from scene and tileset files, by their paths in it.
+fn project_scripts(folder: &Path, path: &str) -> Vec<String> {
+    let mut scripts = Vec::new();
+    for entry in fs::read_dir(folder.join(path)).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name().into_string().unwrap();
+        let inside = if path.is_empty() {
+            name.clone()
+        } else {
+            format!("{path}/{name}")
+        };
+        if entry.file_type().unwrap().is_dir() {
+            scripts.extend(project_scripts(folder, &inside));
+        } else if name.ends_with(".luau")
+            && !name.ends_with(".scene.luau")
+            && !name.ends_with(".tileset.luau")
+        {
+            scripts.push(inside);
+        }
+    }
+    scripts
 }

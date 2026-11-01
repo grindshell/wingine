@@ -8,7 +8,7 @@ local enemies = require("./enemies")
 local field = require("./field")
 local patterns = require("./patterns")
 local player = require("./player")
-local sounds = require("./sounds")
+local sounds = require("./sfx")
 
 local boss = {}
 

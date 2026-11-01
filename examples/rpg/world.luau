@@ -488,8 +488,9 @@ function world.wander(level: Level, character: characters.Character)
     local function ready(): boolean
         return character.removed or not character.talking and not character.mover:is_moving()
     end
+    local route: { number | string } = character.route or {}
     while not character.removed do
-        for _, move in character.route or {} do
+        for _, move in route do
             if type(move) == "number" then
                 wait(move)
             else

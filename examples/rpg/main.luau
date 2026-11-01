@@ -201,7 +201,7 @@ local function encounter(character: characters.Character)
     wait(ALERT_SECONDS)
     character.alert = false
     -- `battle.fight` takes itself off the screen if it fails.
-    local ok, outcome = pcall(battle.fight, character.foe)
+    local ok, outcome = pcall(battle.fight, character.foe :: string)
     character.talking = false
     if not ok then
         error(outcome, 0)

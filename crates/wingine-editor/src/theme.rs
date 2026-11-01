@@ -26,6 +26,33 @@ pub const KEY: Color32 = Color32::from_rgb(0xf2, 0xc1, 0x4e);
 pub const X_AXIS: Color = Color::rgba8(0xf0, 0x60, 0x70, 0x80);
 pub const Y_AXIS: Color = Color::rgba8(0x80, 0xe0, 0x70, 0x80);
 
+/// Behind scripts.
+pub const CODE_BACKGROUND: Color32 = Color32::from_rgb(0x1d, 0x22, 0x29);
+/// Plain text in scripts, and names.
+pub const CODE_TEXT: Color32 = Color32::from_rgb(0xcd, 0xcf, 0xd2);
+/// Line numbers, and the line the cursor is on, behind it.
+pub const LINE_NUMBER: Color32 = Color32::from_rgb(0x76, 0x79, 0x7e);
+pub const CURRENT_LINE: Color32 = Color32::from_rgba_premultiplied(8, 8, 8, 8);
+/// Problems in scripts: errors, and warnings and the rest.
+pub const ERROR: Color32 = Color32::from_rgb(0xff, 0x78, 0x6b);
+pub const WARNING: Color32 = Color32::from_rgb(0xff, 0xde, 0x66);
+
+/// Godot's color for a kind of word in scripts.
+pub fn code_color(kind: crate::luau::Kind) -> Color32 {
+    use crate::luau::Kind;
+    match kind {
+        Kind::Keyword | Kind::Literal => Color32::from_rgb(0xff, 0x70, 0x85),
+        Kind::Control => Color32::from_rgb(0xff, 0x8c, 0xcc),
+        Kind::Number => Color32::from_rgb(0xa1, 0xff, 0xe0),
+        Kind::String => Color32::from_rgb(0xff, 0xed, 0xa1),
+        Kind::Comment => Color32::from_rgb(0x80, 0x84, 0x8a),
+        Kind::Global => Color32::from_rgb(0x8f, 0xff, 0xdb),
+        Kind::Function => Color32::from_rgb(0x57, 0xb3, 0xff),
+        Kind::Name => CODE_TEXT,
+        Kind::Symbol => Color32::from_rgb(0xab, 0xc9, 0xff),
+    }
+}
+
 pub fn apply(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();
     visuals.panel_fill = PANEL;

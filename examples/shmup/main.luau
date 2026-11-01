@@ -23,7 +23,7 @@ local enemies = require("./enemies")
 local field = require("./field")
 local hud = require("./hud")
 local player = require("./player")
-local sounds = require("./sounds")
+local sounds = require("./sfx")
 local stage = require("./stage")
 local stress = require("./stress")
 

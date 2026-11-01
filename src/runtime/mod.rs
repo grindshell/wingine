@@ -181,6 +181,13 @@ use crate::{
     lua::{Scripts, mlua},
 };
 
+/// The types of the engine's API for Luau games, as a definitions file for
+/// [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp): the global tables and built-ins, the
+/// userdata they hand out and the values they take, with their docs, so a language server checks
+/// scripts against the engine and shows its docs on hover. It's `wingine.d.luau`, next to this
+/// file.
+pub const DEFINITIONS: &str = include_str!("wingine.d.luau");
+
 /// Runs the Luau game in `folder` until its window is closed. See the [module docs](self).
 pub fn run(folder: impl AsRef<Path>) -> Result<()> {
     let folder = folder.as_ref();

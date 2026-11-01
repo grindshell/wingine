@@ -1,5 +1,6 @@
 //! The FileSystem dock: the files in the game's folder. Double-clicking a scene opens it, and
 //! dragging one into the viewport or onto a node of the Scene dock places it there.
+//! Double-clicking any other Luau file opens it in the Script screen.
 
 use wingine::gui::egui;
 
@@ -12,6 +13,8 @@ pub struct ScenePath(pub String);
 pub enum Action {
     /// Open the scene file at this path.
     Open(String),
+    /// Open the script at this path in the Script screen.
+    OpenScript(String),
     /// Place the scene file at this path in the open scene.
     Instance(String),
     /// Read the folder again.
@@ -101,6 +104,8 @@ impl FileSystem {
         }
         if is_scene && response.double_clicked() {
             *action = Some(Action::Open(entry.path.clone()));
+        } else if entry.name.ends_with(".luau") && response.double_clicked() {
+            *action = Some(Action::OpenScript(entry.path.clone()));
         }
         if is_scene {
             response.dnd_set_drag_payload(ScenePath(entry.path.clone()));

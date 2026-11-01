@@ -167,7 +167,7 @@ end
 function items.stats(): { [string]: number }
     local stats = table.clone(rpg.stats)
     for _, name in rpg.equipped do
-        for stat, bonus in items.kind(name).bonus or {} do
+        for stat, bonus in items.kind(name).bonus or {} :: { [string]: number } do
             stats[stat] += bonus
         end
     end
