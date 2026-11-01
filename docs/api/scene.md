@@ -461,7 +461,8 @@ bat:set_position(48, 96)
 ```
 
 A name that's empty, holds `/`, or is one of `node`'s children's already is an error, as is
-copying a tile layer without its tilemap.
+copying a tile layer without its tilemap. Nodes can't nest more than 200 levels below a scene's
+root, so a copy that would place one deeper is an error too.
 
 ### `node:remove`
 

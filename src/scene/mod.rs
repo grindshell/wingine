@@ -348,19 +348,11 @@ fn write_file(path: &Path, text: &str) -> Result<()> {
     })
 }
 
-/// Whether `key` can be written bare, as `key = value`, rather than as `["key"] = value`.
-fn is_identifier(key: &str) -> bool {
-    const KEYWORDS: [&str; 22] = [
-        "and", "break", "continue", "do", "else", "elseif", "end", "false", "for", "function",
-        "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until",
-        "while",
-    ];
-    let mut chars = key.chars();
-    let starts = chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
-    starts && chars.all(|c| c.is_ascii_alphanumeric() || c == '_') && !KEYWORDS.contains(&key)
-}
+/// How deeply nodes may nest: how far below a scene's root a node may be, and how far below a
+/// file's top its nodes may be. Files refuse to nest deeper, through their children or the
+/// scenes their instances place, and [`Scene::add`] does too, so the engine never walks a tree
+/// so deep it runs out of stack.
+pub(crate) const MAX_NODE_DEPTH: usize = 200;
 
 /// Where the files and images a scene uses come from as it's built: the scene files its
 /// instances place, the tileset files its tilemaps use, and the images of its sheets, each by
@@ -1067,6 +1059,27 @@ impl Scene {
         found
     }
 
+    /// How far `id` is below the scene's root: 0 for the root itself.
+    fn depth(&self, id: NodeId) -> usize {
+        let mut depth = 0;
+        let mut at = id;
+        while let Some(parent) = self.node(at).parent {
+            at = parent;
+            depth += 1;
+        }
+        depth
+    }
+
+    /// How far the deepest node inside `id` is below it: 0 for a node with nothing inside.
+    fn height(&self, id: NodeId) -> usize {
+        self.node(id)
+            .children
+            .iter()
+            .map(|&child| self.height(child) + 1)
+            .max()
+            .unwrap_or(0)
+    }
+
     /// `from` and the nodes inside it with the tag `tag`, in the order they draw.
     pub fn tagged(&self, from: NodeId, tag: &str) -> Vec<NodeId> {
         let mut found = self.descendants(from);
@@ -1329,7 +1342,8 @@ impl Scene {
     /// scene's root needs a name, since the root has none.
     ///
     /// Fails if the name isn't one a node can have or one of `parent`'s children has it already,
-    /// or if `from` is a tile layer, which only its tilemap can hold.
+    /// if `from` is a tile layer, which only its tilemap can hold, or if the copy would place a
+    /// node deeper than scenes hold, 200 levels below their root.
     pub fn add(
         &mut self,
         parent: NodeId,
@@ -1353,6 +1367,11 @@ impl Scene {
         if self.find(parent, name).is_some() {
             return Err(format!(
                 "there's a node named `{name}` there already, but siblings' names are unique"
+            ));
+        }
+        if self.depth(parent) + 1 + source.height(from) > MAX_NODE_DEPTH {
+            return Err(format!(
+                "nodes would nest more than {MAX_NODE_DEPTH} deep, too deep to add"
             ));
         }
         let id = self.copy(parent, source, from);
@@ -1537,81 +1556,167 @@ struct Expand<'a> {
     sheets: BTreeMap<String, SheetDef>,
 }
 
+/// Work left to expand a file. Children finish before their node, and an instance's placed
+/// file finishes before its overrides and its own children are joined to it. Keeping this on
+/// the heap leaves room on the call stack to parse files even at the deepest instance.
+enum ExpandStep {
+    Node {
+        node: NodeDef,
+        file: String,
+        path: String,
+        depth: usize,
+        children: usize,
+    },
+    Instance {
+        node: NodeDef,
+        file: String,
+        path: String,
+        children: usize,
+        props: Props,
+    },
+    Error(Error),
+}
+
 fn sheet_key(file: &str, sheet: &str) -> String {
     format!("{file}#{sheet}")
 }
 
 impl Expand<'_> {
-    /// The nodes of `file`, at `path`, expanded.
+    /// The nodes of `file`, at `path`, expanded without recursing through nodes or instances.
     fn file(&mut self, file: &SceneFile, path: &str) -> Result<Vec<NodeDef>> {
+        let mut steps = Vec::new();
+        self.queue_file(file, path, 0, &mut steps);
+        let mut nodes = Vec::new();
+        while let Some(step) = steps.pop() {
+            match step {
+                ExpandStep::Error(error) => return Err(error),
+                ExpandStep::Node {
+                    mut node,
+                    file,
+                    path,
+                    depth,
+                    children,
+                } => {
+                    node.children = nodes.split_off(nodes.len() - children);
+                    if let KindDef::Instance(instance) = &node.kind {
+                        let scene = instance.scene.clone();
+                        if self.stack.contains(&scene) {
+                            return Err(Error::Scene {
+                                path: file.into(),
+                                message: format!(
+                                    "node `{path}`: `{scene}` places itself, through its instances"
+                                ),
+                            });
+                        }
+                        let placed = self.assets.scene(&scene)?;
+                        self.stack.push(scene.clone());
+                        steps.push(ExpandStep::Instance {
+                            node,
+                            file,
+                            path,
+                            children: placed.children.len(),
+                            props: placed.props.clone(),
+                        });
+                        self.queue_file(&placed, &scene, depth + 1, &mut steps);
+                    } else {
+                        nodes.push(node);
+                    }
+                }
+                ExpandStep::Instance {
+                    mut node,
+                    file,
+                    path,
+                    children,
+                    mut props,
+                } => {
+                    self.stack.pop();
+                    let mut placed = nodes.split_off(nodes.len() - children);
+                    let KindDef::Instance(instance) = &node.kind else {
+                        unreachable!("only instances place files");
+                    };
+                    let error = |message: String| Error::Scene {
+                        path: file.clone().into(),
+                        message: format!("node `{path}`: {message}"),
+                    };
+                    for (target, change) in &instance.overrides {
+                        self.change(&mut placed, target, change)
+                            .map_err(|err| error(format!("overriding `{target}`: {err}")))?;
+                    }
+                    for child in node.children {
+                        if placed.iter().any(|node| node.name == child.name) {
+                            return Err(error(format!(
+                                "`{}` has a node named `{}` already, but siblings' names are unique",
+                                instance.scene, child.name
+                            )));
+                        }
+                        placed.push(child);
+                    }
+                    node.children = placed;
+                    node.kind = KindDef::Node;
+                    props.extend(node.props);
+                    node.props = props;
+                    nodes.push(node);
+                }
+            }
+        }
+        Ok(nodes)
+    }
+
+    /// Queues a file's nodes in reverse drawing order, parents before children, so popping
+    /// steps finishes children before their parents. Only each node's own fields are cloned;
+    /// walking or cloning a whole subtree recursively here would use the stack we're saving.
+    fn queue_file(
+        &mut self,
+        file: &SceneFile,
+        path: &str,
+        depth: usize,
+        steps: &mut Vec<ExpandStep>,
+    ) {
         for (name, sheet) in &file.sheets {
             self.sheets.insert(sheet_key(path, name), sheet.clone());
         }
-        file.children
-            .iter()
-            .map(|node| self.node(node, path, ""))
-            .collect()
-    }
-
-    /// `def`, a node of the file `file` inside the node at `parent`, expanded.
-    fn node(&mut self, def: &NodeDef, file: &str, parent: &str) -> Result<NodeDef> {
-        let path = if parent.is_empty() {
-            def.name.clone()
-        } else {
-            format!("{parent}/{}", def.name)
-        };
-        let error = |message: String| Error::Scene {
-            path: file.into(),
-            message: format!("node `{path}`: {message}"),
-        };
-        let mut node = NodeDef {
-            name: def.name.clone(),
-            kind: def.kind.clone(),
-            tags: def.tags.clone(),
-            props: def.props.clone(),
-            children: Vec::new(),
-            ..*def
-        };
-        if let KindDef::Sprite(sprite) = &mut node.kind {
-            sprite.sheet = sheet_key(file, &sprite.sheet);
-        }
-        let mut children = def
+        let mut pending = file
             .children
             .iter()
-            .map(|child| self.node(child, file, &path))
-            .collect::<Result<Vec<_>>>()?;
-        if let KindDef::Instance(instance) = &def.kind {
-            let scene = &instance.scene;
-            if self.stack.contains(scene) {
-                return Err(error(format!(
-                    "`{scene}` places itself, through its instances"
-                )));
+            .map(|node| (node, String::new(), depth))
+            .collect::<Vec<_>>();
+        while let Some((def, parent, depth)) = pending.pop() {
+            let at = if parent.is_empty() {
+                def.name.clone()
+            } else {
+                format!("{parent}/{}", def.name)
+            };
+            if depth >= MAX_NODE_DEPTH {
+                steps.push(ExpandStep::Error(Error::Scene {
+                    path: path.into(),
+                    message: format!(
+                        "node `{at}`: nodes nest more than {MAX_NODE_DEPTH} deep, too deep to place"
+                    ),
+                }));
+                continue;
             }
-            let placed = self.assets.scene(scene)?;
-            self.stack.push(scene.clone());
-            let mut nodes = self.file(&placed, scene)?;
-            self.stack.pop();
-            for (target, change) in &instance.overrides {
-                self.change(&mut nodes, target, change)
-                    .map_err(|err| error(format!("overriding `{target}`: {err}")))?;
+            let mut node = NodeDef {
+                name: def.name.clone(),
+                kind: def.kind.clone(),
+                tags: def.tags.clone(),
+                props: def.props.clone(),
+                children: Vec::new(),
+                ..*def
+            };
+            if let KindDef::Sprite(sprite) = &mut node.kind {
+                sprite.sheet = sheet_key(path, &sprite.sheet);
             }
-            for child in children {
-                if nodes.iter().any(|node| node.name == child.name) {
-                    return Err(error(format!(
-                        "`{scene}` has a node named `{}` already, but siblings' names are unique",
-                        child.name
-                    )));
-                }
-                nodes.push(child);
+            steps.push(ExpandStep::Node {
+                node,
+                file: path.to_owned(),
+                path: at.clone(),
+                depth,
+                children: def.children.len(),
+            });
+            for child in &def.children {
+                pending.push((child, at.clone(), depth + 1));
             }
-            children = nodes;
-            node.kind = KindDef::Node;
-            let mut props = placed.props.clone();
-            props.extend(def.props.clone());
-            node.props = props;
         }
-        node.children = children;
-        Ok(node)
     }
 
     /// Changes the node at `target` among `nodes` by the fields `change` sets.

@@ -11,9 +11,11 @@ use std::{collections::BTreeMap, fmt::Write};
 use super::{
     clip::{Clip, Interpolation, Keys, Track},
     file::{FORMAT, KindDef, NodeDef, SceneFile, SheetDef, TileDef, TilesetFile, Value},
-    is_identifier,
 };
-use crate::graphics::{Align, Color};
+use crate::{
+    graphics::{Align, Color},
+    lua::is_identifier,
+};
 
 /// `scene` as the text of a scene file, or why it can't be written: only finite numbers can.
 pub(super) fn write(scene: &SceneFile) -> Result<String, String> {

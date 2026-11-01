@@ -6,11 +6,15 @@
 
 use std::{collections::BTreeMap, fs, path::Path};
 
-use super::clip::{Clip, Interpolation, Keys, Property, Track};
+use super::{
+    MAX_NODE_DEPTH,
+    clip::{Clip, Interpolation, Keys, Property, Track},
+};
 use crate::{
     Error, Result,
     graphics::{Align, Color},
     lua::{
+        is_identifier,
         mlua::{self, chunk::ChunkMode},
         parse_hex, unpacked_color,
     },
@@ -496,7 +500,7 @@ fn plain_at(value: mlua::Value, root: &str, at: &str, depth: usize) -> Result<Va
 
 /// The path to the field `key` of the table at `at`, as Luau would write it.
 fn field_path(at: &str, key: &str) -> String {
-    match (at.is_empty(), super::is_identifier(key)) {
+    match (at.is_empty(), is_identifier(key)) {
         (true, true) => key.to_owned(),
         (false, true) => format!("{at}.{key}"),
         (_, false) => format!("{at}[{key:?}]"),
@@ -814,9 +818,9 @@ fn read_children(
         return Ok(Vec::new());
     };
     let owner = parent.describe();
-    if depth >= MAX_DEPTH {
+    if depth >= MAX_NODE_DEPTH {
         return Err(format!(
-            "{owner}: nodes nest more than {MAX_DEPTH} deep, too deep to read"
+            "{owner}: nodes nest more than {MAX_NODE_DEPTH} deep, too deep to read"
         ));
     }
     let list = list(children, "children").map_err(|err| format!("{owner}: {err}"))?;

@@ -56,7 +56,7 @@ fn headless() -> Headless {
 /// Scene and tileset files held in memory, by path, with every image the tileset's.
 struct Files<'a> {
     ctx: &'a mut Context,
-    files: HashMap<&'static str, &'static str>,
+    files: HashMap<&'a str, &'a str>,
 }
 
 impl Assets for Files<'_> {
@@ -76,11 +76,7 @@ impl Assets for Files<'_> {
 }
 
 /// The scene `path` among `files`, loaded.
-fn load(
-    headless: &mut Headless,
-    files: &[(&'static str, &'static str)],
-    path: &str,
-) -> Result<Scene> {
+fn load(headless: &mut Headless, files: &[(&str, &str)], path: &str) -> Result<Scene> {
     let ctx = headless.context();
     let font = ctx.default_font().clone();
     let mut assets = Files {
@@ -570,6 +566,123 @@ fn instances_that_cannot_be_made_are_errors() {
         let err = town(&mut headless, source.leak()).unwrap_err().to_string();
         assert!(err.contains(expected), "{err}");
     }
+}
+
+/// The source of a scene file holding a chain of `count` plain nodes nested one inside the
+/// next, named n1, n2 and so on, with `inner`, the source of a node, inside the deepest.
+fn chain(count: usize, inner: &str) -> String {
+    let mut node = inner.to_owned();
+    for i in (0..count).rev() {
+        node = format!(
+            "{{ name = \"n{}\", kind = \"node\", children = {{ {node} }} }}",
+            i + 1
+        );
+    }
+    format!("return {{ format = 1, children = {{ {node} }} }}")
+}
+
+#[test]
+fn instances_do_not_nest_deeper_than_scenes_hold() {
+    let mut headless = headless();
+    // Three files of 80 nodes each, each placing the next: each alone is well within what a
+    // scene holds, but placed one inside the next they nest 240 deep. (A file's own nesting is
+    // held to about half that by the limit on how deeply its tables nest, so it takes three.)
+    let placed =
+        |scene: &str| format!(r#"{{ name = "placed", kind = "instance", scene = "{scene}" }}"#);
+    let tail: &str = chain(80, "").leak();
+    let middle: &str = chain(79, &placed("tail.scene.luau")).leak();
+    let head: &str = chain(79, &placed("middle.scene.luau")).leak();
+    let files = [
+        ("tail.scene.luau", tail),
+        ("middle.scene.luau", middle),
+        ("head.scene.luau", head),
+    ];
+    load(&mut headless, &files, "tail.scene.luau").unwrap();
+    let err = load(&mut headless, &files, "head.scene.luau")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("nodes nest more than 200 deep, too deep to place"),
+        "{err}"
+    );
+}
+
+#[test]
+fn long_instance_chains_obey_the_node_limit_without_overflowing() {
+    let mut headless = headless();
+    // One file per node needs the most file-to-file expansion steps. Parsing the last file
+    // must still have room on the stack, and 201 nodes must return an error rather than abort.
+    for count in [199, 200, 201] {
+        let files = (0..count)
+            .map(|i| {
+                let path = format!("part{i}.scene.luau");
+                let source = if i + 1 == count {
+                    r#"return { format = 1, children = { { name = "leaf", kind = "node" } } }"#
+                        .to_owned()
+                } else {
+                    format!(
+                        r#"return {{ format = 1, children = {{ {{ name = "placed", kind = "instance", scene = "part{}.scene.luau" }} }} }}"#,
+                        i + 1
+                    )
+                };
+                (path, source)
+            })
+            .collect::<Vec<_>>();
+        let files = files
+            .iter()
+            .map(|(path, source)| (path.as_str(), source.as_str()))
+            .collect::<Vec<_>>();
+        let result = load(&mut headless, &files, "part0.scene.luau");
+        if count <= 200 {
+            let scene = result.unwrap();
+            assert_eq!(scene.descendants(scene.root()).len(), count + 1);
+        } else {
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("nodes nest more than 200 deep, too deep to place"),
+                "{err}"
+            );
+        }
+    }
+}
+
+#[test]
+fn nodes_are_added_only_as_deep_as_scenes_hold() {
+    let mut headless = headless();
+    // A chain grows one node at a time, each inside the last, until scenes hold no more.
+    let mut growing = load(
+        &mut headless,
+        &[("chain.scene.luau", chain(1, "").leak())],
+        "chain.scene.luau",
+    )
+    .unwrap();
+    let single = load(
+        &mut headless,
+        &[(
+            "single.scene.luau",
+            r#"return { format = 1, children = { { name = "single", kind = "node" } } }"#,
+        )],
+        "single.scene.luau",
+    )
+    .unwrap();
+    let lone = single.find(single.root(), "single").unwrap();
+
+    let root = growing.root();
+    let mut deepest = growing.find(root, "n1").unwrap();
+    let mut depth = 1;
+    loop {
+        match growing.add(deepest, &single, lone, Some("deeper")) {
+            Ok(inside) => {
+                deepest = inside;
+                depth += 1;
+            }
+            Err(err) => {
+                assert!(err.contains("too deep to add"), "{err}");
+                break;
+            }
+        }
+    }
+    assert_eq!(depth, 200, "the chain grew as deep as scenes hold");
 }
 
 #[test]

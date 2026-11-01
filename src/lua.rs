@@ -1210,6 +1210,23 @@ fn conversion_error(value: &mlua::Value, to: &str, message: String) -> mlua::Err
     }
 }
 
+/// Whether `name` is a Luau identifier: a name scripts can use, as a global table's name, or a
+/// table's field written bare, `name = value`, rather than bracketed, `["name"] = value`.
+/// Luau's keywords aren't identifiers, apart from `continue`, which is one only where a
+/// statement could start, so scripts can name things `continue`.
+pub(crate) fn is_identifier(name: &str) -> bool {
+    const KEYWORDS: [&str; 21] = [
+        "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if", "in",
+        "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
+    ];
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !KEYWORDS.contains(&name)
+}
+
 /// Parses a color written `#rrggbb` or `#rrggbbaa`.
 pub(crate) fn parse_hex(text: &str) -> Option<Color> {
     let digits = text.strip_prefix('#')?;
@@ -1505,6 +1522,16 @@ mod tests {
             "true",
         ] {
             assert!(convert::<Color>(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn identifiers_are_names_luau_accepts() {
+        for name in ["graphics", "_x1", "continue", "A1"] {
+            assert!(is_identifier(name), "{name}");
+        }
+        for name in ["", "1x", "the mill", "my-name", "end", "until", "nil"] {
+            assert!(!is_identifier(name), "{name}");
         }
     }
 

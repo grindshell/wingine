@@ -24,6 +24,7 @@ use super::{Lent, LibraryConfig};
 use crate::{
     Context, Error, Result,
     graphics::{Canvas, Color, Sprite},
+    lua::is_identifier,
     math::Rect,
 };
 
@@ -223,20 +224,6 @@ fn register(descriptor: abi::Library) -> Result<Library, String> {
         return Err(err);
     }
     Ok(registration.library)
-}
-
-/// Whether `name` is a Luau identifier, which scripts can name a global table by.
-fn is_identifier(name: &str) -> bool {
-    const KEYWORDS: [&str; 21] = [
-        "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if", "in",
-        "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
-    ];
-    let mut chars = name.chars();
-    chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !KEYWORDS.contains(&name)
 }
 
 /// `text` as a string, if it's UTF-8.

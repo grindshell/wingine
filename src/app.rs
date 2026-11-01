@@ -560,8 +560,8 @@ impl<G: Game> State<G> {
             // the Alt of an Alt+Tab. They weren't pressed for this game, so they're ignored.
             ElementState::Pressed if !is_synthetic && !to_gui => {
                 #[cfg(feature = "egui")]
-                if event.repeat && self.ctx.gui.debug_key == Some(key)
-                    || !event.repeat && self.ctx.gui.debug_key_down(key)
+                if (event.repeat && self.ctx.gui.debug_key == Some(key))
+                    || (!event.repeat && self.ctx.gui.debug_key_down(key))
                 {
                     return;
                 }
