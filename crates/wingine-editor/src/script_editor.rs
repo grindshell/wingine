@@ -16,9 +16,12 @@ use std::{
     sync::Arc,
 };
 
-use wingine::gui::egui::{
-    self, Color32, FontId, Key, Modifiers, Stroke,
-    text::{CCursor, CCursorRange, LayoutJob, TextFormat},
+use wingine::{
+    Waker,
+    gui::egui::{
+        self, Color32, FontId, Key, Modifiers, Stroke,
+        text::{CCursor, CCursorRange, LayoutJob, TextFormat},
+    },
 };
 
 use crate::{
@@ -107,10 +110,14 @@ pub struct ScriptEditor {
     new_script: Option<String>,
     /// How the script shown was laid out last frame, and where.
     shown: Option<(Arc<egui::Galley>, egui::Pos2)>,
+    /// Wakes the editor when the language server says something.
+    waker: Waker,
 }
 
-impl Default for ScriptEditor {
-    fn default() -> Self {
+impl ScriptEditor {
+    /// The screen, with no game open. `waker` wakes the editor when the language server says
+    /// something.
+    pub fn new(waker: Waker) -> Self {
         Self {
             folder: None,
             scripts: Vec::new(),
@@ -127,11 +134,10 @@ impl Default for ScriptEditor {
             tokens: None,
             new_script: None,
             shown: None,
+            waker,
         }
     }
-}
 
-impl ScriptEditor {
     /// Edits the scripts of the game in `folder`, closing those open.
     pub fn set_project(&mut self, folder: Option<PathBuf>) {
         self.folder = folder;
@@ -401,7 +407,7 @@ impl ScriptEditor {
             self.server = Server::Off;
             return;
         };
-        match LanguageServer::start(program, folder) {
+        match LanguageServer::start(program, folder, self.waker.clone()) {
             Ok(server) => self.server = Server::Running(server),
             Err(err) => {
                 let why = if err.kind() == io::ErrorKind::NotFound {
@@ -1217,7 +1223,8 @@ fn show_hover(
     }
     let since = hover.target.as_ref().map_or(now, |(_, since)| *since);
     if now - since < HOVER_DELAY {
-        ui.ctx().request_repaint();
+        ui.ctx()
+            .request_repaint_after_secs((HOVER_DELAY - (now - since)) as f32);
         return;
     }
     let named = luau::token_containing(tokens, word.start).is_some_and(|token| {

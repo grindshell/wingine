@@ -166,11 +166,17 @@ such as physics engines, networking or 3D pipelines.
   quarter step after frames at the rate end, so jitter doesn't move updates between frames.
   After the updates, `run_frame` runs the egui pass (`Game::gui`), then `draw`. The window's close
   button asks `Game::close_requested`, and `Context::quit` closes the window after the frame.
+  Frames come one after another, or with `Redraw::OnDemand` (`WindowConfig::redraw`, for tools),
+  only when something may have changed: the window's events request a redraw, and `Redraws`
+  (shared by the `Context`, `Waker`s and egui's repaint callback) holds when the next frame is
+  due, which `about_to_wait` waits until, woken early by an `EventLoopProxy` when a frame is
+  wanted sooner. Each frame forgets what was asked for as it begins.
 - `src/context.rs`: `Context`, the engine services passed to games: input, audio, the canvas
   size, the built-in font, texture loading, and `FrameStats` for the frame before (CPU time
   spent updating, drawing and rendering, the whole frame's time, and quads and draw calls).
   Games get it in their init closure and in `Game::update`; Luau games call
-  `graphics.frame_stats()`.
+  `graphics.frame_stats()`. Games that redraw on demand ask for frames with
+  `request_redraw` and `request_redraw_after`, and from other threads with a `Waker`.
 - `src/gui.rs`: egui over games, `wingine::gui`, which re-exports `egui`. `Gui` (in the
   `Context`) holds egui's context, the input for its next pass, and what the last pass drew; its
   renderer is made the first time there's something to draw, and games that don't override
@@ -231,7 +237,9 @@ such as physics engines, networking or 3D pipelines.
   thread and WARP renders wrongly with a shared one, so parallel GPU tests take turns. Simulated
   input reaches egui too, with `type_text` and `scroll` for it alone; screenshots show the
   interface; `request_close` presses the window's close button and `has_quit` tells whether the
-  game called `Context::quit`.
+  game called `Context::quit`. Simulations run every frame they're asked to, but
+  `next_frame_in` tells when a game that redraws on demand would want its next (input wants one
+  at once), so tests check it waits while nothing changes.
 - `src/lua.rs`: `Scripts`, a sandboxed Luau VM for gameplay scripts, and its task scheduler.
   Games register Rust functions (`set_function`), load script files, and start script functions
   as tasks (`spawn`): coroutines that `update` resumes once a frame with the frame's duration.
@@ -347,11 +355,16 @@ such as physics engines, networking or 3D pipelines.
   convert between characters and UTF-16 columns. Without luau-lsp, scripts are edited unchecked.
   Play
   (`play.rs`) runs the editor's own executable with `--run`, which runs the game, so it's a
-  process of its own; tests point it at the built executable with `set_runner`. Its tests
+  process of its own; tests point it at the built executable with `set_runner`. The editor
+  redraws on demand: threads that read the game played and luau-lsp wake it with a `Waker` when
+  they have something, as does `project::Watcher`, a thread that hashes the folder's files' sizes
+  and modified times every second, so the editor reads the folder again only when it's changed;
+  the Animation panel asks for frames while a clip plays. Its tests
   (`tests/editor.rs`) drive it through `Simulation`, clicking widgets by label, and copy example
-  games to change them; those of luau-lsp wait on it in real time (`wait_for`). Number fields give
-  their name to AccessKit themselves, since egui doesn't carry a label's text over to what it
-  labels.
+  games to change them; those of luau-lsp, Play and the watcher wait in real time, running frames
+  only when the editor wants them, as its window would (`wait_for`), so they fail if nothing wakes
+  it, and `settle` checks it stops wanting frames. Number fields give their name to AccessKit
+  themselves, since egui doesn't carry a label's text over to what it labels.
 - `examples/rpg/`: the milestone's RPG, written entirely in Luau. Maps in `maps/` are scenes: a
   tilemap over `world.tileset.luau` whose layers hold each cell's kind of ground (`floor`), the
   ground's sprite (`ground`) and objects (`objects`), with tiles named for their kind and sprite

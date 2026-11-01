@@ -3,7 +3,8 @@
 //! call being typed. The server runs in a process of its own, spoken to over its standard input
 //! and output in JSON-RPC messages, each after a `Content-Length` header. Threads write and read
 //! them, so the editor never waits on the server: it asks, and picks the answers up a frame or
-//! more later with [`LanguageServer::poll`].
+//! more later with [`LanguageServer::poll`], in a frame the reading thread asks for when the
+//! server says something.
 //!
 //! The server checks scripts against the engine's API through its definitions file,
 //! [`wingine::runtime::DEFINITIONS`], which the editor writes to a folder of its own for it.
@@ -21,6 +22,7 @@ use std::{
 };
 
 use serde_json::{Value, json};
+use wingine::Waker;
 
 /// Luau's settings for every game, under any `.luaurc` of the game's own. The engine calls a
 /// game's global `update` and `draw`, which Luau would otherwise warn are never used.
@@ -141,8 +143,9 @@ pub struct LanguageServer {
 }
 
 impl LanguageServer {
-    /// Runs `program`, luau-lsp, for the game in `folder`.
-    pub fn start(program: &Path, folder: &Path) -> io::Result<Self> {
+    /// Runs `program`, luau-lsp, for the game in `folder`. `waker` wakes the editor whenever the
+    /// server says something, so it can be polled.
+    pub fn start(program: &Path, folder: &Path, waker: Waker) -> io::Result<Self> {
         let (definitions, luaurc) = support_files()?;
         let folder = std::path::absolute(folder)?;
         let mut definitions_arg = std::ffi::OsString::from("--definitions=@wingine=");
@@ -183,12 +186,14 @@ impl LanguageServer {
                         if sender.send(Incoming::Message(message)).is_err() {
                             return;
                         }
+                        waker.wake();
                     }
                     Ok(None) => break "it closed its output".to_owned(),
                     Err(err) => break err.to_string(),
                 }
             };
             let _ = sender.send(Incoming::Closed(why));
+            waker.wake();
         });
         // What it prints for people, which would fill its pipe if no one read it.
         thread::spawn(move || {

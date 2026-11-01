@@ -3,7 +3,7 @@
 use std::{fs, path::Path};
 
 use wingine::{
-    Context, Error, FrameStats, Game, WindowConfig,
+    Context, Error, FrameStats, Game, Redraw, WindowConfig,
     graphics::{Canvas, Color, Resolution},
     headless::Simulation,
     input::{Key, MouseButton},
@@ -71,6 +71,68 @@ fn a_tap_is_pressed_once_and_held_for_one_frame() {
     assert_eq!(simulation.frame_count(), 4);
     assert_eq!(probe.space_presses, 1);
     assert_eq!(probe.space_held_frames, 1);
+}
+
+/// A game that asks for a frame when told to, as one that redraws on demand does.
+#[derive(Default)]
+struct Asking {
+    /// Seconds from now to ask for a frame at, in the next update.
+    ask: Option<f32>,
+}
+
+impl Game for Asking {
+    fn update(&mut self, ctx: &mut Context, _dt: f32) {
+        match self.ask.take() {
+            Some(0.0) => ctx.request_redraw(),
+            Some(seconds) => ctx.request_redraw_after(seconds),
+            None => {}
+        }
+    }
+
+    fn draw(&mut self, _canvas: &mut Canvas) {}
+}
+
+#[test]
+fn frames_on_demand_are_wanted_after_input_and_when_asked_for() {
+    let config = WindowConfig {
+        redraw: Redraw::OnDemand,
+        ..config()
+    };
+    let mut simulation = Simulation::new(&config, |_| Ok(Asking::default())).unwrap();
+    // The first frames start egui, which asks for a few more.
+    for _ in 0..3 {
+        simulation.step();
+    }
+    assert_eq!(simulation.next_frame_in(), None);
+
+    // Input wants a frame, which the frame it gets satisfies.
+    simulation.key_down(Key::Space);
+    assert_eq!(simulation.next_frame_in(), Some(0.0));
+    simulation.step();
+    assert_eq!(simulation.next_frame_in(), None);
+    simulation.key_up(Key::Space);
+    simulation.move_mouse(4.0, 4.0);
+    assert_eq!(simulation.next_frame_in(), Some(0.0));
+    simulation.step();
+
+    // The game asks for the next frame, or one later.
+    simulation.game_mut().ask = Some(0.0);
+    simulation.step();
+    assert_eq!(simulation.next_frame_in(), Some(0.0));
+    simulation.step();
+    assert_eq!(simulation.next_frame_in(), None);
+    simulation.game_mut().ask = Some(1.0);
+    simulation.step();
+    let wait = simulation.next_frame_in().expect("a frame is wanted");
+    assert!(0.5 < wait && wait <= 1.0, "{wait}");
+
+    // Another thread asks with a waker.
+    simulation.step();
+    let waker = simulation.context().waker();
+    std::thread::spawn(move || waker.wake()).join().unwrap();
+    assert_eq!(simulation.next_frame_in(), Some(0.0));
+    simulation.step();
+    assert_eq!(simulation.next_frame_in(), None);
 }
 
 #[test]

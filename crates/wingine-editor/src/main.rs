@@ -9,7 +9,7 @@
 
 use std::{path::PathBuf, process::ExitCode};
 
-use wingine::WindowConfig;
+use wingine::{Redraw, WindowConfig};
 use wingine_editor::{Editor, docks::output::Logger};
 
 fn main() -> ExitCode {
@@ -41,7 +41,8 @@ fn run(folder: Option<PathBuf>) -> wingine::Result<()> {
         title: "Wingine Editor".into(),
         width: 1600,
         height: 900,
+        redraw: Redraw::OnDemand,
         ..Default::default()
     };
-    wingine::run(config, |_| Ok(Editor::new(folder)))
+    wingine::run(config, |ctx| Ok(Editor::new(ctx, folder)))
 }

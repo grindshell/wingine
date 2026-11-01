@@ -11,7 +11,7 @@ use std::{
 };
 
 use wingine::{
-    Context, Game,
+    Context, Game, Waker,
     graphics::Canvas,
     gui::egui::{self, Key, KeyboardShortcut, Modifiers},
     math::Affine,
@@ -30,14 +30,14 @@ use crate::{
     document::Document,
     edit::{self, NodePath},
     play::Play,
-    project::{AssetCache, Project},
+    project::{AssetCache, Project, Watcher},
     script_editor::{self, ScriptEditor},
     theme,
     viewport::{self, Tool, Viewport},
 };
 
-/// How often the project's folder is read again, in seconds, to see files changed elsewhere.
-const RESCAN_TIME: f32 = 3.0;
+/// How often the editor looks again for a game that has closed its output to end, in seconds.
+const ENDING_CHECK_TIME: f32 = 0.05;
 
 /// The big views in the middle of the editor, switched between at the top.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,13 +96,17 @@ pub struct Editor {
     opening: Option<String>,
     closing: Option<Closing>,
     themed: bool,
-    /// Seconds until the project's folder is read again.
-    rescan_in: f32,
+    /// Asks for frames when there's something new from another thread: the game played, the
+    /// language server, or the project's folder.
+    waker: Waker,
+    /// What tells the editor files in the project's folder have changed.
+    watcher: Option<Watcher>,
 }
 
 impl Editor {
-    /// An editor of the game in `folder`, or of nothing yet, to open a game from the start.
-    pub fn new(folder: Option<PathBuf>) -> Self {
+    /// An editor of the game in `folder`, or of nothing yet, to open a game from the start. It
+    /// redraws on demand, waking itself through `ctx` when there's something new to show.
+    pub fn new(ctx: &Context, folder: Option<PathBuf>) -> Self {
         let mut editor = Self {
             project: None,
             documents: Vec::new(),
@@ -115,7 +119,7 @@ impl Editor {
             output: Output::default(),
             tiles: Tiles::default(),
             animation: Animation::default(),
-            scripts: ScriptEditor::default(),
+            scripts: ScriptEditor::new(ctx.waker()),
             dt: 0.0,
             bottom_open: true,
             bottom_tab: BottomTab::Output,
@@ -127,7 +131,8 @@ impl Editor {
             opening: None,
             closing: None,
             themed: false,
-            rescan_in: RESCAN_TIME,
+            waker: ctx.waker(),
+            watcher: None,
         };
         if let Some(folder) = folder
             && let Err(err) = editor.open_project(folder)
@@ -145,6 +150,7 @@ impl Editor {
         self.current = 0;
         self.cache = AssetCache::default();
         self.scripts.set_project(Some(project.folder.clone()));
+        self.watcher = Some(Watcher::new(project.folder.clone(), self.waker.clone()));
         let message = format!("Opened {}", project.name);
         if let Err(err) = &project.config {
             self.output.push(Level::Error, format!("conf.luau: {err}"));
@@ -322,7 +328,7 @@ impl Editor {
             .play_env
             .iter()
             .map(|(name, value)| (name.as_os_str(), value.as_os_str()));
-        match Play::start(&self.runner, &project.folder, env) {
+        match Play::start(&self.runner, &project.folder, env, self.waker.clone()) {
             Ok(play) => {
                 self.output
                     .push(Level::Info, format!("Playing {}", project.name));
@@ -337,12 +343,12 @@ impl Editor {
     pub fn stop(&mut self) {
         if let Some(mut play) = self.play.take() {
             play.stop();
-            self.take_play_output(&play);
+            self.take_play_output(&mut play);
             self.output.push(Level::Info, "Stopped the game.");
         }
     }
 
-    fn take_play_output(&mut self, play: &Play) {
+    fn take_play_output(&mut self, play: &mut Play) {
         for line in play.lines() {
             self.output.push_game_line(line);
         }
@@ -913,10 +919,10 @@ fn subfolders(folder: &Path) -> Vec<(String, PathBuf, bool)> {
 }
 
 impl Game for Editor {
-    fn update(&mut self, _ctx: &mut Context, dt: f32) {
+    fn update(&mut self, ctx: &mut Context, dt: f32) {
         self.dt = dt;
         if let Some(mut play) = self.play.take() {
-            self.take_play_output(&play);
+            self.take_play_output(&mut play);
             match play.exited() {
                 Some(status) => {
                     let message = match status.code() {
@@ -926,20 +932,25 @@ impl Game for Editor {
                     };
                     self.output.push(Level::Info, message);
                 }
-                None => self.play = Some(play),
+                None => {
+                    // A game closes its output as it ends, which wakes the editor, but may not
+                    // quite have ended yet.
+                    if play.is_closed() {
+                        ctx.request_redraw_after(ENDING_CHECK_TIME);
+                    }
+                    self.play = Some(play);
+                }
             }
         }
-        self.rescan_in -= dt;
-        if self.rescan_in <= 0.0 {
-            self.rescan_in = RESCAN_TIME;
-            if let Some(project) = &mut self.project {
-                project.rescan();
-                // Images and files the scenes use may have changed, and scripts.
-                for document in &mut self.documents {
-                    document.rebuild();
-                }
-                self.scripts.rescan();
+        if self.watcher.as_ref().is_some_and(Watcher::take_changed)
+            && let Some(project) = &mut self.project
+        {
+            project.rescan();
+            // Images and files the scenes use may have changed, and scripts.
+            for document in &mut self.documents {
+                document.rebuild();
             }
+            self.scripts.rescan();
         }
     }
 

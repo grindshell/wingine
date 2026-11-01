@@ -10,7 +10,7 @@ use std::{
 };
 
 use wingine::{
-    WindowConfig,
+    Redraw, WindowConfig,
     headless::Simulation,
     input::{Key, MouseButton},
     scene::{
@@ -58,10 +58,11 @@ fn editor(folder: Option<PathBuf>) -> Simulation<Editor> {
     let config = WindowConfig {
         width: 1600,
         height: 900,
+        redraw: Redraw::OnDemand,
         ..Default::default()
     };
-    let mut simulation =
-        Simulation::new(&config, |_| Ok(Editor::new(folder))).expect("a GPU adapter is available");
+    let mut simulation = Simulation::new(&config, |ctx| Ok(Editor::new(ctx, folder)))
+        .expect("a GPU adapter is available");
     simulation.run_frames(2);
     simulation
 }
@@ -75,6 +76,48 @@ fn garden(folder: PathBuf) -> Simulation<Editor> {
         .unwrap();
     simulation.run_frames(2);
     simulation
+}
+
+/// Runs the frames the editor wants until it wants none, as its window would before it waits
+/// for input, and how many that was.
+///
+/// # Panics
+///
+/// If it still wants frames after two seconds' worth.
+fn settle(simulation: &mut Simulation<Editor>) -> u32 {
+    let mut frames = 0;
+    while simulation.next_frame_in().is_some() {
+        assert!(frames < 120, "the editor still wants frames");
+        simulation.step();
+        frames += 1;
+    }
+    frames
+}
+
+/// Runs frames as the editor's window would, until `done` is true of the editor: when it wants
+/// one, and otherwise not until another thread wakes it, as luau-lsp, a game played and the
+/// project's watcher do when there's something new. Frames it wants later run at once, since a
+/// simulation's time is its own.
+///
+/// # Panics
+///
+/// After 30 seconds.
+fn wait_for(simulation: &mut Simulation<Editor>, what: &str, done: impl Fn(&Editor) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !done(simulation.game()) {
+        let lines = simulation.game().output().lines();
+        let script = simulation.game().scripts().script();
+        let text = script.map(|script| (&script.text, &script.diagnostics));
+        assert!(
+            Instant::now() < deadline,
+            "waited for {what}: {lines:?}\n{text:#?}"
+        );
+        if simulation.next_frame_in().is_some() {
+            simulation.step();
+        } else {
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
 
 fn file(simulation: &Simulation<Editor>) -> &SceneFile {
@@ -838,16 +881,19 @@ fn scrubbing_and_playing_a_clip_poses_the_preview() {
     assert_eq!(node(&simulation, "hips/body/head").rotation, rest);
     assert!(!simulation.game().document().unwrap().is_dirty());
 
-    // Playing moves the playhead on, and the walk loops.
+    // Playing moves the playhead on from the next frame, and the walk loops. The editor wants
+    // frames as long as it plays.
     simulation.click_gui("Play Clip");
     simulation.run_frames(30);
     assert!(simulation.game().animation().playing);
     let played = timeline(&simulation).time;
-    let expected = (time + 31.0 / 60.0) % duration;
-    assert!((played - expected).abs() < 0.03, "{played} {expected}");
+    let expected = (time + 30.0 / 60.0) % duration;
+    assert!((played - expected).abs() < 0.001, "{played} {expected}");
+    assert_eq!(simulation.next_frame_in(), Some(0.0));
     simulation.click_gui("Pause Clip");
     simulation.step();
     assert!(!simulation.game().animation().playing);
+    settle(&mut simulation);
 
     // Another panel puts the preview back as the file has it.
     simulation.click_gui("Output");
@@ -1080,19 +1126,52 @@ fn playing_runs_the_game_in_its_own_process() {
     );
     simulation.click_gui("▶ Play");
     assert!(simulation.game().is_playing());
-    for _ in 0..600 {
-        if !simulation.game().is_playing() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(50));
-        simulation.step();
-    }
+    // The game ending wakes the editor.
+    wait_for(&mut simulation, "the game to end", |editor| {
+        !editor.is_playing()
+    });
     let lines = simulation.game().output().lines();
-    assert!(!simulation.game().is_playing(), "{lines:?}");
     assert!(
         lines.iter().any(|line| line.text == "The game ended."),
         "{lines:?}"
     );
+}
+
+#[test]
+fn the_editor_runs_frames_only_when_something_changes() {
+    let mut simulation = garden(examples().join("garden"));
+    settle(&mut simulation);
+
+    // The pointer moving over the viewport wants a frame, then the editor waits again.
+    let [x, y] = simulation.game().scene_to_window([100.0, 100.0]).unwrap();
+    simulation.move_mouse(x, y);
+    assert_eq!(simulation.next_frame_in(), Some(0.0));
+    settle(&mut simulation);
+    assert_eq!(simulation.next_frame_in(), None);
+}
+
+#[test]
+fn files_changed_elsewhere_wake_the_editor_to_read_them() {
+    let folder = copy_of("pong", "watching");
+    let mut simulation = editor(Some(folder.clone()));
+    simulation.game_mut().scripts_mut().set_program(None);
+    simulation.game_mut().open_script("opponent.luau").unwrap();
+    settle(&mut simulation);
+
+    fs::write(folder.join("opponent.luau"), "-- changed\n").unwrap();
+    fs::write(folder.join("extra.luau"), "").unwrap();
+    wait_for(&mut simulation, "the files to be read again", |editor| {
+        script_is(editor, "-- changed\n")
+    });
+    simulation.step();
+    assert!(simulation.gui_rect("extra.luau").is_some());
+}
+
+fn script_is(editor: &Editor, text: &str) -> bool {
+    editor
+        .scripts()
+        .script()
+        .is_some_and(|script| script.text == text)
 }
 
 /// The text of the script shown.
@@ -1115,22 +1194,6 @@ fn luau_lsp_runs() -> bool {
         eprintln!("luau-lsp isn't installed, so this test checks nothing");
     }
     runs
-}
-
-/// Runs frames, waiting for luau-lsp as it works in real time, until `done` is true of the editor.
-fn wait_for(simulation: &mut Simulation<Editor>, what: &str, done: impl Fn(&Editor) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done(simulation.game()) {
-        let lines = simulation.game().output().lines();
-        let script = simulation.game().scripts().script();
-        let text = script.map(|script| (&script.text, &script.diagnostics));
-        assert!(
-            Instant::now() < deadline,
-            "waited for {what}: {lines:?}\n{text:#?}"
-        );
-        thread::sleep(Duration::from_millis(10));
-        simulation.step();
-    }
 }
 
 #[test]

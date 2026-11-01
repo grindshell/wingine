@@ -17,6 +17,6 @@ pub mod scene;
 pub mod script;
 pub mod tilemap;
 
-pub use app::{Game, WindowConfig, run};
+pub use app::{Game, Redraw, Waker, WindowConfig, run};
 pub use context::{Context, FrameStats};
 pub use error::{BoxedError, Error, Result};

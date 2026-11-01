@@ -1,10 +1,14 @@
-use std::{sync::Arc, time::Instant};
+use std::{
+    fmt,
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    time::{Duration, Instant},
+};
 
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
     event::{ElementState, KeyEvent, WindowEvent},
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::PhysicalKey,
     window::{Window, WindowId},
 };
@@ -74,6 +78,9 @@ pub struct WindowConfig {
     /// reaches the game. `None`, the default, has no such key. Without the `egui` feature, it
     /// does nothing.
     pub debug_key: Option<Key>,
+    /// When frames come: one after another, as games want, or only when something may have
+    /// changed, as tools want.
+    pub redraw: Redraw,
 }
 
 impl Default for WindowConfig {
@@ -87,7 +94,86 @@ impl Default for WindowConfig {
             vsync: true,
             update_rate: None,
             debug_key: None,
+            redraw: Redraw::Continuously,
         }
+    }
+}
+
+/// When a window's frames come.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Redraw {
+    /// One after another, paced by vsync, as games want.
+    #[default]
+    Continuously,
+    /// Only when something may have changed what's shown, as tools want, so they use no power
+    /// while nothing happens: on input, when the window changes, when egui asks (as its
+    /// animations and blinking text cursors do), and when the game asks, with
+    /// [`Context::request_redraw`] and [`Context::request_redraw_after`], or from another thread
+    /// with a [`Waker`]. The first frame after a pause updates by its whole time, a quarter
+    /// second at most.
+    OnDemand,
+}
+
+/// When a game wants its next frame: what it, egui and other threads have asked for since the
+/// last frame began. A window that redraws on demand runs frames when they're due.
+#[derive(Default)]
+pub(crate) struct Redraws {
+    /// The soonest a frame is wanted.
+    due: Mutex<Option<Instant>>,
+    /// Wakes the window's event loop to look at when a frame is due, if it redraws on demand.
+    proxy: Mutex<Option<EventLoopProxy<()>>>,
+}
+
+impl Redraws {
+    /// Wants a frame `delay` from now.
+    pub fn request_after(&self, delay: Duration) {
+        // A delay too long to say when is never.
+        let Some(when) = Instant::now().checked_add(delay) else {
+            return;
+        };
+        let mut due = lock(&self.due);
+        if due.is_some_and(|due| due <= when) {
+            return;
+        }
+        *due = Some(when);
+        drop(due);
+        if let Some(proxy) = &*lock(&self.proxy) {
+            // It fails once the event loop has ended, when no frames are wanted.
+            let _ = proxy.send_event(());
+        }
+    }
+
+    /// When the next frame is wanted, if one is.
+    pub fn due(&self) -> Option<Instant> {
+        *lock(&self.due)
+    }
+
+    /// Forgets what was asked for, as a frame begins.
+    pub fn begin_frame(&self) {
+        *lock(&self.due) = None;
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Asks for a frame from any thread, for a game that [redraws on demand](Redraw::OnDemand): as a
+/// thread does that reads what another process says, when there's something new to show. Get one
+/// from [`Context::waker`]; clones ask for the same game's frames.
+#[derive(Clone)]
+pub struct Waker(pub(crate) Arc<Redraws>);
+
+impl Waker {
+    /// Asks for a frame as soon as there can be one. Does nothing once the window has closed.
+    pub fn wake(&self) {
+        self.0.request_after(Duration::ZERO);
+    }
+}
+
+impl fmt::Debug for Waker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Waker").finish_non_exhaustive()
     }
 }
 
@@ -109,11 +195,13 @@ where
     }
 
     let event_loop = EventLoop::new().map_err(|err| Error::EventLoop(err.into()))?;
-    // Frames are driven by requesting a redraw after each one, paced by vsync. Waiting (rather
-    // than polling) lets the loop sleep when no frame is wanted, e.g. while minimized.
+    // Frames are driven by requesting a redraw after each one, paced by vsync, or on demand.
+    // Waiting (rather than polling) lets the loop sleep when no frame is wanted, e.g. while
+    // minimized.
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let mut app = App {
+        proxy: event_loop.create_proxy(),
         config,
         init: Some(init),
         state: None,
@@ -225,6 +313,8 @@ impl Timestep {
 
 struct App<G, F> {
     config: WindowConfig,
+    /// Wakes the event loop when a game that redraws on demand wants a frame.
+    proxy: EventLoopProxy<()>,
     /// Taken on startup.
     init: Option<F>,
     /// Created once the event loop starts, since windows can't be created before then.
@@ -242,7 +332,7 @@ where
         let Some(init) = self.init.take() else {
             return;
         };
-        match State::new(event_loop, &self.config, init) {
+        match State::new(event_loop, &self.config, self.proxy.clone(), init) {
             Ok(state) => {
                 state.window.request_redraw();
                 self.state = Some(state);
@@ -266,6 +356,9 @@ where
             .consumed;
         #[cfg(not(feature = "egui"))]
         let to_gui = false;
+        if state.redraw == Redraw::OnDemand && changes_frame(&event) {
+            state.window.request_redraw();
+        }
         match event {
             WindowEvent::CloseRequested if state.game.close_requested(&mut state.ctx) => {
                 event_loop.exit();
@@ -309,6 +402,40 @@ where
             _ => {}
         }
     }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(state) = &self.state else {
+            return;
+        };
+        if state.redraw != Redraw::OnDemand {
+            return;
+        }
+        // A frame that's due is requested until one begins. If the window can't show one, as
+        // while it's hidden, the loop waits for an event before asking again.
+        let control_flow = match state.ctx.redraws.due() {
+            Some(due) if due <= Instant::now() => {
+                state.window.request_redraw();
+                ControlFlow::Wait
+            }
+            Some(due) => ControlFlow::WaitUntil(due),
+            None => ControlFlow::Wait,
+        };
+        event_loop.set_control_flow(control_flow);
+    }
+}
+
+/// Whether `event` may change what a window that redraws on demand shows: input, and changes to
+/// the window. Its own redraws and moves don't.
+fn changes_frame(event: &WindowEvent) -> bool {
+    !matches!(
+        event,
+        WindowEvent::RedrawRequested
+            | WindowEvent::Moved(_)
+            | WindowEvent::Destroyed
+            | WindowEvent::Occluded(true)
+            | WindowEvent::AxisMotion { .. }
+            | WindowEvent::ActivationTokenDone { .. }
+    )
 }
 
 struct State<G> {
@@ -319,6 +446,7 @@ struct State<G> {
     canvas: Canvas,
     game: G,
     timestep: Timestep,
+    redraw: Redraw,
     last_frame: Instant,
     /// The stats of the last frame, which become the context's once its whole time is known, at
     /// the start of the next.
@@ -334,6 +462,7 @@ impl<G: Game> State<G> {
     fn new(
         event_loop: &ActiveEventLoop,
         config: &WindowConfig,
+        proxy: EventLoopProxy<()>,
         init: impl FnOnce(&mut Context) -> Result<G>,
     ) -> Result<Self> {
         let timestep = Timestep::new(config.update_rate);
@@ -358,6 +487,10 @@ impl<G: Game> State<G> {
         let surface = WindowSurface::new(&gpu, window.clone(), surface, config.vsync);
         let renderer = Renderer::new(&gpu.device, &gpu.queue, surface.view_format());
         let mut ctx = Context::new(gpu, renderer, Audio::new());
+        // Frames that come one after another needn't be asked for.
+        if config.redraw == Redraw::OnDemand {
+            *lock(&ctx.redraws.proxy) = Some(proxy);
+        }
         // The game is built knowing the canvas size, as it is in a `Simulation`.
         let screen = Screen::new(config.resolution);
         let size = window.inner_size();
@@ -385,6 +518,7 @@ impl<G: Game> State<G> {
             canvas: Canvas::new(),
             game,
             timestep,
+            redraw: config.redraw,
             last_frame: Instant::now(),
             stats: FrameStats::default(),
             cursor: None,
@@ -419,6 +553,7 @@ impl<G: Game> State<G> {
     }
 
     fn frame(&mut self) {
+        self.ctx.redraws.begin_frame();
         let size = self.window.inner_size();
         if size.width == 0 || size.height == 0 {
             // Minimized. The next `Resized` event requests a redraw.
@@ -487,12 +622,18 @@ impl<G: Game> State<G> {
                 self.stats.render = start.elapsed().as_secs_f32();
                 self.surface.present(gpu, frame);
             }
-            Acquired::Skip => {}
+            // Nothing was shown, so the next frame tries again.
+            Acquired::Skip => {
+                self.window.request_redraw();
+                return;
+            }
             // Hidden windows aren't paced by vsync, so asking for the next frame at once would
             // spin. `WindowEvent::Occluded(false)` asks for it instead.
             Acquired::Occluded => return,
         }
-        self.window.request_redraw();
+        if self.redraw == Redraw::Continuously {
+            self.window.request_redraw();
+        }
     }
 }
 

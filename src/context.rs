@@ -1,7 +1,8 @@
-use std::path::Path;
+use std::{path::Path, sync::Arc, time::Duration};
 
 use crate::{
-    Error, Result,
+    Error, Result, Waker,
+    app::Redraws,
     audio::Audio,
     graphics::{Font, Texture, gpu::Gpu, renderer::Renderer},
     input::Input,
@@ -18,6 +19,8 @@ pub struct Context {
     pub(crate) frame_stats: FrameStats,
     /// Whether the game has asked to close its window.
     pub(crate) quit: bool,
+    /// When the game wants its next frame, if it redraws on demand.
+    pub(crate) redraws: Arc<Redraws>,
     #[cfg(feature = "egui")]
     pub(crate) gui: crate::gui::Gui,
     default_font: Font,
@@ -47,9 +50,20 @@ pub struct FrameStats {
 impl Context {
     pub(crate) fn new(gpu: Gpu, renderer: Renderer, audio: Audio) -> Self {
         let default_font = Font::built_in(&renderer, &gpu.device, &gpu.queue);
+        let redraws = Arc::<Redraws>::default();
+        #[cfg(feature = "egui")]
+        let gui = {
+            let gui = crate::gui::Gui::new(renderer.target_format());
+            // egui asks for frames as its animations and text cursors need them, and as code on
+            // any thread asks it to repaint.
+            let redraws = Arc::clone(&redraws);
+            gui.egui
+                .set_request_repaint_callback(move |info| redraws.request_after(info.delay));
+            gui
+        };
         Self {
             #[cfg(feature = "egui")]
-            gui: crate::gui::Gui::new(renderer.target_format()),
+            gui,
             gpu,
             renderer,
             input: Input::new(),
@@ -57,6 +71,7 @@ impl Context {
             canvas_size: [0.0, 0.0],
             frame_stats: FrameStats::default(),
             quit: false,
+            redraws,
             default_font,
         }
     }
@@ -66,6 +81,26 @@ impl Context {
     /// [`Simulation::has_quit`](crate::headless::Simulation::has_quit).
     pub fn quit(&mut self) {
         self.quit = true;
+    }
+
+    /// Asks for another frame after this one, for a game that [redraws on
+    /// demand](crate::Redraw::OnDemand) and has something more to show, such as an animation
+    /// playing. Games whose frames come one after another needn't ask.
+    pub fn request_redraw(&self) {
+        self.redraws.request_after(Duration::ZERO);
+    }
+
+    /// Asks for a frame `seconds` from now, at the latest, for a game that [redraws on
+    /// demand](crate::Redraw::OnDemand) and has something to show then.
+    pub fn request_redraw_after(&self, seconds: f32) {
+        if let Ok(delay) = Duration::try_from_secs_f32(seconds.max(0.0)) {
+            self.redraws.request_after(delay);
+        }
+    }
+
+    /// A [`Waker`], which asks for frames from other threads.
+    pub fn waker(&self) -> Waker {
+        Waker(Arc::clone(&self.redraws))
     }
 
     /// How long the frame before this one took, and how much it drew. All zero until a frame

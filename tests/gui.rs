@@ -1,7 +1,7 @@
 //! Tests for egui interfaces drawn over games, driven through `Simulation`.
 
 use wingine::{
-    Context, Game, WindowConfig,
+    Context, Game, Redraw, WindowConfig,
     graphics::{Canvas, Color},
     gui::egui,
     headless::Simulation,
@@ -16,6 +16,8 @@ struct Panel {
     game_clicks: u32,
     space_presses: u32,
     f3_presses: u32,
+    /// egui's context, which other threads can ask to repaint.
+    egui: Option<egui::Context>,
 }
 
 impl Game for Panel {
@@ -27,6 +29,7 @@ impl Game for Panel {
     }
 
     fn gui(&mut self, _ctx: &mut Context, ui: &mut egui::Ui) {
+        self.egui = Some(ui.ctx().clone());
         egui::Window::new("Panel")
             .fixed_pos([10.0, 10.0])
             .show(ui.ctx(), |ui| {
@@ -174,6 +177,47 @@ fn a_closed_debug_window_keeps_no_clicks_from_the_game() {
     simulation.run_frames(2);
     simulation.click(MouseButton::Left, x, y);
     assert_eq!(simulation.game().clicks, 1);
+}
+
+/// Runs the frames `simulation` wants until it wants none, and how many that was.
+///
+/// # Panics
+///
+/// If it still wants frames after a second's worth.
+fn settle<G: Game>(simulation: &mut Simulation<G>) -> u32 {
+    let mut frames = 0;
+    while simulation.next_frame_in().is_some() {
+        assert!(frames < 60, "frames are still wanted");
+        simulation.step();
+        frames += 1;
+    }
+    frames
+}
+
+#[test]
+fn an_interface_wants_frames_only_while_it_changes() {
+    let mut simulation = simulation(WindowConfig {
+        redraw: Redraw::OnDemand,
+        ..config()
+    });
+    // Its window fades in, then it waits for input.
+    assert!(simulation.next_frame_in().is_some());
+    let frames = settle(&mut simulation);
+    assert!(frames > 0, "{frames}");
+
+    // A button lights up under the pointer, then the interface settles again.
+    let button = simulation.gui_rect("Press me").unwrap();
+    simulation.move_mouse(button.x + button.w / 2.0, button.y + button.h / 2.0);
+    simulation.step();
+    assert!(simulation.next_frame_in().is_some());
+    settle(&mut simulation);
+
+    // Another thread asks egui to repaint.
+    let egui = simulation.game().egui.clone().unwrap();
+    std::thread::spawn(move || egui.request_repaint())
+        .join()
+        .unwrap();
+    assert_eq!(simulation.next_frame_in(), Some(0.0));
 }
 
 #[test]

@@ -16,6 +16,9 @@
 //! the engine's own window of frame stats, in any game, whether or not it has an interface. The
 //! key doesn't reach the game.
 //!
+//! In a window that [redraws on demand](crate::Redraw::OnDemand), egui's requests to repaint, from
+//! its animations or from code on any thread, ask for frames.
+//!
 //! A [`Simulation`](crate::headless::Simulation) does the same with its simulated input, and its
 //! screenshots show the interface. Tests find widgets by their labels with
 //! [`Simulation::gui_rect`](crate::headless::Simulation::gui_rect).

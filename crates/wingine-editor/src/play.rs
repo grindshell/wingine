@@ -7,23 +7,29 @@ use std::{
     io::{self, BufRead, BufReader, Read},
     path::Path,
     process::{Child, Command, ExitStatus, Stdio},
-    sync::mpsc::{self, Receiver},
+    sync::mpsc::{self, Receiver, TryRecvError},
     thread,
 };
+
+use wingine::Waker;
 
 /// A game running in its own process, and what it prints.
 pub struct Play {
     child: Child,
     lines: Receiver<String>,
+    /// Whether the game has closed its output, as it does as it ends.
+    closed: bool,
 }
 
 impl Play {
     /// Runs the game in `folder` with `runner`, an executable that runs the game it's given after
-    /// `--run`: the editor itself. `env` sets environment variables for it.
+    /// `--run`: the editor itself. `env` sets environment variables for it. `waker` wakes the
+    /// editor when the game prints something, and when it closes its output.
     pub fn start<'a>(
         runner: &Path,
         folder: &Path,
         env: impl IntoIterator<Item = (&'a OsStr, &'a OsStr)>,
+        waker: Waker,
     ) -> io::Result<Self> {
         let mut child = Command::new(runner)
             .arg("--run")
@@ -44,20 +50,46 @@ impl Play {
             .map(|err| Box::new(err) as Box<dyn Read + Send>);
         for stream in [stdout, stderr].into_iter().flatten() {
             let sender = sender.clone();
+            let waker = waker.clone();
             thread::spawn(move || {
                 for line in BufReader::new(stream).lines().map_while(Result::ok) {
                     if sender.send(line).is_err() {
-                        break;
+                        return;
                     }
+                    waker.wake();
                 }
+                // The game is ending, which the editor looks for.
+                drop(sender);
+                waker.wake();
             });
         }
-        Ok(Self { child, lines })
+        Ok(Self {
+            child,
+            lines,
+            closed: false,
+        })
     }
 
     /// What the game has printed since this was last called, a line at a time.
-    pub fn lines(&self) -> impl Iterator<Item = String> + '_ {
-        self.lines.try_iter()
+    pub fn lines(&mut self) -> Vec<String> {
+        let mut lines = Vec::new();
+        loop {
+            match self.lines.try_recv() {
+                Ok(line) => lines.push(line),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.closed = true;
+                    break;
+                }
+            }
+        }
+        lines
+    }
+
+    /// Whether the game has closed its output, as it does as it ends, as of the last
+    /// [`Play::lines`].
+    pub fn is_closed(&self) -> bool {
+        self.closed
     }
 
     /// How the game ended, once it has.

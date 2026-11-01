@@ -285,6 +285,7 @@ impl<G: Game> Simulation<G> {
     /// Presses the window's close button, as [`Game::close_requested`] hears it, and tells
     /// whether the window would close.
     pub fn request_close(&mut self) -> bool {
+        self.wake();
         self.game.close_requested(&mut self.headless.ctx)
     }
 
@@ -301,9 +302,28 @@ impl<G: Game> Simulation<G> {
         self.render_every_frame = render;
     }
 
+    /// For a game that [redraws on demand](crate::Redraw::OnDemand), how long its window would
+    /// wait before its next frame, in seconds: 0 if it wants one now, as after input, or `None`
+    /// if it waits for input or a [`Waker`](crate::Waker). [`Simulation::step`] runs a frame
+    /// whatever this says.
+    ///
+    /// The wait is in real time, while delays asked for in a frame are in game time, which a
+    /// simulation runs through faster: a frame asked for a second from now is a second away in
+    /// real time, however many frames run before it.
+    pub fn next_frame_in(&self) -> Option<f32> {
+        let due = self.headless.ctx.redraws.due()?;
+        Some(due.saturating_duration_since(Instant::now()).as_secs_f32())
+    }
+
+    /// Asks for a frame, as input does in a window that redraws on demand.
+    fn wake(&self) {
+        self.headless.ctx.waker().wake();
+    }
+
     /// Runs one frame: updates the game, runs its interface, then draws it.
     pub fn step(&mut self) {
         let start = Instant::now();
+        self.headless.ctx.redraws.begin_frame();
         #[cfg(feature = "egui")]
         self.set_gui_input(true);
         let Self {
@@ -345,6 +365,7 @@ impl<G: Game> Simulation<G> {
     /// Presses `key`. The game sees it unless the interface wants it, as a text field with focus
     /// does, or it's the [debug key](WindowConfig::debug_key).
     pub fn key_down(&mut self, key: Key) {
+        self.wake();
         #[cfg(feature = "egui")]
         {
             let gui = &mut self.headless.ctx.gui;
@@ -360,6 +381,7 @@ impl<G: Game> Simulation<G> {
     }
 
     pub fn key_up(&mut self, key: Key) {
+        self.wake();
         #[cfg(feature = "egui")]
         self.gui_input.key(key, false);
         self.headless.ctx.input.key_up(key);
@@ -386,6 +408,7 @@ impl<G: Game> Simulation<G> {
 
     /// Moves the cursor to `x`, `y` in canvas pixels.
     pub fn move_mouse(&mut self, x: f32, y: f32) {
+        self.wake();
         self.headless.ctx.input.set_mouse_position(Some([x, y]));
         #[cfg(feature = "egui")]
         {
@@ -399,6 +422,7 @@ impl<G: Game> Simulation<G> {
     /// Presses `button` where the cursor is. The game sees it unless the interface wants it, as
     /// when the cursor is over one of its windows.
     pub fn mouse_down(&mut self, button: MouseButton) {
+        self.wake();
         #[cfg(feature = "egui")]
         {
             self.gui_input.button(button, true);
@@ -415,6 +439,7 @@ impl<G: Game> Simulation<G> {
     }
 
     pub fn mouse_up(&mut self, button: MouseButton) {
+        self.wake();
         #[cfg(feature = "egui")]
         self.gui_input.button(button, false);
         self.headless.ctx.input.mouse_up(button);
@@ -424,6 +449,7 @@ impl<G: Game> Simulation<G> {
     /// input doesn't see typing.
     #[cfg(feature = "egui")]
     pub fn type_text(&mut self, text: &str) {
+        self.wake();
         self.gui_input.text(text);
     }
 
@@ -431,6 +457,7 @@ impl<G: Game> Simulation<G> {
     /// under the cursor. Positive `y` scrolls up, as turning the wheel away does.
     #[cfg(feature = "egui")]
     pub fn scroll(&mut self, x: f32, y: f32) {
+        self.wake();
         self.gui_input.scroll(egui::vec2(x, y));
     }
 
@@ -527,6 +554,7 @@ impl<G: Game> Simulation<G> {
 
     /// Resizes the virtual window to `width` by `height` physical pixels.
     pub fn resize(&mut self, width: u32, height: u32) {
+        self.wake();
         self.output = [width, height];
         self.drawn = false;
     }

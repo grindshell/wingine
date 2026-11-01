@@ -269,8 +269,12 @@ The editor writes scene files in the canonical layout, as
 [`SceneFile::to_luau`](scenes.md) does. A file already in it changes only where the scene did, but
 the layout has no comments: saving a scene written by hand drops its comments.
 
-The editor reads the game's folder again every few seconds, so files changed elsewhere, such as
-images, show up without opening them again.
+The editor looks at the game's folder every second, and reads what's changed elsewhere, such as an
+image or a script with no unsaved changes, without opening it again.
+
+The editor draws only when something changes: when it's used, when a clip plays, when the game
+it's playing prints something, or when luau-lsp has something to say. While nothing happens, it
+waits, using next to no power.
 
 ## Shortcuts
 

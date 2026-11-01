@@ -146,6 +146,8 @@ impl Animation {
             self.playing = false;
         }
 
+        // A clip starting to play moves on from the next frame, not by the time before it.
+        let was_playing = self.playing;
         self.toolbar(ui, document);
         ui.separator();
         let Some(name) = document.timeline.clip.clone() else {
@@ -156,7 +158,7 @@ impl Animation {
             return;
         };
         let clip = document.file().clips[&name].clone();
-        if self.playing {
+        if self.playing && was_playing {
             let time = document.timeline.time + dt;
             document.timeline.time = if clip.looping {
                 time.rem_euclid(clip.duration)
@@ -171,6 +173,9 @@ impl Animation {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
         self.timeline(ui, document, &name, &clip);
+        if self.playing {
+            ui.ctx().request_repaint();
+        }
     }
 
     /// The clips to choose from and make, and the open one's playhead, length and looping.
