@@ -3,5 +3,6 @@ name = "wingine-abi"
 version = "0.1.0"
 edition = "2024"
 description = "The binary interface between Wingine and the native libraries it loads"
+license = "MIT OR Apache-2.0"
 
 [dependencies]

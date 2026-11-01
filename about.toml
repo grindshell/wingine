@@ -1,0 +1,68 @@
+# `cargo about` lists the licenses of what's built into the `wingine` and `wingine-editor`
+# binaries, for the notices the release workflow puts beside them: `THIRD-PARTY-NOTICES.txt`,
+# written by `about.hbs` from the editor's dependencies, which include the runtime's.
+
+# The licenses dependencies may use. Where a crate offers a choice, the earliest listed is taken:
+# Apache 2.0 first, since many crates offering MIT ship only their Apache license, and Apache's
+# text has no copyright line for a stand-in to miss.
+accepted = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "Zlib",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "Unicode-3.0",
+    # Symphonia, which decodes audio for kira, and triple_buffer. The notices link their source.
+    "MPL-2.0",
+    # The fonts egui builds in.
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+]
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+ignore-dev-dependencies = true
+# Build dependencies stay: build scripts compile some of them into the binaries, as luau0-src's
+# Luau is.
+ignore-build-dependencies = false
+
+# Crates whose license files `cargo about` doesn't recognize, pointed at them so the notices keep
+# their copyright lines rather than a stand-in text's placeholders. A file that stops matching its
+# checksum, as when its crate is upgraded, makes its clarification unused: update the checksum.
+
+[dpi.clarify]
+license = "Apache-2.0 AND MIT"
+
+[[dpi.clarify.files]]
+path = "LICENSE"
+license = "Apache-2.0"
+checksum = "6dc0e068dcf3a5bc8e054205b85b7720e1d49265bbc64bf515d2cf79197df69a"
+
+[[dpi.clarify.files]]
+path = "LICENSE-LIBM-MIT"
+license = "MIT"
+checksum = "9eff396a99bafd208e7126602420d6864f6066c08b84485a5b032320a9c01997"
+
+[libm.clarify]
+license = "MIT"
+
+[[libm.clarify.files]]
+path = "LICENSE.txt"
+checksum = "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"
+
+# It ships no license file, so this is its repository's, mlua's, from the commit it was published
+# from.
+[mlua-sys.clarify]
+license = "MIT"
+
+[[mlua-sys.clarify.git]]
+path = "LICENSE"
+checksum = "63b61a30d3e3abcfcb1bda4b99f4eea9fdb7d6ab05fbc513461fef6cf89baf29"
+
+[wayland-protocols-plasma.clarify]
+license = "MIT"
+
+[[wayland-protocols-plasma.clarify.files]]
+path = "LICENSE.txt"
+checksum = "1cb6f4dee8c649f175736380495f0af0c753c87f22d50931692968bb24bf2161"

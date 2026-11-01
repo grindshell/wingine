@@ -61,6 +61,11 @@ cargo run -- examples/rpg
 
 The first build takes a little longer while Luau compiles.
 
+Each tagged release also has the runtime (`wingine`) and the editor (`wingine-editor`) built for
+Windows and Linux, on the [releases page](https://github.com/grindshell/wingine/releases). Run a
+game with `wingine path/to/game`, or edit one with `wingine-editor path/to/game`. On Linux they
+need ALSA's library (`libasound2`) and glibc 2.35 or newer.
+
 ## Examples
 
 | Example | Written in | Run with |
@@ -409,3 +414,24 @@ The tileset is Kenney's [1-bit Pack](https://kenney.nl/assets/1-bit-pack), relea
 The RPG's `strides.png` adds walking frames derived from it. The shmup's bullets and the
 orchard's picker, apples and trees were drawn for them. The music and sound effects were
 synthesized for the examples.
+
+## License
+
+Wingine is licensed under either of
+
+- the Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE)), or
+- the MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
+Wingine by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any
+additional terms or conditions.
+
+The release binaries are built with crates under licenses of their own, listed with their texts in
+each archive's `THIRD-PARTY-NOTICES.txt`. [cargo-about](https://github.com/EmbarkStudios/cargo-about)
+writes it from [`about.toml`](about.toml) and [`about.hbs`](about.hbs):
+
+```bash
+cargo about generate --target x86_64-pc-windows-msvc -m crates/wingine-editor/Cargo.toml -c about.toml -o THIRD-PARTY-NOTICES.txt about.hbs
+```

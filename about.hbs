@@ -1,0 +1,18 @@
+Third-party notices
+===================
+
+Wingine is licensed under the Apache License, Version 2.0 (LICENSE-APACHE) or the MIT license
+(LICENSE-MIT), at your option. Its binaries are built with the crates below, under the licenses
+below. Each crate's source is on crates.io, at the link beside it.
+{{#each licenses}}
+
+--------------------------------------------------------------------------------
+{{{name}}} ({{{id}}}), used by:
+{{#each used_by}}
+{{#if crate.source}}
+- {{{crate.name}}} {{{crate.version}}}: https://crates.io/crates/{{{crate.name}}}/{{{crate.version}}}
+{{/if}}
+{{/each}}
+
+{{{text}}}
+{{/each}}

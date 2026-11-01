@@ -20,6 +20,7 @@ default-members = [
 name = "wingine"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
 # `cargo run -- path/to/game` runs a game, though the editor's package has a binary too.
 default-run = "wingine"
 

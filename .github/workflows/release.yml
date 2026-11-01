@@ -1,0 +1,108 @@
+name: Release
+
+# Builds the runtime (`wingine`) and the editor (`wingine-editor`) for Windows and Linux. Pushing a
+# tag such as `v0.1.0` publishes them as a GitHub release of that tag; running the workflow by hand
+# from the Actions tab only builds them, as the run's artifacts.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest Ubuntu runner, since the binaries run only where glibc is as new as the one
+          # they were built against (2.35 here). Move on to the next when it's retired.
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            cargo_about: x86_64-unknown-linux-musl
+          # The C runtime linked in statically, so the binaries don't need the Visual C++
+          # Redistributable installed.
+          - os: windows-latest
+            platform: windows-x86_64
+            target: x86_64-pc-windows-msvc
+            cargo_about: x86_64-pc-windows-msvc
+            rustflags: -C target-feature=+crt-static
+    runs-on: ${{ matrix.os }}
+    env:
+      PACKAGE: wingine-${{ github.ref_name }}-${{ matrix.platform }}
+      RUSTFLAGS: ${{ matrix.rustflags }}
+      # Lists the licenses of the crates built into the binaries, for their third-party notices.
+      CARGO_ABOUT_VERSION: 0.9.3
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-about
+        shell: pwsh
+        run: |
+          $releases = "https://github.com/EmbarkStudios/cargo-about/releases/download"
+          $name = "cargo-about-$env:CARGO_ABOUT_VERSION-${{ matrix.cargo_about }}"
+          Invoke-WebRequest "$releases/$env:CARGO_ABOUT_VERSION/$name.tar.gz" `
+            -OutFile "$env:RUNNER_TEMP/cargo-about.tar.gz"
+          tar -xzf "$env:RUNNER_TEMP/cargo-about.tar.gz" -C $env:RUNNER_TEMP
+          Add-Content $env:GITHUB_PATH (Join-Path $env:RUNNER_TEMP $name)
+      # Before the build, so a dependency under a license `about.toml` doesn't accept fails
+      # quickly.
+      - name: Write the third-party notices
+        run: >-
+          cargo about generate --locked --fail --target ${{ matrix.target }}
+          -m crates/wingine-editor/Cargo.toml -c about.toml -o THIRD-PARTY-NOTICES.txt about.hbs
+      # cpal, kira's audio output, links against ALSA on Linux.
+      - name: Install ALSA headers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev
+      - run: cargo build --release --locked -p wingine -p wingine-editor --bins
+      - name: Package
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p "dist/$PACKAGE"
+          cp target/release/wingine target/release/wingine-editor "dist/$PACKAGE/"
+          cp README.md LICENSE-MIT LICENSE-APACHE THIRD-PARTY-NOTICES.txt "dist/$PACKAGE/"
+          tar -czf "dist/$PACKAGE.tar.gz" -C dist "$PACKAGE"
+      - name: Package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory "dist/$env:PACKAGE" | Out-Null
+          Copy-Item target/release/wingine.exe, target/release/wingine-editor.exe "dist/$env:PACKAGE/"
+          Copy-Item README.md, LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY-NOTICES.txt "dist/$env:PACKAGE/"
+          Compress-Archive "dist/$env:PACKAGE" "dist/$env:PACKAGE.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.PACKAGE }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" dist/*
+          --repo "$GITHUB_REPOSITORY" --title "Wingine $GITHUB_REF_NAME" --generate-notes

@@ -1,3 +1,5 @@
 /target
+# Written by `cargo about` for the release archives.
+/THIRD-PARTY-NOTICES.txt
 # Where the shmup loads the `danmaku` library from, once it's built and copied there.
 /examples/shmup/native/

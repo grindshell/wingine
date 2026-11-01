@@ -33,6 +33,8 @@ networking or 3D pipelines.
 | Interfaces | `egui` | With `egui-winit` and `egui-wgpu`, behind the default `egui` feature |
 
 - Rust edition 2024.
+- Licensed under MIT or Apache 2.0, at the user's option (`LICENSE-MIT`, `LICENSE-APACHE`), which
+  every crate's manifest says with `license = "MIT OR Apache-2.0"`; new crates say so too.
 - Target platforms: desktop only (Windows, macOS, Linux).
 - `wgpu`, `winit`, `mlua`, `kira` and `egui` change their APIs substantially between releases.
   Check the version pinned in `Cargo.toml` and that version's docs on docs.rs rather than relying
@@ -506,6 +508,16 @@ cargo bench
 Run `cargo fmt` and `cargo clippy --all-targets` before considering a change finished, and keep
 both clean, with the engine's `egui` feature off too. CI (`.github/workflows/ci.yml`) runs fmt,
 clippy with `-D warnings` with and without the feature, and `cargo test` on Linux and Windows.
+`release.yml` builds the runtime and the editor in release for Windows and Linux, and pushing a
+`v*` tag publishes them as a GitHub release of it (run by hand, it only keeps them as artifacts).
+Linux builds on the oldest Ubuntu runner, since the binaries need a glibc as new as the one they're
+built against, and Windows links the C runtime statically, so they don't need the Visual C++
+Redistributable. Each archive has `THIRD-PARTY-NOTICES.txt`, the licenses of the crates built into
+its binaries, which `cargo about` (pinned in `release.yml`) writes for the target from the
+editor's dependencies, with `about.toml` and `about.hbs`. It fails on a license `about.toml`
+doesn't accept, so a new dependency's license may need adding there, and its clarifications point
+crates whose license files it doesn't recognize at them by checksum, which upgrading those crates
+can change. The template leaves out the workspace's own crates (those without a `source`).
 
 ## Checking game behavior
 
