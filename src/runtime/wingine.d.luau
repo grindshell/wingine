@@ -1,7 +1,11 @@
 -- The types of the engine's API for Luau games, as a definitions file for luau-lsp, which checks
 -- scripts against them and shows their docs on hover. The editor hands it to luau-lsp itself; to
 -- use it from another editor, see `docs/editor.md`. It follows the reference in `docs/api/`, and
--- `tests/runtime.rs` checks it declares every function the engine's tables hold.
+-- `tests/runtime.rs` checks it declares every function the engine's tables hold, and
+-- `src/runtime/gui.rs` every method of `Ui`.
+--
+-- A game's own `update`, `draw` and `gui` aren't declared, since the game defines them. Write
+-- `function gui(ui: Ui)`, so luau-lsp knows what `ui` is.
 
 --- A color: a hex string such as `"#f2c14e"` or `"#00000080"`, a table of components from 0 to 1
 --- (`a` is 1 if left out), or a number `0xRRGGBBAA`, which passes fastest.
@@ -58,6 +62,35 @@ type FrameStats = {
     quads: number,
     --- Draw calls: one for each run of quads with the same texture.
     draw_calls: number,
+}
+
+--- A window of an interface, for `ui:window`. Positions and sizes are in points: the window's
+--- logical pixels, not the canvas's.
+type WindowOptions = {
+    --- The text in its title bar, which also tells it apart from other windows.
+    title: string,
+    --- Where its top-left corner starts. It can be dragged elsewhere.
+    x: number?,
+    y: number?,
+    --- The size it starts at.
+    width: number?,
+    height: number?,
+    --- Whether its edges can be dragged to resize it. By default, true.
+    resizable: boolean?,
+    --- Whether its title bar folds it away. By default, true.
+    collapsible: boolean?,
+}
+
+--- An edge of the window, which a panel runs along.
+type PanelSide = "left" | "right" | "top" | "bottom"
+
+--- A panel of an interface, for `ui:panel`.
+type PanelOptions = {
+    side: PanelSide,
+    --- The width it starts at, or for the top and bottom, its height, in points.
+    size: number?,
+    --- Whether its inner edge can be dragged to resize it.
+    resizable: boolean?,
 }
 
 --- A rectangle of an image, to draw, from a sprite sheet.
@@ -292,6 +325,67 @@ declare extern type SceneNode with
     function tile(self, column: number, row: number): string?
     --- Puts the tile named `name` in a cell of this tile layer, or with `nil`, empties it.
     function set_tile(self, column: number, row: number, name: string?): ()
+end
+
+--- Where an interface is laid out, with egui, in the game's `gui(ui)`: the whole window, or the
+--- inside of a container. Widgets that change a value take it and return the new one. It works
+--- only until the function it was passed to returns, and inside a container, use the `Ui` the
+--- container passes to its function.
+declare extern type Ui with
+    --- A window over the game, named by its title or with options, which `contents` fills.
+    function window(self, window: string | WindowOptions, contents: (Ui) -> ()): ()
+    --- A panel along an edge of the window, by its side or with options, which `contents` fills.
+    function panel(self, panel: PanelSide | PanelOptions, contents: (Ui) -> ()): ()
+    --- Lays out what `contents` adds from left to right.
+    function horizontal(self, contents: (Ui) -> ()): ()
+    --- Lays out what `contents` adds from top to bottom, as inside `horizontal`.
+    function vertical(self, contents: (Ui) -> ()): ()
+    --- Frames what `contents` adds.
+    function group(self, contents: (Ui) -> ()): ()
+    --- A header that opens and closes what `contents` adds, which runs only while it's open.
+    function collapsing(self, title: string, contents: (Ui) -> ()): ()
+    --- Scrolls what `contents` adds up and down when it doesn't fit.
+    function scroll(self, contents: (Ui) -> ()): ()
+    --- Lines what `contents` adds up in columns, a row at a time: `ui:end_row()` ends each.
+    function grid(self, name: string, contents: (Ui) -> ()): ()
+    --- Ends a row of a grid.
+    function end_row(self): ()
+    --- Greys out what `contents` adds, which can't be used, unless `enabled`.
+    function enabled(self, enabled: boolean, contents: (Ui) -> ()): ()
+    --- Text, in `color` if given.
+    function label(self, text: string, color: Color?): ()
+    --- Large text.
+    function heading(self, text: string): ()
+    --- Text in a monospace font.
+    function monospace(self, text: string): ()
+    --- Small text.
+    function small(self, text: string): ()
+    --- Returns whether the button was clicked.
+    function button(self, text: string): boolean
+    --- Returns whether the box is checked, after any click.
+    function checkbox(self, text: string, checked: boolean): boolean
+    --- One of a set of buttons choosing between values: returns `value` if it was clicked, and
+    --- `current` otherwise. It shows as chosen when `current` is `value`.
+    radio: <T>(self: Ui, current: T, value: T, text: string) -> T
+    --- A drop-down list of `choices`, shown with `tostring`: returns the one chosen, or `current`.
+    combo: <T>(self: Ui, text: string, current: T, choices: { T }) -> T
+    --- Returns `value` after any dragging between `min` and `max`, by `step` if given.
+    function slider(self, text: string, value: number, min: number, max: number, step: number?): number
+    --- A number field, changed by dragging or typing: returns `value` after any change, by
+    --- `speed` for each point dragged (1 by default), kept between `min` and `max` if given.
+    function drag(self, text: string, value: number, speed: number?, min: number?, max: number?): number
+    --- A text field, showing `hint` while empty: returns its text after any typing, and whether
+    --- Enter was pressed in it.
+    function text_input(self, text: string, hint: string?): (string, boolean)
+    --- A bar filled `fraction` of the way, from 0 to 1, with `text` on it.
+    function progress(self, fraction: number, text: string?): ()
+    --- Shows `sprite`, its colors multiplied by `tint`, at `width` by `height` points, or its own
+    --- size.
+    function sprite(self, sprite: Sprite, tint: Color?, width: number?, height: number?): ()
+    --- A line between what comes before and after.
+    function separator(self): ()
+    --- Empty space, `amount` points of it, or the usual space between widgets.
+    function space(self, amount: number?): ()
 end
 
 --- Drawing, the camera, sprites, animations and text. Drawing works only in `draw`.

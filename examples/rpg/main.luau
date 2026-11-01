@@ -1,6 +1,7 @@
 -- A top-down RPG, written entirely in Luau. Walk with the arrow keys or WASD; holding a direction
 -- keeps walking. Press Space, Enter or E to examine whatever is in front of you, or to talk, and
--- Tab or I to open your bag. Escape or Backspace backs out of menus.
+-- Tab or I to open your bag. Escape or Backspace backs out of menus. F1 shows a window of tools
+-- for trying the game out, in `debug_panel.luau`.
 --
 -- The elder of Mossbrook asks you to check on the Stone Shrine, on the hill north of the
 -- village. What you find there sets creatures loose on the hill, and you fight them one on one,
@@ -22,6 +23,7 @@
 local bag = require("./bag")
 local battle = require("./battle")
 local characters = require("./characters")
+local debug_panel = require("./debug_panel")
 local dialogue = require("./dialogue")
 local items = require("./items")
 local story = require("./story")
@@ -41,6 +43,9 @@ local TILE = world.TILE
 -- Where the game begins, and where the player wakes up after losing a battle: beside the elder.
 local START = { map = "village", at = { 20, 13 }, facing = "up" }
 local REVIVE = { map = "village", at = { 16, 8 }, facing = "up" }
+-- Where the debug panel puts the player on each map, in the order it lists them: where the game
+-- begins, and where the path from the village arrives on the shrine's map.
+local ARRIVALS = { START, { map = "shrine", at = { 12, 18 }, facing = "up" } }
 -- The player's stats, which they start the game with at full health.
 local STATS = { max_hp = 36, attack = 6, defense = 4, speed = 5 }
 -- Seconds a creature shows it's noticed the player before a battle starts.
@@ -133,6 +138,8 @@ rpg = {
     dialogue = dialogue,
     battle = battle,
     bag = bag,
+    -- Whether the debug panel shows: F1 shows and hides it.
+    debugging = false,
 }
 
 -- Puts the player on the map `name`, building its level the first time, on cell `at`, facing
@@ -334,6 +341,9 @@ end
 function update(dt: number)
     rpg.time += dt
     rpg.bump_cooldown = math.max(rpg.bump_cooldown - dt, 0)
+    if input.key_pressed("F1") then
+        rpg.debugging = not rpg.debugging
+    end
     -- The map stands still during a battle.
     if battle.is_active() then
         battle.update(dt)
@@ -456,6 +466,27 @@ function draw()
     dialogue.draw()
     if rpg.fade > 0 then
         graphics.fill_rect(0, 0, WIDTH, HEIGHT, { r = 0, g = 0, b = 0, a = rpg.fade })
+    end
+end
+
+-- The maps the debug panel jumps to, in order.
+local ARRIVAL_MAPS = {}
+for _, arrival in ARRIVALS do
+    table.insert(ARRIVAL_MAPS, arrival.map)
+end
+
+-- Puts the player on the map `name`, where they'd arrive.
+local function go_to(name: string)
+    for _, arrival in ARRIVALS do
+        if arrival.map == name then
+            enter(arrival.map, arrival.at, arrival.facing)
+        end
+    end
+end
+
+function gui(ui: Ui)
+    if rpg.debugging then
+        debug_panel.gui(ui, ARRIVAL_MAPS, go_to)
     end
 end
 

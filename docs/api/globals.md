@@ -18,6 +18,16 @@ than a quarter of a second, however long it took.
 
 Read input, move things, and play sounds here. Optional.
 
+### `gui`
+
+```lua
+function gui(ui: Ui)
+```
+
+Defined by the game, and called by the engine once a frame, after the frame's updates and before
+`draw`, to lay out an interface over the game with `ui`, such as a window of debug tools. See
+[`gui`](gui.md). Optional, and most games have none.
+
 ### `draw`
 
 ```lua
@@ -28,7 +38,7 @@ Defined by the game, and called by the engine once a frame, after the frame's up
 the game. The canvas starts each frame cleared to black, with no camera set. Drawing functions
 work only here. Optional.
 
-An error in either function stops the game and shows the error in the window.
+An error in any of these functions stops the game and shows the error in the window.
 
 ## Tasks
 

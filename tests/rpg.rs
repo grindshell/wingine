@@ -1060,3 +1060,49 @@ fn the_well_restores_the_player() {
     assert!(pages[0].starts_with("You drink from the well"), "{pages:?}");
     assert_eq!(eval::<u32>(&simulation, "rpg.hp"), 36);
 }
+
+#[test]
+#[cfg(feature = "egui")]
+fn f1_shows_a_debug_panel_that_changes_the_game() {
+    use wingine::input::MouseButton;
+
+    let mut simulation = simulation();
+    run_for(&mut simulation, 0.1);
+    assert!(simulation.gui_rect("Debug").is_none());
+    simulation.tap(Key::F1);
+    simulation.run_frames(2);
+    assert!(simulation.gui_rect("Debug").is_some());
+    assert!(
+        simulation
+            .gui_rect(&format!("Mossbrook, at {}, {}", START[0], START[1]))
+            .is_some()
+    );
+
+    // Jumping to another map.
+    simulation.click_gui("Shrine");
+    run_for(&mut simulation, 0.1);
+    assert_eq!(level(&simulation), "shrine");
+    assert_eq!(player_tile(&simulation), SHRINE_ARRIVAL);
+
+    // Giving an item, with the `+` on its row.
+    simulation.click_gui("Items");
+    simulation.run_frames(2);
+    let herb = simulation.gui_rect("Herb").unwrap();
+    let plus = simulation
+        .gui_rects("+")
+        .into_iter()
+        .find(|plus| (plus.y + plus.h / 2.0 - (herb.y + herb.h / 2.0)).abs() < 4.0)
+        .expect("the herb's row has a `+`");
+    simulation.click(
+        MouseButton::Left,
+        plus.x + plus.w / 2.0,
+        plus.y + plus.h / 2.0,
+    );
+    simulation.step();
+    assert_eq!(eval::<u32>(&simulation, "rpg.items.herb"), 1);
+
+    // F1 hides it again, once it has faded out.
+    simulation.tap(Key::F1);
+    run_for(&mut simulation, 0.5);
+    assert!(simulation.gui_rect("Debug").is_none());
+}

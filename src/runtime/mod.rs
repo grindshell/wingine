@@ -149,13 +149,35 @@
 //!   `audio.set_music_volume(volume)` set the volume of everything, of sound effects and of
 //!   music, where 1 is as recorded.
 //!
-//! An error while the game loads ends [`run`] with that error. An error in `update` or `draw`
-//! stops the game and shows the error in the window. A task that fails stops and logs its error,
-//! and the other tasks carry on.
+//! A game may also define a global `gui(ui)`, which the engine calls once a frame, after the
+//! updates and before `draw`, with a `Ui` covering the window, to lay out an interface over the
+//! game with egui: debug tools, say. The context is lent as in `update`. Widgets that change a
+//! value take it and return the new one, and containers call a function with the `Ui` inside them:
+//!
+//! - Containers: `ui:window(title or { title, x, y, width, height, resizable, collapsible }, fn)`,
+//!   `ui:panel(side or { side, size, resizable }, fn)`, `ui:horizontal(fn)`, `ui:vertical(fn)`,
+//!   `ui:group(fn)`, `ui:collapsing(title, fn)`, `ui:scroll(fn)`, `ui:grid(name, fn)` with
+//!   `ui:end_row()`, and `ui:enabled(enabled, fn)`.
+//! - Text: `ui:label(text, color)`, `ui:heading(text)`, `ui:monospace(text)` and `ui:small(text)`.
+//! - Widgets: `ui:button(text)` returns whether it was clicked; `ui:checkbox(text, checked)`,
+//!   `ui:radio(current, value, text)`, `ui:combo(text, current, choices)`,
+//!   `ui:slider(text, value, min, max, step)`, `ui:drag(text, value, speed, min, max)` and
+//!   `ui:text_input(text, hint)` (which also returns whether Enter was pressed) return their
+//!   values; `ui:progress(fraction, text)` and `ui:sprite(sprite, tint, width, height)` show them.
+//! - `ui:separator()` and `ui:space(amount)`.
+//!
+//! A `Ui` works only until the function it was passed to returns, and inside a container's
+//! function, only the `Ui` it's passed works. Without the `egui` feature, `gui` isn't called.
+//!
+//! An error while the game loads ends [`run`] with that error. An error in `update`, `gui` or
+//! `draw` stops the game and shows the error in the window. A task that fails stops and logs its
+//! error, and the other tasks carry on.
 
 mod audio;
 mod graphics;
 mod grid;
+#[cfg(feature = "egui")]
+mod gui;
 mod input;
 mod native;
 mod scene;
@@ -359,6 +381,8 @@ impl LuauGame {
         globals.set("grid", grid::module(lua)?)?;
         let scene = scene::module(lua, &lent, folder.to_owned(), textures)?;
         globals.set("scene", scene)?;
+        #[cfg(feature = "egui")]
+        gui::register(lua, &lent)?;
         let natives = Natives::load(lua, &lent, ctx, folder, &libraries)?;
         lent.lend(ctx, || scripts.load(folder.join("main.luau")))?;
         Ok(Self {
@@ -406,6 +430,28 @@ impl Game for LuauGame {
             return;
         }
         if let Err(err) = self.run_update(ctx, dt) {
+            self.stop(err);
+        }
+    }
+
+    #[cfg(feature = "egui")]
+    fn gui(&mut self, ctx: &mut Context, ui: &mut crate::gui::egui::Ui) {
+        let function = match self.error {
+            None => self.scripts.lua().globals().get("gui"),
+            Some(_) => Ok(None),
+        };
+        let result = function.map_err(Error::from).and_then(|function| {
+            let Some(function) = function else {
+                // Frames needn't run egui at all, as for a game with no interface.
+                ctx.gui.game_has_gui = false;
+                return Ok(());
+            };
+            let lent = self.lent.clone();
+            lent.lend(ctx, || {
+                gui::call::<()>(self.scripts.lua(), ui, &function).map_err(Error::from)
+            })
+        });
+        if let Err(err) = result {
             self.stop(err);
         }
     }

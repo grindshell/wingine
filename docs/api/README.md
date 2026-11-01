@@ -1,17 +1,18 @@
 # API reference
 
-Scripts reach the engine through six global tables, a few built-in functions, and the objects
-those hand out:
+Scripts reach the engine through six global tables, a few built-in functions, the objects those
+hand out, and the `Ui` a game's `gui` lays its interface out with:
 
 | Page | What it covers |
 |---|---|
-| [Built-ins](globals.md) | The game's `update` and `draw`, tasks (`spawn`, `wait`, `wait_until`), `print` and `require` |
+| [Built-ins](globals.md) | The game's `update`, `gui` and `draw`, tasks (`spawn`, `wait`, `wait_until`), `print` and `require` |
 | [`graphics`](graphics.md) | Drawing, the camera, sprite sheets, sprites, animations, fonts and text, frame stats |
 | [`input`](input.md) | The keyboard and mouse, and actions bound to keys |
 | [`audio`](audio.md) | Sound effects, music and volume |
 | [`tilemap`](tilemap.md) | Tilesets and maps of tiles in layers |
 | [`grid`](grid.md) | Characters that walk from tile to tile |
 | [`scene`](scene.md) | Scenes loaded from scene files, and their nodes |
+| [`gui`](gui.md) | Interfaces over the game, such as debug tools, laid out with egui in the game's `gui` |
 | [`wingine-native`](native.md) | The Rust crate native libraries are written with |
 
 The engine's tables are read-only. Luau's standard library is there too, in its sandboxed form:
@@ -49,8 +50,10 @@ time raises an error saying when it works.
   `graphics.draw_sprite_rotated`, `graphics.draw_text`, `graphics.draw_text_layout`,
   `graphics.draw_tilemap`, `graphics.draw_scene` and `graphics.set_camera`.
 - **The keyboard, mouse and sound** work while the game loads (the top level of `main.luau` and
-  the modules it requires) and in `update` and the tasks it resumes: everything in `input`, and
-  everything in `audio` but `audio.load`. So do `graphics.load_sprite_sheet` and `scene.load`.
+  the modules it requires), in `update` and the tasks it resumes, and in `gui`: everything in
+  `input`, and everything in `audio` but `audio.load`. So do `graphics.load_sprite_sheet` and
+  `scene.load`.
+- **Interfaces** are laid out only in `gui`, with the `Ui` it's passed.
 - **Everything else** works any time: `graphics.size`, `graphics.color`,
   `graphics.default_font`, `graphics.frame_stats`, `graphics.new_animation`, `audio.load`,
   `tilemap`, `grid`, and the methods of every object, scene nodes included.

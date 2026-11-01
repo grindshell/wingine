@@ -257,8 +257,15 @@ such as physics engines, networking or 3D pipelines.
   `src/lua.rs`. Sprite sheets and scenes share one cache of images (`Textures`), so each is read
   once. `wingine.d.luau` (`runtime::DEFINITIONS`) declares that API's types, with short docs, as
   a definitions file for luau-lsp (`declare extern type ... with` for userdata, `declare name: {}`
-  for tables); `tests/runtime.rs` checks it declares exactly the functions the tables hold, and
-  the editor's tests that the examples type-check against it.
+  for tables; methods can't be generic there, so generic ones are properties of generic function
+  types); `tests/runtime.rs` checks it declares exactly the functions the tables hold, and
+  the editor's tests that the examples type-check against it. A game's global `gui(ui)` lays out
+  an egui interface (`gui.rs`, with the `egui` feature): `LuauGame::gui` lends the context and
+  calls it with egui's `Ui` as userdata borrowed for the call through `Lua::scope`
+  (`create_any_userdata_ref_mut`), whose methods are registered once with
+  `register_userdata_type`. Containers call their function with the inner `Ui` in a nested scope,
+  so a `Ui` kept past its call fails rather than dangle. Widgets that change a value take it and
+  return it; `gui.rs`'s unit test checks `wingine.d.luau` declares exactly `Ui`'s methods.
 - `src/scene/`: scenes. `SceneFile` is what a scene file holds (`NodeDef`s, `SheetDef`s and props
   of `Value`s), and `TilesetFile` a tileset file: `file.rs` reads one by running it as Luau in an
   empty environment, turning what it returns into plain `Value`s, then reading those, with errors
@@ -381,8 +388,10 @@ such as physics engines, networking or 3D pipelines.
   to use and gear, whose bonuses `items.stats` adds to the player's; `shop.luau` buys and sells
   them, and `bag.luau` (the menu key) equips gear and uses items. `ui.luau` holds the panels'
   shared look. `story.reached(stage)` compares quest stages, which run in the order of
-  `story.STAGES`. The game's state is the global `rpg`, which its `.luaurc` names for luau-lsp,
-  as the shmup's names `shmup` and `danmaku`.
+  `story.STAGES`. F1 shows `debug_panel.luau`, an egui window from the game's `gui` that sets hit
+  points, coins, items and the quest's stage, and jumps between maps (`ARRIVALS` in `main.luau`).
+  The game's state is the global `rpg`, which its `.luaurc` names for luau-lsp, as the shmup's
+  names `shmup` and `danmaku`.
 - `examples/shmup/`: the second milestone's bullet hell, written entirely in Luau, at a fixed
   60 updates a second. Its enemy bullets go through one interface, documented at the top of
   `bullets.luau`, which is the Luau implementation (parallel arrays of numbers: a table per
@@ -457,17 +466,18 @@ such as physics engines, networking or 3D pipelines.
   with an RTX 3080, after changes that could move them.
 - `docs/`: the user docs for making games in Luau: a quick start, a game's folder and frame,
   running and checking games, scenes, the editor, native libraries with a quick start, and in
-  `docs/api/` a reference for every table, function and type scripts use, and for
-  `wingine-native`. They restate the module docs (`src/runtime/mod.rs`, `src/lua.rs`,
-  `src/scene/mod.rs`, `crates/wingine-native`) for game authors, and the definitions file
-  (`src/runtime/wingine.d.luau`) gives the same API its types, so change them together; the
-  editor's (`docs/editor.md`) follows what the editor does, so change it with the editor. Check
-  their examples by running them headlessly.
+  `docs/api/` a reference for every table, function and type scripts use, `Ui` among them
+  (`gui.md`), and for `wingine-native`. They restate the module docs (`src/runtime/mod.rs`,
+  `src/lua.rs`, `src/scene/mod.rs`, `crates/wingine-native`) for game authors, and the
+  definitions file (`src/runtime/wingine.d.luau`) gives the same API its types, so change them
+  together; the editor's (`docs/editor.md`) follows what the editor does, so change it with the
+  editor. Check their examples by running them headlessly.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
 - `tests/gui.rs`: tests for egui over games, through `Simulation`: clicking widgets by label,
   typing into a focused field, input egui takes not reaching the game, and the debug key.
-- `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders.
+- `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders,
+  and in its `gui` module (with the `egui` feature), their interfaces, clicked by label.
 - `tests/scene.rs`: tests for scenes loaded to play: finding nodes, transforms, hit testing,
   anchors and stretching, tilemaps, instances and overrides, adding and removing nodes, and
   posing with clips, with files held in memory.
@@ -476,7 +486,8 @@ such as physics engines, networking or 3D pipelines.
   from a file.
 - `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
   expressions such as `pong.ball.vx`.
-- `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest.
+- `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest, and
+  using its debug panel.
 - `tests/garden.rs`: tests for the `garden` example, the same way, and that its scene files are
   in the canonical layout.
 - `tests/orchard.rs`: tests for the `orchard` example, the same way: its clips, the picker's walk

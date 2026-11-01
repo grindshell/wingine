@@ -1547,3 +1547,256 @@ fn games_that_fail_to_load_are_errors() {
     let err = result.err().expect("loading fails").to_string();
     assert!(err.contains("nope.wav"), "{err}");
 }
+
+/// Interfaces Luau games lay out in `gui(ui)`, driven by clicking their widgets by label.
+#[cfg(feature = "egui")]
+mod gui {
+    use super::*;
+    use wingine::input::MouseButton;
+
+    /// A 400x300 window whose canvas is the window, so canvas pixels are points.
+    const WINDOW: &str = "return { width = 400, height = 300 }";
+
+    /// A game whose `gui` is `gui`, with its globals `state` set up first, run for two frames so
+    /// its windows show.
+    fn interface(test: &str, state: &str, gui: &str) -> Simulation<LuauGame> {
+        let main = format!("{state}\nfunction gui(ui: Ui)\n{gui}\nend");
+        let folder = game(test, &[("conf.luau", WINDOW), ("main.luau", &main)]);
+        let mut simulation = simulation(&folder);
+        simulation.run_frames(2);
+        if let Some(err) = simulation.game().error() {
+            panic!("the game stopped: {err}");
+        }
+        simulation
+    }
+
+    #[test]
+    fn widgets_return_what_they_were_changed_to() {
+        let mut simulation = interface(
+            "gui_widgets",
+            "clicks = 0
+            checked = false
+            mode = 'easy'
+            name = ''
+            submitted = nil",
+            "ui:window({ title = 'Tools', x = 10, y = 10 }, function(ui)
+                if ui:button('Press me') then
+                    clicks += 1
+                end
+                checked = ui:checkbox('Checked', checked)
+                ui:horizontal(function(ui)
+                    mode = ui:radio(mode, 'easy', 'Easy')
+                    mode = ui:radio(mode, 'hard', 'Hard')
+                end)
+                local entered
+                name, entered = ui:text_input(name, 'Your name')
+                if entered then
+                    submitted = name
+                end
+            end)",
+        );
+        simulation.click_gui("Press me");
+        assert_eq!(eval::<u32>(&simulation, "clicks"), 1);
+        simulation.click_gui("Checked");
+        assert!(eval::<bool>(&simulation, "checked"));
+        simulation.click_gui("Hard");
+        assert_eq!(eval::<String>(&simulation, "mode"), "hard");
+        simulation.click_gui("Easy");
+        assert_eq!(eval::<String>(&simulation, "mode"), "easy");
+
+        simulation.click_gui("Your name");
+        simulation.type_text("Ada");
+        simulation.step();
+        assert_eq!(eval::<String>(&simulation, "name"), "Ada");
+        assert_eq!(eval::<Option<String>>(&simulation, "submitted"), None);
+        simulation.tap(Key::Enter);
+        simulation.step();
+        assert_eq!(
+            eval::<Option<String>>(&simulation, "submitted").as_deref(),
+            Some("Ada")
+        );
+    }
+
+    #[test]
+    fn a_combo_returns_the_choice_picked() {
+        let mut simulation = interface(
+            "gui_combo",
+            "stage = 'start'",
+            "ui:window('Quest', function(ui)
+                stage = ui:combo('Stage', stage, { 'start', 'middle', 'end' })
+            end)",
+        );
+        simulation.click_gui("Stage");
+        simulation.run_frames(2);
+        simulation.click_gui("middle");
+        simulation.step();
+        assert_eq!(eval::<String>(&simulation, "stage"), "middle");
+    }
+
+    #[test]
+    fn sliders_and_number_fields_change_numbers() {
+        let mut simulation = interface(
+            "gui_numbers",
+            "speed = 0
+            coins = 5",
+            "ui:panel({ side = 'left', size = 250 }, function(ui)
+                speed = ui:slider('Speed', speed, 0, 10, 1)
+                coins = ui:drag('Coins', coins, 1, 0, 9)
+                ui:progress(speed / 10, 'How fast')
+            end)",
+        );
+        // Dragged from its track's start to past its end. It shows its value after its track.
+        let speed = simulation.gui_rect("Speed").unwrap();
+        let y = speed.y + speed.h / 2.0;
+        simulation.move_mouse(speed.x + 2.0, y);
+        simulation.mouse_down(MouseButton::Left);
+        simulation.step();
+        simulation.move_mouse(speed.x + 300.0, y);
+        simulation.step();
+        simulation.mouse_up(MouseButton::Left);
+        simulation.step();
+        assert_eq!(eval::<f64>(&simulation, "speed"), 10.0);
+
+        // Typed into, and kept within its range.
+        let coins = *simulation.gui_rects("Coins").first().unwrap();
+        simulation.click(
+            MouseButton::Left,
+            coins.x + coins.w / 2.0,
+            coins.y + coins.h / 2.0,
+        );
+        simulation.step();
+        simulation.key_down(Key::LeftControl);
+        simulation.tap(Key::A);
+        simulation.key_up(Key::LeftControl);
+        simulation.type_text("42");
+        simulation.tap(Key::Enter);
+        simulation.run_frames(2);
+        assert_eq!(eval::<f64>(&simulation, "coins"), 9.0);
+    }
+
+    #[test]
+    fn sprites_show_in_the_interface() {
+        let folder = game(
+            "gui_sprite",
+            &[
+                ("conf.luau", WINDOW),
+                (
+                    "main.luau",
+                    "local red = graphics.load_sprite_sheet('sheet.png', 1, 1):sprite(0, 0)
+                    function draw()
+                        graphics.clear('#000000')
+                    end
+                    function gui(ui: Ui)
+                        ui:panel('left', function(ui)
+                            ui:horizontal(function(ui)
+                                ui:sprite(red, nil, 32, 32)
+                                ui:label('Beside')
+                            end)
+                        end)
+                    end",
+                ),
+            ],
+        );
+        write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
+        let mut simulation = simulation(&folder);
+        simulation.run_frames(2);
+        // Left of the label beside it, in the middle of its row.
+        let beside = simulation.gui_rect("Beside").unwrap();
+        let [x, y] = [beside.x - 20.0, beside.y + beside.h / 2.0];
+        let image = simulation.screenshot().unwrap();
+        assert_eq!(pixel(&image, x as u32, y as u32), RED);
+    }
+
+    #[test]
+    fn containers_lay_out_what_their_functions_add() {
+        let simulation = interface(
+            "gui_containers",
+            "",
+            "ui:window('Outer', function(ui)
+                ui:heading('Heading')
+                ui:collapsing('Folded', function(ui)
+                    ui:label('Hidden until opened')
+                end)
+                ui:grid('table', function(ui)
+                    ui:label('Name')
+                    ui:monospace('Value')
+                    ui:end_row()
+                end)
+                ui:enabled(false, function(ui)
+                    ui:button('Disabled')
+                end)
+                ui:group(function(ui)
+                    ui:vertical(function(ui)
+                        ui:small('Small')
+                        ui:separator()
+                        ui:space(4)
+                        ui:label('Colored', '#ff0000')
+                    end)
+                end)
+                ui:scroll(function(ui)
+                    ui:label('Scrolled')
+                end)
+            end)",
+        );
+        for label in [
+            "Heading", "Folded", "Name", "Value", "Disabled", "Small", "Colored", "Scrolled",
+        ] {
+            assert!(simulation.gui_rect(label).is_some(), "{label}");
+        }
+        assert!(simulation.gui_rect("Hidden until opened").is_none());
+        let name = simulation.gui_rect("Name").unwrap();
+        let value = simulation.gui_rect("Value").unwrap();
+        assert!(
+            value.x > name.x && (value.y - name.y).abs() < 4.0,
+            "{name:?} {value:?}"
+        );
+    }
+
+    #[test]
+    fn errors_in_gui_stop_the_game() {
+        let folder = game(
+            "gui_error",
+            &[
+                ("conf.luau", WINDOW),
+                (
+                    "main.luau",
+                    "function gui(ui: Ui)
+                        ui:window('Broken', function(ui)
+                            ui:panel('middle', function(ui) end)
+                        end)
+                    end",
+                ),
+            ],
+        );
+        let mut simulation = simulation(&folder);
+        simulation.step();
+        let err = stopped_with(&simulation);
+        assert!(err.contains(r#"not "middle""#), "{err}");
+    }
+
+    #[test]
+    fn a_ui_kept_after_gui_returns_fails() {
+        let folder = game(
+            "gui_kept",
+            &[
+                ("conf.luau", WINDOW),
+                (
+                    "main.luau",
+                    "local kept = nil
+                    function gui(ui: Ui)
+                        kept = ui
+                    end
+                    function update()
+                        if kept then
+                            kept:label('Too late')
+                        end
+                    end",
+                ),
+            ],
+        );
+        let mut simulation = simulation(&folder);
+        simulation.run_frames(2);
+        let err = stopped_with(&simulation);
+        assert!(err.contains("destructed"), "{err}");
+    }
+}

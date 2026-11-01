@@ -42,8 +42,8 @@ Godot's and built with Wingine itself.
   that `wait` across frames for NPCs, dialogue and events. Whole games can be written in Luau.
 - **Headless runs**: games run without a window for tests and for scripted runs that save
   screenshots.
-- **egui** interfaces over any game, for debug panels and tools, and a window of frame stats any
-  game can show with a key. Tests click their widgets by name.
+- **egui** interfaces over any game, in Rust or Luau, for debug panels and tools, and a window of
+  frame stats any game can show with a key. Tests click their widgets by name.
 - **An editor** for scenes and scripts, laid out like Godot's: a tree of nodes, an Inspector, a
   viewport with gizmos, painting tilemaps, placing and overriding instances, laying out screens,
   animating rigs on a timeline, undo, playing the game, and a script editor that checks scripts
@@ -90,7 +90,9 @@ poking around, buy gear at the village shop.
 | ![Talking to Elder Rowan](docs/screenshots/rpg-dialogue.png) | ![A creature notices the player on Shrine Hill](docs/screenshots/rpg-shrine.png) | ![A battle against the Shade Bat](docs/screenshots/rpg-battle.png) |
 
 Walk with the arrow keys or WASD. Press Space, Enter or E to talk or to examine what's in front
-of you, Tab or I to open your bag, and Escape or Backspace to back out of menus.
+of you, Tab or I to open your bag, and Escape or Backspace to back out of menus. F1 shows a debug
+window, laid out with egui from Luau, to set your hit points, coins, items and quest, and jump
+between maps.
 
 The maps in [`maps/`](examples/rpg/maps) are [scenes](docs/scenes.md): tilemaps over the tiles of
 [`world.tileset.luau`](examples/rpg/world.tileset.luau), with the places, exits, characters and
@@ -246,7 +248,9 @@ square, and a translucent panel drawn over both.
 
 [`examples/gui.rs`](examples/gui.rs) bounces sprites around the window, tuned from an egui panel
 that also shows a map of them, drawn by the engine into a texture. F3 shows the engine's window of
-frame stats. Run it with `cargo run --example gui`.
+frame stats. Run it with `cargo run --example gui`. Luau games lay out interfaces too, in a
+`gui(ui)` function of their own: see [`docs/api/gui.md`](docs/api/gui.md), and the RPG's F1
+window.
 
 ## Editor
 

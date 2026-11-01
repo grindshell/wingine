@@ -20,6 +20,8 @@ default-members = [
 name = "wingine"
 version = "0.1.0"
 edition = "2024"
+# `cargo run -- path/to/game` runs a game, though the editor's package has a binary too.
+default-run = "wingine"
 
 [features]
 default = ["egui"]

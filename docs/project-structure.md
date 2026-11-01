@@ -26,17 +26,20 @@ The folder's name is the window's title, unless `conf.luau` gives one.
 
 ## `main.luau`
 
-`main.luau` is the game. The engine runs it in three parts:
+`main.luau` is the game. The engine runs it in three parts, and a fourth if the game has an
+interface:
 
 1. **Its top level runs once**, when the window and GPU are ready, to set the game up: require
    modules, load sprites and sounds, bind keys to actions, build maps, start music, and start any
    tasks.
 2. **`update(dt)` runs every frame** with `dt`, the seconds since the frame before, to move the
    game on. (With an [update rate](#update_rate), it runs at that rate instead.)
-3. **`draw()` runs every frame**, after the frame's updates, to draw the game as it now is.
+3. **`gui(ui)` runs every frame**, after the frame's updates, to lay out an interface over the
+   game, such as a window of debug tools: see [`gui`](api/gui.md).
+4. **`draw()` runs every frame**, after the frame's updates, to draw the game as it now is.
 
-`update` and `draw` are global functions the script defines. Both are optional: a game that only
-draws needs no `update`.
+`update`, `gui` and `draw` are global functions the script defines. All are optional: a game that
+only draws needs no `update`, and most games need no `gui`.
 
 ```lua
 local player = require("./player")
@@ -69,9 +72,10 @@ Each frame, the engine:
 2. Calls `update(dt)`.
 3. Resumes the tasks that are waiting (see [Tasks](#tasks)), each with the same `dt`.
 4. Runs the hooks of native libraries that go after `update`.
-5. Clears the canvas to black, with no camera set.
-6. Runs the hooks that go before `draw`, calls `draw()`, then runs the hooks after `draw`.
-7. Shows the frame.
+5. Calls `gui(ui)`, if the game has one.
+6. Clears the canvas to black, with no camera set.
+7. Runs the hooks that go before `draw`, calls `draw()`, then runs the hooks after `draw`.
+8. Shows the frame, with the interface over it.
 
 With an update rate, steps 1 to 4 run as many times as the frame's time holds, possibly none,
 before the frame draws.
@@ -85,16 +89,17 @@ tapped and let go between two updates counts as both pressed and released.
 The engine lends scripts its services at the times they make sense, and a function used at
 another time raises an error saying so:
 
-| | Top level | `update` and tasks | `draw` |
-|---|:---:|:---:|:---:|
-| Drawing: `graphics.clear`, `graphics.draw_*`, `graphics.fill_rect`, `graphics.set_camera` | | | ✓ |
-| Loading sprite sheets: `graphics.load_sprite_sheet` | ✓ | ✓ | |
-| The keyboard and mouse: `input` | ✓ | ✓ | |
-| Playing sound and music: `audio` (apart from `audio.load`) | ✓ | ✓ | |
-| `graphics.size` | ✓ | ✓ | ✓ |
-| Everything else: `audio.load`, `tilemap`, `grid`, fonts, animations, `graphics.color`, `graphics.frame_stats` | ✓ | ✓ | ✓ |
+| | Top level | `update` and tasks | `gui` | `draw` |
+|---|:---:|:---:|:---:|:---:|
+| Drawing: `graphics.clear`, `graphics.draw_*`, `graphics.fill_rect`, `graphics.set_camera` | | | | ✓ |
+| Loading sprite sheets: `graphics.load_sprite_sheet` | ✓ | ✓ | ✓ | |
+| The keyboard and mouse: `input` | ✓ | ✓ | ✓ | |
+| Playing sound and music: `audio` (apart from `audio.load`) | ✓ | ✓ | ✓ | |
+| `graphics.size` | ✓ | ✓ | ✓ | ✓ |
+| Everything else: `audio.load`, `tilemap`, `grid`, fonts, animations, `graphics.color`, `graphics.frame_stats` | ✓ | ✓ | ✓ | ✓ |
 
-So read input and change the game's state in `update`, and only draw in `draw`.
+So read input and change the game's state in `update`, and only draw in `draw`. By the time `gui`
+runs, the frame's updates have seen its key presses, so `input.pressed` is false there.
 
 ### Tasks
 
