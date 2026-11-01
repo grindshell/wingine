@@ -51,6 +51,16 @@ local function voice(speaker: string?): (string) -> ()
     end
 end
 
+-- The elder unlatches the north gate as the player takes on the quest.
+local function open_gate()
+    world.replace(rpg.levels.village, "gate", "gate_open")
+end
+
+-- Once it's safe, Shrine Hill hums the village's tune again.
+local function calm_shrine()
+    rpg.levels.shrine.music = rpg.levels.village.music
+end
+
 local elder = voice(ELDER)
 local hazel = voice(HAZEL)
 local maple = voice("Maple")
@@ -71,7 +81,7 @@ function story.talk.elder()
         )
         if answer == 1 then
             rpg.quest = "accepted"
-            world.replace(rpg.levels.village, "gate", "gate_open")
+            open_gate()
             audio.play(chime)
             elder(
                 "Thank you. I've unlatched the north gate. Follow the path up the hill, and go "
@@ -156,9 +166,20 @@ function story.defeated(kind: string)
     audio.play(chime)
     narrate("A breeze stirs the shrine's wind chimes… and, for the first time in days, they ring.")
     narrate("The other creatures scatter into the trees. Shrine Hill is quiet again.")
-    -- The hill hums the village's tune again.
-    shrine.music = rpg.levels.village.music
+    calm_shrine()
     world.play_music(shrine, 2)
+end
+
+-- Makes again what reaching the quest's stage changed on the levels, for a saved game being
+-- continued, whose levels are built afresh from their maps.
+function story.restore()
+    if story.reached("accepted") then
+        open_gate()
+    end
+    -- Debugging can clear the hill without the player having been there.
+    if story.reached("cleared") and rpg.levels.shrine then
+        calm_shrine()
+    end
 end
 
 -- Drinking from the village well restores the player.

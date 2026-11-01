@@ -6,15 +6,17 @@ use crate::{
     audio::Audio,
     graphics::{Font, Texture, gpu::Gpu, renderer::Renderer},
     input::Input,
+    save::Saves,
 };
 
-/// Engine services available to a game: input, audio, the canvas size, the built-in font, asset
-/// loading, and how long frames take.
+/// Engine services available to a game: input, audio, saves, the canvas size, the built-in font,
+/// asset loading, and how long frames take.
 pub struct Context {
     pub(crate) gpu: Gpu,
     pub(crate) renderer: Renderer,
     pub(crate) input: Input,
     pub(crate) audio: Audio,
+    pub(crate) saves: Saves,
     pub(crate) canvas_size: [f32; 2],
     pub(crate) frame_stats: FrameStats,
     /// Whether the game has asked to close its window.
@@ -68,6 +70,7 @@ impl Context {
             renderer,
             input: Input::new(),
             audio,
+            saves: Saves::default(),
             canvas_size: [0.0, 0.0],
             frame_stats: FrameStats::default(),
             quit: false,
@@ -112,6 +115,13 @@ impl Context {
     /// Sound effects and music. Silent when running headless.
     pub fn audio(&mut self) -> &mut Audio {
         &mut self.audio
+    }
+
+    /// The game's saves, which last after it ends. A
+    /// [`Simulation`](crate::headless::Simulation) keeps them in a folder of its own, unless its
+    /// config names one: see [`save`](crate::save).
+    pub fn saves(&self) -> &Saves {
+        &self.saves
     }
 
     /// The built-in pixel font: printable ASCII and a little typographic punctuation, with

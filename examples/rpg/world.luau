@@ -227,8 +227,8 @@ export type Level = {
     -- The map's foes, and which of them, by number, have been beaten.
     foes: { any },
     defeated: { [number]: boolean },
-    -- The places whose hidden things the player has found.
-    found: { [any]: boolean },
+    -- The cells of the places whose hidden things the player has found.
+    found: { [string]: boolean },
 }
 
 -- Sets the ground in cell `column`, `row` to the kind `name`.
@@ -439,6 +439,16 @@ end
 
 function world.exit_at(level: Level, column: number, row: number)
     return level.exits[key(column, row)]
+end
+
+-- Whether the player has found what's hidden at the place on cell `column`, `row`.
+function world.is_found(level: Level, column: number, row: number): boolean
+    return level.found[key(column, row)] == true
+end
+
+-- Marks what's hidden at the place on cell `column`, `row` found, for good.
+function world.set_found(level: Level, column: number, row: number)
+    level.found[key(column, row)] = true
 end
 
 -- Whether there's an object in cell `column`, `row`.

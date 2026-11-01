@@ -1,5 +1,6 @@
 use std::{
     fmt,
+    path::PathBuf,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::{Duration, Instant},
 };
@@ -24,6 +25,7 @@ use crate::{
         surface::{Acquired, WindowSurface},
     },
     input::{Key, MouseButton},
+    save::Saves,
 };
 
 /// Longest frame time the game updates for, so a stall (dragging the window, a breakpoint, being
@@ -81,6 +83,13 @@ pub struct WindowConfig {
     /// When frames come: one after another, as games want, or only when something may have
     /// changed, as tools want.
     pub redraw: Redraw,
+    /// Names the folder the game's [saves](crate::save) are kept in, among applications' data,
+    /// so each game should have its own. Letters, digits, `_` and `-` only.
+    pub identity: String,
+    /// Where the game's saves are kept instead, if anywhere: a
+    /// [`Simulation`](crate::headless::Simulation) without one keeps them in a temporary folder
+    /// of its own.
+    pub save_folder: Option<PathBuf>,
 }
 
 impl Default for WindowConfig {
@@ -95,6 +104,8 @@ impl Default for WindowConfig {
             update_rate: None,
             debug_key: None,
             redraw: Redraw::Continuously,
+            identity: "wingine".into(),
+            save_folder: None,
         }
     }
 }
@@ -185,6 +196,14 @@ impl fmt::Debug for Waker {
 /// If the `WINGINE_SCRIPT` environment variable names a script file, the game runs that script
 /// headlessly instead of opening a window: see [`headless::Simulation`](crate::headless::Simulation)
 /// and the script format in the `script` module docs.
+///
+/// The game's [saves](crate::save) are kept in a folder named by `config.identity`, unless
+/// `config.save_folder` gives another.
+///
+/// # Panics
+///
+/// If `config` has an update rate that isn't above 0, or an identity that isn't letters, digits,
+/// `_` and `-`.
 pub fn run<G, F>(config: WindowConfig, init: F) -> Result<()>
 where
     G: Game,
@@ -487,6 +506,7 @@ impl<G: Game> State<G> {
         let surface = WindowSurface::new(&gpu, window.clone(), surface, config.vsync);
         let renderer = Renderer::new(&gpu.device, &gpu.queue, surface.view_format());
         let mut ctx = Context::new(gpu, renderer, Audio::new());
+        ctx.saves = Saves::for_window(config);
         // Frames that come one after another needn't be asked for.
         if config.redraw == Redraw::OnDemand {
             *lock(&ctx.redraws.proxy) = Some(proxy);

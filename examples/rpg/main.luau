@@ -12,8 +12,9 @@
 -- `world.tileset.luau`, the people are in `characters.luau`, the
 -- dialogue box in `dialogue.luau`, and conversations and events in `story.luau`. Battles are in
 -- `battle.luau`, against the creatures in `foes.luau`. What the player carries is in
--- `items.luau`, the shop in `shop.luau`, and the bag in `bag.luau`. The game's state is in the
--- global table `rpg`, where tests can see it.
+-- `items.luau`, the shop in `shop.luau`, and the bag in `bag.luau`. The game opens on the title
+-- screen in `title.luau`, and saves itself after every event, as `progress.luau` describes. The
+-- game's state is in the global table `rpg`, where tests can see it.
 --
 -- Run with `cargo run -- examples/rpg`. The tileset is Kenney's 1-bit Pack
 -- (<https://kenney.nl/assets/1-bit-pack>, CC0). Its sprites are white on transparent, so they're
@@ -26,7 +27,9 @@ local characters = require("./characters")
 local debug_panel = require("./debug_panel")
 local dialogue = require("./dialogue")
 local items = require("./items")
+local progress = require("./progress")
 local story = require("./story")
+local title = require("./title")
 local conf = require("./conf")
 local world = require("./world")
 
@@ -77,6 +80,9 @@ local OBJECTIVES = {
 }
 -- The stage of the quest from which the player's hit points and coins show.
 local SHOW_STATS = "hunt"
+-- The title screen's choices.
+local CONTINUE = "Continue"
+local NEW_GAME = "New Game"
 
 local BACKGROUND = "#101418"
 local HERO = "#f2d3ab"
@@ -138,19 +144,25 @@ rpg = {
     dialogue = dialogue,
     battle = battle,
     bag = bag,
+    title = title,
     -- Whether the debug panel shows: F1 shows and hides it.
     debugging = false,
 }
 
--- Puts the player on the map `name`, building its level the first time, on cell `at`, facing
--- `facing`.
-local function enter(name: string, at: { number }, facing: string)
+-- The level of the map `name`, built the first time it's asked for.
+local function level_named(name: string): world.Level
     local level = rpg.levels[name]
     if not level then
         local map = MAPS[name] or error(`there's no map called {name}`)
         level = world.build(name, scene.load(map))
         rpg.levels[name] = level
     end
+    return level
+end
+
+-- Puts the player on the map `name`, on cell `at`, facing `facing`.
+local function enter(name: string, at: { number }, facing: string)
+    local level = level_named(name)
     if rpg.level then
         world.remove(rpg.level, rpg.player)
     end
@@ -166,7 +178,8 @@ local function enter(name: string, at: { number }, facing: string)
     world.play_music(level, MUSIC_FADE)
 end
 
--- Starts `f(...)` as a task, such as a conversation. The player waits until it's done.
+-- Starts `f(...)` as a task, such as a conversation. The player waits until it's done, and then
+-- the game saves what it changed, unless it's still on the title screen.
 local function run_event(f, ...)
     rpg.busy += 1
     spawn(function(...)
@@ -174,6 +187,9 @@ local function run_event(f, ...)
         rpg.busy -= 1
         if not ok then
             error(err, 0)
+        end
+        if rpg.busy == 0 and not title.is_open() then
+            progress.save()
         end
     end, ...)
 end
@@ -269,10 +285,11 @@ local function interaction(): string?
     return nil
 end
 
--- Finds what's hidden at `place`, on `level`, as the player examines it for the first time.
-local function find(level: world.Level, place)
+-- Finds what's hidden at `place`, on cell `column`, `row` of `level`, as the player examines it
+-- for the first time.
+local function find(level: world.Level, column: number, row: number, place)
     local found = place.find
-    level.found[place] = true
+    world.set_found(level, column, row)
     rpg.coins += found.coins or 0
     if found.item then
         items.give(found.item)
@@ -294,8 +311,8 @@ local function interact()
         return
     end
     local place = world.place_at(level, column, row)
-    if place and place.find and not level.found[place] then
-        run_event(find, level, place)
+    if place and place.find and not world.is_found(level, column, row) then
+        run_event(find, level, column, row, place)
         return
     elseif place and place.event then
         run_event(story.events[place.event], place)
@@ -338,8 +355,56 @@ local function walk()
     end
 end
 
+-- Leaves the title screen for a new game, from the start.
+local function new_game()
+    title.close()
+    enter(START.map, START.at, START.facing)
+end
+
+-- Leaves the title screen for the saved game, where the player was when it saved.
+local function continue_game()
+    local data = progress.load() or error("there's no saved game to continue")
+    title.close()
+    progress.restore(data, level_named)
+    story.restore()
+    enter(data.map, data.at, data.facing)
+end
+
+-- Asks before starting a new game over a saved one, which the new one's first save replaces.
+local function start_over()
+    local answer = dialogue.ask(
+        "Start a new game? The one you saved will be lost.",
+        { "Start over", "Back" }
+    )
+    if answer == 1 then
+        new_game()
+    end
+end
+
+-- Lets the player pick from the title screen's menu.
+local function update_title(dt: number)
+    if dialogue.is_open() then
+        dialogue.update(dt)
+        return
+    elseif rpg.busy > 0 then
+        return
+    end
+    local picked = title.update()
+    if picked == CONTINUE then
+        continue_game()
+    elseif picked == NEW_GAME and progress.load() then
+        run_event(start_over)
+    elseif picked == NEW_GAME then
+        new_game()
+    end
+end
+
 function update(dt: number)
     rpg.time += dt
+    if title.is_open() then
+        update_title(dt)
+        return
+    end
     rpg.bump_cooldown = math.max(rpg.bump_cooldown - dt, 0)
     if input.key_pressed("F1") then
         rpg.debugging = not rpg.debugging
@@ -456,6 +521,11 @@ local function draw_world()
 end
 
 function draw()
+    if title.is_open() then
+        title.draw()
+        dialogue.draw()
+        return
+    end
     local state = battle.state
     -- A battle covers the map once its opening flash is over.
     if not state or state.phase == "flash" then
@@ -490,4 +560,4 @@ function gui(ui: Ui)
     end
 end
 
-enter(START.map, START.at, START.facing)
+title.open(if progress.load() then { CONTINUE, NEW_GAME } else { NEW_GAME })

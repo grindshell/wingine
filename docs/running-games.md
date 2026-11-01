@@ -116,8 +116,10 @@ $env:WINGINE_SCRIPT = "check.txt"; cargo run -- path/to/game; $env:WINGINE_SCRIP
 Instead of opening a window, the engine runs the game in a virtual window the size of the game's
 `width` and `height` settings, follows the script, and exits. Frames advance at exactly 60 a
 second of game time, however long they take to compute, so a run behaves the same every time if
-the game does. Audio is silent, but sounds still start and finish on time. Screenshots are saved
-relative to the script's folder, and each is reported on standard output.
+the game does. Audio is silent, but sounds still start and finish on time. The game's
+[saves](api/save.md) go in a temporary folder, which starts empty and goes when the run ends, so a
+run never sees or changes the player's saves. Screenshots are saved relative to the script's
+folder, and each is reported on standard output.
 
 The script has one command per line. `#` starts a comment.
 

@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-/// Errors from starting the engine, loading or saving files, audio, headless rendering, Luau
-/// scripts, native libraries, or scripted runs.
+/// Errors from starting the engine, loading or saving files, saves, audio, headless rendering,
+/// Luau scripts, native libraries, or scripted runs.
 ///
 /// Errors from winit and wgpu are boxed, so their types stay out of the engine's API.
 #[derive(Debug, Error)]
@@ -54,6 +54,10 @@ pub enum Error {
     /// A scene or tileset couldn't be written as a file.
     #[error("failed to write a scene: {0}")]
     WriteScene(String),
+    /// A save couldn't be read or written, other than by failing to read or write its file: its
+    /// name isn't one, its data isn't plain, or there's nowhere to keep it.
+    #[error("save `{name}`: {message}")]
+    Save { name: String, message: String },
     #[error("failed to read a rendered frame back from the GPU: {0}")]
     ReadFrame(#[source] BoxedError),
     /// A Luau script failed to compile or raised an error.

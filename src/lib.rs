@@ -13,6 +13,7 @@ pub mod input;
 pub mod lua;
 pub mod math;
 pub mod runtime;
+pub mod save;
 pub mod scene;
 pub mod script;
 pub mod tilemap;

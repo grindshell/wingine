@@ -75,6 +75,16 @@ pub(super) fn write_tileset(tileset: &TilesetFile) -> Result<String, String> {
     Ok(writer.out)
 }
 
+/// `value` as the text of a file that returns it, as a save file holds data, or why it can't be
+/// written: only finite numbers can.
+pub(crate) fn write_value(value: &Value) -> Result<String, String> {
+    let mut writer = Writer::default();
+    writer.out.push_str("return ");
+    writer.value(value)?;
+    writer.out.push('\n');
+    Ok(writer.out)
+}
+
 #[derive(Default)]
 struct Writer {
     out: String,
@@ -452,7 +462,7 @@ impl Writer {
             Value::Number(number) => {
                 if !number.is_finite() {
                     return Err(format!(
-                        "{number} can't be written: scene files hold only finite numbers"
+                        "{number} can't be written: files hold only finite numbers"
                     ));
                 }
                 write!(self.out, "{number}").unwrap();

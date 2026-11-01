@@ -363,30 +363,49 @@ fn read_file(path: &Path) -> Result<String> {
     })
 }
 
-/// Runs the Luau `source` with nothing in scope, and returns what it returns as plain data.
+/// Runs the Luau `source` with nothing in scope, and returns what it returns, which must be a
+/// table, as plain data.
 fn evaluate(source: &str, path: &Path) -> Result<Value, String> {
     let lua = mlua::Lua::new();
-    let value: mlua::Value = lua
-        .load(source)
-        .set_name(format!("@{}", path.display()))
-        .set_mode(ChunkMode::Text)
-        .set_environment(lua.create_table().map_err(|err| err.to_string())?)
-        .eval()
-        .map_err(|err| err.to_string())?;
+    let value = run(&lua, source, path)?;
     if !value.is_table() {
         return Err(format!(
             "the file must return a table, not {}",
             describe(&value)
         ));
     }
-    plain(value, "", 0)
+    plain(value, "the file's table")
 }
 
-/// `value` as plain data. `at` is where it is, such as `children[2].props`, for errors.
-fn plain(value: mlua::Value, at: &str, depth: usize) -> Result<Value, String> {
+/// Runs the Luau `source` with nothing in scope, and returns what it returns as plain data,
+/// whatever kind of value it is, as a save file holds.
+pub(crate) fn evaluate_any(source: &str, path: &Path) -> Result<Value, String> {
+    let lua = mlua::Lua::new();
+    let value = run(&lua, source, path)?;
+    plain(value, "what the file returns")
+}
+
+/// Runs the Luau `source` with nothing in scope, and returns what it returns.
+fn run(lua: &mlua::Lua, source: &str, path: &Path) -> Result<mlua::Value, String> {
+    lua.load(source)
+        .set_name(format!("@{}", path.display()))
+        .set_mode(ChunkMode::Text)
+        .set_environment(lua.create_table().map_err(|err| err.to_string())?)
+        .eval()
+        .map_err(|err| err.to_string())
+}
+
+/// `value` as plain data, which errors call `what`, such as "the file's table", and its fields by
+/// their paths from it.
+pub(crate) fn plain(value: mlua::Value, what: &str) -> Result<Value, String> {
+    plain_at(value, what, "", 0)
+}
+
+/// `value` as plain data. `at` is where it is in `root`, such as `children[2].props`, for errors.
+fn plain_at(value: mlua::Value, root: &str, at: &str, depth: usize) -> Result<Value, String> {
     let here = || {
         if at.is_empty() {
-            "the file's table".to_owned()
+            root.to_owned()
         } else {
             format!("`{at}`")
         }
@@ -419,7 +438,7 @@ fn plain(value: mlua::Value, at: &str, depth: usize) -> Result<Value, String> {
                             return Err(format!("{} has a key that isn't UTF-8", here()));
                         };
                         let key = key.to_owned();
-                        let value = plain(value, &field_path(at, &key), depth + 1)?;
+                        let value = plain_at(value, root, &field_path(at, &key), depth + 1)?;
                         strings.insert(key, value);
                     }
                     mlua::Value::Integer(_) | mlua::Value::Number(_) => {
@@ -428,7 +447,8 @@ fn plain(value: mlua::Value, at: &str, depth: usize) -> Result<Value, String> {
                             mlua::Value::Number(index) => index,
                             _ => unreachable!(),
                         };
-                        let value = plain(value, &format!("{at}[{index}]"), depth + 1)?;
+                        let at = format!("{at}[{index}]");
+                        let value = plain_at(value, root, &at, depth + 1)?;
                         numbers.push((index, value));
                     }
                     key => {

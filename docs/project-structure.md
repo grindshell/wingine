@@ -22,7 +22,9 @@ my-game/
     └── libparticles.dylib     macOS
 ```
 
-The folder's name is the window's title, unless `conf.luau` gives one.
+The folder's name is the window's title, unless `conf.luau` gives one. What the game
+[saves](api/save.md) is kept elsewhere, in a folder of the game's own among the player's
+applications' data.
 
 ## `main.luau`
 
@@ -96,7 +98,7 @@ another time raises an error saying so:
 | The keyboard and mouse: `input` | ✓ | ✓ | ✓ | |
 | Playing sound and music: `audio` (apart from `audio.load`) | ✓ | ✓ | ✓ | |
 | `graphics.size` | ✓ | ✓ | ✓ | ✓ |
-| Everything else: `audio.load`, `tilemap`, `grid`, fonts, animations, `graphics.color`, `graphics.frame_stats` | ✓ | ✓ | ✓ | ✓ |
+| Everything else: `audio.load`, `tilemap`, `grid`, `save`, fonts, animations, `graphics.color`, `graphics.frame_stats` | ✓ | ✓ | ✓ | ✓ |
 
 So read input and change the game's state in `update`, and only draw in `draw`. By the time `gui`
 runs, the frame's updates have seen its key presses, so `input.pressed` is false there.
@@ -214,6 +216,7 @@ return {
     vsync = true,
     update_rate = 60,
     debug_key = "F3",
+    identity = "my-game",
     libraries = { "particles", { name = "danmaku", optional = true } },
 }
 ```
@@ -283,6 +286,19 @@ return { debug_key = "F3" }
 ```
 
 [Measuring performance](running-games.md#measuring-performance) says what the numbers mean.
+
+### `identity`
+
+The name of the folder the game's [saves](api/save.md) are kept in, such as `"my-game"`, of
+letters, digits, `_` and `-`. By default, the name of the game's folder, with `_` in place of
+anything else. Games that save should give one, so that renaming the game's folder, or another
+game whose folder has the same name, doesn't change which saves it finds:
+
+```lua
+return { identity = "wingine-rpg" }
+```
+
+[`save`](api/save.md#where-saves-are-kept) says where the folder is on each system.
 
 ### `libraries`
 

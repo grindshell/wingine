@@ -27,15 +27,6 @@ use crate::{
     math::Rect,
 };
 
-/// Whether `name` can name a library in a game's settings: it's part of a file name, so it may
-/// not hold path separators or dots.
-pub(super) fn is_library_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-}
-
 /// Libraries linked into this program, by the name games list them by.
 static LINKED: Mutex<Vec<(String, abi::Library)>> = Mutex::new(Vec::new());
 

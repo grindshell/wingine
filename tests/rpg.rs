@@ -1,6 +1,11 @@
 //! Tests for the RPG example, a game written entirely in Luau, in `examples/rpg`. They run it
 //! headlessly and check its state, which `main.luau` keeps in the global table `rpg`.
 
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
 use wingine::{
     headless::Simulation,
     input::Key,
@@ -23,9 +28,52 @@ const SHRINE_ARRIVAL: [i32; 2] = [12, 18];
 const VILLAGE_ARRIVAL: [i32; 2] = [20, 1];
 const SEAL_STONE: [i32; 2] = [12, 4];
 
-fn simulation() -> Simulation<LuauGame> {
-    let config = runtime::config(GAME).expect("settings load");
+/// Starts the game, which opens on its title screen, keeping its saves in `saves` if given, or
+/// else in a folder of the simulation's own, which starts empty.
+fn start(saves: Option<&Path>) -> Simulation<LuauGame> {
+    let mut config = runtime::config(GAME).expect("settings load");
+    config.window.save_folder = saves.map(Path::to_owned);
     Simulation::new(&config.window, |ctx| LuauGame::load(ctx, GAME)).expect("game starts")
+}
+
+/// Starts a new game, with no saved one.
+fn simulation() -> Simulation<LuauGame> {
+    let mut simulation = start(None);
+    pick(&mut simulation, "New Game");
+    simulation
+}
+
+/// An empty folder for the saves of the test `test`, shared by the games it starts.
+fn saves_folder(test: &str) -> PathBuf {
+    let folder = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("rpg-saves")
+        .join(test);
+    if folder.exists() {
+        fs::remove_dir_all(&folder).unwrap();
+    }
+    folder
+}
+
+/// The title screen's choices, or `None` once it's closed.
+fn title_choices(simulation: &Simulation<LuauGame>) -> Option<Vec<String>> {
+    eval(simulation, "rpg.title.choices")
+}
+
+/// Picks `choice` from the title screen's menu.
+fn pick(simulation: &mut Simulation<LuauGame>, choice: &str) {
+    let choices = title_choices(simulation).expect("the title screen is open");
+    let index = choices
+        .iter()
+        .position(|offered| offered == choice)
+        .unwrap_or_else(|| panic!("the title offers {choice}: {choices:?}"));
+    let highlighted = eval::<usize>(simulation, "rpg.title.selected") - 1;
+    for _ in 0..(index + choices.len() - highlighted) % choices.len() {
+        simulation.tap(Key::Down);
+    }
+    simulation.tap(Key::Space);
+    if let Some(err) = simulation.game().error() {
+        panic!("the game stopped: {err}");
+    }
 }
 
 /// The value of the Luau `expression`, such as `"rpg.quest"`.
@@ -162,6 +210,162 @@ fn gate_is_shut(simulation: &Simulation<LuauGame>) -> bool {
         simulation,
         &format!("rpg.levels.village.map:is_solid({column}, {row})"),
     )
+}
+
+#[test]
+fn the_game_opens_on_its_title() {
+    let mut simulation = start(None);
+    assert_eq!(
+        title_choices(&simulation),
+        Some(vec!["New Game".to_owned()])
+    );
+    simulation.tap(Key::Up);
+    simulation.tap(Key::Tab);
+    run_for(&mut simulation, 0.5);
+    assert!(eval::<bool>(&simulation, "rpg.level == nil"), "no map yet");
+    assert!(title_choices(&simulation).is_some());
+
+    pick(&mut simulation, "New Game");
+    assert_eq!(title_choices(&simulation), None);
+    assert_eq!(level(&simulation), "village");
+    assert_eq!(player_tile(&simulation), START);
+    assert!(
+        eval::<bool>(&simulation, "save.read('progress') == nil"),
+        "nothing to save yet"
+    );
+}
+
+/// What a save keeps of the player, as text, to compare a game with the one it was saved from.
+fn saved_state(simulation: &Simulation<LuauGame>) -> String {
+    eval(
+        simulation,
+        "(function()
+            local function listed(map)
+                local entries = {}
+                for key, value in map do
+                    table.insert(entries, `{key}={value}`)
+                end
+                table.sort(entries)
+                return table.concat(entries, ',')
+            end
+            local column, row = rpg.player.mover:tile()
+            return `{rpg.quest} hp={rpg.hp} coins={rpg.coins} [{listed(rpg.items)}] \
+                [{listed(rpg.equipped)}] {rpg.level.name} {column},{row} \
+                {rpg.player.mover:facing()}`
+        end)()",
+    )
+}
+
+#[test]
+fn continuing_picks_up_where_the_game_saved() {
+    let saves = saves_folder("continue");
+    let mut simulation = start(Some(&saves));
+    pick(&mut simulation, "New Game");
+    // The savings in the player's cottage, the quest, and the feather at the shrine.
+    place_player(&simulation, [6, 6], "up");
+    simulation.tap(Key::Space);
+    read(&mut simulation);
+    accept_quest(&mut simulation);
+    climb_to_the_shrine(&mut simulation);
+    place_player(&simulation, [15, 6], "up");
+    simulation.tap(Key::Space);
+    read(&mut simulation);
+    // Back down to the village, then up again for the hunt, with the feather on.
+    place_player(&simulation, SHRINE_ARRIVAL, "down");
+    simulation.tap(Key::Down);
+    run_for(&mut simulation, 1.0);
+    exec(&simulation, "rpg.equipped.charm = 'swift_feather'");
+    hunt(&mut simulation);
+    meet(&mut simulation, "Shade Bat");
+    exec(
+        &simulation,
+        "rpg.battle.state.foe.hp = 1 rpg.battle.state.foe.shown_hp = 1",
+    );
+    attack(&mut simulation);
+    read(&mut simulation);
+    assert!(!foes(&simulation).contains(&"Shade Bat".to_owned()));
+    let saved = saved_state(&simulation);
+    assert!(
+        saved.starts_with("hunt hp=36 coins=16 [herb=3,swift_feather=1] [charm=swift_feather]"),
+        "{saved}"
+    );
+    drop(simulation);
+
+    let mut simulation = start(Some(&saves));
+    assert_eq!(
+        title_choices(&simulation),
+        Some(vec!["Continue".to_owned(), "New Game".to_owned()])
+    );
+    pick(&mut simulation, "Continue");
+    assert_eq!(title_choices(&simulation), None);
+    assert_eq!(saved_state(&simulation), saved);
+    assert_eq!(
+        eval::<String>(&simulation, "rpg.banner.text"),
+        "Shrine Hill"
+    );
+    // The beaten creature stays beaten, and the rest are still about.
+    let mut names = foes(&simulation);
+    names.sort();
+    assert_eq!(names, ["Gloamfang", "Murk Wisp"]);
+    // What was found stays found, and the gate stays open.
+    place_player(&simulation, [15, 6], "up");
+    simulation.tap(Key::Space);
+    let pages = read(&mut simulation);
+    assert!(
+        !pages.iter().any(|page| page.contains("feather")),
+        "{pages:?}"
+    );
+    assert_eq!(count(&simulation, "swift_feather"), 1);
+    assert!(eval::<bool>(&simulation, "rpg.levels.village.found['6,5']"));
+    assert!(!gate_is_shut(&simulation));
+}
+
+#[test]
+fn a_new_game_over_a_saved_one_asks_first() {
+    let saves = saves_folder("start_over");
+    let mut simulation = start(Some(&saves));
+    pick(&mut simulation, "New Game");
+    place_player(&simulation, [6, 6], "up");
+    simulation.tap(Key::Space);
+    read(&mut simulation);
+    drop(simulation);
+
+    let mut simulation = start(Some(&saves));
+    pick(&mut simulation, "New Game");
+    let question = dialogue(&simulation).expect("a question");
+    assert!(question.contains("will be lost"), "{question}");
+    choose(&mut simulation, 2);
+    simulation.step();
+    assert!(title_choices(&simulation).is_some(), "backed out");
+    assert_eq!(eval::<u32>(&simulation, "save.read('progress').coins"), 10);
+
+    pick(&mut simulation, "New Game");
+    choose(&mut simulation, 1);
+    simulation.step();
+    assert_eq!(title_choices(&simulation), None);
+    assert_eq!(level(&simulation), "village");
+    assert_eq!(eval::<u32>(&simulation, "rpg.coins"), 0);
+    assert_eq!(
+        eval::<u32>(&simulation, "save.read('progress').coins"),
+        0,
+        "the new game replaced the saved one"
+    );
+}
+
+#[test]
+fn the_game_saves_after_every_event() {
+    let mut simulation = simulation();
+    let saved = |simulation: &Simulation<LuauGame>| -> Option<String> {
+        eval(simulation, "(save.read('progress') or {}).quest")
+    };
+    simulation.tap(Key::Up);
+    run_for(&mut simulation, 0.5);
+    assert_eq!(saved(&simulation), None, "walking doesn't save");
+    talk_to_elder(&mut simulation);
+    choose(&mut simulation, 1);
+    assert_eq!(saved(&simulation), None, "not until the talk is over");
+    read(&mut simulation);
+    assert_eq!(saved(&simulation), Some("accepted".into()));
 }
 
 #[test]

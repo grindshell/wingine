@@ -36,6 +36,8 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
   and crossfades.
 - **Luau scripting** with [mlua](https://github.com/mlua-rs/mlua): sandboxed scripts, with tasks
   that `wait` across frames for NPCs, dialogue and events. Whole games can be written in Luau.
+- **Saves**: games keep data between runs, such as the player's progress, as files of plain Luau
+  values in a folder of their own.
 - **Headless runs**: games run without a window for tests and for scripted runs that save
   screenshots.
 - **egui** interfaces over any game, in Rust or Luau, for debug panels and tools, and a window of
@@ -84,7 +86,8 @@ need ALSA's library (`libasound2`) and glibc 2.35 or newer.
 [`examples/rpg`](examples/rpg) is a top-down RPG, written entirely in Luau. The elder of
 Mossbrook asks you to check on the shrine on the hill north of the village. What you find there
 sets creatures loose, and you fight them in turn-based battles. Coins from battles, and from
-poking around, buy gear at the village shop.
+poking around, buy gear at the village shop. The game saves itself after every conversation,
+battle and trip between maps, and its title screen continues from there.
 
 | Talking to the elder | A creature on Shrine Hill notices you | A battle |
 |---|---|---|
@@ -314,7 +317,7 @@ end
 ```
 
 Run it with `cargo run -- path/to/folder`. The engine's API is the global tables `graphics`,
-`input`, `audio`, `tilemap`, `grid` and `scene`. [The docs](docs/README.md) cover making a game in
+`input`, `audio`, `tilemap`, `grid`, `scene` and `save`. [The docs](docs/README.md) cover making a game in
 Luau, from a quick start to native libraries, with a reference to every function and type scripts
 use.
 

@@ -7,9 +7,9 @@ of 2D systems, and don't build 3D features unless asked.
 ## Scope
 
 Wingine has what its examples need: tilemaps and batched sprites, sprite animation, a camera,
-input bound to actions, grid movement, text, audio, Luau scripting with tasks, native libraries
-written in Rust, scenes (levels, screens and rigged characters), egui interfaces, and an editor
-built on the engine. Each feature is finished with a game or example that uses it, with tests.
+input bound to actions, grid movement, text, audio, saves, Luau scripting with tasks, native
+libraries written in Rust, scenes (levels, screens and rigged characters), egui interfaces, and an
+editor built on the engine. Each feature is finished with a game or example that uses it, with tests.
 
 - Scenes are data: files of plain Luau values, with no calls or expressions, so tools write back
   what they read. Behavior stays in games, which find nodes by path, tag or kind and read their
@@ -72,12 +72,21 @@ networking or 3D pipelines.
   (shared by the `Context`, `Waker`s and egui's repaint callback) holds when the next frame is
   due, which `about_to_wait` waits until, woken early by an `EventLoopProxy` when a frame is
   wanted sooner. Each frame forgets what was asked for as it begins.
-- `src/context.rs`: `Context`, the engine services passed to games: input, audio, the canvas
-  size, the built-in font, texture loading, and `FrameStats` for the frame before (CPU time
+- `src/context.rs`: `Context`, the engine services passed to games: input, audio, saves, the
+  canvas size, the built-in font, texture loading, and `FrameStats` for the frame before (CPU time
   spent updating, drawing and rendering, the whole frame's time, and quads and draw calls).
   Games get it in their init closure and in `Game::update`; Luau games call
   `graphics.frame_stats()`. Games that redraw on demand ask for frames with
   `request_redraw` and `request_redraw_after`, and from other threads with a `Waker`.
+- `src/save.rs`: `Saves`, a game's saves: named files of plain `Value`s, `<name>.luau` in a
+  folder of the game's own, read with the scene reader and written in its canonical layout
+  (`scene::evaluate_any`, `plain` and `write_value`), each to a file of its own and then renamed
+  over the old one. A window keeps them in `Wingine/<identity>` among the system's applications'
+  data (`WindowConfig::identity`, `identity` in `conf.luau`), found from environment variables
+  rather than a crate; `WindowConfig::save_folder` puts them elsewhere, and a `Simulation` without
+  one keeps them in a `TemporaryFolder` of its own, removed with it, so tests and scripted runs
+  start with none and never touch the player's. Names, and identities and library names, are
+  letters, digits, `_` and `-` (`is_name`). Its unit tests don't need a GPU.
 - `src/gui.rs`: egui over games, `wingine::gui`, which re-exports `egui`. `Gui` (in the
   `Context`) holds egui's context, the input for its next pass, and what the last pass drew; its
   renderer is made the first time there's something to draw, and games that don't override
@@ -140,7 +149,8 @@ networking or 3D pipelines.
   thread and WARP renders wrongly with a shared one, so parallel GPU tests take turns. Simulated
   input reaches egui too, with `type_text` and `scroll` for it alone; screenshots show the
   interface; `request_close` presses the window's close button and `has_quit` tells whether the
-  game called `Context::quit`. Simulations run every frame they're asked to, but
+  game called `Context::quit`. Each keeps its game's saves in a temporary folder of its own,
+  unless its config gives one. Simulations run every frame they're asked to, but
   `next_frame_in` tells when a game that redraws on demand would want its next (input wants one
   at once), so tests check it waits while nothing changes.
 - `src/lua.rs`: `Scripts`, a sandboxed Luau VM for gameplay scripts, and its task scheduler.
@@ -150,11 +160,11 @@ networking or 3D pipelines.
   Scripts compile at Luau's optimization level 2, whose inlining halves calls between Luau
   functions. Its unit tests don't need a GPU.
 - `src/runtime/`: games written entirely in Luau, run from a folder holding `main.luau` and an
-  optional `conf.luau` of settings: the window's, the update rate, and the native libraries to
-  load, any of them optional (skipped if there's no such library, but an error if it's there and
-  fails to load). `LuauGame`
+  optional `conf.luau` of settings: the window's, the update rate, the identity that names its
+  save folder, and the native libraries to load, any of them optional (skipped if there's no such
+  library, but an error if it's there and fails to load). `LuauGame`
   is the `Game` that runs one, and the engine's API for it is the global tables `graphics`,
-  `input`, `audio`, `tilemap`, `grid` and `scene`, one file each. The module docs are the
+  `input`, `audio`, `tilemap`, `grid`, `scene` and `save`, one file each. The module docs are the
   reference for script authors; the engine types those tables hand out (sprites, animations,
   tilemaps, grid movers, text layouts, scene nodes) are userdata, documented with their methods in
   `src/lua.rs`. Sprite sheets and scenes share one cache of images (`Textures`), so each is read
@@ -292,7 +302,13 @@ networking or 3D pipelines.
   shared look. `story.reached(stage)` compares quest stages, which run in the order of
   `story.STAGES`. F1 shows `debug_panel.luau`, an egui window from the game's `gui` that sets hit
   points, coins, items and the quest's stage, and jumps between maps (`ARRIVALS` in `main.luau`).
-  The game's state is the global `rpg`, which its `.luaurc` names for luau-lsp, as the shmup's
+  The game opens on `title.luau`, a title screen drawn in code, whose Continue (offered when
+  there's a save) restores the save `progress`, which `progress.luau` writes after every event
+  (`run_event`) once the title has closed: the player's state, where they are, and each visited
+  level's beaten foes and found places (by cell). Continuing builds those levels afresh, marks
+  them, and `story.restore` makes again what reaching the quest's stage changed, such as the open
+  gate; change it with the story's events. New Game over a save asks first. The game's state is
+  the global `rpg`, which its `.luaurc` names for luau-lsp, as the shmup's
   names `shmup` and `danmaku`.
 - `examples/shmup/`: a Touhou-style bullet hell, written entirely in Luau, at a fixed 60 updates
   a second. Its enemy bullets go through one interface, documented at the top of
@@ -378,7 +394,8 @@ networking or 3D pipelines.
 - `tests/gui.rs`: tests for egui over games, through `Simulation`: clicking widgets by label,
   typing into a focused field, input egui takes not reaching the game, and the debug key.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders,
-  and in its `gui` module (with the `egui` feature), their interfaces, clicked by label.
+  their saves, and in its `gui` module (with the `egui` feature), their interfaces, clicked by
+  label.
 - `tests/scene.rs`: tests for scenes loaded to play: finding nodes, transforms, hit testing,
   anchors and stretching, tilemaps, instances and overrides, adding and removing nodes, and
   posing with clips, with files held in memory.
@@ -387,8 +404,9 @@ networking or 3D pipelines.
   from a file.
 - `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
   expressions such as `pong.ball.vx`.
-- `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest, and
-  using its debug panel.
+- `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest, using
+  its debug panel, and continuing a saved game in a second simulation sharing the first's save
+  folder. Its `simulation()` starts a new game from the title screen.
 - `tests/garden.rs`: tests for the `garden` example, the same way, and that its scene files are
   in the canonical layout.
 - `tests/orchard.rs`: tests for the `orchard` example, the same way: its clips, the picker's walk

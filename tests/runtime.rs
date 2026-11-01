@@ -75,6 +75,7 @@ fn settings_come_from_conf_luau() {
                 vsync = false,
                 update_rate = 60,
                 debug_key = 'F3',
+                identity = 'settings-test',
                 libraries = { 'physics', { name = 'particle_fx', optional = true } },
             }",
         )],
@@ -87,6 +88,7 @@ fn settings_come_from_conf_luau() {
     assert!(!window.vsync);
     assert_eq!(window.update_rate, Some(60.0));
     assert_eq!(window.debug_key, Some(Key::F3));
+    assert_eq!(window.identity, "settings-test");
     assert_eq!(
         window.resolution,
         Resolution::Fixed {
@@ -109,10 +111,17 @@ fn without_settings_the_title_is_the_folders_name() {
     let folder = game("untitled", &[("main.luau", "")]);
     let config = runtime::config(&folder).unwrap();
     assert_eq!(config.window.title, "untitled");
+    assert_eq!(config.window.identity, "untitled");
     assert_eq!(config.window.resolution, Resolution::Window);
     assert!(config.window.vsync);
     assert_eq!(config.window.update_rate, None);
     assert!(config.libraries.is_empty());
+
+    // An identity names a folder, so it keeps to characters any system takes.
+    let folder = game("Café Quest 2!", &[("main.luau", "")]);
+    let config = runtime::config(&folder).unwrap();
+    assert_eq!(config.window.title, "Café Quest 2!");
+    assert_eq!(config.window.identity, "Caf__Quest_2_");
 }
 
 #[test]
@@ -187,6 +196,11 @@ fn unknown_or_invalid_settings_are_errors() {
             "debug_key",
             "return { debug_key = 'Hyper' }",
             "unknown key `Hyper`",
+        ),
+        (
+            "identity",
+            "return { identity = '../elsewhere' }",
+            "`identity`: runtime error: use only letters, digits",
         ),
     ] {
         let folder = game(test, &[("conf.luau", conf)]);
@@ -432,7 +446,7 @@ fn the_definitions_declare_every_function_of_the_engine() {
         &[(
             "main.luau",
             "local tables = { graphics = graphics, input = input, audio = audio,
-                tilemap = tilemap, grid = grid, scene = scene }
+                tilemap = tilemap, grid = grid, scene = scene, save = save }
             names = {}
             for table_name, functions in tables do
                 local found = {}
@@ -445,7 +459,10 @@ fn the_definitions_declare_every_function_of_the_engine() {
         )],
     );
     let simulation = simulation(&folder);
-    for table in ["graphics", "input", "audio", "tilemap", "grid", "scene"] {
+    let tables = [
+        "graphics", "input", "audio", "tilemap", "grid", "scene", "save",
+    ];
+    for table in tables {
         let functions: Vec<String> = eval(&simulation, &format!("names.{table}"));
         assert_eq!(declared_fields(table), functions, "the fields of `{table}`");
     }
@@ -457,6 +474,121 @@ fn the_definitions_declare_every_function_of_the_engine() {
         let declared = format!("\ndeclare function {built_in}");
         assert!(runtime::DEFINITIONS.contains(&declared), "{built_in}");
     }
+}
+
+/// The error running the Luau `code` in the game fails with.
+fn error_of(simulation: &Simulation<LuauGame>, code: &str) -> String {
+    let lua = simulation.game().scripts().lua();
+    match lua.load(code).exec() {
+        Ok(()) => panic!("`{code}` ran"),
+        Err(err) => err.to_string(),
+    }
+}
+
+#[test]
+fn saves_last_after_the_game_ends() {
+    let folder = game(
+        "saves",
+        &[("main.luau", "progress = save.read('progress')")],
+    );
+    let mut config = runtime::config(&folder).unwrap();
+    let saves = folder.join("saves");
+    config.window.save_folder = Some(saves.clone());
+    let start = || {
+        Simulation::new(&config.window, |ctx| LuauGame::load(ctx, &folder)).expect("game starts")
+    };
+
+    let first = start();
+    assert!(eval::<bool>(&first, "progress == nil"));
+    assert!(eval::<Vec<String>>(&first, "save.list()").is_empty());
+    eval::<()>(
+        &first,
+        "save.write('progress', {
+            stage = 'hunt',
+            coins = 12.5,
+            items = { 'herb', 'tonic' },
+            gear = { weapon = 'staff' },
+            done = false,
+            ['found places'] = {},
+        })",
+    );
+    eval::<()>(&first, "save.write('best', 900)");
+    assert_eq!(
+        eval::<Vec<String>>(&first, "save.list()"),
+        ["best", "progress"]
+    );
+    drop(first);
+
+    // Written as scene files are, a field to a line.
+    let text = fs::read_to_string(saves.join("progress.luau")).unwrap();
+    assert!(text.starts_with("return {\n"), "{text}");
+    assert!(text.contains("\n    stage = \"hunt\",\n"), "{text}");
+    assert!(text.contains("\n    [\"found places\"] = {},\n"), "{text}");
+
+    let second = start();
+    assert_eq!(
+        eval::<(String, f64, String, String, bool)>(
+            &second,
+            "progress.stage, progress.coins, progress.items[2], progress.gear.weapon, \
+             progress.done"
+        ),
+        ("hunt".into(), 12.5, "tonic".into(), "staff".into(), false)
+    );
+    assert!(eval::<bool>(
+        &second,
+        "next(progress['found places']) == nil"
+    ));
+    assert_eq!(eval::<u32>(&second, "save.read('best')"), 900);
+    eval::<()>(&second, "save.remove('best')");
+    eval::<()>(&second, "save.remove('never_saved')");
+    assert_eq!(eval::<Vec<String>>(&second, "save.list()"), ["progress"]);
+    assert!(eval::<bool>(&second, "save.read('best') == nil"));
+}
+
+#[test]
+fn only_plain_data_can_be_saved() {
+    let folder = game("unplain_saves", &[("main.luau", "")]);
+    let simulation = simulation(&folder);
+    for (code, message) in [
+        (
+            "save.write('slot', function() end)",
+            "save `slot`: the data is a function",
+        ),
+        (
+            "save.write('slot', { levels = { village = { f = print } } })",
+            "`levels.village.f` is a function",
+        ),
+        ("save.write('slot', nil)", "the data is nil"),
+        ("save.write('slot', 0 / 0)", "must be a finite number"),
+        ("save.write('slot', { 1, nil, 3 })", "but not 1, 2, 3"),
+        (
+            "save.write('slot', { 1, a = 2 })",
+            "both strings and numbers",
+        ),
+        ("local t = {} t.t = t save.write('slot', t)", "too deep"),
+        (
+            "save.write('../slot', 1)",
+            "save `../slot`: a save's name may hold only letters",
+        ),
+        ("save.read('slot 2')", "may hold only letters"),
+    ] {
+        let err = error_of(&simulation, code);
+        assert!(err.contains(message), "`{code}`: {err}");
+    }
+    assert!(eval::<Vec<String>>(&simulation, "save.list()").is_empty());
+}
+
+#[test]
+fn simulations_keep_saves_of_their_own() {
+    let folder = game("own_saves", &[("main.luau", "")]);
+    let mut first = simulation(&folder);
+    let second = simulation(&folder);
+    eval::<()>(&first, "save.write('slot', 1)");
+    assert!(eval::<bool>(&second, "save.read('slot') == nil"));
+    let saves = first.context().saves().folder().unwrap().to_owned();
+    assert!(saves.join("slot.luau").is_file());
+    drop(first);
+    assert!(!saves.exists());
 }
 
 #[test]

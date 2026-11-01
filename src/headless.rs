@@ -14,6 +14,7 @@ use crate::{
     audio::Audio,
     graphics::{Canvas, Resolution, gpu::Gpu, renderer::Renderer, screen::Screen},
     input::{Key, MouseButton},
+    save::{Saves, TemporaryFolder},
 };
 
 /// Format of headless render targets. sRGB, matching what the window surface is viewed as.
@@ -208,6 +209,9 @@ pub struct Simulation<G> {
     /// Input for the game's interface, gathered until the next frame.
     #[cfg(feature = "egui")]
     gui_input: crate::gui::SimulatedInput,
+    /// Where the game's saves go, unless its config gave a folder. Declared after `game`, so the
+    /// game has finished with it first.
+    _saves: Option<TemporaryFolder>,
 }
 
 impl<G> Simulation<G> {
@@ -224,6 +228,9 @@ impl<G: Game> Simulation<G> {
     /// Starts the game built by `init`, as [`run`](crate::run) would with `config`. The virtual
     /// window is `config.width` by `config.height` physical pixels, with a scale factor of 1.
     ///
+    /// The game's [saves](crate::save) are kept in `config.save_folder`, or without one, in a
+    /// temporary folder of the simulation's own, which starts empty and is removed with it.
+    ///
     /// # Panics
     ///
     /// If `config` has an update rate that isn't above 0.
@@ -233,6 +240,17 @@ impl<G: Game> Simulation<G> {
     ) -> Result<Self> {
         let timestep = Timestep::new(config.update_rate);
         let mut headless = Headless::new()?;
+        let temporary = match &config.save_folder {
+            Some(folder) => {
+                headless.ctx.saves = Saves::in_folder(folder);
+                None
+            }
+            None => {
+                let folder = TemporaryFolder::new();
+                headless.ctx.saves = Saves::in_folder(folder.path());
+                Some(folder)
+            }
+        };
         headless.set_resolution(config.resolution);
         let output = [config.width, config.height];
         headless.ctx.canvas_size = headless.screen.canvas_size(output, 1.0);
@@ -252,6 +270,7 @@ impl<G: Game> Simulation<G> {
             frames: 0,
             #[cfg(feature = "egui")]
             gui_input: Default::default(),
+            _saves: temporary,
         })
     }
 

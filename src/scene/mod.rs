@@ -301,6 +301,8 @@ pub use file::{
     AreaDef, FORMAT, InstanceDef, KindDef, NodeDef, Props, RectDef, SceneFile, SheetDef, SpriteDef,
     TextDef, TileDef, TileLayerDef, TilemapDef, TilesetFile, Value,
 };
+pub(crate) use file::{evaluate_any, plain};
+pub(crate) use writer::write_value;
 
 use crate::{
     Context, Error, Result,

@@ -3,7 +3,7 @@
 Wingine is a 2D game engine for desktops: Windows, macOS and Linux. You write a game as a folder
 of [Luau](https://luau.org) scripts and assets, and the `wingine` executable runs it. The engine
 draws sprites, tilemaps and text with the GPU, plays sound effects and music, reads the keyboard
-and mouse, and runs your scripts once a frame or at a fixed rate.
+and mouse, keeps saves between runs, and runs your scripts once a frame or at a fixed rate.
 
 Luau is a fast, sandboxed language derived from Lua 5.1, with type annotations, compound
 assignment (`x += 1`), `continue` and a few other additions. If you know Lua, you know most of it;
@@ -55,7 +55,7 @@ The repository's examples are complete games, and the best place to see how the 
 | Example | What it shows |
 |---|---|
 | [`examples/pong`](../examples/pong) | A small game in one script and a module: input, sound, music, text, a camera that shakes |
-| [`examples/rpg`](../examples/rpg) | A top-down RPG: tilemaps, grid movement, animation, dialogue, menus and turn-based battles |
+| [`examples/rpg`](../examples/rpg) | A top-down RPG: tilemaps, grid movement, animation, dialogue, menus, turn-based battles, and a title screen that continues a saved game |
 | [`examples/shmup`](../examples/shmup) | A bullet hell at a fixed update rate, with an optional native library for its bullets, and a HUD laid out in a scene, whose menu takes the mouse |
 | [`examples/garden`](../examples/garden) | A garden laid out in a scene file: nodes found by path and tag, turned together, and areas for collision and notes |
 | [`examples/orchard`](../examples/orchard) | A character rigged from sprites and animated by clips, layered and crossfaded each frame, catching apples |

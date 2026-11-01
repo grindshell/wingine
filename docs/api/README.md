@@ -1,6 +1,6 @@
 # API reference
 
-Scripts reach the engine through six global tables, a few built-in functions, the objects those
+Scripts reach the engine through seven global tables, a few built-in functions, the objects those
 hand out, and the `Ui` a game's `gui` lays its interface out with:
 
 | Page | What it covers |
@@ -12,12 +12,14 @@ hand out, and the `Ui` a game's `gui` lays its interface out with:
 | [`tilemap`](tilemap.md) | Tilesets and maps of tiles in layers |
 | [`grid`](grid.md) | Characters that walk from tile to tile |
 | [`scene`](scene.md) | Scenes loaded from scene files, and their nodes |
+| [`save`](save.md) | Data kept between runs of the game, such as progress |
 | [`gui`](gui.md) | Interfaces over the game, such as debug tools, laid out with egui in the game's `gui` |
 | [`wingine-native`](native.md) | The Rust crate native libraries are written with |
 
 The engine's tables are read-only. Luau's standard library is there too, in its sandboxed form:
 `math`, `string`, `table`, `coroutine`, `bit32`, `utf8`, `buffer`, `vector`, `debug`, and `os`
-with `clock`, `date`, `difftime` and `time`, but nothing that reads or writes files.
+with `clock`, `date`, `difftime` and `time`, but nothing that reads or writes files: games keep
+data with [`save`](save.md).
 [luau.org](https://luau.org/library) documents it.
 
 ## Conventions
@@ -56,7 +58,7 @@ time raises an error saying when it works.
 - **Interfaces** are laid out only in `gui`, with the `Ui` it's passed.
 - **Everything else** works any time: `graphics.size`, `graphics.color`,
   `graphics.default_font`, `graphics.frame_stats`, `graphics.new_animation`, `audio.load`,
-  `tilemap`, `grid`, and the methods of every object, scene nodes included.
+  `tilemap`, `grid`, `save`, and the methods of every object, scene nodes included.
 
 ## Values
 

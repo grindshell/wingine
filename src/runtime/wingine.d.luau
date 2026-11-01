@@ -502,6 +502,20 @@ declare scene: {
     clips: (path: string) -> { [string]: Clip },
 }
 
+--- Data kept between runs of the game, in saves named with letters, digits, `_` and `-`. Saves
+--- hold plain data: booleans, numbers, strings, and tables of them that are lists or have strings
+--- for keys. Works at any time.
+declare save: {
+    --- Writes `data` to the save `name`, replacing any.
+    write: (name: string, data: any) -> (),
+    --- Returns the data in the save `name`, or nil if there's no such save.
+    read: (name: string) -> any,
+    --- Removes the save `name`, if there is one.
+    remove: (name: string) -> (),
+    --- Returns the names of the game's saves, in order.
+    list: () -> { string },
+}
+
 --- Starts `f(...)` as a task, running it until it first waits or finishes. The engine resumes it
 --- every update from then on.
 declare function spawn<A...>(f: (A...) -> ...any, ...: A...): ()

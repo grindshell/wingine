@@ -30,6 +30,9 @@
 //!     update_rate = 60,
 //!     -- A key that shows and hides a window of how long frames take. The game never sees it.
 //!     debug_key = "F3",
+//!     -- Names the folder the game's saves are kept in: letters, digits, `_` and `-`. By
+//!     -- default, the folder's name, with `_` for anything else.
+//!     identity = "pong",
 //!     -- Native libraries to load, in order, from the game's `native` folder. One marked
 //!     -- optional loads only if it's there: `if danmaku then ... end` tells whether it did.
 //!     libraries = { "particles", { name = "danmaku", optional = true } },
@@ -47,7 +50,7 @@
 //! `require("./opponent")`. Files the engine loads, such as sounds and images, are relative to
 //! the game's folder.
 //!
-//! The engine's API is in six global tables:
+//! The engine's API is in seven global tables:
 //!
 //! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.color`, `graphics.default_font`,
 //! `graphics.frame_stats` and `graphics.new_animation` work anywhere, and
@@ -149,6 +152,17 @@
 //!   `audio.set_music_volume(volume)` set the volume of everything, of sound effects and of
 //!   music, where 1 is as recorded.
 //!
+//! `save`, for data kept between runs of the game, at any time. Each save has a name of letters,
+//! digits, `_` and `-`, and holds plain data: a boolean, number, string, or table of them, where a
+//! table is a list or has strings for keys, as scenes' props are. See [`save`](crate::save) for
+//! where saves are kept.
+//!
+//! - `save.write(name, data)` writes `data` to the save `name`, replacing any. Anything else in
+//!   it, such as a function, is an error naming where it is.
+//! - `save.read(name)` returns the data in the save `name`, or `nil` if there's no such save.
+//! - `save.remove(name)` removes the save `name`, if there is one.
+//! - `save.list()` returns the names of the game's saves, in order.
+//!
 //! A game may also define a global `gui(ui)`, which the engine calls once a frame, after the
 //! updates and before `draw`, with a `Ui` covering the window, to lay out an interface over the
 //! game with egui: debug tools, say. The context is lent as in `update`. Widgets that change a
@@ -180,6 +194,7 @@ mod grid;
 mod gui;
 mod input;
 mod native;
+mod save;
 mod scene;
 mod tilemap;
 
@@ -236,9 +251,16 @@ pub struct LibraryConfig {
 /// The settings of the game in `folder`, from its `conf.luau` if it has one.
 pub fn config(folder: impl AsRef<Path>) -> Result<Config> {
     let folder = folder.as_ref();
+    let name = folder_name(folder);
     let mut config = Config {
         window: WindowConfig {
-            title: folder_name(folder).unwrap_or_else(|| WindowConfig::default().title),
+            title: name
+                .clone()
+                .unwrap_or_else(|| WindowConfig::default().title),
+            identity: name
+                .as_deref()
+                .map(identity)
+                .unwrap_or_else(|| WindowConfig::default().identity),
             ..Default::default()
         },
         libraries: Vec::new(),
@@ -281,6 +303,14 @@ fn apply_setting(
         "resizable" => window.resizable = lua.unpack(value)?,
         "vsync" => window.vsync = lua.unpack(value)?,
         "debug_key" => window.debug_key = Some(lua.unpack(value)?),
+        "identity" => {
+            let identity: String = lua.unpack(value)?;
+            if !crate::save::is_name(&identity) {
+                let message = "use only letters, digits, `_` and `-`, as it names a folder";
+                return Err(mlua::Error::runtime(message));
+            }
+            window.identity = identity;
+        }
         "update_rate" => {
             let rate: f32 = lua.unpack(value)?;
             if !(rate > 0.0 && rate.is_finite()) {
@@ -329,7 +359,7 @@ fn library(lua: &mlua::Lua, entry: mlua::Value) -> mlua::Result<LibraryConfig> {
             optional: false,
         },
     };
-    if !native::is_library_name(&library.name) {
+    if !crate::save::is_name(&library.name) {
         return Err(mlua::Error::runtime(format!(
             "`{}` is not a library name: use only letters, digits, `_` and `-`",
             library.name
@@ -348,6 +378,17 @@ fn positive(size: u32) -> mlua::Result<u32> {
 fn folder_name(folder: &Path) -> Option<String> {
     let folder = folder.canonicalize().ok()?;
     Some(folder.file_name()?.to_string_lossy().into_owned())
+}
+
+/// The identity of a game in a folder called `name`, by default: the name, with `_` for whatever
+/// can't be in an identity.
+fn identity(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => c,
+            _ => '_',
+        })
+        .collect()
 }
 
 /// A game written in Luau, loaded from its folder.
@@ -381,6 +422,7 @@ impl LuauGame {
         globals.set("grid", grid::module(lua)?)?;
         let scene = scene::module(lua, &lent, folder.to_owned(), textures)?;
         globals.set("scene", scene)?;
+        globals.set("save", save::module(lua, ctx.saves())?)?;
         #[cfg(feature = "egui")]
         gui::register(lua, &lent)?;
         let natives = Natives::load(lua, &lent, ctx, folder, &libraries)?;
