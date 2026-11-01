@@ -5,14 +5,10 @@ or entirely in [Luau](https://luau.org) and run with the `wingine` executable.
 
 ![The village of Mossbrook, from the RPG example](docs/screenshots/rpg-village.png)
 
-Wingine's first milestone, everything needed to ship a tile-based, top-down RPG, is complete.
-The [RPG example](#rpg) is that game. Its second, a bullet hell that shows the engine's
-performance, is complete too: the [shmup](#shmup), whose bullets run in Luau or in a native
-library written in Rust, which [fits 3.4 times as many](#luau-and-rust-compared). So is its
-third, [scenes](docs/scenes.md): levels, screens and rigged characters laid out in files an
-editor can write, which the [garden](#garden), the RPG's maps, the shmup's HUD and the
-[orchard](#orchard) are made of. The fourth, under way, is that [editor](#editor), laid out like
-Godot's and built with Wingine itself.
+Its examples include a tile-based [RPG](#rpg), a [bullet hell](#shmup) whose bullets run in Luau
+or in a native library written in Rust, which [fits 3.4 times as many](#luau-and-rust-compared),
+and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in an
+[editor](#editor) laid out like Godot's and built with Wingine itself.
 
 ## Features
 
@@ -80,7 +76,7 @@ The first build takes a little longer while Luau compiles.
 
 ### RPG
 
-[`examples/rpg`](examples/rpg) is the milestone's game, written entirely in Luau. The elder of
+[`examples/rpg`](examples/rpg) is a top-down RPG, written entirely in Luau. The elder of
 Mossbrook asks you to check on the shrine on the hill north of the village. What you find there
 sets creatures loose, and you fight them in turn-based battles. Coins from battles, and from
 poking around, buy gear at the village shop.
@@ -218,8 +214,9 @@ with a basket on their head catches them. Three apples on the ground and the day
 ![The picker walking under the apple trees as an apple falls](docs/screenshots/orchard.png)
 
 Walk with the arrow keys or A and D, and press Space to start again. The picker is a
-[rig](docs/scenes.md#rigging-characters), in [`picker.scene.luau`](examples/orchard/picker.scene.luau):
-a sprite for each part, turning about its joint, and clips of keyframes for standing, walking,
+[rig](docs/scenes.md#rigging-characters), in
+[`picker.scene.luau`](examples/orchard/picker.scene.luau): a sprite for each part, turning about
+its joint, and clips of keyframes for standing, walking,
 blinking, catching, missing and giving up. Each frame the game poses the picker with one clip over
 another, weighting the walk by how much they're walking, so they ease between standing and
 walking, and fading the reactions in and out. The orchard places the picker as an instance of
@@ -255,10 +252,9 @@ window.
 ## Editor
 
 [`crates/wingine-editor`](crates/wingine-editor) edits a game's scenes and scripts. It's a Wingine
-game itself,
-written in Rust, whose interface is egui, laid out like Godot's editor: the open scene's tree of
-nodes over the game's files on the left, the Inspector on the right, Output along the bottom, and
-the scene in the middle, drawn by the engine as the game draws it.
+game itself, written in Rust, whose interface is egui, laid out like Godot's editor: the open
+scene's tree of nodes over the game's files on the left, the Inspector on the right, Output along
+the bottom, and the scene in the middle, drawn by the engine as the game draws it.
 
 ![The editor with the garden open, its pond selected](docs/screenshots/editor.png)
 
@@ -313,8 +309,9 @@ end
 ```
 
 Run it with `cargo run -- path/to/folder`. The engine's API is the global tables `graphics`,
-`input`, `audio`, `tilemap`, `grid` and `scene`. [The docs](docs/README.md) cover making a game in Luau,
-from a quick start to native libraries, with a reference to every function and type scripts use.
+`input`, `audio`, `tilemap`, `grid` and `scene`. [The docs](docs/README.md) cover making a game in
+Luau, from a quick start to native libraries, with a reference to every function and type scripts
+use.
 
 #### Native libraries
 

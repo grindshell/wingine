@@ -4,123 +4,22 @@ Wingine is a desktop game engine written in Rust, built as a library crate (`win
 primarily a **2D** engine. 3D is possible but not a focus — don't let 3D concerns drive the design
 of 2D systems, and don't build 3D features unless asked.
 
-## Milestones
+## Scope
 
-**Done: ship a tile-based, top-down RPG.** The RPG in `examples/rpg` is that game. The milestone
-covered:
+Wingine has what its examples need: tilemaps and batched sprites, sprite animation, a camera,
+input bound to actions, grid movement, text, audio, Luau scripting with tasks, native libraries
+written in Rust, scenes (levels, screens and rigged characters), egui interfaces, and an editor
+built on the engine. Each feature is finished with a game or example that uses it, with tests.
 
-- Tilemap rendering (multiple layers, tilesets) and batched sprite rendering
-- Sprite animation
-- A 2D camera that follows the player and clamps to map bounds
-- Keyboard input mapped to actions
-- Grid-based movement and tile collision
-- Map loading and transitions between maps
-- Text rendering for dialogue and menus
-- Lua-driven gameplay: NPC behavior, dialogue, events/triggers
-- Music and sound effects
+- Scenes are data: files of plain Luau values, with no calls or expressions, so tools write back
+  what they read. Behavior stays in games, which find nodes by path, tag or kind and read their
+  props; nodes don't have scripts.
+- The shmup's two bullet systems are one game, and its Luau one is written as well as Luau allows
+  (pooled bullets, `--!native`), so comparing it with Rust stays fair.
+- Speedups come from measurements, and CI never asserts timings.
 
-**Done: a bullet-hell shmup that shows the engine's performance.** A Touhou-style vertical
-shooter in `examples/shmup`, built in two versions, in order: first in pure Luau, then with its
-bullets in a native library, `danmaku` (`examples/native-danmaku`), to show native libraries at
-work and what they gain over Luau. Both versions are one game: the bullet system sits behind one
-Luau interface, implemented by `bullets.luau` and by the library, and everything else is shared.
-The Luau version is written as well as Luau allows (pooled bullets, `--!native`), so the comparison
-is fair. Bullets in Rust fit about 3.4 times as many in a frame. The milestone covered:
-
-- Measuring before optimizing: frame stats games can show (update, draw and render times, quads,
-  draw calls), a setting to turn vsync off, and a headless benchmark that renders every frame,
-  run in release builds
-- Rotated sprites, and a batched sprite call in the ABI that rotates them (`ABI_MINOR` 2)
-- A fixed update rate, set in `conf.luau`
-- Libraries a game loads only if they're present, so one folder runs with or without `danmaku`
-- Engine speedups the measurements justify, which help both versions. Instanced rendering only if
-  the native version is limited by rendering, which it isn't (rendering is a fifth of its frame,
-  so sprites aren't instanced); additive blending if time allows, which it didn't
-- Bullets that move by parameters (speed, angle, acceleration, angular velocity, speed limits), so
-  Rust moves them without calling Luau. The game steps them itself, so both versions step at the
-  same point in the frame
-- The game: move, focus, shoot and bomb; lives, graze and score; waves of fairies and a boss with
-  spell cards; clearing bullets on bombs and spell ends; a stress mode that plots frame time
-  against bullet count, with a key to switch versions
-- Tests of the gameplay, and that both versions produce the same bullets from the same seed. CI
-  never asserts timings
-- Results in the README, under the shmup: the most bullets each version fits in a 16.7 ms frame,
-  and where the time goes
-
-**Done: a scene format, for a future editor to write and games to load.** Scenes are for
-level design, UI design and character rigging. The editor isn't part of the milestone, but the
-format is built for one: files it can read, change and write back. Built in order: the format and
-drawing first, then levels, UI and rigging, each finished with a game that uses it. The milestone
-covers:
-
-- Scene files as Luau data: one `return { ... }` of tables, strings, numbers and booleans, with
-  no calls, variables or expressions, so an editor can write back what it reads. Each has a
-  `format` version. The engine evaluates them in an empty environment and converts them to Rust,
-  as it reads `conf.luau`, and an unknown field is an error naming the node's path
-- A writer that puts scenes in one canonical layout (a stable field order, a field per line), so
-  diffs stay small. Loading what it writes gives the same scene, and writing that gives the same
-  bytes. It drops comments; keeping them through an editor's saves is the editor's problem
-- A tree of nodes, each with a name unique among its siblings (paths such as `torso/arm_l`
-  address nodes), a kind, a transform (`x`, `y`, `rotation` in radians, `scale_x`, `scale_y`),
-  and optional tags, children and `props`, free-form data for the game. The kinds: `node` (empty:
-  groups, bones, spawn points), `sprite`, `text`, `rect`, `area` (an invisible rectangle, such as
-  an exit or a trigger), `tilemap` with `tile_layer` children, and `instance`
-- Scenes are data: behavior stays in games, which find nodes by path, tag or kind and read their
-  props. Nodes don't have scripts
-- Sprites drawn with a full 2D transform, composed from parent to child, about a pivot, with sine
-  and cosine computed once per node rather than per quad. Text and tilemaps only translate
-- Levels: tilemap nodes whose layers are their children, so other nodes draw between layers (such
-  as characters under roofs), drawn at an offset, from tileset files that scenes share; and
-  instances of other scenes, with overrides by node path. The RPG's maps become scenes
-- UI: anchors at a fraction of the parent's size (the canvas's, for the root), sizes, text
-  alignment, and a node's bounds in canvas pixels, for hit testing. A menu or HUD from the
-  examples becomes a scene
-- Rigging: cutout animation, rigid sprites turning about their pivots, not meshes. Clips are
-  tracks of keyframes on node properties, linear or stepped, which games sample at a time they
-  keep, as with `Animation`. A rigged character shows it
-- The runtime: a `scene` table for Luau, and the same API in Rust. `scene.load` parses a file
-  once and caches it; instances are live copies that games change (moving, adding and removing
-  nodes, posing); `graphics.draw_scene` draws one, culled. The tree lives in Rust, so drawing a
-  scene is one call from Luau, not one per node
-- Docs for scene files and their API, screenshot tests for the new drawing, and round-trip tests
-  of the writer
-
-Each part has its game: the format and drawing, `examples/garden`; levels (tilemaps over tileset
-files, instances with overrides, adding and removing nodes), the RPG's maps, moved into scenes,
-and the garden's trees and flowers, made instances; UI (anchors, stretching with the parent, text
-alignment, scenes laid out on the canvas), the shmup's HUD and title menu, moved into a scene
-whose menu takes the mouse; and rigging (clips in scene files, posed with weights so games layer
-and crossfade them), the picker of `examples/orchard`.
-
-**Current: an editor, built on the engine.** The editor is itself a wingine game: a Rust program
-that runs on `wingine::run` and draws its interface with egui, which the engine gains for every
-game as a way to debug it. It's laid out like Godot's editor: a Scene dock over a FileSystem dock
-on the left, the Inspector on the right, Output, Tiles and Animation in a bottom panel, and the
-open scenes as tabs over a 2D viewport in the middle. It edits scene files and writes them back in
-the canonical layout. Built in order, each part usable on its own:
-
-- egui in the engine: `Game::gui`, drawn over the canvas at the window's resolution, which takes
-  the input it wants before the game sees it; the same in `Simulation`, so tests click widgets by
-  their labels; canvases shown in egui (`GuiCanvas`); and a window of frame stats any game can
-  turn on with a key. A small Rust example shows them
-- The shell: the layout, opening a game's folder, its files, scene tabs, a viewport drawing scenes
-  through the engine, panned and zoomed, with a grid and the game's canvas, and playing the game
-  in a process of its own, with its output in the Output panel
-- Editing scenes: selecting nodes in the tree or the viewport, an Inspector for every field of
-  every kind, gizmos that move, turn and stretch nodes with snapping, adding, removing,
-  duplicating, renaming and moving nodes, undo, and saving
-- Levels: painting tiles from a palette of the tileset, resizing tilemaps, placing instances by
-  dragging scenes in, and overrides shown and reverted in the Inspector
-- UI: anchor presets, stretching, and previewing screens at other canvas sizes
-- Rigging: an Animation panel with clips' tracks and keys on a timeline, scrubbing and playing
-  them on the preview, and keying from the Inspector
-- Stretch: egui for Luau games, and a Script screen that edits Luau, with luau-lsp for
-  diagnostics, completion and hover against a definitions file of the engine's API
-- Redrawing only when something changes, docs for the editor, and tests of each part, driven
-  through `Simulation`
-
-Ask before starting features outside the current milestone, and especially general-purpose ones
-such as physics engines, networking or 3D pipelines.
+Ask before starting new features, and especially general-purpose ones such as physics engines,
+networking or 3D pipelines.
 
 ## Tech stack
 
@@ -212,7 +111,9 @@ such as physics engines, networking or 3D pipelines.
   bytes, their colors sRGB bytes that the vertex shader converts to linear space, and every quad
   shares one static index buffer, which grows only when a frame has more quads than ever. A fixed
   resolution renders the canvas to an offscreen texture, then draws that texture scaled onto the
-  output with the same pipeline. Shaders are WGSL files next to the code that loads them.
+  output with the same pipeline. Shaders are WGSL files next to the code that loads them. Sprites
+  aren't instanced: rendering is a fifth of the shmup's frame with its bullets in Rust, so it
+  isn't what limits it.
 - `src/graphics/font.rs` and `default_font.rs`: `Font` (glyphs packed into one texture, with
   their metrics) and `TextLayout`. `Font::layout` wraps text between words to a width
   (`layout_aligned` also lines its lines up by an `Align`, moving each by whole pixels), and
@@ -372,15 +273,14 @@ such as physics engines, networking or 3D pipelines.
   only when the editor wants them, as its window would (`wait_for`), so they fail if nothing wakes
   it, and `settle` checks it stops wanting frames. Number fields give their name to AccessKit
   themselves, since egui doesn't carry a label's text over to what it labels.
-- `examples/rpg/`: the milestone's RPG, written entirely in Luau. Maps in `maps/` are scenes: a
+- `examples/rpg/`: a top-down RPG, written entirely in Luau. Maps in `maps/` are scenes: a
   tilemap over `world.tileset.luau` whose layers hold each cell's kind of ground (`floor`), the
   ground's sprite (`ground`) and objects (`objects`), with tiles named for their kind and sprite
   (`tree.2`), and nodes tagged `place`, `exit`, `character` and `foe` on the cells they're about,
   whose props say the rest. `world.luau` builds levels from them, and holds each kind's
   descriptions and the tiles it varies between, picked by a deterministic noise, so changing a
-  cell at runtime picks what the map would have; examining any cell shows its description. The
-  scenes were made from the maps' old rows of symbols, cell for cell. `story.luau` holds
-  conversations and events, which maps refer to by name, and
+  cell at runtime picks what the map would have; examining any cell shows its description.
+  `story.luau` holds conversations and events, which maps refer to by name, and
   `dialogue.luau` the dialogue box, whose `say` and `ask` wait for the player. `battle.luau` runs
   one-on-one, turn-based battles against the creatures in `foes.luau`, which maps place and
   which fight when the player stands beside them; its messages and menus go through the dialogue
@@ -392,11 +292,11 @@ such as physics engines, networking or 3D pipelines.
   points, coins, items and the quest's stage, and jumps between maps (`ARRIVALS` in `main.luau`).
   The game's state is the global `rpg`, which its `.luaurc` names for luau-lsp, as the shmup's
   names `shmup` and `danmaku`.
-- `examples/shmup/`: the second milestone's bullet hell, written entirely in Luau, at a fixed
-  60 updates a second. Its enemy bullets go through one interface, documented at the top of
-  `bullets.luau`, which is the Luau implementation (parallel arrays of numbers: a table per
-  bullet managed little more than a third as many in the stress test) and which the `danmaku`
-  library implements too; `main.luau` lists the systems there are, registers the bullet kinds
+- `examples/shmup/`: a Touhou-style bullet hell, written entirely in Luau, at a fixed 60 updates
+  a second. Its enemy bullets go through one interface, documented at the top of
+  `bullets.luau`, which is the Luau implementation (parallel arrays of numbers, which fit nearly
+  three times as many bullets as a table per bullet) and which the `danmaku` library implements
+  too; `main.luau` lists the systems there are, registers the bullet kinds
   of `art.luau` with each in the same order, and `shmup.bullets` is the one running. Switching
   hands every bullet to the next system through `bullet` and `add`, so they carry on exactly as
   they would have (the stress test starts again instead). Bullets move
@@ -427,8 +327,8 @@ such as physics engines, networking or 3D pipelines.
   a flower (`add`) or picks one (`remove`). The scene files are in the canonical layout, as an
   editor would write them, and `tests/garden.rs` checks they stay so: after editing one, write it
   again with `SceneFile::write`. The game's state is the global `garden`.
-- `examples/orchard/`: the scene milestone's rigged character, a picker with a basket on their
-  head who catches falling apples. `picker.scene.luau` is the rig, sprites of its parts from
+- `examples/orchard/`: a rigged character, a picker with a basket on their head who catches
+  falling apples. `picker.scene.luau` is the rig, sprites of its parts from
   `orchard.png` turning about their joints, and its clips: `idle` has a track for everything the
   others change, so `main.luau` poses with it first each frame, then `walk` weighted by
   `orchard.stride`, `blink`, and the reactions (`catch`, `miss`) faded in and out, or `slump`
@@ -444,17 +344,16 @@ such as physics engines, networking or 3D pipelines.
   `Simulation`, and its events and NPC are scripted in `sprites.luau`. `pong/` is a game written
   entirely in Luau, with its computer opponent in `opponent.luau`. The sounds and music in
   `examples/sounds/` were synthesized for `sprites`; `pong`, `rpg` and `shmup` have copies of
-  the ones they use, and `rpg`, `shmup` and `garden` copies of the tileset. `shmup/bullets.png` was drawn
-  pixel by pixel for it: pellets, orbs and rice in eight colors, the hitbox, and the player's
-  shot. `orchard/orchard.png` was drawn pixel by pixel for it too: the picker's parts and faces
-  and their basket in 16x16 cells, apples, and clumps of leaves, a cloud and a bush in 32x32 cells
-  below them, which the scenes divide with two sheets of the one image. `rpg/strides.png` is
-  another copy with its people
-  and creatures mid-stride (raised a pixel on stretched legs), the frame characters show for the
-  first half of each step. `native-particles/` is a native library, a `cdylib` built as
-  `particles`, which `tests/native.rs` builds and loads. `gui.rs` shows egui over a game:
-  sprites bouncing about, tuned from a panel that shows a `GuiCanvas` map of them, and the debug
-  window on F3.
+  the ones they use, and `rpg`, `shmup` and `garden` copies of the tileset. `shmup/bullets.png`
+  was drawn pixel by pixel for it: pellets, orbs and rice in eight colors, the hitbox, and the
+  player's shot. `orchard/orchard.png` was drawn pixel by pixel for it too: the picker's parts and
+  faces and their basket in 16x16 cells, apples, and clumps of leaves, a cloud and a bush in 32x32
+  cells below them, which the scenes divide with two sheets of the one image. `rpg/strides.png` is
+  another copy with its people and creatures mid-stride (raised a pixel on stretched legs), the
+  frame characters show for the first half of each step. `native-particles/` is a native library,
+  a `cdylib` built as `particles`, which `tests/native.rs` builds and loads. `gui.rs` shows egui
+  over a game: sprites bouncing about, tuned from a panel that shows a `GuiCanvas` map of them,
+  and the debug window on F3.
 - `README.md`: the project's overview, with a screenshot of each example in `docs/screenshots/`.
   They were taken headlessly at 640x360 (768x432 for `sprites`, so its 256x144 canvas scales
   without bars, 960x720 for `shmup`, twice its canvas, and 1280x720 for the editor, with the
@@ -557,15 +456,16 @@ such as physics engines, networking or 3D pipelines.
   types scripts use implement `FromLua`/`IntoLua` or `UserData` in
   `src/lua.rs` (`Direction` is a string such as `"up"`, `Color` a hex string such as
   `"#f2c14e"`, a table or a number `0xRRGGBBAA`, and `Font` userdata with methods).
-- The Luau runtime lends its functions the `Context` while the game loads and updates, and the
-  `Canvas` while it draws, through `Lent` in `src/runtime/mod.rs`: a pointer that `Lent::lend`
-  sets while it runs, with a borrow flag, which every engine function captures a handle to
-  (`lent.context(...)`, `lent.canvas(...)`). Called at any other time, they fail with a Lua
-  error rather than reaching stale state. Looking what's lent up in the Lua registry, as it once
-  did, cost more than drawing; so do conversions mlua makes through `Value`, such as reading a
-  string's bytes, which is why scripts that draw a lot pass colors as numbers. Each update runs `update(dt)`, then resumes tasks; each frame runs its
-  updates (one, or with an update rate, as many as its time holds), then `draw()`. Presses and
-  releases last until an update has seen them.
+- The Luau runtime lends its functions the `Context` while the game loads, updates and lays out
+  its interface, and the `Canvas` while it draws, through `Lent` in `src/runtime/mod.rs`: a
+  pointer that `Lent::lend` sets while it runs, with a borrow flag, which every engine function
+  captures a handle to (`lent.context(...)`, `lent.canvas(...)`). Called at any other time, they
+  fail with a Lua error rather than reaching stale state. Looking what's lent up in the Lua
+  registry would cost more than drawing; so do conversions mlua makes through `Value`, such as
+  reading a string's bytes, which is why scripts that draw a lot pass colors as numbers. Each
+  update runs `update(dt)`, then resumes tasks; each frame runs its updates (one, or with an
+  update rate, as many as its time holds), then `gui(ui)`, then `draw()`. Presses and releases
+  last until an update has seen them.
 - Luau reads a global's fields named in a chunk, such as `shmup.system`, when the chunk loads,
   if the global exists then (its "imports": the sandbox lets it assume globals don't change). A
   chunk that changes such a field, such as by calling a function, and reads it back sees the old
