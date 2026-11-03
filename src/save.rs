@@ -116,15 +116,7 @@ impl Saves {
             path: folder.to_owned(),
             source,
         })?;
-        let mut partial = path.clone().into_os_string();
-        partial.push(".partial");
-        let partial = PathBuf::from(partial);
-        write_synced(&partial, &text)
-            .and_then(|()| fs::rename(&partial, &path))
-            .map_err(|source| {
-                let _ = fs::remove_file(&partial);
-                Error::WriteFile { path, source }
-            })
+        write_replacing(&path, &text)
     }
 
     /// The data in the save `name`, or `None` if there's no such save.
@@ -212,6 +204,23 @@ impl Saves {
         let folder = self.folder();
         Ok(folder.map(|folder| folder.join(format!("{name}.{EXTENSION}"))))
     }
+}
+
+/// Writes `text` to the file at `path`, replacing any: in full to `<path>.partial` first, which
+/// then takes the old file's place, so stopping partway through leaves the old one as it was.
+pub(crate) fn write_replacing(path: &Path, text: &str) -> Result<()> {
+    let mut partial = path.as_os_str().to_owned();
+    partial.push(".partial");
+    let partial = PathBuf::from(partial);
+    write_synced(&partial, text)
+        .and_then(|()| fs::rename(&partial, path))
+        .map_err(|source| {
+            let _ = fs::remove_file(&partial);
+            Error::WriteFile {
+                path: path.to_owned(),
+                source,
+            }
+        })
 }
 
 /// Writes `text` to a new file at `path`, and waits until it's on the disk.
@@ -336,6 +345,23 @@ mod tests {
         saves.write("slot", &Value::Bool(false)).unwrap();
         assert_eq!(saves.read("slot").unwrap(), Some(Value::Bool(false)));
         assert_eq!(saves.list().unwrap(), ["slot"]);
+    }
+
+    #[test]
+    fn a_file_that_fails_to_be_replaced_stays_as_it_was() {
+        let folder = TemporaryFolder::new();
+        fs::create_dir(folder.path()).unwrap();
+        let path = folder.path().join("level.scene.luau");
+        write_replacing(&path, "return 1\n").unwrap();
+        write_replacing(&path, "return 2\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "return 2\n");
+        assert!(!folder.path().join("level.scene.luau.partial").exists());
+
+        // Something in the way of the new file.
+        fs::create_dir(folder.path().join("level.scene.luau.partial")).unwrap();
+        let err = write_replacing(&path, "return 3\n").unwrap_err();
+        assert!(err.to_string().contains("level.scene.luau"), "{err}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "return 2\n");
     }
 
     #[test]

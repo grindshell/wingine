@@ -260,7 +260,10 @@ pub const DEFINITIONS: &str = include_str!("wingine.d.luau");
 /// Runs the Luau game in `folder` until its window is closed. See the [module docs](self).
 pub fn run(folder: impl AsRef<Path>) -> Result<()> {
     let folder = folder.as_ref();
-    crate::run(config(folder)?.window, |ctx| LuauGame::load(ctx, folder))
+    let config = config(folder)?;
+    crate::run(config.window.clone(), |ctx| {
+        LuauGame::load_with(ctx, folder, &config)
+    })
 }
 
 /// A Luau game's settings, from its `conf.luau`.
@@ -439,7 +442,13 @@ impl LuauGame {
     /// `main.luau`.
     pub fn load(ctx: &mut Context, folder: impl AsRef<Path>) -> Result<Self> {
         let folder = folder.as_ref();
-        let libraries = config(folder)?.libraries;
+        Self::load_with(ctx, folder, &config(folder)?)
+    }
+
+    /// Loads the game in `folder` with its settings, `config`, read already: the native
+    /// libraries they list, then its `main.luau`.
+    pub fn load_with(ctx: &mut Context, folder: impl AsRef<Path>, config: &Config) -> Result<Self> {
+        let folder = folder.as_ref();
         let scripts = Scripts::new()?;
         let lua = scripts.lua();
         let lent = Lent::default();
@@ -458,7 +467,7 @@ impl LuauGame {
         globals.set("window", window::module(lua, &lent)?)?;
         #[cfg(feature = "egui")]
         gui::register(lua, &lent)?;
-        let natives = Natives::load(lua, &lent, ctx, folder, &libraries)?;
+        let natives = Natives::load(lua, &lent, ctx, folder, &config.libraries)?;
         lent.lend(ctx, || scripts.load(folder.join("main.luau")))?;
         Ok(Self {
             scripts,

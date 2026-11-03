@@ -15,7 +15,7 @@ use wingine::{
     headless::{Image, Simulation},
     input::Key,
     lua::mlua::FromLuaMulti,
-    runtime::{self, LuauGame},
+    runtime::{self, LibraryConfig, LuauGame},
 };
 use wingine_native::{
     Call, Class, Color, Context, Library, Rect, Registry, Result, Sprite, SpriteDraw, abi,
@@ -58,7 +58,9 @@ fn conf(libraries: &[&str]) -> String {
 
 fn start(folder: &Path) -> Result<Simulation<LuauGame>, Error> {
     let config = runtime::config(folder).expect("settings load");
-    Simulation::new(&config.window, |ctx| LuauGame::load(ctx, folder))
+    Simulation::new(&config.window, |ctx| {
+        LuauGame::load_with(ctx, folder, &config)
+    })
 }
 
 fn simulation(folder: &Path) -> Simulation<LuauGame> {
@@ -701,6 +703,28 @@ fn optional_libraries_load_only_if_theyre_there() {
     );
     let err = start(&folder).err().expect("loading fails").to_string();
     assert!(err.contains("native library `broken`"), "{err}");
+}
+
+#[test]
+fn games_load_the_libraries_of_the_settings_theyre_given() {
+    runtime::link_library("given_probe", wingine_native::library::<Probe>());
+    let folder = game(
+        "given",
+        &[
+            ("conf.luau", &conf(&["nowhere"])),
+            ("main.luau", "has_probe = probe ~= nil"),
+        ],
+    );
+    let mut config = runtime::config(&folder).unwrap();
+    config.libraries = vec![LibraryConfig {
+        name: "given_probe".to_owned(),
+        optional: false,
+    }];
+    let simulation = Simulation::new(&config.window, |ctx| {
+        LuauGame::load_with(ctx, &folder, &config)
+    })
+    .expect("game starts");
+    assert!(eval::<bool>(&simulation, "has_probe"));
 }
 
 /// Builds the `native-particles` example, returning the library file. It builds in a target

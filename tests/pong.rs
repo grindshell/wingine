@@ -24,7 +24,10 @@ const RESTING_BALL: [f64; 4] = [160.0, 90.0, 0.0, 0.0];
 
 fn simulation() -> Simulation<LuauGame> {
     let config = runtime::config(GAME).expect("settings load");
-    Simulation::new(&config.window, |ctx| LuauGame::load(ctx, GAME)).expect("game starts")
+    Simulation::new(&config.window, |ctx| {
+        LuauGame::load_with(ctx, GAME, &config)
+    })
+    .expect("game starts")
 }
 
 /// The value of the Luau `expression`, such as `"pong.ball.vx"`.

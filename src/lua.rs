@@ -830,10 +830,19 @@ impl SceneNode {
         Ok(f(&mut scene, self.id))
     }
 
-    /// Runs `f` with the node's kind, which must be one that has `what`, such as `"a tint"`.
+    /// Runs `f` with the node's kind, which must be one that has `what`, such as `"tint"`.
+    fn read_kind<R>(&self, what: &str, f: impl FnOnce(&Kind) -> Option<R>) -> mlua::Result<R> {
+        self.read(|scene, id| {
+            let kind = scene.node(id).kind();
+            f(kind).ok_or_else(|| wrong_kind(&scene.describe(id), &a_node_of(kind.name()), what))
+        })?
+    }
+
+    /// Runs `f` with the node's kind to change, which must be one that has `what`, as
+    /// [`SceneNode::read_kind`] does.
     fn write_kind<R>(&self, what: &str, f: impl FnOnce(&mut Kind) -> Option<R>) -> mlua::Result<R> {
         self.write(|scene, id| {
-            let described = describe_node(scene, id);
+            let described = scene.describe(id);
             let kind = scene.node_mut(id).kind_mut();
             let is = a_node_of(kind.name());
             f(kind).ok_or_else(|| wrong_kind(&described, &is, what))
@@ -850,20 +859,16 @@ impl SceneNode {
             Some((map_id, map)) => f(scene, map_id, map),
             None => {
                 let is = a_node_of(scene.node(id).kind().name());
-                Err(wrong_kind(&describe_node(scene, id), &is, "tilemap"))
+                Err(wrong_kind(&scene.describe(id), &is, "tilemap"))
             }
         })?
     }
 
     /// Fails unless this is a tile layer node.
     fn check_tile_layer(&self) -> mlua::Result<()> {
-        self.read(|scene, id| match scene.node(id).kind() {
-            Kind::TileLayer(_) => Ok(()),
-            kind => {
-                let is = a_node_of(kind.name());
-                Err(wrong_kind(&describe_node(scene, id), &is, "tiles"))
-            }
-        })?
+        self.read_kind("tiles", |kind| {
+            matches!(kind, Kind::TileLayer(_)).then_some(())
+        })
     }
 }
 
@@ -873,11 +878,6 @@ fn removed() -> mlua::Error {
 
 fn wrong_kind(described: &str, is: &str, what: &str) -> mlua::Error {
     mlua::Error::runtime(format!("{described} is {is}, which has no {what}"))
-}
-
-/// How errors name a node: by its path, or as the root.
-fn describe_node(scene: &Scene, id: NodeId) -> String {
-    scene.describe(id)
 }
 
 /// Fails unless every one of `numbers` is finite, which positions and the like must be so the
@@ -1063,7 +1063,7 @@ impl mlua::UserData for SceneNode {
         methods.add_method("size", |_, node, ()| {
             let [width, height] = node.read(|scene, id| {
                 scene.node(id).size().ok_or_else(|| {
-                    let described = describe_node(scene, id);
+                    let described = scene.describe(id);
                     let is = a_node_of(scene.node(id).kind().name());
                     mlua::Error::runtime(format!("{described} is {is}, which has no size"))
                 })
@@ -1133,7 +1133,7 @@ impl mlua::UserData for SceneNode {
             })
         });
         methods.add_method("text", |_, node, ()| {
-            node.write_kind("text", |kind| match kind {
+            node.read_kind("text", |kind| match kind {
                 Kind::Text(text) => Some(text.text().to_owned()),
                 _ => None,
             })
@@ -1155,7 +1155,7 @@ impl mlua::UserData for SceneNode {
         });
         methods.add_meta_method(mlua::MetaMethod::ToString, |_, node, ()| {
             let described = node
-                .read(describe_node)
+                .read(Scene::describe)
                 .unwrap_or_else(|_| "removed".into());
             Ok(format!("SceneNode({described})"))
         });

@@ -15,7 +15,7 @@ use std::{
     io::{self, BufRead, BufReader, Write},
     ops::Range,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::mpsc::{self, Receiver, Sender},
     thread,
     time::{Duration, Instant},
@@ -448,25 +448,57 @@ impl LanguageServer {
     }
 }
 
-impl Drop for LanguageServer {
-    fn drop(&mut self) {
-        if !self.stopped {
-            if self.ready {
-                self.request(Request::Other, "shutdown", Value::Null);
-                self.notify("exit", Value::Null);
+impl LanguageServer {
+    /// Asks the server to end, as the protocol has it: `shutdown`, then once that's answered,
+    /// `exit`. Gives it 200 ms, and tells how it ended if it did by then.
+    fn shut_down(&mut self) -> Option<ExitStatus> {
+        let deadline = Instant::now() + Duration::from_millis(200);
+        if self.outgoing.is_some()
+            && self.ready
+            && let Some(id) = self.request(Request::Other, "shutdown", Value::Null)
+            && self.answered(id, deadline)
+        {
+            self.notify("exit", Value::Null);
+        }
+        // Closing its input ends it too, if it won't say goodbye.
+        self.outgoing = None;
+        loop {
+            if let Ok(Some(status)) = self.child.try_wait() {
+                return Some(status);
             }
-            // Closing its input ends it too, if it won't say goodbye.
-            self.outgoing = None;
-            let deadline = Instant::now() + Duration::from_millis(200);
-            while Instant::now() < deadline {
-                if let Ok(Some(_)) = self.child.try_wait() {
-                    return;
+            if Instant::now() >= deadline {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Waits until `deadline` for the answer to the request `id`, passing over anything else
+    /// the server says, and tells whether it came.
+    fn answered(&self, id: RequestId, deadline: Instant) -> bool {
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            match self.incoming.recv_timeout(left) {
+                Ok(Incoming::Message(message)) => {
+                    if message.get("method").is_none() && message["id"] == id {
+                        return true;
+                    }
                 }
-                thread::sleep(Duration::from_millis(10));
+                Ok(Incoming::Closed(_)) | Err(_) => return false,
             }
         }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+    }
+}
+
+impl Drop for LanguageServer {
+    fn drop(&mut self) {
+        if self.shut_down().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 
@@ -838,6 +870,43 @@ mod tests {
             ),
             text.len()
         );
+    }
+
+    #[test]
+    fn the_server_ends_when_asked() {
+        let runs = Command::new(program())
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success());
+        if !runs {
+            assert!(
+                env::var_os("WINGINE_LUAU_LSP").is_none(),
+                "WINGINE_LUAU_LSP is set, but doesn't run"
+            );
+            eprintln!("luau-lsp isn't installed, so this test checks nothing");
+            return;
+        }
+        let mut headless = wingine::headless::Headless::new().unwrap();
+        let waker = headless.context().waker();
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/pong");
+        let mut server = LanguageServer::start(&program(), &folder, waker).unwrap();
+        let started = Instant::now();
+        while !server.is_ready() {
+            assert!(
+                server
+                    .poll()
+                    .iter()
+                    .all(|event| !matches!(event, Event::Stopped(_)))
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "it never started"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        // luau-lsp ends with a failure when told to exit before it's shut down.
+        let status = server.shut_down().expect("it ended by itself");
+        assert!(status.success(), "{status}");
     }
 
     #[test]

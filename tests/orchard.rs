@@ -17,8 +17,10 @@ const GAME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/orchard");
 /// The game, growing no apples but those a test grows.
 fn simulation() -> Simulation<LuauGame> {
     let config = runtime::config(GAME).expect("settings load");
-    let simulation =
-        Simulation::new(&config.window, |ctx| LuauGame::load(ctx, GAME)).expect("game starts");
+    let simulation = Simulation::new(&config.window, |ctx| {
+        LuauGame::load_with(ctx, GAME, &config)
+    })
+    .expect("game starts");
     exec(&simulation, "orchard.growing = false");
     simulation
 }

@@ -140,6 +140,24 @@ fn the_debug_key_shows_frame_stats_and_never_reaches_the_game() {
     assert_eq!(simulation.game().f3_presses, 0);
 }
 
+#[test]
+fn the_debug_key_goes_to_a_focused_field_instead() {
+    let mut simulation = simulation(WindowConfig {
+        debug_key: Some(Key::F3),
+        ..config()
+    });
+    simulation.click_gui("Your name");
+    simulation.tap(Key::F3);
+    simulation.step();
+    assert!(simulation.gui_rect("Wingine").is_none());
+    assert_eq!(simulation.game().f3_presses, 0);
+
+    simulation.tap(Key::Escape);
+    simulation.tap(Key::F3);
+    simulation.step();
+    assert!(simulation.gui_rect("Wingine").is_some());
+}
+
 /// A game with no interface of its own, where the debug window is all there is.
 #[derive(Default)]
 struct Plain {

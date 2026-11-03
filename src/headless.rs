@@ -382,17 +382,15 @@ impl<G: Game> Simulation<G> {
     }
 
     /// Presses `key`. The game sees it unless the interface wants it, as a text field with focus
-    /// does, or it's the [debug key](WindowConfig::debug_key).
+    /// does, or it's the [debug key](WindowConfig::debug_key), which, as in a window, does nothing
+    /// while the interface wants it.
     pub fn key_down(&mut self, key: Key) {
         self.wake();
         #[cfg(feature = "egui")]
         {
             let gui = &mut self.headless.ctx.gui;
-            if gui.debug_key_down(key) {
-                return;
-            }
             self.gui_input.key(key, true);
-            if gui.wants_keyboard() {
+            if gui.wants_keyboard() || gui.debug_key_down(key) {
                 return;
             }
         }

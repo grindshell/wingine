@@ -33,7 +33,10 @@ const SEAL_STONE: [i32; 2] = [12, 4];
 fn start(saves: Option<&Path>) -> Simulation<LuauGame> {
     let mut config = runtime::config(GAME).expect("settings load");
     config.window.save_folder = saves.map(Path::to_owned);
-    Simulation::new(&config.window, |ctx| LuauGame::load(ctx, GAME)).expect("game starts")
+    Simulation::new(&config.window, |ctx| {
+        LuauGame::load_with(ctx, GAME, &config)
+    })
+    .expect("game starts")
 }
 
 /// Starts a new game, with no saved one.

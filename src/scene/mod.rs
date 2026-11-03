@@ -291,7 +291,6 @@ mod writer;
 
 use std::{
     collections::{BTreeMap, HashMap},
-    fs,
     path::Path,
     rc::Rc,
 };
@@ -309,6 +308,7 @@ use crate::{
     graphics::{Align, Canvas, Color, Font, Sprite, SpriteSheet, TextLayout, Texture},
     lua::check_tilemap_size,
     math::{Affine, Rect},
+    save,
     tilemap::{Tile, TileId, Tilemap, Tileset},
 };
 
@@ -322,9 +322,11 @@ impl SceneFile {
         writer::write(self).map_err(Error::WriteScene)
     }
 
-    /// Writes the scene to the file at `path`, as [`SceneFile::to_luau`] gives it.
+    /// Writes the scene to the file at `path`, as [`SceneFile::to_luau`] gives it. The scene is
+    /// written in full to a file of its own first, then takes the old one's place, so stopping
+    /// partway through leaves the old one as it was.
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
-        write_file(path.as_ref(), &self.to_luau()?)
+        save::write_replacing(path.as_ref(), &self.to_luau()?)
     }
 }
 
@@ -335,17 +337,11 @@ impl TilesetFile {
         writer::write_tileset(self).map_err(Error::WriteScene)
     }
 
-    /// Writes the tileset to the file at `path`, as [`TilesetFile::to_luau`] gives it.
+    /// Writes the tileset to the file at `path`, as [`TilesetFile::to_luau`] gives it, replacing
+    /// the old one as [`SceneFile::write`] does.
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
-        write_file(path.as_ref(), &self.to_luau()?)
+        save::write_replacing(path.as_ref(), &self.to_luau()?)
     }
-}
-
-fn write_file(path: &Path, text: &str) -> Result<()> {
-    fs::write(path, text).map_err(|source| Error::WriteFile {
-        path: path.to_owned(),
-        source,
-    })
 }
 
 /// How deeply nodes may nest: how far below a scene's root a node may be, and how far below a

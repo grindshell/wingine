@@ -108,7 +108,10 @@ fn build_danmaku() -> PathBuf {
 
 fn load(folder: &Path) -> Simulation<LuauGame> {
     let config = runtime::config(folder).expect("settings load");
-    Simulation::new(&config.window, |ctx| LuauGame::load(ctx, folder)).expect("game starts")
+    Simulation::new(&config.window, |ctx| {
+        LuauGame::load_with(ctx, folder, &config)
+    })
+    .expect("game starts")
 }
 
 /// The game, with both bullet systems, running bullets in Luau.

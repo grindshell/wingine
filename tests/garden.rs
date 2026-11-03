@@ -16,7 +16,10 @@ const GAME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/garden");
 
 fn simulation() -> Simulation<LuauGame> {
     let config = runtime::config(GAME).expect("settings load");
-    Simulation::new(&config.window, |ctx| LuauGame::load(ctx, GAME)).expect("game starts")
+    Simulation::new(&config.window, |ctx| {
+        LuauGame::load_with(ctx, GAME, &config)
+    })
+    .expect("game starts")
 }
 
 /// The value of the Luau `expression`, such as `"garden.walk_time"`.

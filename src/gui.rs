@@ -234,21 +234,23 @@ impl Gui {
             }
             alive
         });
+        // Written with the queue's next submission, whichever that is.
         for (id, deltas) in &textures.set {
             for delta in deltas {
                 renderer.update_texture(device, queue, *id, delta);
             }
         }
 
-        let screen = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [target.width(), target.height()],
-            pixels_per_point,
-        };
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gui") });
-        let mut commands =
-            renderer.update_buffers(device, queue, &mut encoder, &primitives, &screen);
+        // A pass that drew nothing, as one with the interface closed, has nothing to submit.
         if !primitives.is_empty() {
+            let screen = egui_wgpu::ScreenDescriptor {
+                size_in_pixels: [target.width(), target.height()],
+                pixels_per_point,
+            };
+            let mut encoder = device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gui") });
+            let mut commands =
+                renderer.update_buffers(device, queue, &mut encoder, &primitives, &screen);
             let view = target.create_view(&wgpu::TextureViewDescriptor {
                 format: Some(format),
                 ..Default::default()
@@ -272,9 +274,10 @@ impl Gui {
                 })
                 .forget_lifetime();
             renderer.render(&mut pass, &primitives, &screen);
+            drop(pass);
+            commands.push(encoder.finish());
+            queue.submit(commands);
         }
-        commands.push(encoder.finish());
-        queue.submit(commands);
         for id in &textures.free {
             renderer.free_texture(id);
         }

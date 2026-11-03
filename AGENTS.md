@@ -204,8 +204,9 @@ networking or 3D pipelines.
 - `src/scene/`: scenes. `SceneFile` is what a scene file holds (`NodeDef`s, `SheetDef`s and props
   of `Value`s), and `TilesetFile` a tileset file: `file.rs` reads one by running it as Luau in an
   empty environment, turning what it returns into plain `Value`s, then reading those, with errors
-  naming the node's path; `writer.rs` writes either in the canonical layout. The module docs are
-  the formats' reference. `Scene::new` builds a scene in two passes: `Expand` replaces instances
+  naming the node's path; `writer.rs` writes either in the canonical layout, and their `write`
+  puts it in a file of its own, then renames that over the old one, as saves are. The module docs
+  are the formats' reference. `Scene::new` builds a scene in two passes: `Expand` replaces instances
   with the nodes of the files they place, then makes their overrides by turning the node back
   into `Value`s (`node_fields`), setting the fields and reading it again, so overrides are
   checked as files are (`NodeDef::overridden` does the same for tools, and `NodeDef::fields`

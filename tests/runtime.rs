@@ -38,7 +38,10 @@ const SMALL_WINDOW: &str =
 
 fn simulation(folder: &Path) -> Simulation<LuauGame> {
     let config = runtime::config(folder).expect("settings load");
-    Simulation::new(&config.window, |ctx| LuauGame::load(ctx, folder)).expect("game starts")
+    Simulation::new(&config.window, |ctx| {
+        LuauGame::load_with(ctx, folder, &config)
+    })
+    .expect("game starts")
 }
 
 /// The value of the Luau `expression` in the game.
@@ -723,7 +726,10 @@ fn saves_last_after_the_game_ends() {
     let saves = folder.join("saves");
     config.window.save_folder = Some(saves.clone());
     let start = || {
-        Simulation::new(&config.window, |ctx| LuauGame::load(ctx, &folder)).expect("game starts")
+        Simulation::new(&config.window, |ctx| {
+            LuauGame::load_with(ctx, &folder, &config)
+        })
+        .expect("game starts")
     };
 
     let first = start();
@@ -1609,9 +1615,11 @@ fn scene_errors_name_the_file_and_node() {
     );
     write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
     let config = runtime::config(&folder).unwrap();
-    let err = Simulation::new(&config.window, |ctx| LuauGame::load(ctx, &folder))
-        .err()
-        .expect("the scene fails to load");
+    let err = Simulation::new(&config.window, |ctx| {
+        LuauGame::load_with(ctx, &folder, &config)
+    })
+    .err()
+    .expect("the scene fails to load");
     let message = err.to_string();
     assert!(message.contains("broken.scene.luau"), "{message}");
     assert!(
