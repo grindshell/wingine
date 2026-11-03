@@ -103,7 +103,120 @@ impl Canvas {
     }
 
     pub fn fill_rect(&mut self, rect: Rect, color: Color) {
-        self.push_rect(None, rect, ([0.0, 0.0], [1.0, 1.0]), color);
+        self.push_rect(None, rect, SOLID, color);
+    }
+
+    /// Draws the outline of `rect`, `thickness` wide inside its edges, so it covers the edge of
+    /// what [`Canvas::fill_rect`] would fill. Its sides don't overlap, so a translucent outline
+    /// is even all round. An outline thick enough to meet itself fills the rect.
+    pub fn outline_rect(&mut self, rect: Rect, thickness: f32, color: Color) {
+        if !(thickness > 0.0 && rect.w > 0.0 && rect.h > 0.0) {
+            return;
+        }
+        if thickness * 2.0 >= rect.w.min(rect.h) {
+            return self.fill_rect(rect, color);
+        }
+        // In canvas pixels, so the sides meet exactly, whatever the camera's zoom.
+        let outer = self.transform.apply(rect);
+        let thickness = thickness * self.transform.scale;
+        let [left, top, right, bottom] = [outer.x, outer.y, outer.right(), outer.bottom()];
+        let [inner_top, inner_bottom] = [top + thickness, bottom - thickness];
+        for [x0, y0, x1, y1] in [
+            [left, top, right, inner_top],
+            [left, inner_top, left + thickness, inner_bottom],
+            [right - thickness, inner_top, right, inner_bottom],
+            [left, inner_bottom, right, bottom],
+        ] {
+            self.push_quad(None, [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], SOLID, color);
+        }
+    }
+
+    /// Draws a line `thickness` wide from `from` to `to`, centered on the line between them and
+    /// ending square at them. Like everything drawn, it covers the pixels whose middles it covers,
+    /// so a line 1 wide lights a row of pixels when it runs along their middles: from `[0.0, 5.5]`
+    /// to `[11.0, 5.5]` lights the pixels `fill_rect` does with `Rect::new(0.0, 5.0, 11.0, 1.0)`.
+    /// A line from a point to itself draws nothing.
+    pub fn draw_line(&mut self, from: [f32; 2], to: [f32; 2], thickness: f32, color: Color) {
+        let [dx, dy] = [to[0] - from[0], to[1] - from[1]];
+        let length = (dx * dx + dy * dy).sqrt();
+        if !(length > 0.0 && thickness > 0.0) {
+            return;
+        }
+        // Half the thickness, across the line, to the left of it going from `from` to `to`.
+        let across = thickness / 2.0 / length;
+        let [nx, ny] = [dy * across, -dx * across];
+        let corners = [
+            [from[0] + nx, from[1] + ny],
+            [to[0] + nx, to[1] + ny],
+            [to[0] - nx, to[1] - ny],
+            [from[0] - nx, from[1] - ny],
+        ]
+        .map(|corner| self.transform.apply_point(corner));
+        self.push_quad(None, corners, SOLID, color);
+    }
+
+    /// Fills a circle of `radius` about `center`, drawn as a polygon with as many sides as its
+    /// size on the canvas needs to look round.
+    pub fn fill_circle(&mut self, center: [f32; 2], radius: f32, color: Color) {
+        if radius.is_nan() || radius <= 0.0 {
+            return;
+        }
+        let center = self.transform.apply_point(center);
+        let radius = radius * self.transform.scale;
+        let polygon = Polygon::new(radius);
+        let at = |[x, y]: [f32; 2]| [center[0] + x * radius, center[1] + y * radius];
+        // A fan of triangles from the middle, two to a quad, the last closing on the first corner.
+        let first = polygon.first();
+        let mut corner = first;
+        for quad in 0..polygon.sides / 2 {
+            let next = polygon.turn(corner);
+            let after = if quad + 1 == polygon.sides / 2 {
+                first
+            } else {
+                polygon.turn(next)
+            };
+            self.push_quad(
+                None,
+                [center, at(corner), at(next), at(after)],
+                SOLID,
+                color,
+            );
+            corner = after;
+        }
+    }
+
+    /// Draws the outline of a circle of `radius` about `center`, `thickness` wide inside its
+    /// edge, so it covers the edge of what [`Canvas::fill_circle`] would fill, as evenly as
+    /// [`Canvas::outline_rect`]. An outline thick enough to meet itself fills the circle.
+    pub fn outline_circle(&mut self, center: [f32; 2], radius: f32, thickness: f32, color: Color) {
+        if !(radius > 0.0 && thickness > 0.0) {
+            return;
+        }
+        if thickness >= radius {
+            return self.fill_circle(center, radius, color);
+        }
+        let center = self.transform.apply_point(center);
+        let outer = radius * self.transform.scale;
+        let inner = (radius - thickness) * self.transform.scale;
+        let polygon = Polygon::new(outer);
+        let at = |[x, y]: [f32; 2], radius: f32| [center[0] + x * radius, center[1] + y * radius];
+        let first = polygon.first();
+        let mut corner = first;
+        for side in 0..polygon.sides {
+            let next = if side + 1 == polygon.sides {
+                first
+            } else {
+                polygon.turn(corner)
+            };
+            let corners = [
+                at(corner, outer),
+                at(next, outer),
+                at(next, inner),
+                at(corner, inner),
+            ];
+            self.push_quad(None, corners, SOLID, color);
+            corner = next;
+        }
     }
 
     /// Draws `sprite` stretched to fill `dest`, with its colors multiplied by `tint`.
@@ -141,7 +254,7 @@ impl Canvas {
     /// Fills `rect` moved by `transform`, as [`Canvas::draw_sprite_transformed`] places a sprite.
     pub fn fill_rect_transformed(&mut self, rect: Rect, transform: Affine, color: Color) {
         let corners = self.transformed_corners(rect, transform);
-        self.push_quad(None, corners, ([0.0, 0.0], [1.0, 1.0]), color);
+        self.push_quad(None, corners, SOLID, color);
     }
 
     /// The corners of `rect` moved by `transform`, in canvas pixels.
@@ -242,6 +355,49 @@ impl Canvas {
     }
 }
 
+/// The texture region solid fills draw, the whole of the white texture.
+const SOLID: ([f32; 2], [f32; 2]) = ([0.0, 0.0], [1.0, 1.0]);
+
+/// The polygon a circle is drawn as, with enough sides that its edge strays from the circle's by
+/// no more than an eighth of a pixel either way.
+struct Polygon {
+    sides: u32,
+    /// How far each corner turns from the last, as its cosine and sine.
+    cos: f32,
+    sin: f32,
+    /// How far out the corners are, for a circle of radius 1: a little outside it, so the sides'
+    /// middles are as far inside.
+    reach: f32,
+}
+
+impl Polygon {
+    /// The polygon for a circle of `radius` canvas pixels.
+    fn new(radius: f32) -> Self {
+        use std::f32::consts::{PI, TAU};
+        // The middle of a side is about `radius * (PI / sides)^2 / 2` inside the corners, which
+        // is a quarter of a pixel at this many.
+        let needed = (PI * (2.0 * radius).sqrt()).min(256.0) as u32 + 1;
+        let sides = needed.clamp(8, 256).next_multiple_of(2);
+        let (sin, cos) = (TAU / sides as f32).sin_cos();
+        Self {
+            sides,
+            cos,
+            sin,
+            reach: 2.0 / (1.0 + (PI / sides as f32).cos()),
+        }
+    }
+
+    /// The first corner, for a circle of radius 1 about the origin.
+    fn first(&self) -> [f32; 2] {
+        [self.reach, 0.0]
+    }
+
+    /// The corner after `corner`, clockwise.
+    fn turn(&self, [x, y]: [f32; 2]) -> [f32; 2] {
+        [x * self.cos - y * self.sin, x * self.sin + y * self.cos]
+    }
+}
+
 /// The corners of `rect` rotated by `angle` radians about its center, clockwise from the one
 /// that was its top-left.
 fn rotated_corners(rect: Rect, angle: f32) -> [[f32; 2]; 4] {
@@ -302,6 +458,127 @@ mod tests {
         canvas.fill_rect(Rect::new(2.0, 2.0, 1.0, 1.0), Color::RED);
         assert_eq!(canvas.batches.len(), 1);
         assert_eq!(canvas.batches[0].quads, 0..2);
+    }
+
+    /// The corners of each quad drawn so far.
+    fn quads(canvas: &Canvas) -> Vec<[[f32; 2]; 4]> {
+        canvas
+            .vertices
+            .chunks(4)
+            .map(|quad| [0, 1, 2, 3].map(|i| quad[i].position))
+            .collect()
+    }
+
+    #[test]
+    fn outlines_are_four_sides_that_meet_without_overlapping() {
+        let mut canvas = Canvas::new();
+        canvas.outline_rect(Rect::new(10.0, 20.0, 8.0, 6.0), 2.0, Color::WHITE);
+        let sides: Vec<[f32; 4]> = quads(&canvas)
+            .iter()
+            .map(|[top_left, _, bottom_right, _]| {
+                [top_left[0], top_left[1], bottom_right[0], bottom_right[1]]
+            })
+            .collect();
+        assert_eq!(
+            sides,
+            [
+                [10.0, 20.0, 18.0, 22.0],
+                [10.0, 22.0, 12.0, 24.0],
+                [16.0, 22.0, 18.0, 24.0],
+                [10.0, 24.0, 18.0, 26.0],
+            ]
+        );
+        assert_eq!(canvas.batches.len(), 1);
+    }
+
+    #[test]
+    fn outlines_thick_enough_to_meet_fill() {
+        let mut canvas = Canvas::new();
+        canvas.outline_rect(Rect::new(0.0, 0.0, 8.0, 4.0), 2.0, Color::WHITE);
+        canvas.outline_circle([0.0, 0.0], 3.0, 3.0, Color::WHITE);
+        let mut filled = Canvas::new();
+        filled.fill_rect(Rect::new(0.0, 0.0, 8.0, 4.0), Color::WHITE);
+        filled.fill_circle([0.0, 0.0], 3.0, Color::WHITE);
+        assert_eq!(quads(&canvas), quads(&filled));
+    }
+
+    #[test]
+    fn lines_run_between_their_ends_and_as_wide_as_their_thickness() {
+        let mut canvas = Canvas::new();
+        canvas.draw_line([0.0, 5.5], [11.0, 5.5], 1.0, Color::WHITE);
+        assert_eq!(
+            quads(&canvas),
+            [[[0.0, 5.0], [11.0, 5.0], [11.0, 6.0], [0.0, 6.0]]]
+        );
+
+        canvas.clear(Color::BLACK);
+        canvas.draw_line([0.0, 0.0], [3.0, 4.0], 10.0, Color::WHITE);
+        let [a, b, c, d] = quads(&canvas)[0];
+        let near =
+            |p: [f32; 2], q: [f32; 2]| (p[0] - q[0]).abs() < 1e-5 && (p[1] - q[1]).abs() < 1e-5;
+        assert!(near(a, [4.0, -3.0]) && near(b, [7.0, 1.0]), "{a:?} {b:?}");
+        assert!(near(c, [-1.0, 7.0]) && near(d, [-4.0, 3.0]), "{c:?} {d:?}");
+    }
+
+    #[test]
+    fn shapes_with_nothing_to_them_draw_nothing() {
+        let mut canvas = Canvas::new();
+        canvas.draw_line([1.0, 1.0], [1.0, 1.0], 1.0, Color::WHITE);
+        canvas.draw_line([0.0, 0.0], [1.0, 1.0], 0.0, Color::WHITE);
+        canvas.outline_rect(Rect::new(0.0, 0.0, 0.0, 4.0), 1.0, Color::WHITE);
+        canvas.outline_rect(Rect::new(0.0, 0.0, 4.0, 4.0), f32::NAN, Color::WHITE);
+        canvas.fill_circle([0.0, 0.0], 0.0, Color::WHITE);
+        canvas.fill_circle([0.0, 0.0], -1.0, Color::WHITE);
+        canvas.outline_circle([0.0, 0.0], 4.0, 0.0, Color::WHITE);
+        canvas.outline_circle([0.0, 0.0], f32::NAN, 1.0, Color::WHITE);
+        assert!(canvas.vertices.is_empty());
+    }
+
+    #[test]
+    fn circles_are_fans_and_rings_that_close() {
+        let mut canvas = Canvas::new();
+        canvas.fill_circle([10.0, 20.0], 4.0, Color::WHITE);
+        let fan = quads(&canvas);
+        let sides = Polygon::new(4.0).sides as usize;
+        assert_eq!(fan.len(), sides / 2);
+        for (quad, next) in fan.iter().zip(fan.iter().cycle().skip(1)) {
+            assert_eq!(quad[0], [10.0, 20.0], "from the middle");
+            assert_eq!(quad[3], next[1], "each quad starts where the last ended");
+        }
+
+        canvas.clear(Color::BLACK);
+        canvas.outline_circle([10.0, 20.0], 4.0, 1.0, Color::WHITE);
+        let ring = quads(&canvas);
+        assert_eq!(ring.len(), sides);
+        for (quad, next) in ring.iter().zip(ring.iter().cycle().skip(1)) {
+            assert_eq!(
+                [quad[1], quad[2]],
+                [next[0], next[3]],
+                "each side meets the next"
+            );
+            let distance = |[x, y]: [f32; 2]| (x - 10.0).hypot(y - 20.0);
+            assert!((distance(quad[0]) - 4.0).abs() < 0.15, "{:?}", quad[0]);
+            assert!((distance(quad[3]) - 3.0).abs() < 0.15, "{:?}", quad[3]);
+        }
+    }
+
+    #[test]
+    fn circles_get_more_sides_the_larger_they_are_drawn() {
+        assert_eq!(Polygon::new(1.0).sides, 8);
+        assert_eq!(Polygon::new(100.0).sides, 46);
+        assert_eq!(Polygon::new(1e9).sides, 256);
+        assert_eq!(Polygon::new(f32::INFINITY).sides, 256);
+
+        // A circle twice the size on the canvas through a zoomed camera.
+        let mut canvas = Canvas::new();
+        canvas.begin(100.0, 100.0);
+        canvas.set_camera(Some(Camera {
+            zoom: 2.0,
+            ..Camera::new(0.0, 0.0)
+        }));
+        canvas.fill_circle([0.0, 0.0], 50.0, Color::WHITE);
+        assert_eq!(quads(&canvas).len(), 46 / 2);
+        assert_eq!(quads(&canvas)[0][0], [50.0, 50.0]);
     }
 
     #[test]

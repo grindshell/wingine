@@ -93,7 +93,7 @@ another time raises an error saying so:
 
 | | Top level | `update` and tasks | `gui` | `draw` |
 |---|:---:|:---:|:---:|:---:|
-| Drawing: `graphics.clear`, `graphics.draw_*`, `graphics.fill_rect`, `graphics.set_camera` | | | | ✓ |
+| Drawing: `graphics.clear`, `graphics.draw_*`, `graphics.fill_*`, `graphics.outline_*`, `graphics.set_camera` | | | | ✓ |
 | Loading sprite sheets: `graphics.load_sprite_sheet` | ✓ | ✓ | ✓ | |
 | The keyboard, mouse and gamepads: `input` | ✓ | ✓ | ✓ | |
 | Playing sound and music: `audio` (apart from `audio.load`) | ✓ | ✓ | ✓ | |

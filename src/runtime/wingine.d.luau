@@ -398,6 +398,14 @@ declare graphics: {
     clear: (color: Color) -> (),
     --- Fills a rectangle with its top-left corner at `x`, `y`.
     fill_rect: (x: number, y: number, width: number, height: number, color: Color) -> (),
+    --- Draws a rectangle's outline, `thickness` wide (1 by default) inside its edges.
+    outline_rect: (x: number, y: number, width: number, height: number, color: Color, thickness: number?) -> (),
+    --- Draws a line from `x1`, `y1` to `x2`, `y2`, `thickness` wide (1 by default).
+    draw_line: (x1: number, y1: number, x2: number, y2: number, color: Color, thickness: number?) -> (),
+    --- Fills a circle of `radius` about `x`, `y`.
+    fill_circle: (x: number, y: number, radius: number, color: Color) -> (),
+    --- Draws a circle's outline, `thickness` wide (1 by default) inside its edge.
+    outline_circle: (x: number, y: number, radius: number, color: Color, thickness: number?) -> (),
     --- Draws `sprite` with its top-left corner at `x`, `y`, stretched to `width` by `height`, with
     --- its colors multiplied by `tint`.
     draw_sprite: (sprite: Sprite, x: number, y: number, tint: Color?, width: number?, height: number?) -> (),

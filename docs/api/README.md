@@ -48,9 +48,11 @@ against, in [the editor](../editor.md#checking-scripts-with-luau-lsp) or another
 The engine lends scripts its services at the times they make sense. A function used at another
 time raises an error saying when it works.
 
-- **Drawing** works only in `draw`: `graphics.clear`, `graphics.fill_rect`, `graphics.draw_sprite`,
-  `graphics.draw_sprite_rotated`, `graphics.draw_text`, `graphics.draw_text_layout`,
-  `graphics.draw_tilemap`, `graphics.draw_scene` and `graphics.set_camera`.
+- **Drawing** works only in `draw`: `graphics.clear`, `graphics.fill_rect`,
+  `graphics.outline_rect`, `graphics.draw_line`, `graphics.fill_circle`,
+  `graphics.outline_circle`, `graphics.draw_sprite`, `graphics.draw_sprite_rotated`,
+  `graphics.draw_text`, `graphics.draw_text_layout`, `graphics.draw_tilemap`,
+  `graphics.draw_scene` and `graphics.set_camera`.
 - **The keyboard, mouse, gamepads and sound** work while the game loads (the top level of
   `main.luau` and the modules it requires), in `update` and the tasks it resumes, and in `gui`:
   everything in `input`, and everything in `audio` but `audio.load`. So do

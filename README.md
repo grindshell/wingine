@@ -12,8 +12,8 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 
 ## Features
 
-- **Rendering** with [wgpu](https://wgpu.rs): sprites, rotated or not, sprite sheets and solid
-  shapes, batched by texture. A fixed resolution, such as 320x180, scales up by whole numbers for
+- **Rendering** with [wgpu](https://wgpu.rs): sprites, rotated or not, sprite sheets, and
+  rectangles, lines and circles, filled or outlined, batched by texture. A fixed resolution, such as 320x180, scales up by whole numbers for
   crisp pixel art.
 - **Timing**: games update once a frame by the frame's time, or at a fixed rate, such as 60 times
   a second, so they play the same at any frame rate. Frame stats and a headless benchmark show
@@ -213,7 +213,8 @@ plant a flower, or to pick the one you're standing on. The mill's sails are a no
 arms and cloths, which turn together as the script turns the node; the birds circle the same way.
 The trees and flowers are instances of scenes of their own, each changed by overrides, and
 planting adds another. Things tagged `solid` are in the player's way, and areas tagged `note`
-carry the text they show. See [Scenes](docs/scenes.md).
+carry the text they show; F1 outlines them both, and circles what turns. See
+[Scenes](docs/scenes.md).
 
 ### Orchard
 
@@ -245,8 +246,9 @@ Space, Enter or E to read the note on its door.
 
 ### Shapes
 
-[`examples/shapes.rs`](examples/shapes.rs) is the smallest example: a checkerboard, a sliding
-square, and a translucent panel drawn over both.
+[`examples/shapes.rs`](examples/shapes.rs) is the smallest example: a checkerboard, an outlined
+square sliding across it, a ball circling the middle on the end of a line, and a translucent panel
+drawn over them.
 
 ![Shapes](docs/screenshots/shapes.png)
 

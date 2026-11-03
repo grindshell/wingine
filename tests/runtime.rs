@@ -1742,6 +1742,50 @@ fn the_camera_stays_inside_its_bounds() {
 }
 
 #[test]
+fn outlines_lines_and_circles_draw_where_they_are_given() {
+    let folder = game(
+        "shapes",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "function draw()
+                    graphics.clear('#000000')
+                    graphics.outline_rect(0, 0, 10, 10, '#ff0000')
+                    graphics.fill_circle(5, 5, 2, '#0000ff')
+                    graphics.outline_rect(12, 0, 8, 8, '#ff0000', 2)
+                    graphics.outline_circle(16, 4, 2, '#0000ff')
+                    graphics.draw_line(0, 12.5, 20, 12.5, '#0000ff')
+                    graphics.draw_line(0, 16, 20, 16, '#ff0000', 2)
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    // A thin outline, with a circle inside it.
+    assert_eq!(pixel(&image, 0, 0), RED);
+    assert_eq!(pixel(&image, 9, 9), RED);
+    assert_eq!(pixel(&image, 1, 1), BLACK);
+    assert_eq!(pixel(&image, 4, 4), BLUE);
+    assert_eq!(pixel(&image, 3, 5), BLUE);
+    assert_eq!(pixel(&image, 2, 5), BLACK);
+    // A thick outline, with a ring inside it.
+    assert_eq!(pixel(&image, 13, 1), RED);
+    assert_eq!(pixel(&image, 14, 3), BLUE);
+    assert_eq!(pixel(&image, 15, 3), BLACK);
+    // A thin line along the middles of row 12, and a thick one over rows 15 and 16.
+    assert_eq!(pixel(&image, 10, 11), BLACK);
+    assert_eq!(pixel(&image, 10, 12), BLUE);
+    assert_eq!(pixel(&image, 10, 13), BLACK);
+    assert_eq!(pixel(&image, 3, 14), BLACK);
+    assert_eq!(pixel(&image, 3, 15), RED);
+    assert_eq!(pixel(&image, 3, 16), RED);
+    assert_eq!(pixel(&image, 3, 17), BLACK);
+}
+
+#[test]
 fn the_camera_zooms_about_the_middle_of_the_view() {
     let folder = game(
         "camera_zoom",

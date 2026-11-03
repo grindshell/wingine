@@ -49,6 +49,39 @@ fn player(simulation: &Simulation<LuauGame>) -> [f32; 2] {
 }
 
 #[test]
+fn f1_outlines_what_is_solid() {
+    let mut simulation = simulation();
+    let (x, y, width): (f32, f32, f32) = eval(
+        &simulation,
+        "(function() local b = garden.solids[1]:bounds() return b.x, b.y, b.width end)()",
+    );
+    // The canvas pixel in the middle of the outline's top edge, in the screenshot, which is
+    // scaled up from the canvas.
+    let middle_of_top = |simulation: &mut Simulation<LuauGame>| {
+        let image = simulation.screenshot().unwrap();
+        let scale = image.width() / 320;
+        let [column, row] =
+            [x + width / 2.0, y + 0.5].map(|at| at.floor() as u32 * scale + scale / 2);
+        let offset = ((row * image.width() + column) * 4) as usize;
+        <[u8; 4]>::try_from(&image.pixels()[offset..offset + 4]).unwrap()
+    };
+    let before = middle_of_top(&mut simulation);
+
+    simulation.tap(Key::F1);
+    assert!(eval::<bool>(&simulation, "garden.debug"));
+    let [red, green, blue, _] = middle_of_top(&mut simulation);
+    assert!(
+        red > green + 60 && red > blue + 60,
+        "{:?}",
+        [red, green, blue]
+    );
+
+    simulation.tap(Key::F1);
+    assert!(!eval::<bool>(&simulation, "garden.debug"));
+    assert_eq!(middle_of_top(&mut simulation), before);
+}
+
+#[test]
 fn the_scene_files_are_in_the_canonical_layout() {
     for name in ["garden", "tree", "flower"] {
         let path = Path::new(GAME).join(format!("{name}.scene.luau"));

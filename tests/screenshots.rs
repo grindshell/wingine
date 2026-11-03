@@ -73,6 +73,54 @@ fn fill_rects() {
     assert_screenshot(&headless.adapter_name(), "fill_rects", frame);
 }
 
+/// Outlines, lines and circles: a thin outline, and a thick translucent one over a fill, which
+/// must be even at its corners; a line along a row of pixels, a thin diagonal one and a thick
+/// translucent one; a circle inside a translucent ring; and a circle in an outline through a
+/// zoomed camera, both twice the size.
+///
+/// The diagonal lines and the circles are off the pixel grid by fractions, so no pixel's center
+/// lands exactly on an edge, where GPUs may differ.
+#[test]
+fn outlines_lines_and_circles() {
+    let mut headless = headless();
+    let frame = headless
+        .render(96, 64, |canvas| {
+            canvas.clear(Color::rgb8(0x20, 0x20, 0x28));
+            let yellow = Color::rgb8(0xf0, 0xc0, 0x30);
+            let half_white = Color::rgba(1.0, 1.0, 1.0, 0.5);
+            canvas.outline_rect(Rect::new(4.0, 4.0, 24.0, 16.0), 1.0, yellow);
+            canvas.fill_rect(
+                Rect::new(32.0, 4.0, 24.0, 16.0),
+                Color::rgb8(0xd0, 0x40, 0x40),
+            );
+            canvas.outline_rect(Rect::new(32.0, 4.0, 24.0, 16.0), 3.0, half_white);
+
+            let cyan = Color::rgb8(0x30, 0xa0, 0xf0);
+            canvas.draw_line([4.0, 26.5], [60.0, 26.5], 1.0, cyan);
+            canvas.draw_line([4.3, 31.2], [40.1, 58.7], 1.0, Color::WHITE);
+            let amber = Color::rgba(1.0, 0.8, 0.2, 0.6);
+            canvas.draw_line([44.2, 36.1], [60.3, 58.4], 5.0, amber);
+
+            let green = Color::rgb8(0x40, 0xb0, 0x50);
+            canvas.fill_circle([78.3, 16.2], 9.0, green);
+            canvas.outline_circle([78.3, 16.2], 13.0, 2.0, half_white);
+
+            // World units are two canvas pixels, with the world's origin at the canvas's.
+            canvas.set_camera(Some(Camera {
+                zoom: 2.0,
+                ..Camera::new(24.0, 16.0)
+            }));
+            canvas.outline_rect(Rect::new(34.0, 19.0, 11.0, 11.0), 1.0, yellow);
+            canvas.fill_circle([39.6, 24.6], 4.1, cyan);
+        })
+        .unwrap();
+    assert_screenshot(
+        &headless.adapter_name(),
+        "outlines_lines_and_circles",
+        frame,
+    );
+}
+
 #[test]
 fn sprites() {
     let mut headless = headless();

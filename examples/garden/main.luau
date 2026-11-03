@@ -18,6 +18,9 @@
 -- - The trees and flowers are instances of `tree.scene.luau` and `flower.scene.luau`, each changed
 --   by overrides: another sprite, another tint. Pressing Space plants a flower, adding a copy of
 --   `flower.scene.luau` to the garden, or picks the one the player stands on, removing it.
+-- - F1 shows what this script works with, drawn over the garden: outlines of what's solid and of
+--   the areas with notes, the line across the player's feet that bumps into them, and the nodes
+--   it turns, with lines out to what they hold and the circles they turn it around.
 --
 -- Run with `cargo run -- examples/garden`. The tileset is Kenney's 1-bit Pack
 -- (<https://kenney.nl/assets/1-bit-pack>, CC0). Its sprites are white on transparent, so the scene
@@ -30,6 +33,7 @@ input.bind("right", { "Right", "D" })
 input.bind("up", { "Up", "W" })
 input.bind("down", { "Down", "S" })
 input.bind("tend", { "Space", "Enter", "E" })
+input.bind("debug", { "F1" })
 
 -- How far either side of the middle of its feet the player bumps into things.
 local FOOT = 4
@@ -58,7 +62,16 @@ garden = {
     -- the player has planted.
     flowers = garden_scene:find("flowers"),
     planted = 0,
+    -- Whether F1's view of the script's workings is showing.
+    debug = false,
 }
+
+-- The colors of F1's view: what's solid, the notes' areas, the player's feet, and the turning
+-- nodes.
+local DEBUG_SOLID = graphics.color("#ff5a4ad0")
+local DEBUG_NOTE = graphics.color("#f2c14ed0")
+local DEBUG_FEET = graphics.color("#5ad2ff")
+local DEBUG_TURNING = graphics.color("#ffffff90")
 
 local WIDTH, HEIGHT = garden_scene:find("ground"):size()
 
@@ -161,9 +174,49 @@ function update(dt: number)
     if input.pressed("tend") then
         tend()
     end
+    if input.pressed("debug") then
+        garden.debug = not garden.debug
+    end
+end
+
+-- Outlines `node`'s bounds, if it has any.
+local function outline(node, color: number)
+    local bounds = node:bounds()
+    if bounds then
+        graphics.outline_rect(bounds.x, bounds.y, bounds.width, bounds.height, color)
+    end
+end
+
+-- Draws F1's view of what the script works with.
+local function draw_debug()
+    for _, solid in garden.solids do
+        outline(solid, DEBUG_SOLID)
+    end
+    for _, area in garden.notes do
+        outline(area, DEBUG_NOTE)
+    end
+    -- Between the two points `blocked` checks.
+    local x, y = player:position()
+    graphics.draw_line(x - FOOT, y - 1, x + FOOT, y - 1, DEBUG_FEET)
+    for _, node in { sails, flock } do
+        local cx, cy = node:world_position()
+        graphics.fill_circle(cx, cy, 2, DEBUG_TURNING)
+        local reach = 0
+        for _, child in node:children() do
+            local child_x, child_y = child:world_position()
+            graphics.draw_line(cx, cy, child_x, child_y, DEBUG_TURNING)
+            reach = math.max(reach, math.sqrt((child_x - cx) ^ 2 + (child_y - cy) ^ 2))
+        end
+        if reach > 0 then
+            graphics.outline_circle(cx, cy, reach, DEBUG_TURNING)
+        end
+    end
 end
 
 function draw()
     graphics.clear("#000000")
     graphics.draw_scene(garden.scene)
+    if garden.debug then
+        draw_debug()
+    end
 end

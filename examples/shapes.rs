@@ -1,4 +1,5 @@
-//! Draws a tile-sized checkerboard with a square sliding across it.
+//! Draws a tile-sized checkerboard with a square sliding across it, a ball circling the middle on
+//! the end of a line, and a translucent panel over them all.
 //!
 //! Run with `cargo run --example shapes`.
 
@@ -9,6 +10,11 @@ use wingine::{
 };
 
 const TILE: f32 = 32.0;
+/// How far from the middle the ball circles, its radius, and how fast it goes round, in radians
+/// a second.
+const ORBIT: f32 = 120.0;
+const BALL: f32 = 10.0;
+const BALL_SPEED: f32 = 1.5;
 
 #[derive(Default)]
 struct Shapes {
@@ -34,19 +40,27 @@ impl Game for Shapes {
             }
         }
 
-        let center_x = canvas.width() / 2.0;
-        let center_y = canvas.height() / 2.0;
-        let x = center_x + self.time.sin() * canvas.width() / 3.0;
-        canvas.fill_rect(
-            Rect::new(x - TILE / 2.0, center_y - TILE / 2.0, TILE, TILE),
-            Color::rgb8(0xe0, 0x6c, 0x4a),
-        );
+        let center = [canvas.width() / 2.0, canvas.height() / 2.0];
+
+        // The ball's path, then the line out to it and the ball.
+        let path = Color::rgb8(0x4a, 0x56, 0x66);
+        canvas.outline_circle(center, ORBIT + 1.0, 2.0, path);
+        let (sin, cos) = (self.time * BALL_SPEED).sin_cos();
+        let ball = [center[0] + cos * ORBIT, center[1] + sin * ORBIT];
+        canvas.draw_line(center, ball, 2.0, Color::rgb8(0x8a, 0x96, 0xa6));
+        canvas.fill_circle(center, 4.0, Color::rgb8(0x8a, 0x96, 0xa6));
+        canvas.fill_circle(ball, BALL, Color::rgb8(0x5a, 0xb4, 0xe0));
+
+        let x = center[0] + self.time.sin() * canvas.width() / 3.0;
+        let square = Rect::new(x - TILE / 2.0, center[1] - TILE / 2.0, TILE, TILE);
+        canvas.fill_rect(square, Color::rgb8(0xe0, 0x6c, 0x4a));
+        canvas.outline_rect(square, 2.0, Color::rgb8(0xf4, 0xb0, 0x8c));
 
         // Translucent overlay, to show alpha blending.
         canvas.fill_rect(
             Rect::new(
-                center_x - 2.0 * TILE,
-                center_y - TILE,
+                center[0] - 2.0 * TILE,
+                center[1] - TILE,
                 4.0 * TILE,
                 2.0 * TILE,
             ),

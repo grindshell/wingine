@@ -6,6 +6,8 @@ Everything drawn in a frame is drawn in order, later things on top of earlier on
 that starts the frame cleared to black. Drawing functions work only in `draw`.
 
 - [Drawing](#drawing): [`clear`](#graphicsclear), [`fill_rect`](#graphicsfill_rect),
+  [`outline_rect`](#graphicsoutline_rect), [`draw_line`](#graphicsdraw_line),
+  [`fill_circle`](#graphicsfill_circle), [`outline_circle`](#graphicsoutline_circle),
   [`draw_sprite`](#graphicsdraw_sprite), [`draw_sprite_rotated`](#graphicsdraw_sprite_rotated),
   [`draw_text`](#graphicsdraw_text), [`draw_text_layout`](#graphicsdraw_text_layout),
   [`draw_tilemap`](#graphicsdraw_tilemap), [`draw_scene`](#graphicsdraw_scene)
@@ -41,6 +43,69 @@ under it.
 ```lua
 -- A half-transparent black panel over the bottom of a 320x180 canvas.
 graphics.fill_rect(0, 140, 320, 40, "#00000080")
+```
+
+Like everything drawn, a shape covers the pixels whose middles are inside it. Pixel `x`, `y` is
+the square from `x`, `y` to `x + 1`, `y + 1`, so a rectangle at whole numbers covers whole pixels,
+and a 1-pixel line or outline is crisp along the middles of pixels, at `x + 0.5`.
+
+### `graphics.outline_rect`
+
+```lua
+graphics.outline_rect(x: number, y: number, width: number, height: number, color: Color, thickness: number?)
+```
+
+Draws the outline of the rectangle `fill_rect` would fill, `thickness` wide (by default 1) inside
+its edges. Its sides don't overlap, so a translucent outline is as see-through at its corners as
+along its sides. An outline thick enough to meet itself fills the rectangle.
+
+```lua
+-- A hitbox, outlined over the fighter, with its bounds from a scene node.
+local box = hitbox:bounds()
+graphics.outline_rect(box.x, box.y, box.width, box.height, "#ff4040c0")
+```
+
+### `graphics.draw_line`
+
+```lua
+graphics.draw_line(x1: number, y1: number, x2: number, y2: number, color: Color, thickness: number?)
+```
+
+Draws a line from `x1`, `y1` to `x2`, `y2`, `thickness` wide (by default 1), centered on the line
+between them and ending square at them. A line from a point to itself draws nothing.
+
+A line 1 wide lights a row or column of pixels when it runs along their middles, so to draw a line
+across the pixels of row 5, from column 0 to column 10:
+
+```lua
+graphics.draw_line(0, 5.5, 11, 5.5, "#ffffff") -- the pixels fill_rect(0, 5, 11, 1) fills
+```
+
+### `graphics.fill_circle`
+
+```lua
+graphics.fill_circle(x: number, y: number, radius: number, color: Color)
+```
+
+Fills a circle of `radius` about `x`, `y`. It's drawn as a polygon with as many sides as its size
+on the canvas needs to look round, more for larger circles.
+
+A circle about the corner between four pixels covers whole pixels evenly on all sides, so one of
+`radius` 3 about `10`, `10` is 6 pixels across. About the middle of a pixel, such as `10.5`,
+`10.5`, it has a pixel in the middle, so its width in pixels is odd.
+
+### `graphics.outline_circle`
+
+```lua
+graphics.outline_circle(x: number, y: number, radius: number, color: Color, thickness: number?)
+```
+
+Draws the outline of the circle `fill_circle` would fill, `thickness` wide (by default 1) inside
+its edge, as evenly as `outline_rect`. An outline thick enough to meet itself fills the circle.
+
+```lua
+-- A shield's bubble, shrinking as it wears down.
+graphics.outline_circle(fighter.x, fighter.y - 12, 6 + 12 * shield, "#80ccff", 2)
 ```
 
 ### `graphics.draw_sprite`

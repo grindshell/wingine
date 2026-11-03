@@ -58,6 +58,16 @@
 //!
 //! - `graphics.clear(color)` fills the canvas with `color`, discarding anything drawn so far.
 //! - `graphics.fill_rect(x, y, width, height, color)`
+//! - `graphics.outline_rect(x, y, width, height, color, thickness)` draws the rectangle's
+//!   outline, `thickness` wide (1 by default) inside its edges, so it covers the edge of what
+//!   `fill_rect` would fill. Its sides don't overlap, so a translucent outline is even.
+//! - `graphics.draw_line(x1, y1, x2, y2, color, thickness)` draws a line `thickness` wide (1 by
+//!   default) from `x1`, `y1` to `x2`, `y2`, centered on them and ending square at them. A
+//!   line covers the pixels whose middles it covers, so a line 1 wide lights a row of pixels
+//!   when it runs along their middles, such as from 0, 5.5 to 11, 5.5.
+//! - `graphics.fill_circle(x, y, radius, color)` fills a circle of `radius` about `x`, `y`.
+//! - `graphics.outline_circle(x, y, radius, color, thickness)` draws the circle's outline,
+//!   `thickness` wide (1 by default) inside its edge.
 //! - `graphics.draw_sprite(sprite, x, y, tint, width, height)` draws `sprite` with its top-left
 //!   corner at `x`, `y`, its colors multiplied by `tint` (white, unchanged, by default), and
 //!   stretched to `width` by `height` (its own size by default).

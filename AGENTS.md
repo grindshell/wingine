@@ -129,7 +129,10 @@ networking or 3D pipelines.
   and ask it for the frame to draw, so one animation can be shared. Rotated sprites turn about the
   center of their destination, on the CPU as quads are recorded, and transformed sprites and fills
   (`draw_sprite_transformed`, `fill_rect_transformed`) are placed by an `Affine` the same way,
-  which is how scenes draw. All quads go through one
+  which is how scenes draw. Outlines, lines and circles are quads too: an outline four that meet
+  without overlapping, so translucent ones are even, a line one, and a circle a polygon with sides
+  enough for its size on the canvas (`Polygon`), filled as a fan of triangles two to a quad or
+  outlined as a ring of quads. All quads go through one
   textured pipeline; solid fills use a 1x1 white texture,
   and consecutive quads with the same texture are batched into one draw call. Vertices are 20
   bytes, their colors sRGB bytes that the vertex shader converts to linear space, and every quad
@@ -355,7 +358,9 @@ networking or 3D pipelines.
   children turn with them), walks the player, which waddles and mirrors about its feet, stops it
   at nodes tagged `solid`, and shows the `text` of areas tagged `note`. Its trees and flowers are
   instances of `tree.scene.luau` and `flower.scene.luau`, changed by overrides, and Space plants
-  a flower (`add`) or picks one (`remove`). The scene files are in the canonical layout, as an
+  a flower (`add`) or picks one (`remove`). F1 draws a debug view over it (`garden.debug`):
+  outlines of the solid nodes and note areas, the player's feet, and the turning nodes' circles.
+  The scene files are in the canonical layout, as an
   editor would write them, and `tests/garden.rs` checks they stay so: after editing one, write it
   again with `SceneFile::write`. The game's state is the global `garden`.
 - `examples/orchard/`: a rigged character, a picker with a basket on their head who catches
@@ -387,7 +392,8 @@ networking or 3D pipelines.
   frame characters show for the first half of each step. `native-particles/` is a native library,
   a `cdylib` built as `particles`, which `tests/native.rs` builds and loads. `gui.rs` shows egui
   over a game: sprites bouncing about, tuned from a panel that shows a `GuiCanvas` map of them,
-  and the debug window on F3.
+  and the debug window on F3. `shapes.rs` draws each kind of shape: fills, outlines, a line and
+  circles.
 - `README.md`: the project's overview, with a screenshot of each example in `docs/screenshots/`.
   They were taken headlessly at 640x360 (768x432 for `sprites`, so its 256x144 canvas scales
   without bars, 960x720 for `shmup`, twice its canvas, and 1280x720 for the editor, with the
@@ -423,8 +429,8 @@ networking or 3D pipelines.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest, using
   its debug panel, and continuing a saved game in a second simulation sharing the first's save
   folder. Its `simulation()` starts a new game from the title screen.
-- `tests/garden.rs`: tests for the `garden` example, the same way, and that its scene files are
-  in the canonical layout.
+- `tests/garden.rs`: tests for the `garden` example, the same way, its F1 view, and that its scene
+  files are in the canonical layout.
 - `tests/orchard.rs`: tests for the `orchard` example, the same way: its clips, the picker's walk
   easing in and out, catching and missing apples, the reactions, the end of the day and the
   camera's close-up, and that its scene files are in the canonical layout.

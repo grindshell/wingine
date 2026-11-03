@@ -25,6 +25,10 @@ type RotatedSpriteArgs = (
     Option<f32>,
 );
 
+/// The arguments of `graphics.outline_rect` and `graphics.draw_line`: four numbers, the color,
+/// and optionally the thickness.
+type ShapeArgs = (f32, f32, f32, f32, Color, Option<f32>);
+
 /// The table, loading files relative to `folder`, and images through `textures`.
 pub(super) fn module(
     lua: &Lua,
@@ -43,6 +47,38 @@ pub(super) fn module(
         lua.create_function(
             move |_, (x, y, width, height, color): (f32, f32, f32, f32, Color)| {
                 lent.canvas(|canvas| canvas.fill_rect(Rect::new(x, y, width, height), color))
+            },
+        )?
+    })?;
+    graphics.set("outline_rect", {
+        let lent = lent.clone();
+        lua.create_function(
+            move |_, (x, y, width, height, color, thickness): ShapeArgs| {
+                let rect = Rect::new(x, y, width, height);
+                let thickness = thickness.unwrap_or(1.0);
+                lent.canvas(|canvas| canvas.outline_rect(rect, thickness, color))
+            },
+        )?
+    })?;
+    graphics.set("draw_line", {
+        let lent = lent.clone();
+        lua.create_function(move |_, (x1, y1, x2, y2, color, thickness): ShapeArgs| {
+            let thickness = thickness.unwrap_or(1.0);
+            lent.canvas(|canvas| canvas.draw_line([x1, y1], [x2, y2], thickness, color))
+        })?
+    })?;
+    graphics.set("fill_circle", {
+        let lent = lent.clone();
+        lua.create_function(move |_, (x, y, radius, color): (f32, f32, f32, Color)| {
+            lent.canvas(|canvas| canvas.fill_circle([x, y], radius, color))
+        })?
+    })?;
+    graphics.set("outline_circle", {
+        let lent = lent.clone();
+        lua.create_function(
+            move |_, (x, y, radius, color, thickness): (f32, f32, f32, Color, Option<f32>)| {
+                let thickness = thickness.unwrap_or(1.0);
+                lent.canvas(|canvas| canvas.outline_circle([x, y], radius, thickness, color))
             },
         )?
     })?;
