@@ -36,7 +36,8 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **Audio** with [kira](https://github.com/tesselode/kira): sound effects, and music that loops
   and crossfades.
 - **Luau scripting** with [mlua](https://github.com/mlua-rs/mlua): sandboxed scripts, with tasks
-  that `wait` across frames for NPCs, dialogue and events. Whole games can be written in Luau.
+  that `wait` across frames for NPCs, dialogue and events. Whole games can be written in Luau, and
+  trig that gives the same bits on every platform (`exact`) lets them replay inputs anywhere.
 - **Saves**: games keep data between runs, such as the player's progress, as files of plain Luau
   values in a folder of their own.
 - **Headless runs**: games run without a window for tests and for scripted runs that save
@@ -196,8 +197,10 @@ first to 5 points wins.
 
 ![Pong](docs/screenshots/pong.png)
 
-Move your paddle, on the left, with W and S, the arrow keys or the mouse. Press Space or click to
-serve. Hits get faster and blip higher as a rally goes on, and sounds pan to where they happen.
+Move your paddle, on the left, with W and S, the arrow keys, a gamepad or the mouse. Press Space,
+click, or press a gamepad's A to serve. Hits get faster and blip higher as a rally goes on, and
+sounds pan to where they happen. Nothing in it is random, and its ball's angles come from
+[`exact`](docs/api/exact.md), so the same inputs play the same match on every platform.
 
 ### Garden
 

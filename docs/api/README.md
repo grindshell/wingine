@@ -1,6 +1,6 @@
 # API reference
 
-Scripts reach the engine through seven global tables, a few built-in functions, the objects those
+Scripts reach the engine through eight global tables, a few built-in functions, the objects those
 hand out, and the `Ui` a game's `gui` lays its interface out with:
 
 | Page | What it covers |
@@ -13,6 +13,7 @@ hand out, and the `Ui` a game's `gui` lays its interface out with:
 | [`grid`](grid.md) | Characters that walk from tile to tile |
 | [`scene`](scene.md) | Scenes loaded from scene files, and their nodes |
 | [`save`](save.md) | Data kept between runs of the game, such as progress |
+| [`exact`](exact.md) | Math that gives the same bits on every platform, for games that replay |
 | [`gui`](gui.md) | Interfaces over the game, such as debug tools, laid out with egui in the game's `gui` |
 | [`wingine-native`](native.md) | The Rust crate native libraries are written with |
 

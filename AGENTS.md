@@ -172,7 +172,11 @@ networking or 3D pipelines.
 - `src/lua.rs`: `Scripts`, a sandboxed Luau VM for gameplay scripts, and its task scheduler.
   Games register Rust functions (`set_function`), load script files, and start script functions
   as tasks (`spawn`): coroutines that `update` resumes once a frame with the frame's duration.
-  The built-ins `wait`, `wait_until`, `spawn` and `print` are documented at the top of the file.
+  The built-ins `wait`, `wait_until`, `spawn` and `print` are documented at the top of the file,
+  with `exact`, a table of math functions from the `libm` crate, which give the same bits on
+  every platform, unlike `math`'s from the C library (Windows' and Linux's differ). They can't
+  replace `math`'s: Luau calls those as builtins without looking them up, which also makes them
+  about five times quicker, so games call `exact`'s for what must replay and `math`'s for show.
   Scripts compile at Luau's optimization level 2, whose inlining halves calls between Luau
   functions. Its unit tests don't need a GPU.
 - `src/runtime/`: games written entirely in Luau, run from a folder holding `main.luau` and an
@@ -381,7 +385,9 @@ networking or 3D pipelines.
   `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
   `Simulation`, and its events and NPC are scripted in `sprites.luau`. `pong/` is a game written
   entirely in Luau, with its computer opponent in `opponent.luau`, played with the keys, the mouse
-  or a gamepad, whose stick moves the paddle as fast as it's pushed (`input.axis`). The sounds and music in
+  or a gamepad, whose stick moves the paddle as fast as it's pushed (`input.axis`). Nothing in it
+  is random, and its ball's angles come from `exact`, so the same inputs play the same match on
+  every platform. The sounds and music in
   `examples/sounds/` were synthesized for `sprites`; `pong`, `rpg` and `shmup` have copies of
   the ones they use, and `rpg`, `shmup` and `garden` copies of the tileset. `shmup/bullets.png`
   was drawn pixel by pixel for it: pellets, orbs and rice in eight colors, the hitbox, and the
@@ -417,7 +423,8 @@ networking or 3D pipelines.
   typing into a focused field, input egui takes not reaching the game, and the debug key.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders,
   their saves, and in its `gui` module (with the `egui` feature), their interfaces, clicked by
-  label.
+  label. A hash of what `exact` gives for spreads of arguments is pinned, so CI checks it's the
+  same on Windows and Linux.
 - `tests/scene.rs`: tests for scenes loaded to play: finding nodes, transforms, hit testing,
   anchors and stretching, tilemaps, instances and overrides, adding and removing nodes, and
   posing with clips, with files held in memory.
@@ -425,7 +432,9 @@ networking or 3D pipelines.
   `native-particles` with a nested `cargo build` into a target folder of its own and loads it
   from a file.
 - `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
-  expressions such as `pong.ball.vx`, and play it with simulated keys, mouse and gamepad.
+  expressions such as `pong.ball.vx`, and play it with simulated keys, mouse and gamepad. One
+  plays a whole match and checks a hash of it, pinned, so CI checks it's the same to the bit on
+  Windows and Linux; a change to how Pong plays changes the hash.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest, using
   its debug panel, and continuing a saved game in a second simulation sharing the first's save
   folder. Its `simulation()` starts a new game from the title screen.

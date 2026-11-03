@@ -3811,6 +3811,7 @@ dependencies = [
  "image",
  "kira",
  "libloading",
+ "libm",
  "log",
  "mlua",
  "pollster",

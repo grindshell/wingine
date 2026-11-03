@@ -266,6 +266,58 @@ fn the_computer_beats_a_player_who_stands_still() {
     assert_eq!(eval::<String>(&simulation, "pong.winner"), "right");
 }
 
+/// A whole match, with the player's paddle chasing the ball with the keys, plays out the same to
+/// the bit on every platform: the ball's angles come from `exact`, and the rest is arithmetic
+/// that IEEE 754 makes exact. The match is hashed frame by frame, and CI checks the hash on
+/// Windows and Linux.
+#[test]
+fn a_match_plays_out_the_same_on_every_platform() {
+    let mut simulation = simulation();
+    simulation.tap(Key::Space);
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut held = [false, false];
+    let mut frames = 0;
+    while phase(&simulation) != "over" {
+        assert!(frames < 60 * 600, "the match ends");
+        let (ball_y, vx, paddle_y): (f64, f64, f64) =
+            eval(&simulation, "pong.ball.y, pong.ball.vx, pong.left.y");
+        // Chasing the ball as it comes, but lazily, so both sides win points.
+        let center = paddle_y + PADDLE_HEIGHT / 2.0;
+        let chase = [
+            vx < 0.0 && ball_y < center - 10.0,
+            vx < 0.0 && ball_y > center + 10.0,
+        ];
+        for ((key, held), chase) in [Key::Up, Key::Down].into_iter().zip(&mut held).zip(chase) {
+            if chase != *held {
+                if chase {
+                    simulation.key_down(key);
+                } else {
+                    simulation.key_up(key);
+                }
+                *held = chase;
+            }
+        }
+        simulation.step();
+        frames += 1;
+        let state: [f64; 6] = eval::<(f64, f64, f64, f64, f64, f64)>(
+            &simulation,
+            "pong.ball.x, pong.ball.y, pong.ball.vx, pong.ball.vy, pong.left.y, pong.right.y",
+        )
+        .into();
+        for value in state {
+            hash = (hash ^ value.to_bits()).wrapping_mul(0x100_0000_01b3);
+        }
+    }
+    // With `math.cos` and `math.sin`, the match comes out the same here, but not to the bit: the
+    // hash differs between Windows and Linux. A change to how Pong plays changes these: pin
+    // the new ones once CI shows them the same on both.
+    assert_eq!(
+        (frames, score(&simulation), hash),
+        (15452, [5, 2], 0x1049_db71_e255_e7d3),
+        "the match played differently"
+    );
+}
+
 #[test]
 fn music_plays_from_the_start() {
     let mut simulation = simulation();

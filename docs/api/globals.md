@@ -159,6 +159,10 @@ differ from Lua 5.x come up often in games:
 - `math.clamp(x, min, max)`, `math.sign(x)` and `math.round(x)`.
 - Integer division with `//`.
 
+`math.sin`, `math.cos` and their kin come from the C library, which rounds differently on
+different platforms. Games whose state must play out the same everywhere, such as to replay
+inputs, use [`exact`](exact.md)'s instead.
+
 Globals a script defines are seen by every script loaded after it, but see
 [Globals and the sandbox](../project-structure.md#globals-and-the-sandbox) before keeping the
 game's state in a global table.

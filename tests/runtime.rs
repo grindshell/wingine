@@ -518,7 +518,7 @@ fn the_definitions_declare_every_function_of_the_engine() {
         &[(
             "main.luau",
             "local tables = { graphics = graphics, input = input, audio = audio,
-                tilemap = tilemap, grid = grid, scene = scene, save = save }
+                tilemap = tilemap, grid = grid, scene = scene, save = save, exact = exact }
             names = {}
             for table_name, functions in tables do
                 local found = {}
@@ -532,7 +532,7 @@ fn the_definitions_declare_every_function_of_the_engine() {
     );
     let simulation = simulation(&folder);
     let tables = [
-        "graphics", "input", "audio", "tilemap", "grid", "scene", "save",
+        "graphics", "input", "audio", "tilemap", "grid", "scene", "save", "exact",
     ];
     for table in tables {
         let functions: Vec<String> = eval(&simulation, &format!("names.{table}"));
@@ -546,6 +546,55 @@ fn the_definitions_declare_every_function_of_the_engine() {
         let declared = format!("\ndeclare function {built_in}");
         assert!(runtime::DEFINITIONS.contains(&declared), "{built_in}");
     }
+}
+
+/// What `library`, `exact` or `math`, gives for a spread of arguments to each of its functions,
+/// hashed together bit for bit.
+fn math_fingerprint(simulation: &Simulation<LuauGame>, library: &str) -> u64 {
+    let results: Vec<f64> = eval(
+        simulation,
+        &format!(
+            "(function()
+                local m = {library}
+                local results = {{}}
+                for i = -500, 500 do
+                    local x = i * 0.0137 + 0.001
+                    local unit = i / 500.5
+                    local positive = (i + 501) * 0.731
+                    for _, value in {{
+                        m.sin(x), m.cos(x), m.tan(x), m.asin(unit), m.acos(unit), m.atan(x),
+                        m.atan2(x, unit), m.sinh(x), m.cosh(x), m.tanh(x), m.exp(x),
+                        m.log(positive), m.log(positive, 3), m.log(positive, 2),
+                        m.log10(positive), m.pow(positive, x),
+                    }} do
+                        table.insert(results, value)
+                    end
+                end
+                return results
+            end)()"
+        ),
+    );
+    assert_eq!(results.len(), 1001 * 16);
+    // FNV-1a over each result's bits.
+    results.iter().fold(0xcbf2_9ce4_8422_2325, |hash, value| {
+        (hash ^ value.to_bits()).wrapping_mul(0x100_0000_01b3)
+    })
+}
+
+#[test]
+fn exact_math_gives_the_same_bits_on_every_platform() {
+    let folder = game("exact_math", &[("main.luau", "")]);
+    let simulation = simulation(&folder);
+    // CI checks it on Windows and Linux. `math`'s comes out differently on each, from their C
+    // libraries.
+    assert_eq!(
+        math_fingerprint(&simulation, "exact"),
+        0x0c4f_400f_fe58_5058
+    );
+    assert_eq!(
+        eval::<(f64, f64, f64)>(&simulation, "exact.sin(0), exact.cos(0), exact.log(8, 2)"),
+        (0.0, 1.0, 3.0)
+    );
 }
 
 /// The error running the Luau `code` in the game fails with.

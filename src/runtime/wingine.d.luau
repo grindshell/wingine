@@ -549,6 +549,27 @@ declare save: {
     list: () -> { string },
 }
 
+--- Math functions that give the same bits on every platform, unlike `math`'s, which come from the
+--- C library Luau is built with. Each takes what `math`'s function of the same name takes, and
+--- costs about five times as much to call.
+declare exact: {
+    sin: (x: number) -> number,
+    cos: (x: number) -> number,
+    tan: (x: number) -> number,
+    asin: (x: number) -> number,
+    acos: (x: number) -> number,
+    atan: (x: number) -> number,
+    atan2: (y: number, x: number) -> number,
+    sinh: (x: number) -> number,
+    cosh: (x: number) -> number,
+    tanh: (x: number) -> number,
+    exp: (x: number) -> number,
+    --- The natural logarithm of `x`, or with `base`, its logarithm in that base.
+    log: (x: number, base: number?) -> number,
+    log10: (x: number) -> number,
+    pow: (x: number, y: number) -> number,
+}
+
 --- Starts `f(...)` as a task, running it until it first waits or finishes. The engine resumes it
 --- every update from then on.
 declare function spawn<A...>(f: (A...) -> ...any, ...: A...): ()

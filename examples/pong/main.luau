@@ -7,6 +7,11 @@
 -- the field; walls thud and points chime, each panned to where it happened, and music loops in
 -- the background.
 --
+-- Nothing in the game is random, so the same input plays the same match, and the ball's angles
+-- come from `exact.cos` and `exact.sin`, which give the same bits on every platform, unlike
+-- `math`'s, so it plays the same on every platform too. The shake is only for show, so it uses
+-- `math`'s, which are quicker.
+--
 -- Run with `cargo run -- examples/pong`.
 
 local opponent = require("./opponent")
@@ -123,8 +128,8 @@ local function bounce_off(ball: Ball, paddle: Paddle, side: Side)
     local offset = math.clamp((ball.y - paddle_center(paddle)) / reach, -1, 1)
     local angle = offset * MAX_BOUNCE_ANGLE
     local new_speed = math.min(speed(ball) * SPEEDUP, MAX_SPEED)
-    ball.vx = direction(opposite(side)) * math.cos(angle) * new_speed
-    ball.vy = math.sin(angle) * new_speed
+    ball.vx = direction(opposite(side)) * exact.cos(angle) * new_speed
+    ball.vy = exact.sin(angle) * new_speed
     -- In front of the paddle, so it doesn't hit again.
     ball.x = if side == "left"
         then paddle.x + PADDLE_WIDTH + BALL_SIZE / 2
@@ -194,8 +199,8 @@ local function serve()
     pong.ball = {
         x = WIDTH / 2,
         y = HEIGHT / 2,
-        vx = away * math.cos(angle) * SERVE_SPEED,
-        vy = math.sin(angle) * SERVE_SPEED,
+        vx = away * exact.cos(angle) * SERVE_SPEED,
+        vy = exact.sin(angle) * SERVE_SPEED,
     }
     pong.phase = "rally"
     pong.winner = nil

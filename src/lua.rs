@@ -24,6 +24,15 @@
 //!   waits. If it fails, it stops like any other task: the caller carries on, and
 //!   [`Scripts::update`] returns the error.
 //! - `print(...)` logs its arguments at info level, with the target `lua`.
+//! - `exact` is a table of math functions that give the same bits on every platform: `sin`,
+//!   `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `exp`, `log`,
+//!   `log10` and `pow`, taking what `math`'s functions of the same names take. Those of `math`
+//!   come from the C library Luau is built with, which rounds differently on different platforms,
+//!   so a game whose state must play out the same everywhere, such as to replay inputs, uses
+//!   these for it. They're written in Rust (the `libm` crate), and each call costs about five
+//!   times what `math`'s does, which Luau calls without leaving the VM. The rest of Luau's
+//!   arithmetic (`+`, `-`, `*`, `/`, `//`, `math.sqrt`, `math.floor` and the like) is exact under
+//!   IEEE 754 on every platform; `x ^ y` uses the C library's `pow`, and `exact.pow` doesn't.
 //!
 //! Engine types convert to and from Lua values:
 //!
@@ -190,6 +199,7 @@ impl Scripts {
         let globals = lua.globals();
         globals.set("print", lua.create_function(print)?)?;
         globals.set("spawn", lua.create_function(spawn)?)?;
+        globals.set("exact", exact_math(&lua)?)?;
         lua.load(PRELUDE).set_name("=prelude").exec()?;
         lua.sandbox(true)?;
         Ok(Self {
@@ -347,6 +357,51 @@ impl Scripts {
 fn spawned(lua: &mlua::Lua) -> mlua::AppDataRefMut<'_, Spawned> {
     lua.app_data_mut::<Spawned>()
         .expect("set when the VM is created")
+}
+
+/// The `exact` built-in: math functions from `libm`, which give the same bits on every platform.
+///
+/// They can't take the place of `math`'s: Luau calls those by name without looking them up, so a
+/// function put in `math` would only be called where scripts look it up, such as through a local.
+fn exact_math(lua: &mlua::Lua) -> mlua::Result<mlua::Table> {
+    let exact = lua.create_table()?;
+    let functions = [
+        ("sin", libm::sin as fn(f64) -> f64),
+        ("cos", libm::cos),
+        ("tan", libm::tan),
+        ("asin", libm::asin),
+        ("acos", libm::acos),
+        ("atan", libm::atan),
+        ("sinh", libm::sinh),
+        ("cosh", libm::cosh),
+        ("tanh", libm::tanh),
+        ("exp", libm::exp),
+        ("log10", libm::log10),
+    ];
+    for (name, function) in functions {
+        exact.set(name, lua.create_function(move |_, x: f64| Ok(function(x)))?)?;
+    }
+    exact.set(
+        "atan2",
+        lua.create_function(|_, (y, x): (f64, f64)| Ok(libm::atan2(y, x)))?,
+    )?;
+    exact.set(
+        "pow",
+        lua.create_function(|_, (x, y): (f64, f64)| Ok(libm::pow(x, y)))?,
+    )?;
+    // As `math.log` does it, with a base.
+    exact.set(
+        "log",
+        lua.create_function(|_, (x, base): (f64, Option<f64>)| {
+            Ok(match base {
+                None => libm::log(x),
+                Some(2.0) => libm::log2(x),
+                Some(10.0) => libm::log10(x),
+                Some(base) => libm::log(x) / libm::log(base),
+            })
+        })?,
+    )?;
+    Ok(exact)
 }
 
 /// The `print` built-in.
