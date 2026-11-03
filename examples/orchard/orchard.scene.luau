@@ -624,7 +624,7 @@ return {
                 {
                     name = "banner",
                     kind = "rect",
-                    anchor = { 0.5, 0.5 },
+                    anchor = { 0.5, 0.4 },
                     visible = false,
                     width = 200,
                     height = 50,

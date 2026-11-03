@@ -137,9 +137,22 @@ pub(super) fn module(
     graphics.set("set_camera", {
         let lent = lent.clone();
         lua.create_function(
-            move |_, (x, y, bounds): (Option<f32>, Option<f32>, Option<Rect>)| {
+            move |_,
+                  (x, y, bounds, zoom): (
+                Option<f32>,
+                Option<f32>,
+                Option<Rect>,
+                Option<f32>,
+            )| {
+                let zoom = zoom.unwrap_or(1.0);
+                // Not `zoom <= 0.0`, which lets NaN through.
+                if !(zoom > 0.0 && zoom.is_finite()) {
+                    let message = format!("set_camera's zoom must be above 0, not {zoom}");
+                    return Err(mlua::Error::runtime(message));
+                }
                 let camera = match (x, y) {
                     (Some(x), Some(y)) => Some(Camera {
+                        zoom,
                         bounds,
                         ..Camera::new(x, y)
                     }),

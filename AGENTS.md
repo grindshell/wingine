@@ -366,7 +366,9 @@ networking or 3D pipelines.
   once the day is over. Its near arm hangs from `body_front`, a node the clips turn as they turn
   `body`, so it draws in front of the near leg. `orchard.scene.luau` places the picker as an
   instance, and the apples are copies of a hidden node, caught against the bounds of the
-  basket's `mouth` area as it's posed. `orchard.grow(x)` starts an apple growing, and tests turn
+  basket's `mouth` area as it's posed. The orchard draws through a camera (`orchard.camera`) and
+  the HUD over it without one; once the day is over, the camera eases in on the picker to a zoom
+  of 2. `orchard.grow(x)` starts an apple growing, and tests turn
   `orchard.growing` off so only theirs grow. The scene files are in the canonical layout, and
   `tests/orchard.rs` checks they stay so. The game's state is the global `orchard`.
 - `src/math.rs`: geometry types: `Rect`, and `Affine`, a 2D transform that composes with `*`.
@@ -424,8 +426,8 @@ networking or 3D pipelines.
 - `tests/garden.rs`: tests for the `garden` example, the same way, and that its scene files are
   in the canonical layout.
 - `tests/orchard.rs`: tests for the `orchard` example, the same way: its clips, the picker's walk
-  easing in and out, catching and missing apples, the reactions, and the end of the day, and that
-  its scene files are in the canonical layout.
+  easing in and out, catching and missing apples, the reactions, the end of the day and the
+  camera's close-up, and that its scene files are in the canonical layout.
 - `tests/shmup.rs`: tests for the `shmup` example, the same way: the title menu by key and by
   mouse, its HUD's scene, the player, the bullet systems
   through `shmup.bullets`, spell cards, clearing the stage with cheats, the same seed firing the
@@ -447,8 +449,8 @@ networking or 3D pipelines.
 - Drawing coordinates are canvas pixels with the origin at the top-left and `y` pointing down.
   The canvas is the window's size in logical pixels (`Resolution::Window`), or a fixed size scaled
   up by whole numbers with black bars (`Resolution::Fixed`, the choice for pixel art).
-- `Canvas::set_camera` switches drawing to world coordinates; the camera's translation is
-  applied on the CPU as quads are recorded, so switching costs nothing. Draw the world with a
+- `Canvas::set_camera` switches drawing to world coordinates; the camera's translation and zoom
+  are applied on the CPU as quads are recorded, so switching costs nothing. Draw the world with a
   camera, then call `set_camera(None)` and draw the HUD in canvas pixels.
 - Tiles are addressed as `[column, row]` (`[i32; 2]`, so neighbors off the map's edge are
   representable), with the map's top-left corner at the world origin. A `GridMover` occupies its

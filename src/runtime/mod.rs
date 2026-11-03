@@ -75,10 +75,11 @@
 //!   its children, where they are in the scene, first laying the scene out on the canvas, so its
 //!   anchors follow the canvas's edges. Hidden nodes don't draw, nor what's inside them, and
 //!   nothing is drawn where it's off the canvas.
-//! - `graphics.set_camera(x, y, bounds)` centers the view on world position `x`, `y` for whatever
-//!   is drawn next, keeping it inside `bounds`, a rect such as `map:bounds()`, if given.
-//!   `graphics.set_camera(nil)`, the default at the start of each frame, draws in canvas pixels,
-//!   as for a HUD.
+//! - `graphics.set_camera(x, y, bounds, zoom)` centers the view on world position `x`, `y` for
+//!   whatever is drawn next, keeping it inside `bounds`, a rect such as `map:bounds()`, if given,
+//!   and scaling it by `zoom`, canvas pixels a world unit: above 1 zooms in and below 1 out, about
+//!   the view's center. It's 1 by default, and must be above 0. `graphics.set_camera(nil)`, the
+//!   default at the start of each frame, draws in canvas pixels, as for a HUD.
 //! - `graphics.size()` returns the canvas's width and height.
 //! - `graphics.default_font()` returns the built-in pixel font.
 //! - `graphics.color(color)` returns `color`, such as a hex string or a table, as a number

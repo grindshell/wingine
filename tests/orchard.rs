@@ -246,3 +246,43 @@ fn three_apples_on_the_ground_end_the_day() {
     let y = hips(&simulation);
     assert!((-14.0..=-13.5).contains(&y), "standing again, at {y}");
 }
+
+/// Where the camera looks, and its zoom.
+fn camera(simulation: &Simulation<LuauGame>) -> [f32; 3] {
+    let (x, y, zoom) = eval(
+        simulation,
+        "orchard.camera.x, orchard.camera.y, orchard.camera.zoom",
+    );
+    [x, y, zoom]
+}
+
+#[test]
+fn the_camera_closes_in_on_the_picker_at_the_end_of_the_day() {
+    let mut simulation = simulation();
+    let whole = [160.0, 90.0, 1.0];
+    simulation.hold(Key::Left, 0.5);
+    assert_eq!(
+        camera(&simulation),
+        whole,
+        "the whole orchard, while they play"
+    );
+
+    exec(
+        &simulation,
+        "orchard.grow(200) orchard.grow(240) orchard.grow(280)",
+    );
+    run_for(&mut simulation, 3.0);
+    assert!(eval::<bool>(&simulation, "orchard.over_at ~= nil"));
+    let [_, _, zoom] = camera(&simulation);
+    assert!(1.0 < zoom && zoom < 2.0, "easing in: {zoom}");
+    run_for(&mut simulation, 1.0);
+    let (x, y): (f32, f32) = eval(&simulation, "orchard.picker:position()");
+    assert_eq!(camera(&simulation), [x, y - 24.0, 2.0], "on the picker");
+
+    simulation.tap(Key::Space);
+    run_for(&mut simulation, 0.5);
+    let [_, _, zoom] = camera(&simulation);
+    assert!(1.0 < zoom && zoom < 2.0, "easing out: {zoom}");
+    run_for(&mut simulation, 0.5);
+    assert_eq!(camera(&simulation), whole);
+}

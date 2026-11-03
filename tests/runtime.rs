@@ -1742,6 +1742,48 @@ fn the_camera_stays_inside_its_bounds() {
 }
 
 #[test]
+fn the_camera_zooms_about_the_middle_of_the_view() {
+    let folder = game(
+        "camera_zoom",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "zoom = 2
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.set_camera(10, 10, nil, zoom)
+                    graphics.fill_rect(10, 10, 2, 2, '#ff0000')
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    // From the middle, (10, 10), twice the size.
+    assert_eq!(pixel(&image, 10, 10), RED);
+    assert_eq!(pixel(&image, 13, 13), RED);
+    assert_eq!(pixel(&image, 14, 14), BLACK);
+    assert_eq!(pixel(&image, 9, 9), BLACK);
+
+    let scripts = simulation.game().scripts();
+    scripts.load_source("test", "zoom = 0.5").unwrap();
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&image, 10, 10), RED);
+    assert_eq!(pixel(&image, 11, 11), BLACK);
+
+    for zoom in ["0", "-1", "0 / 0", "math.huge"] {
+        let err = error_of(
+            &simulation,
+            &format!("graphics.set_camera(0, 0, nil, {zoom})"),
+        );
+        assert!(err.contains("zoom must be above 0"), "{zoom}: {err}");
+    }
+}
+
+#[test]
 fn games_that_fail_to_load_are_errors() {
     let config = wingine::WindowConfig::default();
     let missing = game("no_main", &[]);

@@ -229,7 +229,7 @@ its joint, and clips of keyframes for standing, walking,
 blinking, catching, missing and giving up. Each frame the game poses the picker with one clip over
 another, weighting the walk by how much they're walking, so they ease between standing and
 walking, and fading the reactions in and out. The orchard places the picker as an instance of
-that file, and their clips pose it there.
+that file, and their clips pose it there. When the day is over, the camera zooms in on the picker.
 
 ### Sprites
 

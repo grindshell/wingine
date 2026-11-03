@@ -413,8 +413,9 @@ declare graphics: {
     --- Draws `node` and every node inside it, laid out on the canvas.
     draw_scene: (node: SceneNode) -> (),
     --- Centers the view on world position `x`, `y` for what's drawn after, kept inside `bounds`,
-    --- or with `nil`, goes back to canvas pixels.
-    set_camera: ((x: number, y: number, bounds: Rect?) -> ()) & ((nothing: nil) -> ()),
+    --- at `zoom` canvas pixels a world unit (1 by default), or with `nil`, goes back to canvas
+    --- pixels.
+    set_camera: ((x: number, y: number, bounds: Rect?, zoom: number?) -> ()) & ((nothing: nil) -> ()),
     --- Returns the canvas's width and height in canvas pixels.
     size: () -> (number, number),
     --- Returns `color` as a number `0xRRGGBBAA`, the fastest way to pass it.

@@ -176,7 +176,7 @@ end
 ### `graphics.set_camera`
 
 ```lua
-graphics.set_camera(x: number, y: number, bounds: Rect?)
+graphics.set_camera(x: number, y: number, bounds: Rect?, zoom: number?)
 graphics.set_camera(nil)
 ```
 
@@ -184,6 +184,12 @@ Centers the view on world position `x`, `y` for everything drawn after this call
 are world positions rather than canvas pixels. With `bounds`, such as a map's
 [`map:bounds()`](tilemap.md#mapbounds), the view stays inside them, so a camera following the
 player stops at the map's edges. Where the view is larger than the bounds, it centers them.
+
+`zoom` scales the view about its center: each world unit takes `zoom` canvas pixels, so at 2 the
+world is drawn twice as large, and the view shows half as much of it each way, and at 0.5 half as
+large. It's 1 by default, and must be above 0. Everything drawn with the camera is scaled, text
+included. Bounds keep the view inside them at whatever zoom it's at, so zooming out until the view
+is larger than the bounds centers them.
 
 `graphics.set_camera(nil)` goes back to drawing in canvas pixels, as for a HUD. Every frame starts
 with no camera.
@@ -201,9 +207,24 @@ function draw()
 end
 ```
 
+A camera that keeps two players in view zooms out as they move apart:
+
+```lua
+-- Zoomed to fit both players with 48 pixels to spare around them, but no further in than 2.
+local width, height = graphics.size()
+local spread_x = math.abs(a.x - b.x) + 96
+local spread_y = math.abs(a.y - b.y) + 96
+local zoom = math.min(2, width / spread_x, height / spread_y)
+graphics.set_camera((a.x + b.x) / 2, (a.y + b.y) / 2, stage_bounds, zoom)
+```
+
 The view moves in whole canvas pixels, so the world doesn't shimmer as the camera moves by
 fractions of a pixel. Shaking the view is a matter of moving the camera by a few pixels for a few
 frames. The camera costs nothing to set, so set it as often as needed.
+
+At whole-number zooms, every texel of pixel art covers the same number of canvas pixels. At other
+zooms some cover one more than others, so pixel art looks uneven while it's there: a camera easing
+between zooms looks best ending on a whole number.
 
 ## The canvas and frames
 

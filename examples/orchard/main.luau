@@ -23,6 +23,10 @@
 -- Apples are copies of a hidden node, and the catching is done against an area in the basket,
 -- `mouth`, whose bounds move as the picker is posed.
 --
+-- The orchard is drawn through a camera, and the HUD over it without one. Once the day is over,
+-- the camera eases in on the picker, ending at a zoom of 2, a whole number, so the pixel art is
+-- even again once it gets there.
+--
 -- Run with `cargo run -- examples/orchard`. The art was drawn pixel by pixel for it. The game's
 -- state is in the global table `orchard`, where tests can see it.
 
@@ -53,6 +57,11 @@ local LIVES = 3
 local FIRST_INTERVAL, LAST_INTERVAL, QUICKER = 2, 0.7, 0.05
 -- The cells of an apple and a bruised one.
 local APPLE, BRUISED = { 5, 0 }, { 6, 0 }
+-- The orchard, which the camera stays inside: the canvas, which the scene is laid out on.
+local ORCHARD = { x = 0, y = 0, width = 320, height = 180 }
+-- How far the camera zooms in on the picker once the day is over, in seconds, and how far above
+-- their feet it looks.
+local CLOSE_UP, CLOSE_UP_TIME, CLOSE_UP_ABOVE = 2, 1, 24
 
 local picker = orchard_scene:find("picker")
 local canopy = orchard_scene:find("canopy"):bounds()
@@ -91,6 +100,10 @@ orchard = {
     reaction_at = 0,
     -- When the day ended, if it has.
     over_at = nil :: number?,
+    -- How far the camera has gone from the whole orchard (0) to its close-up of the picker at the
+    -- end of the day (1), and where it looks and its zoom.
+    close_up = 0,
+    camera = { x = 160, y = 90, zoom = 1 },
     -- Seconds until the next apple, and between apples. Tests turn `growing` off and grow apples
     -- where they like.
     growing = true,
@@ -109,6 +122,14 @@ local hud = {
 local template = orchard_scene:find("templates/apple")
 local apple_nodes = orchard_scene:find("apples")
 local clouds = orchard_scene:find("clouds"):children()
+-- What the camera shows: everything but the HUD.
+local hud_node = orchard_scene:find("hud")
+local world = {}
+for _, node in orchard_scene:children() do
+    if node ~= hud_node then
+        table.insert(world, node)
+    end
+end
 
 -- Starts an apple growing at `x` across the canopy, and `y` down it, or halfway down.
 function orchard.grow(x: number, y: number?): Apple
@@ -304,6 +325,21 @@ local function drift(dt: number)
     end
 end
 
+-- Eases the camera in on the picker once the day is over, and back out to the whole orchard for
+-- the next.
+local function frame(dt: number)
+    local step = if orchard.over_at then dt / CLOSE_UP_TIME else -dt / CLOSE_UP_TIME
+    orchard.close_up = math.clamp(orchard.close_up + step, 0, 1)
+    local t = orchard.close_up
+    local eased = t * t * (3 - 2 * t)
+    local x, y = picker:position()
+    y -= CLOSE_UP_ABOVE
+    local camera = orchard.camera
+    camera.x = 160 + (x - 160) * eased
+    camera.y = 90 + (y - 90) * eased
+    camera.zoom = 1 + (CLOSE_UP - 1) * eased
+end
+
 function update(dt: number)
     orchard.time += dt
     if orchard.over_at and input.pressed("again") then
@@ -313,9 +349,16 @@ function update(dt: number)
     walk(dt)
     pose()
     update_apples(dt)
+    frame(dt)
 end
 
 function draw()
     graphics.clear("#000000")
-    graphics.draw_scene(orchard.scene)
+    local camera = orchard.camera
+    graphics.set_camera(camera.x, camera.y, ORCHARD, camera.zoom)
+    for _, node in world do
+        graphics.draw_scene(node)
+    end
+    graphics.set_camera(nil)
+    graphics.draw_scene(hud_node)
 end
