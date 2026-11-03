@@ -7,7 +7,7 @@ hand out, and the `Ui` a game's `gui` lays its interface out with:
 |---|---|
 | [Built-ins](globals.md) | The game's `update`, `gui` and `draw`, tasks (`spawn`, `wait`, `wait_until`), `print` and `require` |
 | [`graphics`](graphics.md) | Drawing, the camera, sprite sheets, sprites, animations, fonts and text, frame stats |
-| [`input`](input.md) | The keyboard and mouse, and actions bound to keys |
+| [`input`](input.md) | The keyboard, mouse and gamepads, and actions bound to keys and buttons |
 | [`audio`](audio.md) | Sound effects, music and volume |
 | [`tilemap`](tilemap.md) | Tilesets and maps of tiles in layers |
 | [`grid`](grid.md) | Characters that walk from tile to tile |
@@ -51,10 +51,10 @@ time raises an error saying when it works.
 - **Drawing** works only in `draw`: `graphics.clear`, `graphics.fill_rect`, `graphics.draw_sprite`,
   `graphics.draw_sprite_rotated`, `graphics.draw_text`, `graphics.draw_text_layout`,
   `graphics.draw_tilemap`, `graphics.draw_scene` and `graphics.set_camera`.
-- **The keyboard, mouse and sound** work while the game loads (the top level of `main.luau` and
-  the modules it requires), in `update` and the tasks it resumes, and in `gui`: everything in
-  `input`, and everything in `audio` but `audio.load`. So do `graphics.load_sprite_sheet` and
-  `scene.load`.
+- **The keyboard, mouse, gamepads and sound** work while the game loads (the top level of
+  `main.luau` and the modules it requires), in `update` and the tasks it resumes, and in `gui`:
+  everything in `input`, and everything in `audio` but `audio.load`. So do
+  `graphics.load_sprite_sheet` and `scene.load`.
 - **Interfaces** are laid out only in `gui`, with the `Ui` it's passed.
 - **Everything else** works any time: `graphics.size`, `graphics.color`,
   `graphics.default_font`, `graphics.frame_stats`, `graphics.new_animation`, `audio.load`,
@@ -105,6 +105,12 @@ where they are on a US QWERTY keyboard. [Key names](input.md#key-names) lists th
 ### `MouseButton`
 
 One of `"left"`, `"right"`, `"middle"`, `"back"` and `"forward"`, in any case.
+
+### `GamepadButton`
+
+A gamepad button's name, such as `"South"`, `"Start"` or `"DPadUp"`, or a stick's direction, such
+as `"LeftStickLeft"`, in any case. Buttons are named for where they are on the gamepad.
+[Button names](input.md#button-names) lists them.
 
 ### `PlaySettings`
 

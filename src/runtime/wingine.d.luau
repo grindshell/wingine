@@ -24,6 +24,10 @@ type Key = string
 --- `"left"`, `"right"`, `"middle"`, `"back"` or `"forward"`, in any case.
 type MouseButton = string
 
+--- A gamepad button's name, such as `"South"`, `"Start"` or `"DPadUp"`, or a stick's direction,
+--- such as `"LeftStickLeft"`, in any case. Buttons are named for where they are on the gamepad.
+type GamepadButton = string
+
 --- A direction on the grid.
 type Direction = "up" | "down" | "left" | "right"
 
@@ -425,16 +429,23 @@ declare graphics: {
     default_font: () -> Font,
 }
 
---- The keyboard and mouse, and actions bound to keys. Works while the game loads and in `update`.
+--- The keyboard, mouse and gamepads, and actions bound to keys and buttons. Works while the game
+--- loads and in `update`.
 declare input: {
-    --- Binds `action` to `keys`, replacing any keys it was bound to before.
-    bind: (action: string, keys: { Key }) -> (),
-    --- Returns whether any key bound to `action` is down.
+    --- Binds `action` to keys and gamepad buttons, replacing what it was bound to before. With
+    --- `gamepad`, only that gamepad's buttons count; without, any gamepad's do.
+    bind: (action: string, controls: { Key | GamepadButton }, gamepad: number?) -> (),
+    --- Returns whether anything bound to `action` is down.
     held: (action: string) -> boolean,
-    --- Returns whether any key bound to `action` was pressed for this update.
+    --- Returns whether anything bound to `action` was pressed for this update.
     pressed: (action: string) -> boolean,
-    --- Returns whether any key bound to `action` was released for this update.
+    --- Returns whether anything bound to `action` was released for this update.
     released: (action: string) -> boolean,
+    --- Returns how far `action` is pushed, from 0 to 1: 1 while a key bound to it is down, and
+    --- otherwise as far as the furthest of its buttons, such as a trigger or a stick's direction.
+    strength: (action: string) -> number,
+    --- Returns how far `positive` is pushed less how far `negative` is, from -1 to 1.
+    axis: (negative: string, positive: string) -> number,
     --- Returns whether `key` is down.
     key_held: (key: Key) -> boolean,
     --- Returns whether `key` was pressed for this update.
@@ -449,6 +460,19 @@ declare input: {
     mouse_pressed: (button: MouseButton) -> boolean,
     --- Returns whether `button` was released for this update.
     mouse_released: (button: MouseButton) -> boolean,
+    --- Returns the numbers of the gamepads connected, in order. They count from 1, in the order
+    --- gamepads first connect.
+    gamepads: () -> { number },
+    --- Returns the name of gamepad `gamepad`, or `nil` if it's never been connected.
+    gamepad_name: (gamepad: number) -> string?,
+    --- Returns whether `button` is down on `gamepad`, or without it, on any gamepad.
+    button_held: (button: GamepadButton, gamepad: number?) -> boolean,
+    --- Returns whether `button` was pressed for this update on `gamepad`, or on any gamepad.
+    button_pressed: (button: GamepadButton, gamepad: number?) -> boolean,
+    --- Returns whether `button` was released for this update on `gamepad`, or on any gamepad.
+    button_released: (button: GamepadButton, gamepad: number?) -> boolean,
+    --- Returns how far `button` is pushed on `gamepad`, or the furthest on any, from 0 to 1.
+    button_strength: (button: GamepadButton, gamepad: number?) -> number,
 }
 
 --- Sound effects and music, from WAV or OGG Vorbis files. Volumes are linear: 1 is as recorded.

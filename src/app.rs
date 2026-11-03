@@ -17,6 +17,7 @@ use winit::{
 use crate::{
     Context, Error, FrameStats, Result,
     audio::Audio,
+    gamepads::Gamepads,
     graphics::{
         Canvas, Resolution,
         gpu::Gpu,
@@ -117,11 +118,11 @@ pub enum Redraw {
     #[default]
     Continuously,
     /// Only when something may have changed what's shown, as tools want, so they use no power
-    /// while nothing happens: on input, when the window changes, when egui asks (as its
-    /// animations and blinking text cursors do), and when the game asks, with
+    /// while nothing happens: on input from the keyboard and mouse, when the window changes, when
+    /// egui asks (as its animations and blinking text cursors do), and when the game asks, with
     /// [`Context::request_redraw`] and [`Context::request_redraw_after`], or from another thread
-    /// with a [`Waker`]. The first frame after a pause updates by its whole time, a quarter
-    /// second at most.
+    /// with a [`Waker`]. Gamepads don't ask for frames: they're read in the frames that come. The
+    /// first frame after a pause updates by its whole time, a quarter second at most.
     OnDemand,
 }
 
@@ -409,7 +410,12 @@ where
                 }
             }
             // Releases aren't delivered while unfocused, so treat every key and button as released.
-            WindowEvent::Focused(false) => state.ctx.input.release_all(),
+            WindowEvent::Focused(focused) => {
+                state.focused = focused;
+                if !focused {
+                    state.ctx.input.release_all();
+                }
+            }
             // Frames stop while the window is hidden, so they start again here.
             WindowEvent::Occluded(false) => state.window.request_redraw(),
             WindowEvent::RedrawRequested => {
@@ -472,6 +478,10 @@ struct State<G> {
     stats: FrameStats,
     /// Cursor position in physical window pixels, while it is over the window.
     cursor: Option<[f64; 2]>,
+    /// The gamepads, unless the system has none to read.
+    gamepads: Option<Gamepads>,
+    /// Whether the window has the keyboard's focus, and so the gamepads'.
+    focused: bool,
     /// Turns window events into egui's input, and acts on what egui asks of the window.
     #[cfg(feature = "egui")]
     gui_window: egui_winit::State,
@@ -507,6 +517,8 @@ impl<G: Game> State<G> {
         let renderer = Renderer::new(&gpu.device, &gpu.queue, surface.view_format());
         let mut ctx = Context::new(gpu, renderer, Audio::new());
         ctx.saves = Saves::for_window(config);
+        // Before the game is built, so it can see the gamepads already connected.
+        let gamepads = Gamepads::new(&mut ctx.input);
         // Frames that come one after another needn't be asked for.
         if config.redraw == Redraw::OnDemand {
             *lock(&ctx.redraws.proxy) = Some(proxy);
@@ -531,6 +543,7 @@ impl<G: Game> State<G> {
         let game = init(&mut ctx)?;
 
         Ok(Self {
+            focused: window.has_focus(),
             window,
             surface,
             screen,
@@ -542,6 +555,7 @@ impl<G: Game> State<G> {
             last_frame: Instant::now(),
             stats: FrameStats::default(),
             cursor: None,
+            gamepads,
             #[cfg(feature = "egui")]
             gui_window,
         })
@@ -587,6 +601,9 @@ impl<G: Game> State<G> {
             .cursor
             .map(|cursor| self.screen.to_canvas(cursor, output, scale_factor));
         self.ctx.input.set_mouse_position(mouse_position);
+        if let Some(gamepads) = &mut self.gamepads {
+            gamepads.poll(&mut self.ctx.input, self.focused);
+        }
         let canvas_size = self.screen.canvas_size(output, scale_factor);
 
         let now = Instant::now();

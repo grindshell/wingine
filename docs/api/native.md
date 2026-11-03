@@ -363,9 +363,9 @@ functions get it from [`call.context`](#callcontext).
 | Method | What it does |
 |---|---|
 | `fn canvas_size(&self) -> [f32; 2]` | The width and height of the canvas the frame will be drawn on, in canvas pixels. |
-| `fn held(&self, action: &str) -> bool` | Whether any key bound to `action` is held. Games bind actions with `input.bind`. |
-| `fn pressed(&self, action: &str) -> bool` | Whether any key bound to `action` was pressed for this update. |
-| `fn released(&self, action: &str) -> bool` | Whether any key bound to `action` was released for this update. |
+| `fn held(&self, action: &str) -> bool` | Whether anything bound to `action` is held. Games bind actions with `input.bind`. |
+| `fn pressed(&self, action: &str) -> bool` | Whether anything bound to `action` was pressed for this update. |
+| `fn released(&self, action: &str) -> bool` | Whether anything bound to `action` was released for this update. |
 | `fn mouse_position(&self) -> Option<[f32; 2]>` | The cursor's position in canvas pixels, or `None` when it's outside the window. |
 | `fn create_sprite(&mut self, width: u32, height: u32, rgba: &[u8]) -> Result<Sprite>` | Creates a sprite from `width` by `height` pixels: sRGB RGBA bytes, row by row from the top. Fails if `rgba` isn't `width * height * 4` bytes, or the size is empty or too large. |
 

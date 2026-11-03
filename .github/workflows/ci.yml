@@ -18,11 +18,12 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      # cpal, kira's audio output, links against ALSA on Linux.
-      - name: Install ALSA headers
+      # cpal, kira's audio output, links against ALSA on Linux, and gilrs, which reads gamepads,
+      # against libudev.
+      - name: Install ALSA and udev headers
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev
+          sudo apt-get install -y libasound2-dev libudev-dev
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       # The engine builds without egui too.
@@ -58,11 +59,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Runners have no sound device either, so audio falls back to silent output.
-      - name: Install lavapipe and ALSA headers
+      - name: Install lavapipe, and ALSA and udev headers
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers libasound2-dev
+          sudo apt-get install -y mesa-vulkan-drivers libasound2-dev libudev-dev
       # With WINGINE_LUAU_LSP set, the tests that need luau-lsp fail rather than skip without it.
       - name: Install luau-lsp
         shell: bash

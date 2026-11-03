@@ -128,16 +128,26 @@
 //!
 //! `input`, while the game loads and in `update`:
 //!
-//! - `input.bind(action, keys)` binds an action, such as `"jump"`, to a list of keys, such as
-//!   `{ "Space", "W" }`, replacing any it had.
+//! - `input.bind(action, controls, gamepad)` binds an action, such as `"jump"`, to a list of
+//!   keys and gamepad buttons, such as `{ "Space", "W", "South" }`, replacing any it had. A
+//!   gamepad's buttons include its sticks' directions, such as `"LeftStickLeft"`. With
+//!   `gamepad`, a number from 1, only that gamepad's buttons count; without, any gamepad's do.
 //! - `input.held(action)`, `input.pressed(action)` and `input.released(action)` tell whether any
-//!   of the action's keys is held, or was pressed or released this frame.
+//!   of the action's controls is held, or was pressed or released this frame.
+//! - `input.strength(action)` tells how far it's pushed, from 0 to 1: 1 for a key, and for a
+//!   trigger or a stick's direction, how far that is. `input.axis(negative, positive)` is how far
+//!   `positive` is pushed less how far `negative` is, from -1 to 1.
 //! - `input.key_held(key)`, `input.key_pressed(key)` and `input.key_released(key)` do the same for
 //!   a key.
 //! - `input.mouse_position()` returns the cursor's position in canvas pixels, or `nil` when the
 //!   cursor is outside the window.
 //! - `input.mouse_held(button)`, `input.mouse_pressed(button)` and
 //!   `input.mouse_released(button)` do the same for a mouse button.
+//! - `input.gamepads()` returns the connected gamepads' numbers, which count from 1 in the order
+//!   gamepads first connect, and `input.gamepad_name(gamepad)` a gamepad's name.
+//! - `input.button_held(button, gamepad)`, `input.button_pressed(button, gamepad)`,
+//!   `input.button_released(button, gamepad)` and `input.button_strength(button, gamepad)` do
+//!   the same for a gamepad's button, or without `gamepad`, any gamepad's.
 //!
 //! `audio`, while the game loads and in `update`. `audio.load` works anywhere.
 //!

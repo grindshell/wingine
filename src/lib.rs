@@ -4,6 +4,7 @@ mod app;
 pub mod audio;
 mod context;
 mod error;
+mod gamepads;
 pub mod graphics;
 pub mod grid;
 #[cfg(feature = "egui")]

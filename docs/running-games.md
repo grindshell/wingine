@@ -136,10 +136,18 @@ The script has one command per line. `#` starts a comment.
 | `mouse-up Left` | Lets a mouse button go. |
 | `click 120 64` | Moves the cursor, presses the left button, runs one frame, and lets it go. |
 | `click Right` | Clicks another button where the cursor is. |
+| `pad-down 1 South` | Holds gamepad 1's button down. Buttons are named as in [Button names](api/input.md#button-names), in any case, and a stick's direction, such as `LeftStickLeft`, pushes the stick all the way. |
+| `pad-up 1 South` | Lets a gamepad's button go. |
+| `pad-tap 2 Start` | Presses gamepad 2's button, runs one frame, and lets it go. |
+| `pad-hold 1 DPadLeft 1s` | Presses a gamepad's button, runs for a second (or a number of frames), and lets it go. |
+| `stick 1 Left 0.5 -1` | Moves gamepad 1's left stick to `x`, `y`, each from -1 to 1, with `y` down: here, up and a little right. |
 | `resize 640 360` | Resizes the virtual window, in physical pixels. |
 | `screenshot shots/walk.png` | Saves the latest frame as a PNG. |
 | `benchmark 10s` | Runs for 10 seconds (or a number of frames), rendering every frame, and reports how long they took. See below. |
 | `benchmark 600 run.csv` | The same, also saving each frame's stats as CSV. |
+
+Gamepads are numbered from 1, and connect when a command first names them, with any numbered
+before them, since a scripted run has no real gamepads.
 
 Mouse positions are canvas pixels, but screenshots are the size of the window. With a fixed
 resolution, divide a position in a screenshot by the scale, after taking away the black bars, to

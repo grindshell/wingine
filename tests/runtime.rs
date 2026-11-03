@@ -10,7 +10,7 @@ use wingine::{
     Error,
     graphics::Resolution,
     headless::{Image, Simulation},
-    input::Key,
+    input::{GamepadButton, Key, Stick},
     lua::mlua::FromLuaMulti,
     runtime::{self, LibraryConfig, LuauGame},
 };
@@ -416,6 +416,78 @@ fn scripts_require_modules_relative_to_themselves() {
     assert_eq!(eval::<u32>(&simulation, "doubled"), 42);
     simulation.tap(Key::Enter);
     assert!(simulation.context().input().released("confirm"));
+}
+
+#[test]
+fn gamepads_are_read_by_number_and_through_actions() {
+    let folder = game(
+        "gamepads",
+        &[(
+            "main.luau",
+            "input.bind('jump', { 'Space', 'South' })
+            input.bind('p2_jump', { 'South' }, 2)
+            input.bind('left', { 'A', 'LeftStickLeft' })
+            input.bind('right', { 'D', 'LeftStickRight' })
+            input.bind('shield', { 'RightTrigger' })
+            local _, err = pcall(input.bind, 'dodge', { 'Shift' })
+            bind_error = tostring(err)
+            seen = nil
+            function update()
+                seen = {
+                    gamepads = input.gamepads(),
+                    name = input.gamepad_name(1),
+                    unknown = input.gamepad_name(3),
+                    jump = input.pressed('jump'),
+                    p2_jump = input.held('p2_jump'),
+                    axis = input.axis('left', 'right'),
+                    shield = input.strength('shield'),
+                    shield_held = input.held('shield'),
+                    south_on_1 = input.button_pressed('South', 1),
+                    south_on_2 = input.button_held('South', 2),
+                    south_released = input.button_released('South'),
+                    trigger = input.button_strength('rightTrigger'),
+                }
+            end",
+        )],
+    );
+    let mut simulation = simulation(&folder);
+    assert!(
+        eval::<String>(&simulation, "bind_error").contains("unknown key or gamepad button `Shift`")
+    );
+    let one = simulation.connect_gamepad("Left Hand");
+    let two = simulation.connect_gamepad("Right Hand");
+    assert_eq!((one, two), (1, 2));
+
+    simulation.button_down(1, GamepadButton::South);
+    simulation.push_button(1, GamepadButton::RightTrigger, 0.3);
+    simulation.move_stick(1, Stick::Left, -0.55, 0.0);
+    simulation.step();
+    assert_eq!(eval::<Vec<u32>>(&simulation, "seen.gamepads"), [1, 2]);
+    assert_eq!(eval::<String>(&simulation, "seen.name"), "Left Hand");
+    assert!(eval::<Option<String>>(&simulation, "seen.unknown").is_none());
+    assert!(eval::<bool>(&simulation, "seen.jump"));
+    assert!(eval::<bool>(&simulation, "seen.south_on_1"));
+    assert!(
+        !eval::<bool>(&simulation, "seen.p2_jump"),
+        "gamepad 1 isn't 2"
+    );
+    assert!(!eval::<bool>(&simulation, "seen.south_on_2"));
+    let axis: f64 = eval(&simulation, "seen.axis");
+    assert!((axis + 0.5).abs() < 1e-6, "{axis}");
+    assert!((eval::<f64>(&simulation, "seen.shield") - 0.3).abs() < 1e-6);
+    assert!(!eval::<bool>(&simulation, "seen.shield_held"));
+    assert!((eval::<f64>(&simulation, "seen.trigger") - 0.3).abs() < 1e-6);
+
+    simulation.button_down(2, GamepadButton::South);
+    simulation.disconnect_gamepad(1);
+    simulation.step();
+    assert_eq!(eval::<Vec<u32>>(&simulation, "seen.gamepads"), [2]);
+    assert!(eval::<bool>(&simulation, "seen.p2_jump"));
+    assert!(
+        eval::<bool>(&simulation, "seen.south_released"),
+        "disconnecting releases it"
+    );
+    assert_eq!(eval::<f64>(&simulation, "seen.axis"), 0.0);
 }
 
 /// The fields of the table `name` declares in the definitions file, a line each.

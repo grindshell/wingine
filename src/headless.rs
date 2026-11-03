@@ -13,7 +13,7 @@ use crate::{
     app::{Timestep, run_frame},
     audio::Audio,
     graphics::{Canvas, Resolution, gpu::Gpu, renderer::Renderer, screen::Screen},
-    input::{Key, MouseButton},
+    input::{Axis, GamepadButton, Key, MouseButton, Stick},
     save::{Saves, TemporaryFolder},
 };
 
@@ -462,6 +462,75 @@ impl<G: Game> Simulation<G> {
         #[cfg(feature = "egui")]
         self.gui_input.button(button, false);
         self.headless.ctx.input.mouse_up(button);
+    }
+
+    /// Connects a new gamepad called `name`, and returns its number: 1 for the first, and one
+    /// more for each after.
+    pub fn connect_gamepad(&mut self, name: &str) -> u32 {
+        self.wake();
+        let input = &mut self.headless.ctx.input;
+        let number = input
+            .matching_gamepads(None)
+            .count()
+            .try_into()
+            .map_or(u32::MAX, |count: u32| count + 1);
+        input.connect_gamepad(number, name.to_owned());
+        number
+    }
+
+    /// Disconnects gamepad `number`, releasing everything held on it.
+    pub fn disconnect_gamepad(&mut self, gamepad: u32) {
+        self.wake();
+        self.headless.ctx.input.disconnect_gamepad(gamepad);
+    }
+
+    /// Pushes `button` on `gamepad` all the way. A stick's direction, such as
+    /// [`GamepadButton::LeftStickLeft`], pushes the stick that way.
+    pub fn button_down(&mut self, gamepad: u32, button: GamepadButton) {
+        self.push_button(gamepad, button, 1.0);
+    }
+
+    pub fn button_up(&mut self, gamepad: u32, button: GamepadButton) {
+        self.push_button(gamepad, button, 0.0);
+    }
+
+    /// Pushes `button` on `gamepad` `strength` of the way, from 0 to 1, as a trigger can be. It's
+    /// held from halfway, until it falls back below 0.4.
+    pub fn push_button(&mut self, gamepad: u32, button: GamepadButton, strength: f32) {
+        self.wake();
+        self.headless
+            .ctx
+            .input
+            .set_gamepad_button(gamepad, button, strength);
+    }
+
+    /// Pushes `button` on `gamepad`, runs one frame, and releases it, as [`Simulation::tap`]
+    /// does with a key.
+    pub fn tap_button(&mut self, gamepad: u32, button: GamepadButton) {
+        self.button_down(gamepad, button);
+        self.step();
+        self.button_up(gamepad, button);
+    }
+
+    /// Holds `button` on `gamepad` for `seconds` of game time, rounded to whole frames.
+    pub fn hold_button(&mut self, gamepad: u32, button: GamepadButton, seconds: f32) {
+        self.hold_button_frames(gamepad, button, Self::frames_in(seconds));
+    }
+
+    /// Holds `button` on `gamepad` for `frames` frames.
+    pub fn hold_button_frames(&mut self, gamepad: u32, button: GamepadButton, frames: u32) {
+        self.button_down(gamepad, button);
+        self.run_frames(frames);
+        self.button_up(gamepad, button);
+    }
+
+    /// Moves `stick` on `gamepad` to `x`, `y`, each from -1 to 1, with `y` down: `0, 0` is its
+    /// middle and `-1, 0` all the way left. The game sees it from a dead zone around the middle.
+    pub fn move_stick(&mut self, gamepad: u32, stick: Stick, x: f32, y: f32) {
+        self.wake();
+        let input = &mut self.headless.ctx.input;
+        input.set_gamepad_axis(gamepad, stick, Axis::X, x);
+        input.set_gamepad_axis(gamepad, stick, Axis::Y, y);
     }
 
     /// Types `text` into the interface, as into whichever text field has focus. The game's own

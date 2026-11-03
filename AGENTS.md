@@ -7,9 +7,9 @@ of 2D systems, and don't build 3D features unless asked.
 ## Scope
 
 Wingine has what its examples need: tilemaps and batched sprites, sprite animation, a camera,
-input bound to actions, grid movement, text, audio, saves, Luau scripting with tasks, native
-libraries written in Rust, scenes (levels, screens and rigged characters), egui interfaces, and an
-editor built on the engine. Each feature is finished with a game or example that uses it, with tests.
+keyboard, mouse and gamepad input bound to actions, grid movement, text, audio, saves, Luau
+scripting with tasks, native libraries written in Rust, scenes (levels, screens and rigged
+characters), egui interfaces, and an editor built on the engine. Each feature is finished with a game or example that uses it, with tests.
 
 - Scenes are data: files of plain Luau values, with no calls or expressions, so tools write back
   what they read. Behavior stays in games, which find nodes by path, tag or kind and read their
@@ -31,6 +31,7 @@ networking or 3D pipelines.
 | Scripting | `mlua`  | Luau, with the `luau-jit` feature        |
 | Native libraries | `libloading` | Loads them, and never unloads them |
 | Interfaces | `egui` | With `egui-winit` and `egui-wgpu`, behind the default `egui` feature |
+| Gamepads | `gilrs` | Read by the window; simulated without one |
 
 - Rust edition 2024.
 - Licensed under MIT or Apache 2.0, at the user's option (`LICENSE-MIT`, `LICENSE-APACHE`), which
@@ -46,6 +47,10 @@ networking or 3D pipelines.
   `monochrome_emoji_fonts` feature is on, as the editor turns it on.
 - `kira` is built with only the WAV and OGG Vorbis decoders. Its output, `cpal`, links against
   ALSA on Linux, so building there needs `libasound2-dev` (CI installs it).
+- `gilrs` reads gamepads through Windows Gaming Input on Windows, which hears them only while the
+  process has a focused window, and evdev on Linux, through libudev, so building there needs
+  `libudev-dev` too (CI installs it). The engine skips gilrs's filters but the D-pad's and the
+  jitter's, applying its own dead zone, since gilrs's comes only from drivers that report one.
 - Scripts are **Luau**, not standard Lua 5.x. Luau has its own syntax additions (type annotations,
   compound assignment, `continue`, generalized `for ... in t`) and a sandboxed standard library.
 - `mlua` builds Luau from C++ source, so building needs a C++ compiler (MSVC on Windows, `g++` or
@@ -106,9 +111,17 @@ networking or 3D pipelines.
   loops, crossfading when it changes. Without a sound device, and always headless, audio plays
   to a silent mixer that the engine advances by game time each frame, so sounds still start and
   finish on schedule and tests can check them (`sounds_playing`, `music_playing`).
-- `src/input.rs`: `Input` (keyboard and mouse state per frame), `Key` and `MouseButton`. The
-  event loop feeds it winit events, maps the cursor to canvas pixels, and clears per-frame presses
-  and releases after each `update`.
+- `src/input.rs`: `Input` (keyboard, mouse and gamepad state per frame), `Key`, `MouseButton`,
+  `Gamepad`, `GamepadButton` and `Stick`. The event loop feeds it winit events, maps the cursor to
+  canvas pixels, and clears per-frame presses and releases after each `update`. Actions bind to
+  `Control`s, keys and gamepad buttons, of any gamepad or one, and have a strength from 0 to 1,
+  which `axis` makes an axis of two. Gamepads are numbered from 1, keeping their number while
+  disconnected. Their buttons include the sticks' directions (`LeftStickLeft`), pushed as far as
+  the stick is that way through a radial dead zone (`dead_zoned`); every button is held from 0.5
+  of the way and released below 0.4, so a trigger or stick near the line doesn't flicker.
+  `src/gamepads.rs` feeds it from gilrs, polled at the start of each of a window's frames (so a
+  window that redraws on demand reads them only in frames that come anyway), and only while it's
+  focused; a `Simulation` connects and pushes simulated ones.
 - `src/graphics/`: `Gpu` (adapter + device), `WindowSurface` (presents to the window),
   `Renderer` (wgpu pipelines), `Screen` (applies the `Resolution`), and the public drawing API:
   `Canvas` (what games draw to each frame), `Camera`, `Resolution`, `Texture`, `Sprite`,
@@ -142,7 +155,7 @@ networking or 3D pipelines.
   one before, so continuous walking keeps an even pace.
 - `src/headless.rs`: `Headless`, which renders a `Canvas` to an in-memory image without a window,
   and `Simulation`, which runs a whole `Game` without a window: fixed 60 fps frames, simulated
-  keys and mouse, and screenshots on demand. Its frames render only for screenshots, unless
+  keys, mouse and gamepads, and screenshots on demand. Its frames render only for screenshots, unless
   `set_render_every_frame` asks for every frame to render and wait for the GPU, as benchmarks
   want. All of them in a process share one GPU device, and
   only one thread at a time may hold any (a reentrant lease): lavapipe crashes with a device per
@@ -360,7 +373,8 @@ networking or 3D pipelines.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
   `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
   `Simulation`, and its events and NPC are scripted in `sprites.luau`. `pong/` is a game written
-  entirely in Luau, with its computer opponent in `opponent.luau`. The sounds and music in
+  entirely in Luau, with its computer opponent in `opponent.luau`, played with the keys, the mouse
+  or a gamepad, whose stick moves the paddle as fast as it's pushed (`input.axis`). The sounds and music in
   `examples/sounds/` were synthesized for `sprites`; `pong`, `rpg` and `shmup` have copies of
   the ones they use, and `rpg`, `shmup` and `garden` copies of the tileset. `shmup/bullets.png`
   was drawn pixel by pixel for it: pellets, orbs and rice in eight colors, the hitbox, and the
@@ -403,7 +417,7 @@ networking or 3D pipelines.
   `native-particles` with a nested `cargo build` into a target folder of its own and loads it
   from a file.
 - `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
-  expressions such as `pong.ball.vx`.
+  expressions such as `pong.ball.vx`, and play it with simulated keys, mouse and gamepad.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest, using
   its debug panel, and continuing a saved game in a second simulation sharing the first's save
   folder. Its `simulation()` starts a new game from the title screen.

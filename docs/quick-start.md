@@ -10,7 +10,8 @@ You need:
 - A stable [Rust toolchain](https://rustup.rs).
 - A C++ compiler, since the engine builds Luau from source: MSVC on Windows (the "Desktop
   development with C++" workload of Visual Studio or its Build Tools), `g++` or `clang` elsewhere.
-- On Linux, the ALSA headers for audio: `libasound2-dev` on Debian and Ubuntu.
+- On Linux, the ALSA headers for audio and the udev headers for gamepads: `libasound2-dev` and
+  `libudev-dev` on Debian and Ubuntu.
 
 Clone the engine's repository and build it:
 

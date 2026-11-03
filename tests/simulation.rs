@@ -1,12 +1,12 @@
 //! Tests for running games headlessly with simulated input: `Simulation` and scripted runs.
 
-use std::{fs, path::Path};
+use std::{cell::RefCell, fs, path::Path, rc::Rc};
 
 use wingine::{
     Context, Error, FrameStats, Game, Redraw, WindowConfig,
     graphics::{Canvas, Color, Resolution},
     headless::Simulation,
-    input::{Key, MouseButton},
+    input::{GamepadButton, Key, MouseButton},
     math::Rect,
 };
 
@@ -221,6 +221,48 @@ fn a_script_drives_the_game_and_saves_screenshots() {
     let dimensions = |name: &str| image::image_dimensions(directory.join("shots").join(name));
     assert_eq!(dimensions("start.png").unwrap(), (100, 60));
     assert_eq!(dimensions("small.png").unwrap(), (64, 32));
+}
+
+/// What a game sees of the gamepads in an update: those connected, whether gamepad 2's South
+/// was pressed, and how far gamepad 1's left stick is pushed right.
+type PadUpdate = (Vec<u32>, bool, f32);
+
+/// Records what it sees of the gamepads each update, where a test can read it after a scripted
+/// run has ended the game.
+struct PadProbe(Rc<RefCell<Vec<PadUpdate>>>);
+
+impl Game for PadProbe {
+    fn update(&mut self, ctx: &mut Context, _dt: f32) {
+        let input = ctx.input();
+        let connected = input.gamepads().map(|(number, _)| number).collect();
+        let south = input
+            .gamepad(2)
+            .is_some_and(|gamepad| gamepad.pressed(GamepadButton::South));
+        let right = input.gamepad(1).map_or(0.0, |gamepad| {
+            gamepad.strength(GamepadButton::LeftStickRight)
+        });
+        self.0.borrow_mut().push((connected, south, right));
+    }
+
+    fn draw(&mut self, _canvas: &mut Canvas) {}
+}
+
+#[test]
+fn a_script_connects_the_gamepads_it_names() {
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("simulation-gamepads");
+    fs::create_dir_all(&directory).unwrap();
+    let script = directory.join("pads.txt");
+    fs::write(&script, "pad-tap 2 South\nstick 1 left 0.55 0\nwait 1\n").unwrap();
+
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let probe = PadProbe(seen.clone());
+    wingine::script::run(&config(), |_| Ok(probe), &script).unwrap();
+
+    let seen = seen.borrow();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0], (vec![1, 2], true, 0.0));
+    let (_, south, right) = &seen[1];
+    assert!(!south && (right - 0.5).abs() < 1e-6, "{right}");
 }
 
 /// Draws five rectangles a frame, and records the frame stats it sees.

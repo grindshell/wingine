@@ -31,7 +31,8 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **Sprite animation**, such as walk cycles.
 - **Text** in a built-in pixel font, wrapped to a width and revealed a little at a time for
   dialogue.
-- **Input** from the keyboard and mouse, with keys bound to named actions.
+- **Input** from the keyboard, mouse and gamepads, with keys and buttons bound to named actions,
+  and sticks and triggers read as far as they're pushed.
 - **Audio** with [kira](https://github.com/tesselode/kira): sound effects, and music that loops
   and crossfades.
 - **Luau scripting** with [mlua](https://github.com/mlua-rs/mlua): sandboxed scripts, with tasks
@@ -52,8 +53,8 @@ Wingine targets desktops: Windows, macOS and Linux. CI builds and tests it on Wi
 ## Getting started
 
 You need a stable Rust toolchain and a C++ compiler (MSVC on Windows, `g++` or `clang`
-elsewhere), since `mlua` builds Luau from source. On Linux, audio also needs the ALSA headers
-(`libasound2-dev` on Debian and Ubuntu).
+elsewhere), since `mlua` builds Luau from source. On Linux, audio also needs the ALSA headers,
+and gamepads the udev headers (`libasound2-dev` and `libudev-dev` on Debian and Ubuntu).
 
 Clone the repository and play the RPG:
 

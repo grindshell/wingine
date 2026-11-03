@@ -1,6 +1,7 @@
 -- Pong against the computer, written entirely in Luau. Move your paddle, on the left, with W and
--- S or the arrow keys, or with the mouse, and press Space or click to serve. The first to 5
--- points wins.
+-- S or the arrow keys, a gamepad's left stick or D-pad, or the mouse, and press Space, click, or
+-- press a gamepad's A or Start to serve. The stick moves the paddle as fast as it's pushed. The
+-- first to 5 points wins.
 --
 -- The computer's play is in `opponent.luau`. Hits blip, higher as a rally speeds up, and shake
 -- the field; walls thud and points chime, each panned to where it happened, and music loops in
@@ -22,7 +23,7 @@ local PADDLE_WIDTH = 4
 local PADDLE_HEIGHT = 24
 -- The gap between each paddle and its end of the field.
 local PADDLE_MARGIN = 8
--- Pixels per second the player's paddle moves with the keys.
+-- Pixels per second the player's paddle moves with the keys, or a stick pushed all the way.
 local PLAYER_SPEED = 160
 -- Pixels per second the opponent's paddle moves: slower than the player's, to be fair.
 local OPPONENT_SPEED = 110
@@ -135,9 +136,9 @@ local function panned(x: number)
     return { pan = (math.clamp(x / WIDTH, 0, 1) * 2 - 1) * STEREO_WIDTH }
 end
 
-input.bind("up", { "W", "Up" })
-input.bind("down", { "S", "Down" })
-input.bind("serve", { "Space", "Enter" })
+input.bind("up", { "W", "Up", "DPadUp", "LeftStickUp" })
+input.bind("down", { "S", "Down", "DPadDown", "LeftStickDown" })
+input.bind("serve", { "Space", "Enter", "South", "Start" })
 
 local sounds = {
     hit = audio.load("sounds/blip.wav"),
@@ -171,8 +172,8 @@ pong = {
     serve_toward = "right" :: Side,
     -- Serves so far, which picks the angle of the next.
     serves = 0,
-    -- Whether the player's paddle follows the cursor: from when the mouse moves until a key is
-    -- held.
+    -- Whether the player's paddle follows the cursor: from when the mouse moves until a key, the
+    -- D-pad or a stick moves it.
     mouse_control = false,
     -- The cursor's position the frame before, to tell when it moves.
     last_mouse = nil :: { x: number, y: number }?,
@@ -215,15 +216,10 @@ local function point(scorer: Side)
     end
 end
 
--- Moves the player's paddle with the keys, or to the cursor once the mouse moves.
+-- Moves the player's paddle with the keys or a gamepad, or to the cursor once the mouse moves.
 local function move_player(dt: number)
-    local heading = 0
-    if input.held("up") then
-        heading -= 1
-    end
-    if input.held("down") then
-        heading += 1
-    end
+    -- -1 up and 1 down, and with a stick, anywhere between.
+    local heading = input.axis("up", "down")
     local x, y = input.mouse_position()
     local last = pong.last_mouse
     if heading ~= 0 then

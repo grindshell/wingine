@@ -1,4 +1,4 @@
-//! Keyboard and mouse input, queried by key, by mouse button, or by named action.
+//! Keyboard, mouse and gamepad input, queried by key, by button, or by named action.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -9,12 +9,24 @@ use std::{
 
 use winit::keyboard::KeyCode;
 
-/// Keyboard and mouse state for the current frame, available from
+/// How far a button or a stick's direction must be pushed, from 0 to 1, to be held.
+const PRESS: f32 = 0.5;
+/// How far a held button or stick's direction must fall back, from 0 to 1, to be released: below
+/// [`PRESS`], so one resting near the line doesn't flicker between the two.
+const RELEASE: f32 = 0.4;
+/// How far a stick moves from its middle, from 0 to 1, before it counts as pushed at all, since
+/// sticks rarely come to rest exactly in the middle.
+const STICK_DEAD_ZONE: f32 = 0.15;
+/// How far a stick must move from its middle to count as pushed all the way, since many don't
+/// reach their edges, least of all on the diagonals.
+const STICK_FULL: f32 = 0.95;
+
+/// Keyboard, mouse and gamepad state for the current frame, available from
 /// [`Context::input`](crate::Context::input).
 ///
-/// Games usually bind named actions (such as `"confirm"`) to keys with [`Input::bind`] and query
-/// those, so controls can be rebound without touching game code. Keys and mouse buttons can also
-/// be queried directly.
+/// Games usually bind named actions (such as `"confirm"`) to keys and gamepad buttons with
+/// [`Input::bind`] and query those, so controls can be rebound without touching game code. Keys,
+/// mouse buttons and gamepads can also be queried directly.
 ///
 /// A key or button is *pressed* or *released* on the frame its state changed, and *held* while it
 /// is down. One tapped between two frames counts as both pressed and released on the next frame,
@@ -24,7 +36,19 @@ pub struct Input {
     keys: Buttons<Key>,
     mouse_buttons: Buttons<MouseButton>,
     mouse_position: Option<[f32; 2]>,
-    actions: HashMap<String, Vec<Key>>,
+    /// Every gamepad connected since the game started, by number: gamepad 1 is first. Those
+    /// disconnected keep their number, for when they come back.
+    gamepads: Vec<Gamepad>,
+    actions: HashMap<String, Binding>,
+}
+
+/// What an action is bound to.
+#[derive(Debug)]
+struct Binding {
+    keys: Vec<Key>,
+    buttons: Vec<GamepadButton>,
+    /// The gamepad whose buttons count, or `None` for any gamepad's.
+    gamepad: Option<u32>,
 }
 
 impl Input {
@@ -32,10 +56,49 @@ impl Input {
         Self::default()
     }
 
-    /// Binds `action` to `keys`, replacing any keys it was bound to before.
-    pub fn bind(&mut self, action: impl Into<String>, keys: impl IntoIterator<Item = Key>) {
-        self.actions
-            .insert(action.into(), keys.into_iter().collect());
+    /// Binds `action` to `controls`, keys and gamepad buttons, replacing what it was bound to
+    /// before. Its buttons are any gamepad's: [`Input::bind_gamepad`] binds one gamepad's.
+    pub fn bind(
+        &mut self,
+        action: impl Into<String>,
+        controls: impl IntoIterator<Item = impl Into<Control>>,
+    ) {
+        self.bind_to(action.into(), controls.into_iter().map(Into::into), None);
+    }
+
+    /// Binds `action` to `controls`, as [`Input::bind`] does, but only `gamepad`'s buttons count,
+    /// as when each player has a gamepad of their own. Gamepads are numbered from 1.
+    pub fn bind_gamepad(
+        &mut self,
+        action: impl Into<String>,
+        gamepad: u32,
+        controls: impl IntoIterator<Item = impl Into<Control>>,
+    ) {
+        self.bind_to(
+            action.into(),
+            controls.into_iter().map(Into::into),
+            Some(gamepad),
+        );
+    }
+
+    pub(crate) fn bind_to(
+        &mut self,
+        action: String,
+        controls: impl IntoIterator<Item = Control>,
+        gamepad: Option<u32>,
+    ) {
+        let mut binding = Binding {
+            keys: Vec::new(),
+            buttons: Vec::new(),
+            gamepad,
+        };
+        for control in controls {
+            match control {
+                Control::Key(key) => binding.keys.push(key),
+                Control::Button(button) => binding.buttons.push(button),
+            }
+        }
+        self.actions.insert(action, binding);
     }
 
     /// Whether `key` is down.
@@ -53,19 +116,46 @@ impl Input {
         self.keys.released.contains(&key)
     }
 
-    /// Whether any key bound to `action` is down. Unbound actions are never held.
+    /// Whether anything bound to `action` is down. Unbound actions are never held.
     pub fn held(&self, action: &str) -> bool {
-        self.any_key(action, |key| self.key_held(key))
+        self.any_bound(action, Self::key_held, Gamepad::held)
     }
 
-    /// Whether any key bound to `action` went down this frame.
+    /// Whether anything bound to `action` went down this frame.
     pub fn pressed(&self, action: &str) -> bool {
-        self.any_key(action, |key| self.key_pressed(key))
+        self.any_bound(action, Self::key_pressed, Gamepad::pressed)
     }
 
-    /// Whether any key bound to `action` went up this frame.
+    /// Whether anything bound to `action` went up this frame.
     pub fn released(&self, action: &str) -> bool {
-        self.any_key(action, |key| self.key_released(key))
+        self.any_bound(action, Self::key_released, Gamepad::released)
+    }
+
+    /// How far `action` is pushed, from 0 to 1: 1 while one of its keys is held, and otherwise
+    /// the furthest of its buttons is pushed, which for a trigger or a stick's direction can be
+    /// anywhere between. Unbound actions are never pushed.
+    pub fn strength(&self, action: &str) -> f32 {
+        let Some(binding) = self.actions.get(action) else {
+            return 0.0;
+        };
+        if binding.keys.iter().any(|&key| self.key_held(key)) {
+            return 1.0;
+        }
+        self.matching_gamepads(binding.gamepad)
+            .flat_map(|gamepad| {
+                binding
+                    .buttons
+                    .iter()
+                    .map(|&button| gamepad.strength(button))
+            })
+            .fold(0.0, f32::max)
+    }
+
+    /// An axis made of two actions, from -1 to 1: how far `positive` is pushed less how far
+    /// `negative` is. Bound to keys, it's -1, 0 or 1; bound to a stick's two directions, it's
+    /// where the stick is along them.
+    pub fn axis(&self, negative: &str, positive: &str) -> f32 {
+        self.strength(positive) - self.strength(negative)
     }
 
     /// The cursor's position in canvas pixels, or `None` while it is outside the window. With a
@@ -91,10 +181,41 @@ impl Input {
         self.mouse_buttons.released.contains(&button)
     }
 
-    fn any_key(&self, action: &str, test: impl Fn(Key) -> bool) -> bool {
-        self.actions
-            .get(action)
-            .is_some_and(|keys| keys.iter().copied().any(test))
+    /// Gamepad `number`, counting from 1 in the order they were first connected, if it has ever
+    /// been connected. A gamepad keeps its number while it's disconnected, and gets it back when
+    /// it's connected again.
+    pub fn gamepad(&self, number: u32) -> Option<&Gamepad> {
+        let index = usize::try_from(number).ok()?.checked_sub(1)?;
+        self.gamepads.get(index)
+    }
+
+    /// The gamepads connected now, and their numbers, in order.
+    pub fn gamepads(&self) -> impl Iterator<Item = (u32, &Gamepad)> {
+        (1..)
+            .zip(&self.gamepads)
+            .filter(|(_, gamepad)| gamepad.connected)
+    }
+
+    /// Gamepad `number`, or with `None`, every gamepad.
+    pub(crate) fn matching_gamepads(&self, number: Option<u32>) -> impl Iterator<Item = &Gamepad> {
+        (1..)
+            .zip(&self.gamepads)
+            .filter(move |&(n, _)| number.is_none_or(|number| number == n))
+            .map(|(_, gamepad)| gamepad)
+    }
+
+    fn any_bound(
+        &self,
+        action: &str,
+        key: impl Fn(&Self, Key) -> bool,
+        button: impl Fn(&Gamepad, GamepadButton) -> bool,
+    ) -> bool {
+        self.actions.get(action).is_some_and(|binding| {
+            binding.keys.iter().any(|&k| key(self, k))
+                || self
+                    .matching_gamepads(binding.gamepad)
+                    .any(|gamepad| binding.buttons.iter().any(|&b| button(gamepad, b)))
+        })
     }
 
     pub(crate) fn key_down(&mut self, key: Key) {
@@ -117,18 +238,180 @@ impl Input {
         self.mouse_position = position;
     }
 
+    /// Connects gamepad `number`, called `name`: a new one, or one that was disconnected.
+    /// Numbers start at 1.
+    pub(crate) fn connect_gamepad(&mut self, number: u32, name: String) {
+        let Some(index) = (number as usize).checked_sub(1) else {
+            return;
+        };
+        if self.gamepads.len() <= index {
+            self.gamepads.resize_with(index + 1, Gamepad::default);
+        }
+        let gamepad = &mut self.gamepads[index];
+        gamepad.name = name;
+        gamepad.connected = true;
+    }
+
+    /// Disconnects gamepad `number`, releasing everything held on it.
+    pub(crate) fn disconnect_gamepad(&mut self, number: u32) {
+        if let Some(gamepad) = self.gamepad_mut(number) {
+            gamepad.release_all();
+            gamepad.connected = false;
+        }
+    }
+
+    /// Sets how far `button` on gamepad `number` is pushed, from 0 to 1. A stick's direction
+    /// moves the stick, that way or back to the middle.
+    pub(crate) fn set_gamepad_button(&mut self, number: u32, button: GamepadButton, strength: f32) {
+        if let Some(gamepad) = self.gamepad_mut(number) {
+            gamepad.set_button(button, strength);
+        }
+    }
+
+    /// Moves `stick` on gamepad `number` along one axis, `x` or `y` (`y` down), from -1 to 1.
+    pub(crate) fn set_gamepad_axis(&mut self, number: u32, stick: Stick, axis: Axis, value: f32) {
+        if let Some(gamepad) = self.gamepad_mut(number) {
+            gamepad.set_axis(stick, axis, value);
+        }
+    }
+
+    fn gamepad_mut(&mut self, number: u32) -> Option<&mut Gamepad> {
+        let index = usize::try_from(number).ok()?.checked_sub(1)?;
+        self.gamepads.get_mut(index)
+    }
+
     /// Releases every held key and button, for when the window loses focus and stops receiving
     /// input events.
     pub(crate) fn release_all(&mut self) {
         self.keys.release_all();
         self.mouse_buttons.release_all();
+        for gamepad in &mut self.gamepads {
+            gamepad.release_all();
+        }
     }
 
     /// Clears this frame's presses and releases. Call after the game has updated.
     pub(crate) fn end_frame(&mut self) {
         self.keys.end_frame();
         self.mouse_buttons.end_frame();
+        for gamepad in &mut self.gamepads {
+            gamepad.buttons.end_frame();
+        }
     }
+}
+
+/// A gamepad's state, from [`Input::gamepad`].
+///
+/// Its buttons include its sticks' directions, such as [`GamepadButton::LeftStickLeft`], each
+/// pushed as far as the stick is that way, so a stick can be bound to actions as the D-pad is.
+/// Sticks are measured from a dead zone around their middle, inside which they count as at rest,
+/// to a little short of their edge, where they count as pushed all the way. A button or a
+/// direction is held once it's pushed halfway, and released when it falls back below 0.4.
+#[derive(Debug, Default)]
+pub struct Gamepad {
+    name: String,
+    connected: bool,
+    buttons: Buttons<GamepadButton>,
+    /// How far each button is pushed, from 0 to 1, by `GamepadButton as usize`.
+    strengths: [f32; GamepadButton::ALL.len()],
+    /// Where each stick is, `x` and `y` from -1 to 1 (`y` down), before the dead zone, by
+    /// `Stick as usize`.
+    sticks: [[f32; 2]; 2],
+}
+
+impl Gamepad {
+    /// The name its driver gives it, such as `"Xbox Controller"`.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Whether it's connected. A gamepad that isn't has nothing held.
+    pub fn is_connected(&self) -> bool {
+        self.connected
+    }
+
+    /// Whether `button` is down.
+    pub fn held(&self, button: GamepadButton) -> bool {
+        self.buttons.held.contains(&button)
+    }
+
+    /// Whether `button` went down this frame.
+    pub fn pressed(&self, button: GamepadButton) -> bool {
+        self.buttons.pressed.contains(&button)
+    }
+
+    /// Whether `button` went up this frame.
+    pub fn released(&self, button: GamepadButton) -> bool {
+        self.buttons.released.contains(&button)
+    }
+
+    /// How far `button` is pushed, from 0 to 1: a trigger, or a stick's direction, can be
+    /// anywhere between.
+    pub fn strength(&self, button: GamepadButton) -> f32 {
+        self.strengths[button as usize]
+    }
+
+    fn set_button(&mut self, button: GamepadButton, strength: f32) {
+        let strength = strength.clamp(0.0, 1.0);
+        if let Some((stick, axis, sign)) = button.stick_direction() {
+            let value = &mut self.sticks[stick as usize][axis as usize];
+            // Pushing one way moves the stick that way; letting go of a way the stick isn't
+            // pushed leaves it where it is.
+            if strength > 0.0 {
+                *value = sign * strength;
+            } else if *value * sign > 0.0 {
+                *value = 0.0;
+            }
+            self.update_stick(stick);
+            return;
+        }
+        self.strengths[button as usize] = strength;
+        self.update_held(button);
+    }
+
+    fn set_axis(&mut self, stick: Stick, axis: Axis, value: f32) {
+        self.sticks[stick as usize][axis as usize] = value.clamp(-1.0, 1.0);
+        self.update_stick(stick);
+    }
+
+    /// Works out how far `stick` is pushed each way from where it is.
+    fn update_stick(&mut self, stick: Stick) {
+        let [x, y] = dead_zoned(self.sticks[stick as usize]);
+        let [up, down, left, right] = stick.directions();
+        for (button, strength) in [(up, -y), (down, y), (left, -x), (right, x)] {
+            self.strengths[button as usize] = strength.max(0.0);
+            self.update_held(button);
+        }
+    }
+
+    /// Holds or releases `button` by how far it's pushed.
+    fn update_held(&mut self, button: GamepadButton) {
+        let strength = self.strengths[button as usize];
+        if strength >= PRESS {
+            self.buttons.down(button);
+        } else if strength < RELEASE {
+            self.buttons.up(button);
+        }
+    }
+
+    fn release_all(&mut self) {
+        self.buttons.release_all();
+        self.strengths = Default::default();
+        self.sticks = Default::default();
+    }
+}
+
+/// Where a stick at `position` counts as: at rest inside the dead zone around its middle, pushed
+/// all the way near its edge, and in between, as far as it is between the two, in the direction
+/// it's pushed.
+fn dead_zoned([x, y]: [f32; 2]) -> [f32; 2] {
+    let distance = (x * x + y * y).sqrt();
+    if distance <= STICK_DEAD_ZONE {
+        return [0.0, 0.0];
+    }
+    let pushed = ((distance - STICK_DEAD_ZONE) / (STICK_FULL - STICK_DEAD_ZONE)).min(1.0);
+    let scale = pushed / distance;
+    [x * scale, y * scale]
 }
 
 /// Held, pressed and released state for a set of keys or buttons.
@@ -217,7 +500,193 @@ impl FromStr for MouseButton {
     }
 }
 
-/// An unrecognized key or mouse button name.
+/// A gamepad button, or a direction of one of its sticks, named for where it is on the gamepad,
+/// in the layout of an Xbox controller, whatever the gamepad.
+///
+/// The four face buttons are named for the compass: [`South`](Self::South) is the bottom one (A
+/// on an Xbox controller, Cross on a PlayStation's, B on a Nintendo's), [`East`](Self::East) the
+/// right, [`West`](Self::West) the left and [`North`](Self::North) the top.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum GamepadButton {
+    South,
+    East,
+    West,
+    North,
+    /// The bumper above the left trigger (LB, L1).
+    LeftShoulder,
+    /// The bumper above the right trigger (RB, R1).
+    RightShoulder,
+    /// The left trigger (LT, L2), which can be pushed part of the way.
+    LeftTrigger,
+    /// The right trigger (RT, R2), which can be pushed part of the way.
+    RightTrigger,
+    /// The button left of the middle (View, Share, Minus).
+    Select,
+    /// The button right of the middle (Menu, Options, Plus).
+    Start,
+    /// The button in the middle, such as the Xbox or PS button, which the system often takes for
+    /// itself.
+    Guide,
+    /// Pressing the left stick in.
+    LeftThumb,
+    /// Pressing the right stick in.
+    RightThumb,
+    DPadUp,
+    DPadDown,
+    DPadLeft,
+    DPadRight,
+    LeftStickUp,
+    LeftStickDown,
+    LeftStickLeft,
+    LeftStickRight,
+    RightStickUp,
+    RightStickDown,
+    RightStickLeft,
+    RightStickRight,
+}
+
+impl GamepadButton {
+    /// Every button, in order, with its name.
+    const ALL: [(&'static str, Self); 25] = [
+        ("South", Self::South),
+        ("East", Self::East),
+        ("West", Self::West),
+        ("North", Self::North),
+        ("LeftShoulder", Self::LeftShoulder),
+        ("RightShoulder", Self::RightShoulder),
+        ("LeftTrigger", Self::LeftTrigger),
+        ("RightTrigger", Self::RightTrigger),
+        ("Select", Self::Select),
+        ("Start", Self::Start),
+        ("Guide", Self::Guide),
+        ("LeftThumb", Self::LeftThumb),
+        ("RightThumb", Self::RightThumb),
+        ("DPadUp", Self::DPadUp),
+        ("DPadDown", Self::DPadDown),
+        ("DPadLeft", Self::DPadLeft),
+        ("DPadRight", Self::DPadRight),
+        ("LeftStickUp", Self::LeftStickUp),
+        ("LeftStickDown", Self::LeftStickDown),
+        ("LeftStickLeft", Self::LeftStickLeft),
+        ("LeftStickRight", Self::LeftStickRight),
+        ("RightStickUp", Self::RightStickUp),
+        ("RightStickDown", Self::RightStickDown),
+        ("RightStickLeft", Self::RightStickLeft),
+        ("RightStickRight", Self::RightStickRight),
+    ];
+
+    /// The stick and axis this is a direction along, and which way along it (`-1` or `1`), if
+    /// it's a stick's direction.
+    fn stick_direction(self) -> Option<(Stick, Axis, f32)> {
+        Some(match self {
+            Self::LeftStickUp => (Stick::Left, Axis::Y, -1.0),
+            Self::LeftStickDown => (Stick::Left, Axis::Y, 1.0),
+            Self::LeftStickLeft => (Stick::Left, Axis::X, -1.0),
+            Self::LeftStickRight => (Stick::Left, Axis::X, 1.0),
+            Self::RightStickUp => (Stick::Right, Axis::Y, -1.0),
+            Self::RightStickDown => (Stick::Right, Axis::Y, 1.0),
+            Self::RightStickLeft => (Stick::Right, Axis::X, -1.0),
+            Self::RightStickRight => (Stick::Right, Axis::X, 1.0),
+            _ => return None,
+        })
+    }
+}
+
+/// Parses a button's name, as written in [`GamepadButton`] (such as `"South"` or
+/// `"LeftStickUp"`), ignoring case.
+impl FromStr for GamepadButton {
+    type Err = ParseInputError;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|(candidate, _)| name.eq_ignore_ascii_case(candidate))
+            .map(|(_, button)| button)
+            .ok_or_else(|| ParseInputError(format!("unknown gamepad button `{name}`")))
+    }
+}
+
+/// One of a gamepad's two sticks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Stick {
+    Left,
+    Right,
+}
+
+impl Stick {
+    /// Its directions: up, down, left and right.
+    fn directions(self) -> [GamepadButton; 4] {
+        use GamepadButton as B;
+        match self {
+            Self::Left => [
+                B::LeftStickUp,
+                B::LeftStickDown,
+                B::LeftStickLeft,
+                B::LeftStickRight,
+            ],
+            Self::Right => [
+                B::RightStickUp,
+                B::RightStickDown,
+                B::RightStickLeft,
+                B::RightStickRight,
+            ],
+        }
+    }
+}
+
+/// Parses `"left"` or `"right"`, ignoring case.
+impl FromStr for Stick {
+    type Err = ParseInputError;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        [("Left", Self::Left), ("Right", Self::Right)]
+            .into_iter()
+            .find(|(candidate, _)| name.eq_ignore_ascii_case(candidate))
+            .map(|(_, stick)| stick)
+            .ok_or_else(|| ParseInputError(format!("unknown stick `{name}`")))
+    }
+}
+
+/// An axis of a stick: `X` grows to the right and `Y` downward, as canvas pixels do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Axis {
+    X,
+    Y,
+}
+
+/// What an action can be bound to: a key, or a gamepad's button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Control {
+    Key(Key),
+    Button(GamepadButton),
+}
+
+impl From<Key> for Control {
+    fn from(key: Key) -> Self {
+        Self::Key(key)
+    }
+}
+
+impl From<GamepadButton> for Control {
+    fn from(button: GamepadButton) -> Self {
+        Self::Button(button)
+    }
+}
+
+/// Parses a key's name or a gamepad button's, ignoring case. No name is both.
+impl FromStr for Control {
+    type Err = ParseInputError;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        name.parse()
+            .map(Self::Key)
+            .or_else(|_| name.parse().map(Self::Button))
+            .map_err(|_| ParseInputError(format!("unknown key or gamepad button `{name}`")))
+    }
+}
+
+/// An unrecognized key or button name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParseInputError(String);
 
@@ -243,6 +712,10 @@ macro_rules! keys {
         }
 
         impl Key {
+            /// Every key's name.
+            #[cfg(test)]
+            const NAMES: &'static [&'static str] = &[$(stringify!($key),)*];
+
             /// The engine's key for a winit key code, if it has one.
             pub(crate) fn from_winit(code: KeyCode) -> Option<Self> {
                 match code {
@@ -341,15 +814,22 @@ mod tests {
     #[test]
     fn release_all_releases_held_keys_and_buttons() {
         let mut input = Input::new();
+        input.connect_gamepad(1, "Pad".into());
         input.key_down(Key::LeftAlt);
         input.key_down(Key::Tab);
         input.mouse_down(MouseButton::Left);
+        input.set_gamepad_button(1, GamepadButton::South, 1.0);
+        input.set_gamepad_axis(1, Stick::Left, Axis::X, 1.0);
         input.end_frame();
         input.release_all();
         assert!(input.key_released(Key::LeftAlt) && input.key_released(Key::Tab));
         assert!(!input.key_held(Key::LeftAlt) && !input.key_held(Key::Tab));
         assert!(input.mouse_released(MouseButton::Left));
         assert!(!input.mouse_held(MouseButton::Left));
+        let gamepad = input.gamepad(1).unwrap();
+        assert!(gamepad.released(GamepadButton::South) && !gamepad.held(GamepadButton::South));
+        assert!(gamepad.released(GamepadButton::LeftStickRight));
+        assert_eq!(gamepad.strength(GamepadButton::LeftStickRight), 0.0);
     }
 
     #[test]
@@ -388,6 +868,140 @@ mod tests {
     }
 
     #[test]
+    fn gamepads_number_from_one_and_keep_their_number() {
+        let mut input = Input::new();
+        assert!(input.gamepad(0).is_none() && input.gamepad(1).is_none());
+        input.connect_gamepad(1, "First".into());
+        input.connect_gamepad(2, "Second".into());
+        input.set_gamepad_button(1, GamepadButton::East, 1.0);
+        input.end_frame();
+
+        input.disconnect_gamepad(1);
+        let first = input.gamepad(1).unwrap();
+        assert!(!first.is_connected() && first.released(GamepadButton::East));
+        let connected: Vec<u32> = input.gamepads().map(|(number, _)| number).collect();
+        assert_eq!(connected, [2]);
+
+        input.connect_gamepad(1, "First".into());
+        assert_eq!(input.gamepad(1).unwrap().name(), "First");
+        assert_eq!(input.gamepads().count(), 2);
+    }
+
+    #[test]
+    fn actions_follow_bound_buttons_on_any_gamepad_or_one() {
+        let mut input = Input::new();
+        input.connect_gamepad(1, "One".into());
+        input.connect_gamepad(2, "Two".into());
+        input.bind(
+            "jump",
+            [Control::Key(Key::Space), GamepadButton::South.into()],
+        );
+        input.bind_gamepad("p2_jump", 2, [GamepadButton::South]);
+
+        input.set_gamepad_button(1, GamepadButton::South, 1.0);
+        assert!(input.pressed("jump") && input.held("jump"));
+        assert!(!input.held("p2_jump"), "only gamepad 2's buttons count");
+
+        input.set_gamepad_button(2, GamepadButton::South, 1.0);
+        assert!(input.pressed("p2_jump"));
+        input.end_frame();
+        input.set_gamepad_button(2, GamepadButton::South, 0.0);
+        assert!(input.released("p2_jump") && !input.held("p2_jump"));
+        assert!(input.held("jump"), "gamepad 1 still holds it");
+    }
+
+    #[test]
+    fn analog_buttons_hold_past_halfway_and_release_below_less() {
+        let mut input = Input::new();
+        input.connect_gamepad(1, "Pad".into());
+        input.bind("shield", [GamepadButton::RightTrigger]);
+        input.set_gamepad_button(1, GamepadButton::RightTrigger, 0.3);
+        assert!(!input.held("shield"));
+        assert_eq!(input.strength("shield"), 0.3);
+        input.set_gamepad_button(1, GamepadButton::RightTrigger, 0.5);
+        assert!(input.pressed("shield"));
+        input.end_frame();
+        input.set_gamepad_button(1, GamepadButton::RightTrigger, 0.45);
+        assert!(
+            input.held("shield"),
+            "it stays held until it falls below 0.4"
+        );
+        input.set_gamepad_button(1, GamepadButton::RightTrigger, 0.39);
+        assert!(input.released("shield") && !input.held("shield"));
+    }
+
+    #[test]
+    fn sticks_count_from_their_dead_zone_to_near_their_edge() {
+        let mut input = Input::new();
+        input.connect_gamepad(1, "Pad".into());
+        let strength = |input: &Input, button| input.gamepad(1).unwrap().strength(button);
+
+        input.set_gamepad_axis(1, Stick::Left, Axis::X, 0.1);
+        assert_eq!(strength(&input, GamepadButton::LeftStickRight), 0.0);
+        input.set_gamepad_axis(1, Stick::Left, Axis::X, 0.55);
+        assert!((strength(&input, GamepadButton::LeftStickRight) - 0.5).abs() < 1e-6);
+        input.set_gamepad_axis(1, Stick::Left, Axis::X, 0.97);
+        assert_eq!(strength(&input, GamepadButton::LeftStickRight), 1.0);
+        assert_eq!(strength(&input, GamepadButton::LeftStickLeft), 0.0);
+
+        // Up and to the left, as far as it goes: both directions are held, a little over 0.7.
+        input.set_gamepad_axis(1, Stick::Left, Axis::X, -0.7);
+        input.set_gamepad_axis(1, Stick::Left, Axis::Y, -0.7);
+        let gamepad = input.gamepad(1).unwrap();
+        assert!(gamepad.held(GamepadButton::LeftStickUp));
+        assert!(gamepad.held(GamepadButton::LeftStickLeft));
+        assert!(!gamepad.held(GamepadButton::LeftStickRight));
+        let up = gamepad.strength(GamepadButton::LeftStickUp);
+        assert!((up - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6, "{up}");
+    }
+
+    #[test]
+    fn axes_combine_two_actions() {
+        let mut input = Input::new();
+        input.connect_gamepad(1, "Pad".into());
+        input.bind(
+            "left",
+            [Control::Key(Key::A), GamepadButton::LeftStickLeft.into()],
+        );
+        input.bind(
+            "right",
+            [Control::Key(Key::D), GamepadButton::LeftStickRight.into()],
+        );
+        assert_eq!(input.axis("left", "right"), 0.0);
+        input.key_down(Key::A);
+        assert_eq!(input.axis("left", "right"), -1.0);
+        input.key_up(Key::A);
+        input.set_gamepad_axis(1, Stick::Left, Axis::X, 0.55);
+        assert!((input.axis("left", "right") - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stick_directions_push_the_stick() {
+        let mut input = Input::new();
+        input.connect_gamepad(1, "Pad".into());
+        input.set_gamepad_button(1, GamepadButton::RightStickDown, 1.0);
+        let gamepad = input.gamepad(1).unwrap();
+        assert!(gamepad.pressed(GamepadButton::RightStickDown));
+        assert_eq!(gamepad.strength(GamepadButton::RightStickDown), 1.0);
+
+        // Letting go of the other way leaves it pushed down.
+        input.set_gamepad_button(1, GamepadButton::RightStickUp, 0.0);
+        assert!(
+            input
+                .gamepad(1)
+                .unwrap()
+                .held(GamepadButton::RightStickDown)
+        );
+        input.set_gamepad_button(1, GamepadButton::RightStickDown, 0.0);
+        assert!(
+            !input
+                .gamepad(1)
+                .unwrap()
+                .held(GamepadButton::RightStickDown)
+        );
+    }
+
+    #[test]
     fn winit_codes_map_by_position() {
         assert_eq!(Key::from_winit(KeyCode::KeyW), Some(Key::W));
         assert_eq!(Key::from_winit(KeyCode::ArrowLeft), Some(Key::Left));
@@ -402,5 +1016,33 @@ mod tests {
         assert!("Shift".parse::<Key>().is_err());
         assert_eq!("middle".parse(), Ok(MouseButton::Middle));
         assert!("wheel".parse::<MouseButton>().is_err());
+        assert_eq!("south".parse(), Ok(GamepadButton::South));
+        assert_eq!("LEFTSTICKUP".parse(), Ok(GamepadButton::LeftStickUp));
+        assert_eq!("Space".parse(), Ok(Control::Key(Key::Space)));
+        assert_eq!(
+            "dpadleft".parse(),
+            Ok(Control::Button(GamepadButton::DPadLeft))
+        );
+        assert_eq!(
+            "A".parse::<Control>(),
+            Ok(Control::Key(Key::A)),
+            "A is a key, not the Xbox button"
+        );
+        assert_eq!(
+            "Shift".parse::<Control>().unwrap_err().to_string(),
+            "unknown key or gamepad button `Shift`"
+        );
+        assert_eq!("Right".parse(), Ok(Stick::Right));
+    }
+
+    #[test]
+    fn no_name_is_both_a_key_and_a_gamepad_button() {
+        for name in Key::NAMES {
+            assert!(name.parse::<GamepadButton>().is_err(), "{name}");
+        }
+        for (index, (name, button)) in GamepadButton::ALL.into_iter().enumerate() {
+            assert!(name.parse::<Key>().is_err(), "{name}");
+            assert_eq!(button as usize, index, "`ALL` is in order");
+        }
     }
 }

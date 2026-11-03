@@ -22,19 +22,19 @@ impl Context {
         [size.width, size.height]
     }
 
-    /// Whether any of the keys bound to `action` is held.
+    /// Whether any of the keys and gamepad buttons bound to `action` is held.
     pub fn held(&self, action: &str) -> bool {
         // SAFETY: lent for as long as `self` is, and the name is valid for the call.
         unsafe { (host().action_held)(self.raw, abi::Str::new(action)) }
     }
 
-    /// Whether any of the keys bound to `action` was pressed this frame.
+    /// Whether any of the keys and gamepad buttons bound to `action` was pressed this frame.
     pub fn pressed(&self, action: &str) -> bool {
         // SAFETY: lent for as long as `self` is, and the name is valid for the call.
         unsafe { (host().action_pressed)(self.raw, abi::Str::new(action)) }
     }
 
-    /// Whether any of the keys bound to `action` was released this frame.
+    /// Whether any of the keys and gamepad buttons bound to `action` was released this frame.
     pub fn released(&self, action: &str) -> bool {
         // SAFETY: lent for as long as `self` is, and the name is valid for the call.
         unsafe { (host().action_released)(self.raw, abi::Str::new(action)) }

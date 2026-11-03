@@ -3,7 +3,7 @@
 
 use wingine::{
     headless::Simulation,
-    input::{Key, MouseButton},
+    input::{GamepadButton, Key, MouseButton, Stick},
     lua::mlua::FromLuaMulti,
     runtime::{self, LuauGame},
 };
@@ -119,6 +119,32 @@ fn the_keys_move_the_paddle_until_it_reaches_a_wall() {
     simulation.hold(Key::Down, 0.5);
     let y: f64 = eval(&simulation, "pong.left.y");
     assert!((y - PLAYER_SPEED * 0.5).abs() < 1e-3, "at {y}");
+}
+
+#[test]
+fn a_gamepad_moves_the_paddle_as_far_as_its_stick_is_pushed() {
+    let mut simulation = simulation();
+    let gamepad = simulation.connect_gamepad("Gamepad");
+    simulation.move_stick(gamepad, Stick::Left, 0.0, -1.0);
+    simulation.run_for(2.0);
+    assert_eq!(eval::<f64>(&simulation, "pong.left.y"), 0.0);
+
+    // Past the dead zone, halfway to where it counts as pushed all the way: half speed.
+    simulation.move_stick(gamepad, Stick::Left, 0.0, 0.55);
+    simulation.run_for(0.5);
+    let y: f64 = eval(&simulation, "pong.left.y");
+    assert!((y - PLAYER_SPEED * 0.5 * 0.5).abs() < 1e-3, "at {y}");
+
+    simulation.move_stick(gamepad, Stick::Left, 0.0, 0.0);
+    simulation.hold_button(gamepad, GamepadButton::DPadDown, 0.5);
+    let moved = eval::<f64>(&simulation, "pong.left.y") - y;
+    assert!(
+        (moved - PLAYER_SPEED * 0.5).abs() < 1e-3,
+        "the D-pad moves it at full speed"
+    );
+
+    simulation.tap_button(gamepad, GamepadButton::South);
+    assert_eq!(phase(&simulation), "rally");
 }
 
 #[test]

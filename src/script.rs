@@ -19,11 +19,19 @@
 //! mouse-up Left
 //! click 120 64           # move the cursor, press Left, run one frame, release
 //! click Right            # the same with another button, where the cursor already is
+//! pad-down 1 South       # hold gamepad 1's button down (names as in `GamepadButton`)
+//! pad-up 1 South         # let it go
+//! pad-tap 2 Start        # press gamepad 2's button, run one frame, release
+//! pad-hold 1 DPadLeft 1s # press, run for 1 second (or a number of frames), release
+//! stick 1 Left 0.5 -1    # move gamepad 1's left stick to x, y, each from -1 to 1 (y down)
 //! resize 640 360         # resize the virtual window, in physical pixels
 //! screenshot walk.png    # save the latest frame, relative to the script's directory
 //! benchmark 10s          # run 10 seconds, rendering every frame, and report how long they took
 //! benchmark 600 run.csv  # the same, also saving each frame's stats to a CSV file
 //! ```
+//!
+//! Gamepads are numbered from 1, and connect when a command first names them, along with any
+//! numbered before them.
 //!
 //! Each saved screenshot is reported on standard output, as is each benchmark: the mean, median,
 //! 99th percentile and longest of each [`FrameStats`] time, as a window would see them (with
@@ -44,7 +52,7 @@ use std::{
 use crate::{
     Context, Error, FrameStats, Game, Result, WindowConfig,
     headless::Simulation,
-    input::{Key, MouseButton},
+    input::{GamepadButton, Key, MouseButton, Stick},
 };
 
 /// The environment variable naming a script for [`run`](crate::run) to run instead of opening a
@@ -63,6 +71,11 @@ enum Command {
     MouseDown(MouseButton),
     MouseUp(MouseButton),
     Click(MouseButton, Option<[f32; 2]>),
+    PadDown(u32, GamepadButton),
+    PadUp(u32, GamepadButton),
+    PadTap(u32, GamepadButton),
+    PadHold(u32, GamepadButton, u32),
+    Stick(u32, Stick, [f32; 2]),
     Resize(u32, u32),
     Screenshot(PathBuf),
     Benchmark(u32, Option<PathBuf>),
@@ -85,7 +98,19 @@ pub fn run<G: Game>(
     let directory = path.parent().unwrap_or(Path::new("."));
 
     let mut simulation = Simulation::new(config, init)?;
+    // Gamepads connected so far.
+    let mut gamepads = 0;
     for command in commands {
+        if let Command::PadDown(gamepad, _)
+        | Command::PadUp(gamepad, _)
+        | Command::PadTap(gamepad, _)
+        | Command::PadHold(gamepad, ..)
+        | Command::Stick(gamepad, ..) = command
+        {
+            while gamepads < gamepad {
+                gamepads = simulation.connect_gamepad(&format!("Gamepad {}", gamepads + 1));
+            }
+        }
         match command {
             Command::Wait(frames) => simulation.run_frames(frames),
             Command::Press(key) => simulation.key_down(key),
@@ -101,6 +126,13 @@ pub fn run<G: Game>(
                 }
                 simulation.tap_mouse(button);
             }
+            Command::PadDown(gamepad, button) => simulation.button_down(gamepad, button),
+            Command::PadUp(gamepad, button) => simulation.button_up(gamepad, button),
+            Command::PadTap(gamepad, button) => simulation.tap_button(gamepad, button),
+            Command::PadHold(gamepad, button, frames) => {
+                simulation.hold_button_frames(gamepad, button, frames);
+            }
+            Command::Stick(gamepad, stick, [x, y]) => simulation.move_stick(gamepad, stick, x, y),
             Command::Resize(width, height) => simulation.resize(width, height),
             Command::Screenshot(file) => {
                 let file = output_file(directory, &file).map_err(fail)?;
@@ -247,6 +279,15 @@ fn parse_command(name: &str, args: &[&str]) -> Result<Command, String> {
         ("click", [button, x, y]) => {
             Command::Click(by_name(button)?, Some([number(x)?, number(y)?]))
         }
+        ("pad-down", [gamepad, button]) => Command::PadDown(size(gamepad)?, by_name(button)?),
+        ("pad-up", [gamepad, button]) => Command::PadUp(size(gamepad)?, by_name(button)?),
+        ("pad-tap", [gamepad, button]) => Command::PadTap(size(gamepad)?, by_name(button)?),
+        ("pad-hold", [gamepad, button, duration]) => {
+            Command::PadHold(size(gamepad)?, by_name(button)?, frames(duration)?)
+        }
+        ("stick", [gamepad, stick, x, y]) => {
+            Command::Stick(size(gamepad)?, by_name(stick)?, [number(x)?, number(y)?])
+        }
         ("resize", [width, height]) => Command::Resize(size(width)?, size(height)?),
         ("screenshot", [file]) => Command::Screenshot(PathBuf::from(file)),
         ("benchmark", [duration]) => Command::Benchmark(some_frames(duration)?, None),
@@ -255,7 +296,8 @@ fn parse_command(name: &str, args: &[&str]) -> Result<Command, String> {
         }
         (
             "wait" | "press" | "release" | "tap" | "hold" | "mouse" | "mouse-down" | "mouse-up"
-            | "click" | "resize" | "screenshot" | "benchmark",
+            | "click" | "pad-down" | "pad-up" | "pad-tap" | "pad-hold" | "stick" | "resize"
+            | "screenshot" | "benchmark",
             _,
         ) => return Err(format!("wrong arguments for `{name}`")),
         _ => return Err(format!("unknown command `{name}`")),
@@ -329,6 +371,11 @@ mod tests {
             click right
             click 3 4
             click middle 3 4
+            pad-down 1 south
+            pad-up 1 South
+            pad-tap 2 Start
+            pad-hold 1 DPadLeft 0.5s
+            stick 1 left 0.5 -1
             resize 640 360
             screenshot shots/a.png
             benchmark 2s
@@ -350,6 +397,11 @@ mod tests {
                 Command::Click(MouseButton::Right, None),
                 Command::Click(MouseButton::Left, Some([3.0, 4.0])),
                 Command::Click(MouseButton::Middle, Some([3.0, 4.0])),
+                Command::PadDown(1, GamepadButton::South),
+                Command::PadUp(1, GamepadButton::South),
+                Command::PadTap(2, GamepadButton::Start),
+                Command::PadHold(1, GamepadButton::DPadLeft, 30),
+                Command::Stick(1, Stick::Left, [0.5, -1.0]),
                 Command::Resize(640, 360),
                 Command::Screenshot(PathBuf::from("shots/a.png")),
                 Command::Benchmark(120, None),
@@ -386,5 +438,10 @@ mod tests {
         assert!(parse("wait -1s").is_err());
         assert!(parse("benchmark 0").is_err());
         assert!(parse("resize 0 10").is_err());
+        assert!(parse("pad-down 0 South").is_err());
+        assert_eq!(
+            parse("pad-tap 1 A"),
+            Err("line 1: unknown gamepad button `A`".into())
+        );
     }
 }

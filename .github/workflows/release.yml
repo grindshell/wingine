@@ -58,12 +58,13 @@ jobs:
         run: >-
           cargo about generate --locked --fail --target ${{ matrix.target }}
           -m crates/wingine-editor/Cargo.toml -c about.toml -o THIRD-PARTY-NOTICES.txt about.hbs
-      # cpal, kira's audio output, links against ALSA on Linux.
-      - name: Install ALSA headers
+      # cpal, kira's audio output, links against ALSA on Linux, and gilrs, which reads gamepads,
+      # against libudev.
+      - name: Install ALSA and udev headers
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev
+          sudo apt-get install -y libasound2-dev libudev-dev
       - run: cargo build --release --locked -p wingine -p wingine-editor --bins
       - name: Package
         if: runner.os == 'Linux'

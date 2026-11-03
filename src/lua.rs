@@ -130,7 +130,7 @@ use crate::{
     audio::{PlaySettings, Sound},
     graphics::{Animation, Color, Font, Sprite, SpriteSheet, TextLayout},
     grid::{Direction, GridMover},
-    input::{Key, MouseButton},
+    input::{Control, GamepadButton, Key, MouseButton},
     math::Rect,
     scene::{
         AreaNode, Clip, Kind, NodeId, Props, RectNode, Scene, SpriteNode, TextNode, TilemapNode,
@@ -421,6 +421,18 @@ impl FromLua for Key {
 impl FromLua for MouseButton {
     fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
         from_name(&value, "MouseButton")
+    }
+}
+
+impl FromLua for GamepadButton {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        from_name(&value, "GamepadButton")
+    }
+}
+
+impl FromLua for Control {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        from_name(&value, "Control")
     }
 }
 
