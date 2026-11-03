@@ -7,7 +7,10 @@
 //! (those `update` starts, from the next update), and calls `draw()`. With an `update_rate`
 //! setting, the game updates that many times a second instead, each time by the same `dt`, and
 //! each frame runs as many updates as its time holds before it draws. Both functions are
-//! optional. The built-ins `wait`, `wait_until`, `spawn` and `print` work as described in the
+//! optional. When the player presses the window's close button, the engine calls the script's
+//! global `close_requested()`, if it has one, lending it what `update` is lent: the window closes
+//! unless it returns false, as a game does to ask first, and `window.quit` closes it later. The
+//! built-ins `wait`, `wait_until`, `spawn` and `print` work as described in the
 //! [`lua`](crate::lua) module, which also lists how engine types such as colors and keys are
 //! written in Luau.
 //!
@@ -50,7 +53,7 @@
 //! `require("./opponent")`. Files the engine loads, such as sounds and images, are relative to
 //! the game's folder.
 //!
-//! The engine's API is in seven global tables:
+//! The engine's API is in eight global tables:
 //!
 //! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.color`, `graphics.default_font`,
 //! `graphics.frame_stats` and `graphics.new_animation` work anywhere, and
@@ -184,6 +187,12 @@
 //! - `save.remove(name)` removes the save `name`, if there is one.
 //! - `save.list()` returns the names of the game's saves, in order.
 //!
+//! `window`, for the game's window, while the game loads, in `update`, `gui` and
+//! `close_requested`:
+//!
+//! - `window.quit()` closes the window once the frame has drawn, which ends the game. A game that
+//!   saves on the way out writes its save first.
+//!
 //! A game may also define a global `gui(ui)`, which the engine calls once a frame, after the
 //! updates and before `draw`, with a `Ui` covering the window, to lay out an interface over the
 //! game with egui: debug tools, say. The context is lent as in `update`. Widgets that change a
@@ -204,8 +213,9 @@
 //! A `Ui` works only until the function it was passed to returns, and inside a container's
 //! function, only the `Ui` it's passed works. Without the `egui` feature, `gui` isn't called.
 //!
-//! An error while the game loads ends [`run`] with that error. An error in `update`, `gui` or
-//! `draw` stops the game and shows the error in the window. A task that fails stops and logs its
+//! An error while the game loads ends [`run`] with that error. An error in `update`, `gui`,
+//! `draw` or `close_requested` stops the game and shows the error in the window, and a stopped
+//! game's window closes when asked. A task that fails stops and logs its
 //! error, and the other tasks carry on.
 
 mod audio;
@@ -218,6 +228,7 @@ mod native;
 mod save;
 mod scene;
 mod tilemap;
+mod window;
 
 use std::{
     cell::{Cell, RefCell},
@@ -444,6 +455,7 @@ impl LuauGame {
         let scene = scene::module(lua, &lent, folder.to_owned(), textures)?;
         globals.set("scene", scene)?;
         globals.set("save", save::module(lua, ctx.saves())?)?;
+        globals.set("window", window::module(lua, &lent)?)?;
         #[cfg(feature = "egui")]
         gui::register(lua, &lent)?;
         let natives = Natives::load(lua, &lent, ctx, folder, &libraries)?;
@@ -529,6 +541,20 @@ impl Game for LuauGame {
             draw_error(canvas, &self.font, err);
         }
     }
+
+    fn close_requested(&mut self, ctx: &mut Context) -> bool {
+        // A game stopped by an error can't answer, so it closes.
+        if self.error.is_some() {
+            return true;
+        }
+        match self.run_close_requested(ctx) {
+            Ok(close) => close,
+            Err(err) => {
+                self.stop(err);
+                true
+            }
+        }
+    }
 }
 
 impl LuauGame {
@@ -561,6 +587,18 @@ impl LuauGame {
         lent.lend(canvas, || self.callback("draw", ()))?;
         canvas.set_camera(None);
         self.natives.draw(Phase::AFTER, canvas)
+    }
+
+    /// Asks the script's `close_requested` whether the window closes, lending it the context as
+    /// `update` is lent it. Without one, it does; with one, unless it returns false.
+    fn run_close_requested(&mut self, ctx: &mut Context) -> Result<bool> {
+        let globals = self.scripts.lua().globals();
+        if globals.get::<mlua::Value>("close_requested")?.is_nil() {
+            return Ok(true);
+        }
+        let lent = self.lent.clone();
+        let answer: mlua::Value = lent.lend(ctx, || self.scripts.call("close_requested", ()))?;
+        Ok(answer != mlua::Value::Boolean(false))
     }
 }
 

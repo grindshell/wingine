@@ -1,11 +1,11 @@
 # API reference
 
-Scripts reach the engine through eight global tables, a few built-in functions, the objects those
+Scripts reach the engine through nine global tables, a few built-in functions, the objects those
 hand out, and the `Ui` a game's `gui` lays its interface out with:
 
 | Page | What it covers |
 |---|---|
-| [Built-ins](globals.md) | The game's `update`, `gui` and `draw`, tasks (`spawn`, `wait`, `wait_until`), `print` and `require` |
+| [Built-ins](globals.md) | The game's `update`, `gui`, `draw` and `close_requested`, tasks (`spawn`, `wait`, `wait_until`), `print` and `require` |
 | [`graphics`](graphics.md) | Drawing, the camera, sprite sheets, sprites, animations, fonts and text, frame stats |
 | [`input`](input.md) | The keyboard, mouse and gamepads, and actions bound to keys and buttons |
 | [`audio`](audio.md) | Sound effects, music and volume |
@@ -14,6 +14,7 @@ hand out, and the `Ui` a game's `gui` lays its interface out with:
 | [`scene`](scene.md) | Scenes loaded from scene files, and their nodes |
 | [`save`](save.md) | Data kept between runs of the game, such as progress |
 | [`exact`](exact.md) | Math that gives the same bits on every platform, for games that replay |
+| [`window`](window.md) | Quitting the game, and asking before its window closes |
 | [`gui`](gui.md) | Interfaces over the game, such as debug tools, laid out with egui in the game's `gui` |
 | [`wingine-native`](native.md) | The Rust crate native libraries are written with |
 
@@ -57,7 +58,8 @@ time raises an error saying when it works.
 - **The keyboard, mouse, gamepads and sound** work while the game loads (the top level of
   `main.luau` and the modules it requires), in `update` and the tasks it resumes, and in `gui`:
   everything in `input`, and everything in `audio` but `audio.load`. So do
-  `graphics.load_sprite_sheet` and `scene.load`.
+  `graphics.load_sprite_sheet`, `scene.load` and `window.quit`, and all of them work in
+  `close_requested` too.
 - **Interfaces** are laid out only in `gui`, with the `Ui` it's passed.
 - **Everything else** works any time: `graphics.size`, `graphics.color`,
   `graphics.default_font`, `graphics.frame_stats`, `graphics.new_animation`, `audio.load`,

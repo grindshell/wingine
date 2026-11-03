@@ -4,8 +4,8 @@
 -- `tests/runtime.rs` checks it declares every function the engine's tables hold, and
 -- `src/runtime/gui.rs` every method of `Ui`.
 --
--- A game's own `update`, `draw` and `gui` aren't declared, since the game defines them. Write
--- `function gui(ui: Ui)`, so luau-lsp knows what `ui` is.
+-- A game's own `update`, `draw`, `gui` and `close_requested` aren't declared, since the game
+-- defines them. Write `function gui(ui: Ui)`, so luau-lsp knows what `ui` is.
 
 --- A color: a hex string such as `"#f2c14e"` or `"#00000080"`, a table of components from 0 to 1
 --- (`a` is 1 if left out), or a number `0xRRGGBBAA`, which passes fastest.
@@ -547,6 +547,12 @@ declare save: {
     remove: (name: string) -> (),
     --- Returns the names of the game's saves, in order.
     list: () -> { string },
+}
+
+--- The game's window. Works while the game loads, in `update`, `gui` and `close_requested`.
+declare window: {
+    --- Closes the window once the frame has drawn, which ends the game.
+    quit: () -> (),
 }
 
 --- Math functions that give the same bits on every platform, unlike `math`'s, which come from the

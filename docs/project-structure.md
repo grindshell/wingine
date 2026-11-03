@@ -41,7 +41,9 @@ interface:
 4. **`draw()` runs every frame**, after the frame's updates, to draw the game as it now is.
 
 `update`, `gui` and `draw` are global functions the script defines. All are optional: a game that
-only draws needs no `update`, and most games need no `gui`.
+only draws needs no `update`, and most games need no `gui`. A game that wants to ask before its
+window closes defines a fifth, [`close_requested`](api/globals.md#close_requested), which the
+engine calls when the player presses the close button.
 
 ```lua
 local player = require("./player")
@@ -97,11 +99,13 @@ another time raises an error saying so:
 | Loading sprite sheets: `graphics.load_sprite_sheet` | ✓ | ✓ | ✓ | |
 | The keyboard, mouse and gamepads: `input` | ✓ | ✓ | ✓ | |
 | Playing sound and music: `audio` (apart from `audio.load`) | ✓ | ✓ | ✓ | |
+| Quitting: `window.quit` | ✓ | ✓ | ✓ | |
 | `graphics.size` | ✓ | ✓ | ✓ | ✓ |
 | Everything else: `audio.load`, `tilemap`, `grid`, `save`, fonts, animations, `graphics.color`, `graphics.frame_stats` | ✓ | ✓ | ✓ | ✓ |
 
 So read input and change the game's state in `update`, and only draw in `draw`. By the time `gui`
 runs, the frame's updates have seen its key presses, so `input.pressed` is false there.
+`close_requested`, which runs between frames, can use what `update` can.
 
 ### Tasks
 

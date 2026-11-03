@@ -184,7 +184,9 @@ networking or 3D pipelines.
   save folder, and the native libraries to load, any of them optional (skipped if there's no such
   library, but an error if it's there and fails to load). `LuauGame`
   is the `Game` that runs one, and the engine's API for it is the global tables `graphics`,
-  `input`, `audio`, `tilemap`, `grid`, `scene` and `save`, one file each. The module docs are the
+  `input`, `audio`, `tilemap`, `grid`, `scene`, `save` and `window`, one file each. The close
+  button asks the game's global `close_requested`, lent the context as `update` is, and closes
+  unless it returns false; a game stopped by an error always closes. The module docs are the
   reference for script authors; the engine types those tables hand out (sprites, animations,
   tilemaps, grid movers, text layouts, scene nodes) are userdata, documented with their methods in
   `src/lua.rs`. Sprite sheets and scenes share one cache of images (`Textures`), so each is read

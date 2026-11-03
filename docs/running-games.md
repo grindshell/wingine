@@ -32,8 +32,9 @@ To ship a game, build the executable with `cargo build --release`, which leaves 
 folder. Start it with the folder's path, such as from a shortcut or a small launch script. Build
 the executable, and any native libraries, on each platform the game runs on.
 
-The window closes, and the game ends, when the player closes it. Scripts can't close it
-themselves.
+The window closes, and the game ends, when the player closes it, unless the game's
+[`close_requested`](api/globals.md#close_requested) asks first, or when a script calls
+[`window.quit`](api/window.md#windowquit).
 
 ## Errors and output
 

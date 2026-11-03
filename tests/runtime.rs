@@ -395,6 +395,88 @@ fn input_and_audio_do_not_work_in_draw() {
 }
 
 #[test]
+fn scripts_quit_the_game() {
+    let folder = game(
+        "quitting",
+        &[(
+            "main.luau",
+            "input.bind('quit', { 'Escape' })
+            function update()
+                if input.pressed('quit') then
+                    window.quit()
+                end
+            end",
+        )],
+    );
+    let mut quitting = simulation(&folder);
+    quitting.step();
+    assert!(!quitting.has_quit());
+    quitting.tap(Key::Escape);
+    assert!(quitting.has_quit());
+
+    // The window closes after the frame has drawn, so quitting while drawing would be too late.
+    let folder = game(
+        "quitting_in_draw",
+        &[("main.luau", "function draw() window.quit() end")],
+    );
+    let mut drawing = simulation(&folder);
+    drawing.step();
+    let err = stopped_with(&drawing);
+    assert!(err.contains("not in `draw`"), "{err}");
+    assert!(!drawing.has_quit());
+}
+
+#[test]
+fn close_requested_decides_whether_the_window_closes() {
+    let folder = game("closing_unasked", &[("main.luau", "")]);
+    assert!(simulation(&folder).request_close(), "without asking");
+
+    let folder = game(
+        "closing_asked",
+        &[(
+            "main.luau",
+            "asked = 0
+            willing = false
+            input.bind('yes', { 'Y' })
+            function close_requested()
+                asked += 1
+                -- What's lent to `update` is lent here too.
+                input.held('yes')
+                if willing then
+                    return nil
+                end
+                return false
+            end
+            function update()
+                if asked > 0 and input.pressed('yes') then
+                    window.quit()
+                end
+            end",
+        )],
+    );
+    let mut asking = simulation(&folder);
+    assert!(!asking.request_close(), "false keeps it open");
+    assert_eq!(eval::<u32>(&asking, "asked"), 1);
+    asking.step();
+    assert!(!asking.has_quit());
+    asking.tap(Key::Y);
+    assert!(asking.has_quit(), "the game closes it once answered");
+    eval::<()>(&asking, "(function() willing = true end)()");
+    assert!(asking.request_close(), "anything but false closes it");
+
+    // A game that can't answer can't keep its window open.
+    let folder = game(
+        "closing_failing",
+        &[("main.luau", "function close_requested() error('no') end")],
+    );
+    let mut failing = simulation(&folder);
+    assert!(failing.request_close());
+    let err = stopped_with(&failing);
+    assert!(err.contains("main.luau:1: no"), "{err}");
+    assert!(failing.request_close(), "nor once it has stopped");
+}
+
+#[test]
 fn scripts_require_modules_relative_to_themselves() {
     let folder = game(
         "modules",
@@ -518,7 +600,8 @@ fn the_definitions_declare_every_function_of_the_engine() {
         &[(
             "main.luau",
             "local tables = { graphics = graphics, input = input, audio = audio,
-                tilemap = tilemap, grid = grid, scene = scene, save = save, exact = exact }
+                tilemap = tilemap, grid = grid, scene = scene, save = save, exact = exact,
+                window = window }
             names = {}
             for table_name, functions in tables do
                 local found = {}
@@ -532,7 +615,7 @@ fn the_definitions_declare_every_function_of_the_engine() {
     );
     let simulation = simulation(&folder);
     let tables = [
-        "graphics", "input", "audio", "tilemap", "grid", "scene", "save", "exact",
+        "graphics", "input", "audio", "tilemap", "grid", "scene", "save", "exact", "window",
     ];
     for table in tables {
         let functions: Vec<String> = eval(&simulation, &format!("names.{table}"));

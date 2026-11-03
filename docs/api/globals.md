@@ -38,7 +38,19 @@ Defined by the game, and called by the engine once a frame, after the frame's up
 the game. The canvas starts each frame cleared to black, with no camera set. Drawing functions
 work only here. Optional.
 
-An error in any of these functions stops the game and shows the error in the window.
+### `close_requested`
+
+```lua
+function close_requested(): boolean?
+```
+
+Defined by the game, and called by the engine when the player presses the window's close button.
+The window closes unless it returns `false`, as a game does to ask the player first, then calling
+[`window.quit`](window.md#windowquit) once they've answered. What works in `update` works here too.
+Optional: without it, the close button closes the window.
+
+An error in any of these functions stops the game and shows the error in the window. A stopped
+game's window closes when asked.
 
 ## Tasks
 
