@@ -5,7 +5,10 @@ use bytemuck::{Pod, Zeroable};
 use super::{
     Camera, Color, Font, Sprite, TextLayout, Texture, camera::Transform, font::PlacedGlyph,
 };
-use crate::math::{Affine, Rect};
+use crate::{
+    FrameStats,
+    math::{Affine, Rect},
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -37,6 +40,9 @@ pub struct Canvas {
     width: f32,
     height: f32,
     transform: Transform,
+    /// The stats of the frame before, as the context has them, for Luau games, which are lent the
+    /// canvas and not the context while they draw.
+    pub(crate) frame_stats: FrameStats,
 }
 
 impl Canvas {
@@ -48,6 +54,7 @@ impl Canvas {
             width: 0.0,
             height: 0.0,
             transform: Transform::IDENTITY,
+            frame_stats: FrameStats::default(),
         }
     }
 

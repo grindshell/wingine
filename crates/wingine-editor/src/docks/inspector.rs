@@ -59,6 +59,8 @@ pub struct Inspector {
 struct Marks {
     fields: BTreeSet<String>,
     props: BTreeSet<String>,
+    /// The props of the node as its scene has it, which an override changes but can't remove.
+    scene_props: BTreeSet<String>,
     reverted: Vec<String>,
     reverted_props: Vec<String>,
     keying: Option<Keying>,
@@ -366,6 +368,7 @@ impl Inspector {
                 Some(Value::Map(props)) => props.keys().cloned().collect(),
                 _ => BTreeSet::new(),
             },
+            scene_props: placed.node.props.keys().cloned().collect(),
             ..Marks::default()
         };
         let mut after = before.clone();
@@ -658,19 +661,26 @@ fn changed_override(
         Some(Value::Map(props)) => props.clone(),
         _ => BTreeMap::new(),
     };
-    let (base_props, before_props) = (props(&base), props(&before));
+    let (base_props, before_props, after_props) = (props(&base), props(&before), props(&after));
     let mut changed_props = match change.remove("props") {
         Some(Value::Map(props)) => props,
         _ => BTreeMap::new(),
     };
-    for (key, value) in props(&after) {
-        if before_props.get(&key) == Some(&value) {
+    for (key, value) in &after_props {
+        if before_props.get(key) == Some(value) {
             continue;
         }
-        if base_props.get(&key) == Some(&value) {
-            changed_props.remove(&key);
+        if base_props.get(key) == Some(value) {
+            changed_props.remove(key);
         } else {
-            changed_props.insert(key, value);
+            changed_props.insert(key.clone(), value.clone());
+        }
+    }
+    // A prop removed leaves the override: one only it adds goes, and one the scene has goes back
+    // to the scene's.
+    for key in before_props.keys() {
+        if !after_props.contains_key(key) {
+            changed_props.remove(key);
         }
     }
     for key in &over.reverted {
@@ -927,7 +937,11 @@ fn map_entries(
                 }
             }
             value_editor(ui, id.with(key), value);
-            if ui.small_button("🗑").on_hover_text("Remove").clicked() {
+            // An instance's override can't remove a prop its scene has.
+            let removable = !over
+                .as_deref()
+                .is_some_and(|over| over.scene_props.contains(key));
+            if removable && ui.small_button("🗑").on_hover_text("Remove").clicked() {
                 removed = Some(key.clone());
             }
             ui.end_row();
@@ -1140,5 +1154,18 @@ mod tests {
             )]
             .into()
         );
+    }
+
+    #[test]
+    fn props_removed_leave_the_override() {
+        let base = flower();
+        let props = Value::Map([("petals".to_owned(), Value::Number(5.0))].into());
+        let change: BTreeMap<String, Value> = [("props".to_owned(), props)].into();
+        let mut before = base.clone();
+        before.props.insert("petals".into(), Value::Number(5.0));
+        let mut after = before.clone();
+        after.props.remove("petals");
+        let changed = changed_override(&change, &base, &before, &after, &Marks::default());
+        assert!(changed.is_empty(), "{changed:?}");
     }
 }

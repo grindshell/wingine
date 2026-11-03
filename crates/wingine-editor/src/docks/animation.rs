@@ -272,8 +272,9 @@ impl Animation {
                 self.playing = false;
             }
             ui.label("of");
-            number(ui, "duration", &mut duration, shortest..=3600.0)
-                .on_hover_text("How long the clip lasts: no shorter than its last key");
+            let lengthened = number(ui, "duration", &mut duration, shortest..=3600.0)
+                .on_hover_text("How long the clip lasts: no shorter than its last key")
+                .changed();
             ui.toggle_value(&mut looping, "Loop")
                 .on_hover_text("Whether it starts over after its end");
             ui.separator();
@@ -287,7 +288,11 @@ impl Animation {
             )
             .on_hover_text("The step times snap to");
 
-            let duration = clips::tidy_time(duration);
+            // A length typed or dragged is written as times are, though no shorter than the last
+            // key; one only shown stays as the file has it.
+            if lengthened {
+                duration = clips::tidy_time(duration).max(shortest);
+            }
             if (duration, looping) != was
                 && let Some(clip) = document.edit().clips.get_mut(&name)
             {

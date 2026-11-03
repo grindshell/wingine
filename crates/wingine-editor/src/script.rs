@@ -101,6 +101,7 @@ fn read(path: &Path) -> io::Result<(String, bool)> {
     Ok((text.replace("\r\n", "\n"), crlf))
 }
 
-fn modified(path: &Path) -> Option<SystemTime> {
+/// When the file at `path` was last changed, if it can be told.
+pub(crate) fn modified(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|meta| meta.modified()).ok()
 }

@@ -71,7 +71,7 @@ pub(crate) struct Gui {
     pub debug_key: Option<Key>,
     overlay: Overlay,
     /// Whether the game lays out an interface of its own, until [`Game::gui`]'s default says it
-    /// doesn't.
+    /// doesn't, or a Luau game has no global `gui`, which it may define later.
     pub game_has_gui: bool,
     /// Whether the last pass had nothing to show, so passes can stop until there's something.
     idle: bool,

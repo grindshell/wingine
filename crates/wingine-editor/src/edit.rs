@@ -141,11 +141,28 @@ pub fn add(file: &mut SceneFile, parent: &[usize], mut node: NodeDef) -> Result<
     Ok(path)
 }
 
-/// Removes the node at `path` and the nodes inside it, and returns it.
+/// Removes the node at `path` and the nodes inside it, with the tracks of clips that pose them,
+/// and returns it.
 pub fn remove(file: &mut SceneFile, path: &[usize]) -> Option<NodeDef> {
+    let names = name_path(file, path)?;
+    let node = take(file, path)?;
+    for clip in file.clips.values_mut() {
+        clip.tracks.retain(|track| !is_within(&track.node, &names));
+    }
+    Some(node)
+}
+
+/// Takes the node at `path` out of the file, leaving clips as they are.
+fn take(file: &mut SceneFile, path: &[usize]) -> Option<NodeDef> {
     let (&index, parent) = path.split_last()?;
     let siblings = children_mut(file, parent)?;
     (index < siblings.len()).then(|| siblings.remove(index))
+}
+
+/// Whether `node`, a path of names, is the node at `names` or one inside it.
+fn is_within(node: &str, names: &str) -> bool {
+    node.strip_prefix(names)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
 /// Puts a copy of the node at `path` right after it, named apart from its siblings, and returns
@@ -219,7 +236,7 @@ pub fn move_node(
         index
     };
 
-    let mut node = remove(file, from).expect("the node is there");
+    let mut node = take(file, from).expect("the node is there");
     let siblings = children_mut(file, &parent).expect("the parent is still there");
     if !same_parent {
         node.name = unique_name(siblings, &node.name);
@@ -236,12 +253,8 @@ pub fn move_node(
 fn retarget_clips(file: &mut SceneFile, old: &str, new: &str) {
     for clip in file.clips.values_mut() {
         for track in &mut clip.tracks {
-            if track.node == old {
-                track.node = new.to_owned();
-            } else if let Some(rest) = track.node.strip_prefix(old)
-                && rest.starts_with('/')
-            {
-                track.node = format!("{new}{rest}");
+            if is_within(&track.node, old) {
+                track.node = format!("{new}{}", &track.node[old.len()..]);
             }
         }
     }
@@ -607,6 +620,18 @@ mod tests {
         assert_eq!(removed.name, "b");
         assert_eq!(names(&file, &[0]), ["c", "b2"]);
         assert!(remove(&mut file, &[5]).is_none());
+    }
+
+    #[test]
+    fn removing_takes_the_tracks_of_what_it_removes() {
+        let mut file = file();
+        // `ab` isn't inside `a`, though its name starts the same way.
+        file.clips.get_mut("wave").unwrap().tracks[1].node = "ab".into();
+        file.children[1].name = "ab".into();
+        remove(&mut file, &[0]);
+        assert_eq!(tracks(&file), ["ab"]);
+        remove(&mut file, &[0]);
+        assert!(tracks(&file).is_empty());
     }
 
     #[test]

@@ -155,6 +155,30 @@ fn scripts_see_the_stats_of_the_frame_before() {
 }
 
 #[test]
+fn frames_without_updates_draw_with_the_stats_of_the_frame_before() {
+    let folder = game(
+        "frame_stats_between_updates",
+        &[
+            // Half as many updates as frames, so every other frame has none.
+            ("conf.luau", "return { update_rate = 30 }"),
+            (
+                "main.luau",
+                "seen = {}
+                function draw()
+                    table.insert(seen, graphics.frame_stats().quads)
+                    for _ = 1, #seen do
+                        graphics.fill_rect(0, 0, 1, 1, '#ffffff')
+                    end
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.run_frames(4);
+    assert_eq!(eval::<Vec<u32>>(&simulation, "seen"), [0, 1, 2, 3]);
+}
+
+#[test]
 fn unknown_or_invalid_settings_are_errors() {
     let folder = game(
         "misspelled_setting",
@@ -2039,6 +2063,35 @@ mod gui {
             eval::<Option<String>>(&simulation, "submitted").as_deref(),
             Some("Ada")
         );
+    }
+
+    #[test]
+    fn a_gui_defined_while_playing_is_laid_out() {
+        let folder = game(
+            "gui_later",
+            &[
+                ("conf.luau", WINDOW),
+                (
+                    "main.luau",
+                    "function update(dt: number)
+                        if input.key_pressed('G') then
+                            function gui(ui: Ui)
+                                ui:window('Later', function(ui)
+                                    ui:label('Defined later')
+                                end)
+                            end
+                        end
+                    end",
+                ),
+            ],
+        );
+        let mut simulation = simulation(&folder);
+        // Long enough for frames to stop running an interface the game has none of.
+        simulation.run_frames(5);
+        simulation.tap(Key::G);
+        simulation.run_frames(3);
+        assert!(simulation.game().error().is_none());
+        assert!(simulation.gui_rect("Defined later").is_some());
     }
 
     #[test]

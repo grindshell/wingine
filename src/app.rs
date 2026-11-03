@@ -262,6 +262,7 @@ pub(crate) fn run_frame(
     #[cfg(feature = "egui")]
     crate::gui::run_pass(ctx, game);
     canvas.begin(canvas_size[0], canvas_size[1]);
+    canvas.frame_stats = ctx.frame_stats;
     game.draw(canvas);
     FrameStats {
         update,

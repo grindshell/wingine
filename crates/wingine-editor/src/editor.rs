@@ -27,7 +27,7 @@ use crate::{
         scene_tree::{self, Addable, SceneTree},
         tiles::{Palette, Target, Tiles},
     },
-    document::Document,
+    document::{Document, Reloaded},
     edit::{self, NodePath},
     play::Play,
     project::{AssetCache, Project, Watcher},
@@ -58,11 +58,13 @@ pub enum BottomTab {
 }
 
 /// What's waiting for an answer about unsaved changes before it closes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Closing {
     Tab(usize),
     Script(usize),
     Window,
+    /// The game open, for the game in this folder.
+    Project(PathBuf),
 }
 
 pub struct Editor {
@@ -142,7 +144,17 @@ impl Editor {
         editor
     }
 
-    /// Opens the game in `folder`, closing the one open now, if any.
+    /// Opens the game in `folder`, as the Open dialog does: asking first what to do about unsaved
+    /// changes to the game open now, if it has any.
+    pub fn open_folder(&mut self, folder: PathBuf) {
+        if self.has_unsaved_changes() {
+            self.closing = Some(Closing::Project(folder));
+        } else if let Err(err) = self.open_project(folder) {
+            self.output.push(Level::Error, err);
+        }
+    }
+
+    /// Opens the game in `folder`, closing the one open now, if any, unsaved changes and all.
     pub fn open_project(&mut self, folder: impl Into<PathBuf>) -> Result<(), String> {
         let project = Project::open(folder)?;
         self.stop();
@@ -256,6 +268,11 @@ impl Editor {
 
     pub fn is_playing(&self) -> bool {
         self.play.is_some()
+    }
+
+    /// Whether any open scene or script has changes that aren't saved.
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.documents.iter().any(Document::is_dirty) || self.scripts.is_dirty()
     }
 
     /// Plays games with `runner` instead of the editor's own executable, with `env` set: as tests
@@ -688,17 +705,15 @@ impl Editor {
         });
         if let Some(folder) = open {
             self.opening = None;
-            if let Err(err) = self.open_project(folder) {
-                self.output.push(Level::Error, err);
-            }
+            self.open_folder(folder);
         } else if cancel {
             self.opening = None;
         }
     }
 
-    /// Asks what to do about unsaved changes, for a tab or the window closing.
+    /// Asks what to do about unsaved changes, for a tab, the window or the game closing.
     fn closing_dialog(&mut self, ui: &mut egui::Ui, ctx: &mut Context) {
-        let Some(closing) = self.closing else {
+        let Some(closing) = self.closing.clone() else {
             return;
         };
         let names: Vec<String> = match closing {
@@ -715,7 +730,7 @@ impl Editor {
                 .map(|script| script.name().to_owned())
                 .into_iter()
                 .collect(),
-            Closing::Window => {
+            Closing::Window | Closing::Project(_) => {
                 let scenes = self.documents.iter().filter(|doc| doc.is_dirty());
                 let scripts = self.scripts.scripts().iter().filter(|s| s.is_dirty());
                 scenes
@@ -744,28 +759,40 @@ impl Editor {
             return;
         };
         self.closing = None;
+        // What fails to save stays open, changes and all, and Output says why.
+        if save && !self.save_closing(&closing) {
+            return;
+        }
         match closing {
-            Closing::Tab(i) => {
-                if save {
-                    let current = self.current;
-                    self.current = i;
-                    self.save();
-                    self.current = current;
+            Closing::Tab(i) => self.close_tab(i, true),
+            Closing::Script(i) => self.close_script(i, true),
+            Closing::Window => ctx.quit(),
+            Closing::Project(folder) => {
+                if let Err(err) = self.open_project(folder) {
+                    self.output.push(Level::Error, err);
                 }
-                self.close_tab(i, true);
+            }
+        }
+    }
+
+    /// Saves what `closing` closes, and tells whether all of it saved.
+    fn save_closing(&mut self, closing: &Closing) -> bool {
+        match *closing {
+            Closing::Tab(i) => {
+                let current = self.current;
+                self.current = i;
+                self.save();
+                self.current = current;
+                !self.documents.get(i).is_some_and(Document::is_dirty)
             }
             Closing::Script(i) => {
-                if save {
-                    let (level, message) = self.scripts.save(i);
-                    self.output.push(level, message);
-                }
-                self.close_script(i, true);
+                let (level, message) = self.scripts.save(i);
+                self.output.push(level, message);
+                !self.scripts.scripts().get(i).is_some_and(|s| s.is_dirty())
             }
-            Closing::Window => {
-                if save {
-                    self.save_all();
-                }
-                ctx.quit();
+            Closing::Window | Closing::Project(_) => {
+                self.save_all();
+                !self.has_unsaved_changes()
             }
         }
     }
@@ -816,10 +843,8 @@ impl Editor {
                     ui.add_space(12.0);
                     ui.label("Or one of the examples:");
                     for (name, folder, _) in games {
-                        if ui.button(format!("🎮 {name}")).clicked()
-                            && let Err(err) = self.open_project(folder)
-                        {
-                            self.output.push(Level::Error, err);
+                        if ui.button(format!("🎮 {name}")).clicked() {
+                            self.open_folder(folder);
                         }
                     }
                 }
@@ -946,8 +971,27 @@ impl Game for Editor {
             && let Some(project) = &mut self.project
         {
             project.rescan();
-            // Images and files the scenes use may have changed, and scripts.
+            // The scenes themselves may have changed, images and files they use, and scripts.
             for document in &mut self.documents {
+                let reloaded = document.reload_if_changed(&project.folder);
+                let path = &document.path;
+                match reloaded {
+                    Some(Reloaded::Read) => self.output.push(
+                        Level::Info,
+                        format!("Read {path} again: it changed on disk."),
+                    ),
+                    Some(Reloaded::Kept) => self.output.push(
+                        Level::Warning,
+                        format!(
+                            "{path} changed on disk, but has unsaved changes here: saving it \
+                             will replace the file."
+                        ),
+                    ),
+                    Some(Reloaded::Failed(err)) => self
+                        .output
+                        .push(Level::Warning, format!("Couldn't read {path} again: {err}")),
+                    None => {}
+                }
                 document.rebuild();
             }
             self.scripts.rescan();
@@ -1211,7 +1255,7 @@ impl Game for Editor {
     }
 
     fn close_requested(&mut self, _ctx: &mut Context) -> bool {
-        if self.documents.iter().any(Document::is_dirty) || self.scripts.is_dirty() {
+        if self.has_unsaved_changes() {
             self.closing = Some(Closing::Window);
             return false;
         }

@@ -114,7 +114,8 @@ shrinks with its parent.
   it, an instance. Right-click a node for the same, and more.
 - **Rename** a node by double-clicking it or pressing F2, then typing a name and pressing Enter.
   Escape keeps the old name. Clips' tracks follow a node that's renamed or moved.
-- **Duplicate** a node with Ctrl+D, and **delete** it with Delete.
+- **Duplicate** a node with Ctrl+D, and **delete** it with Delete, which takes out the tracks of
+  clips that pose it or nodes inside it.
 - **Drag** a node onto another to move it inside it, onto the top edge of one to move it before it,
   or onto the bottom edge to move it after it. **Move Up** and **Move Down**, in its menu, change
   its place among its siblings: later nodes draw over earlier ones.
@@ -153,7 +154,8 @@ one to see it in the Inspector as the instance makes it, and change it there: th
 the instance's `overrides`, as the scene file names them, and leave the scene it places alone.
 Fields the overrides change are marked in blue, each with **⟲** to put it back as the scene has it,
 and **Revert All** puts back every field. Changing a field back to the scene's value takes it out
-of the overrides too.
+of the overrides too. Props the overrides add can be removed, but those the scene has can only be
+changed, since overrides change props one by one.
 
 ## Animating rigs
 
@@ -261,7 +263,8 @@ editor turns that warning off, and a `.luaurc` can too, with `"FunctionUnused": 
 - **Ctrl+Z** undoes a change and **Ctrl+Y** (or Ctrl+Shift+Z) redoes it. A drag, or typing in a
   field, is one change.
 - **Ctrl+S** saves the open scene, or in the Script screen, the script shown. A tab shows `*` while
-  its scene has unsaved changes, and closing it or the editor asks first.
+  its scene has unsaved changes, and closing it, the editor or the game asks first. What fails to
+  save stays open, and Output says why.
 - **F5**, or **Play**, saves every scene and script and plays the game in a window of its own, as
   `cargo run -- path/to/game` would. What it prints shows in Output. **F8**, or **Stop**, ends it.
 
@@ -270,7 +273,8 @@ The editor writes scene files in the canonical layout, as
 the layout has no comments: saving a scene written by hand drops its comments.
 
 The editor looks at the game's folder every second, and reads what's changed elsewhere, such as an
-image or a script with no unsaved changes, without opening it again.
+image, or a scene or script with no unsaved changes, without opening it again. A scene with unsaved
+changes is left as it is, and Output says its file changed.
 
 The editor draws only when something changes: when it's used, when a clip plays, when the game
 it's playing prints something, or when luau-lsp has something to say. While nothing happens, it

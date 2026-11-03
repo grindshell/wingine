@@ -1,7 +1,7 @@
 //! A scene file open in the editor: the file as it's being edited, its history for undo, what's
 //! selected, and the scene it makes, to show.
 
-use std::{mem, path::Path};
+use std::{mem, path::Path, time::SystemTime};
 
 use wingine::{
     Context,
@@ -12,6 +12,7 @@ use crate::{
     clips,
     edit::{self, NodePath},
     project::AssetCache,
+    script::modified,
 };
 
 /// How many changes undo goes back through.
@@ -24,6 +25,8 @@ pub struct Document {
     file: SceneFile,
     /// The file as it is on disk.
     saved: SceneFile,
+    /// When its file was changed, as of the last time it was read or saved.
+    modified: Option<SystemTime>,
     /// The file before each change, oldest first.
     undo: Vec<SceneFile>,
     /// The file after each change undone, latest undone last.
@@ -56,6 +59,17 @@ pub struct Document {
     pub pose_error: Option<String>,
 }
 
+/// What became of a scene whose file changed on disk.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Reloaded {
+    /// It was read again.
+    Read,
+    /// It has changes of its own, so it wasn't.
+    Kept,
+    /// Its file couldn't be read, so it wasn't, and why.
+    Failed(String),
+}
+
 /// A clip open in the Animation panel, and when in it its playhead is.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Timeline {
@@ -76,14 +90,20 @@ pub struct View {
 impl Document {
     /// Opens the scene file at `path` in the game's `folder`.
     pub fn open(folder: &Path, path: &str) -> wingine::Result<Self> {
-        let file = SceneFile::read(folder.join(path))?;
-        Ok(Self::new(path, file))
+        let at = folder.join(path);
+        let modified = modified(&at);
+        let file = SceneFile::read(at)?;
+        Ok(Self {
+            modified,
+            ..Self::new(path, file)
+        })
     }
 
     pub fn new(path: &str, file: SceneFile) -> Self {
         Self {
             path: path.to_owned(),
             saved: file.clone(),
+            modified: None,
             file,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -215,9 +235,36 @@ impl Document {
     /// Writes the file to `folder`, in the canonical layout.
     pub fn save(&mut self, folder: &Path) -> wingine::Result<()> {
         self.end_change();
-        self.file.write(folder.join(&self.path))?;
+        let path = folder.join(&self.path);
+        self.file.write(&path)?;
         self.saved = self.file.clone();
+        self.modified = modified(&path);
         Ok(())
+    }
+
+    /// Reads its file in the game in `folder` again if it has changed on disk since it was last
+    /// read or saved, unless the scene has changes of its own: `None` if it hasn't changed.
+    pub fn reload_if_changed(&mut self, folder: &Path) -> Option<Reloaded> {
+        let path = folder.join(&self.path);
+        let now = modified(&path);
+        if now == self.modified {
+            return None;
+        }
+        self.modified = now;
+        if self.is_dirty() {
+            return Some(Reloaded::Kept);
+        }
+        match SceneFile::read(&path) {
+            Ok(file) if file == self.file => None,
+            Ok(file) => {
+                self.end_change();
+                self.saved = file.clone();
+                self.file = file;
+                self.changed();
+                Some(Reloaded::Read)
+            }
+            Err(err) => Some(Reloaded::Failed(err.to_string())),
+        }
     }
 
     /// Poses the preview by the timeline's clip from now on, or stops posing it.

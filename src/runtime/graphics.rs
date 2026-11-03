@@ -6,7 +6,7 @@ use mlua::{Lua, Table, UserDataRef};
 
 use super::{Lent, Textures};
 use crate::{
-    FrameStats,
+    Context,
     graphics::{Animation, Camera, Canvas, Color, Font, Sprite, SpriteSheet, TextLayout},
     lua::{SceneNode, check_layer, packed_color},
     math::Rect,
@@ -220,12 +220,16 @@ pub(super) fn module(
         "default_font",
         lua.create_function(move |_, ()| Ok(default_font.clone()))?,
     )?;
-    graphics.set(
-        "frame_stats",
-        lua.create_function(|lua, ()| {
-            let stats = lua
-                .app_data_ref::<FrameStats>()
-                .map_or_else(FrameStats::default, |stats| *stats);
+    graphics.set("frame_stats", {
+        let lent = lent.clone();
+        lua.create_function(move |lua, ()| {
+            // The canvas has them while the game draws, and the context the rest of the time.
+            let stats = match lent.with(|canvas: &mut Canvas| canvas.frame_stats)? {
+                Some(stats) => stats,
+                None => lent
+                    .with(|ctx: &mut Context| ctx.frame_stats())?
+                    .unwrap_or_default(),
+            };
             let table = lua.create_table()?;
             table.set("frame", stats.frame)?;
             table.set("update", stats.update)?;
@@ -234,8 +238,8 @@ pub(super) fn module(
             table.set("quads", stats.quads)?;
             table.set("draw_calls", stats.draw_calls)?;
             Ok(table)
-        })?,
-    )?;
+        })?
+    })?;
     graphics.set(
         "new_animation",
         lua.create_function(|_, (frames, frame_time): (Vec<UserDataRef<Sprite>>, f32)| {

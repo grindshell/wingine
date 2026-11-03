@@ -497,6 +497,13 @@ impl LuauGame {
         log::error!("{err}");
         self.error = Some(err);
     }
+
+    /// Whether the script has a global `gui`, to lay out its interface.
+    #[cfg(feature = "egui")]
+    fn has_gui(&self) -> bool {
+        let gui = self.scripts.lua().globals().get::<mlua::Value>("gui");
+        gui.is_ok_and(|gui| !gui.is_nil())
+    }
 }
 
 impl Game for LuauGame {
@@ -506,6 +513,12 @@ impl Game for LuauGame {
         }
         if let Err(err) = self.run_update(ctx, dt) {
             self.stop(err);
+        }
+        // A game may define `gui` as it plays, after frames have stopped running an interface
+        // because it had none.
+        #[cfg(feature = "egui")]
+        if !ctx.gui.game_has_gui && self.error.is_none() && self.has_gui() {
+            ctx.gui.game_has_gui = true;
         }
     }
 
@@ -561,9 +574,6 @@ impl LuauGame {
     /// Runs the libraries' hooks before `update`, the script's `update` and its tasks, then the
     /// hooks after.
     fn run_update(&mut self, ctx: &mut Context, dt: f32) -> Result<()> {
-        let lua = self.scripts.lua().clone();
-        // For `graphics.frame_stats`, which works in `draw` too, where the context isn't lent.
-        lua.set_app_data(ctx.frame_stats());
         self.natives.update(Phase::BEFORE, ctx, dt)?;
         // Tasks started before this frame, such as while the game loaded, resume in it. Those
         // `update` starts have run until they first waited, and resume from the next frame.

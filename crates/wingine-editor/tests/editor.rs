@@ -1040,6 +1040,34 @@ fn keys_move_and_go_on_the_timeline() {
 }
 
 #[test]
+fn a_clip_keeps_its_length_until_it_is_changed() {
+    let folder = copy_of("orchard", "clip_length");
+    // Longer than the editor writes lengths, and its last key at its end.
+    fs::write(
+        folder.join("wave.scene.luau"),
+        r#"return {
+            format = 1,
+            children = { { name = "arm", kind = "node" } },
+            clips = { wave = { duration = 0.12344, tracks = {
+                { node = "arm", property = "x", keys = { { 0, 0 }, { 0.12344, 1 } } },
+            } } },
+        }"#,
+    )
+    .unwrap();
+    let mut simulation = editor(Some(folder));
+    simulation.game_mut().open_scene("wave.scene.luau").unwrap();
+    simulation.run_frames(2);
+    simulation.click_gui("Animation");
+    simulation.run_frames(2);
+    assert_eq!(timeline(&simulation).clip.as_deref(), Some("wave"));
+    assert_eq!(clip(&simulation, "wave").duration, 0.12344);
+    assert!(!simulation.game().has_unsaved_changes());
+
+    type_into(&mut simulation, "duration", "0.5");
+    assert_eq!(clip(&simulation, "wave").duration, 0.5);
+}
+
+#[test]
 fn clips_are_made_named_lengthened_looped_and_saved() {
     let folder = copy_of("orchard", "clips");
     let mut simulation = editor(Some(folder.clone()));
@@ -1115,6 +1143,56 @@ fn closing_with_unsaved_changes_asks_first() {
 }
 
 #[test]
+fn what_fails_to_save_on_closing_stays_open() {
+    let folder = copy_of("garden", "failing_save");
+    let mut simulation = garden(folder.clone());
+    let document = simulation.game_mut().document_mut().unwrap();
+    edit::node_mut(document.edit(), &[0]).unwrap().x += 1.0;
+    document.end_change();
+    // A folder where the file was, which can't be written over.
+    let path = folder.join("garden.scene.luau");
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+
+    assert!(!simulation.request_close());
+    simulation.run_frames(2);
+    simulation.click_gui("Save");
+    assert!(!simulation.has_quit());
+    assert!(simulation.game().has_unsaved_changes());
+    let lines = simulation.game().output().lines();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.level == Level::Error && line.text.contains("garden.scene.luau")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn opening_another_game_with_unsaved_changes_asks_first() {
+    let mut simulation = garden(examples().join("garden"));
+    let document = simulation.game_mut().document_mut().unwrap();
+    edit::node_mut(document.edit(), &[0]).unwrap().x += 1.0;
+    document.end_change();
+    let project =
+        |simulation: &Simulation<Editor>| simulation.game().project().unwrap().name.clone();
+
+    simulation.game_mut().open_folder(examples().join("pong"));
+    simulation.run_frames(2);
+    assert!(simulation.gui_rect("Unsaved Changes").is_some());
+    simulation.click_gui("Cancel");
+    assert_eq!(project(&simulation), "garden");
+    assert!(simulation.game().has_unsaved_changes());
+    simulation.run_for(0.5);
+
+    simulation.game_mut().open_folder(examples().join("pong"));
+    simulation.run_frames(2);
+    simulation.click_gui("Don't Save");
+    assert_eq!(project(&simulation), "pong");
+    assert!(simulation.game().documents().is_empty());
+}
+
+#[test]
 fn playing_runs_the_game_in_its_own_process() {
     let script = Path::new(env!("CARGO_TARGET_TMPDIR")).join("editor/play.txt");
     fs::create_dir_all(script.parent().unwrap()).unwrap();
@@ -1165,6 +1243,40 @@ fn files_changed_elsewhere_wake_the_editor_to_read_them() {
     });
     simulation.step();
     assert!(simulation.gui_rect("extra.luau").is_some());
+}
+
+#[test]
+fn scenes_changed_elsewhere_are_read_again_unless_changed_here() {
+    let folder = copy_of("garden", "scene_changed");
+    let mut simulation = garden(folder.clone());
+    settle(&mut simulation);
+    let path = folder.join("garden.scene.luau");
+    let mut changed = SceneFile::read(&path).unwrap();
+    changed.children[0].x += 10.0;
+    let x = changed.children[0].x;
+    changed.write(&path).unwrap();
+    wait_for(&mut simulation, "the scene to be read again", |editor| {
+        editor.document().unwrap().file().children[0].x == x
+    });
+    assert!(!simulation.game().has_unsaved_changes());
+
+    // With changes of its own, it's kept as it is here, and Output says so.
+    let document = simulation.game_mut().document_mut().unwrap();
+    edit::node_mut(document.edit(), &[0]).unwrap().y += 1.0;
+    document.end_change();
+    changed.children[0].x += 10.0;
+    changed.write(&path).unwrap();
+    wait_for(
+        &mut simulation,
+        "the change on disk to be noticed",
+        |editor| {
+            editor.output().lines().iter().any(|line| {
+                line.level == Level::Warning && line.text.contains("has unsaved changes here")
+            })
+        },
+    );
+    assert_eq!(file(&simulation).children[0].x, x);
+    assert!(simulation.game().has_unsaved_changes());
 }
 
 fn script_is(editor: &Editor, text: &str) -> bool {
