@@ -14,9 +14,12 @@ use std::{env, fs, path::Path, rc::Rc};
 use image::{Rgba, RgbaImage};
 use wingine::{
     Context,
-    graphics::{Camera, Color, Resolution, SpriteSheet, Texture},
+    graphics::{
+        Camera, Camera3d, Canvas, Color, Lighting, MeshData, Resolution, SpriteSheet, Texture,
+        View3d,
+    },
     headless::{Headless, Image},
-    math::{Affine, Rect},
+    math::{Affine, Affine3, Rect},
     scene::{Assets, Scene, SceneFile, TilesetFile},
     tilemap::{Tile, Tilemap, Tileset},
 };
@@ -760,6 +763,211 @@ fn text() {
     assert_screenshot(&headless.adapter_name(), "text", frame);
 }
 
+/// A cube turned to show three sides and a sphere, lit by the default sun: tops brightest, then
+/// fronts, then right-hand sides, with the sphere shading smoothly between.
+#[test]
+fn meshes_lit() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let cube = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let sphere = ctx.create_mesh(&MeshData::sphere(0.6, 16, 8)).unwrap();
+    let frame = headless
+        .render(96, 64, |canvas| {
+            canvas.clear(Color::rgb8(0x1b, 0x26, 0x1e));
+            let camera = Camera3d::perspective([0.03, 1.61, 4.02], [0.0; 3], 0.8);
+            let mut view = canvas.begin_3d(View3d::new(camera, Rect::new(0.0, 0.0, 96.0, 64.0)));
+            let turned =
+                Affine3::from_translation([-0.9, 0.0, 0.0]) * Affine3::from_rotation_y(0.6);
+            view.draw_mesh(&cube, turned, None, Color::rgb8(0xd0, 0x60, 0x40));
+            let right = Affine3::from_translation([0.9, 0.0, 0.0]);
+            view.draw_mesh(&sphere, right, None, Color::rgb8(0x50, 0x90, 0xd0));
+        })
+        .unwrap();
+    assert_screenshot(&headless.adapter_name(), "meshes_lit", frame);
+}
+
+/// A tall box pushed through a cube at a slant, and a cube in front of both: each hides what's
+/// behind it, pixel by pixel, whichever order they're drawn in.
+#[test]
+fn meshes_depth() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let cube = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let post = ctx.create_mesh(&MeshData::cuboid([0.4, 2.0, 0.4])).unwrap();
+    let draws = [
+        (
+            &cube,
+            Affine3::from_translation([0.0, 0.0, -1.0]) * Affine3::from_rotation_y(0.3),
+            Color::rgb8(0x50, 0x90, 0xd0),
+        ),
+        (
+            &post,
+            Affine3::from_translation([0.2, 0.0, -1.1]) * Affine3::from_rotation_z(0.4),
+            Color::rgb8(0xf0, 0xc0, 0x30),
+        ),
+        (
+            &cube,
+            Affine3::from_translation([-0.6, -0.4, 0.6]) * Affine3::from_scale([0.5; 3]),
+            Color::rgb8(0xd0, 0x60, 0x40),
+        ),
+    ];
+    let draw = |canvas: &mut Canvas, near_first: bool| {
+        canvas.clear(Color::rgb8(0x10, 0x10, 0x18));
+        let camera = Camera3d::perspective([0.02, 0.51, 3.03], [0.0, 0.0, -0.5], 0.9);
+        let mut view = canvas.begin_3d(View3d::new(camera, Rect::new(0.0, 0.0, 64.0, 48.0)));
+        let mut order: Vec<_> = draws.iter().collect();
+        if near_first {
+            order.reverse();
+        }
+        for (mesh, transform, color) in order {
+            view.draw_mesh(mesh, *transform, None, *color);
+        }
+    };
+    let far_first = headless
+        .render(64, 48, |canvas| draw(canvas, false))
+        .unwrap();
+    let near_first = headless
+        .render(64, 48, |canvas| draw(canvas, true))
+        .unwrap();
+    assert!(
+        far_first.pixels() == near_first.pixels(),
+        "the order meshes are drawn in changed what shows"
+    );
+    assert_screenshot(&headless.adapter_name(), "meshes_depth", far_first);
+}
+
+/// 3D views among 2D drawing: stripes under a view, a translucent bar over it, a second view over
+/// part of the first and the bar, whose depth doesn't hide it behind the first's meshes, and a
+/// marker over that. Views don't clear what's under them.
+#[test]
+fn meshes_layered() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let cube = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let sphere = ctx.create_mesh(&MeshData::sphere(0.8, 12, 6)).unwrap();
+    let frame = headless
+        .render(96, 64, |canvas| {
+            canvas.clear(Color::rgb8(0x10, 0x10, 0x18));
+            for x in (0..96).step_by(8) {
+                let stripe = Rect::new(x as f32, 0.0, 4.0, 64.0);
+                canvas.fill_rect(stripe, Color::rgb8(0x24, 0x2c, 0x38));
+            }
+
+            let camera = Camera3d::perspective([0.02, 1.21, 3.01], [0.0; 3], 0.9);
+            canvas
+                .begin_3d(View3d::new(camera, Rect::new(4.0, 8.0, 48.0, 40.0)))
+                .draw_mesh(
+                    &cube,
+                    Affine3::from_translation([0.6, 0.0, 0.0]) * Affine3::from_rotation_y(0.5),
+                    None,
+                    Color::rgb8(0xd0, 0x60, 0x40),
+                );
+            canvas.fill_rect(
+                Rect::new(0.0, 26.0, 96.0, 8.0),
+                Color::rgba(1.0, 1.0, 1.0, 0.5),
+            );
+
+            // Farther from its camera than the cube is from the first's, but drawn after, so over
+            // the cube's right-hand side.
+            let camera = Camera3d::perspective([0.01, 0.02, 6.03], [0.0; 3], 0.5);
+            canvas
+                .begin_3d(View3d::new(camera, Rect::new(24.0, 12.0, 56.0, 44.0)))
+                .draw_mesh(
+                    &sphere,
+                    Affine3::IDENTITY,
+                    None,
+                    Color::rgb8(0x50, 0x90, 0xd0),
+                );
+            canvas.fill_rect(
+                Rect::new(56.0, 38.0, 6.0, 6.0),
+                Color::rgb8(0xf0, 0xc0, 0x30),
+            );
+        })
+        .unwrap();
+    assert_screenshot(&headless.adapter_name(), "meshes_layered", frame);
+}
+
+/// 3D views at a fixed resolution of 32x24, scaled 3x onto the frame, so meshes render at the
+/// canvas's own pixels: a view hanging off the canvas's left edge, which keeps its projection,
+/// showing a cube mirrored left to right, which isn't turned inside out; and a view through a 2D
+/// camera zoomed 2x, unlit.
+#[test]
+fn meshes_fixed_resolution() {
+    let mut headless = headless();
+    headless.set_resolution(Resolution::Fixed {
+        width: 32,
+        height: 24,
+    });
+    let cube = headless
+        .context()
+        .create_mesh(&MeshData::cuboid([1.6, 1.0, 1.0]))
+        .unwrap();
+    let frame = headless
+        .render(100, 80, |canvas| {
+            canvas.clear(Color::rgb8(0x20, 0x30, 0x60));
+            let camera = Camera3d::perspective([1.21, 1.02, 3.03], [0.0; 3], 0.9);
+            let rect = Rect::new(-8.0, 0.0, 32.0, 16.0);
+            let mirrored = Affine3::from_scale([-1.0, 1.0, 1.0]) * Affine3::from_rotation_y(0.4);
+            canvas.begin_3d(View3d::new(camera, rect)).draw_mesh(
+                &cube,
+                mirrored,
+                None,
+                Color::rgb8(0xd0, 0x60, 0x40),
+            );
+
+            // World units are two canvas pixels, so the view's 8x4 rect covers 16x8 pixels.
+            canvas.set_camera(Some(Camera {
+                zoom: 2.0,
+                ..Camera::new(8.0, 6.0)
+            }));
+            let camera = Camera3d::orthographic([0.01, 0.02, 3.0], [0.0; 3], 1.5);
+            let view = View3d {
+                lighting: Lighting::UNLIT,
+                ..View3d::new(camera, Rect::new(8.0, 8.0, 8.0, 4.0))
+            };
+            canvas.begin_3d(view).draw_mesh(
+                &cube,
+                Affine3::IDENTITY,
+                None,
+                Color::rgb8(0x40, 0xb0, 0x50),
+            );
+        })
+        .unwrap();
+    assert_screenshot(&headless.adapter_name(), "meshes_fixed_resolution", frame);
+}
+
+/// Meshes showing sprites, seen from above at an angle: cubes whose sides show a sprite with a
+/// transparent background, which shows what's behind through it, on a plane showing a tree,
+/// flipped, so its top is toward the camera.
+///
+/// Where a pixel's middle lands almost exactly between two texels, GPUs pick either, so a few
+/// pixels may differ.
+#[test]
+fn meshes_textured() {
+    let mut headless = headless();
+    let sheet = SpriteSheet::new(headless.context().load_texture(TILESET).unwrap(), 16, 16);
+    let ctx = headless.context();
+    let cube = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let plane = ctx.create_mesh(&MeshData::plane([3.0, 3.0])).unwrap();
+    let hero = sheet.sprite(27, 0);
+    let tree = sheet.sprite(0, 1).flipped_y();
+    let frame = headless
+        .render(128, 96, |canvas| {
+            canvas.clear(Color::rgb8(0x1b, 0x26, 0x1e));
+            let camera = Camera3d::perspective([1.83, 2.01, 2.52], [-0.2, -0.2, 0.2], 0.82);
+            let rect = Rect::new(0.0, 0.0, 128.0, 96.0);
+            let mut view = canvas.begin_3d(View3d::new(camera, rect));
+            let below = Affine3::from_translation([0.0, -0.5, 0.0]);
+            view.draw_mesh(&plane, below, Some(&tree), Color::rgb8(0x6a, 0xa8, 0x4f));
+            view.draw_mesh(&cube, Affine3::IDENTITY, Some(&hero), Color::WHITE);
+            let small =
+                Affine3::from_translation([-1.0, -0.25, 0.9]) * Affine3::from_scale([0.5; 3]);
+            view.draw_mesh(&cube, small, Some(&hero), Color::rgb8(0xf2, 0xd3, 0xab));
+        })
+        .unwrap();
+    assert_screenshot_allowing(&headless.adapter_name(), "meshes_textured", frame, 16);
+}
+
 /// An egui window over a game with a 40x30 canvas drawn 4x, at the window's own resolution, so its
 /// text is crisp over the canvas's big pixels. In it, a canvas the engine rendered, shown 2x, and
 /// one cell of a texture, shown 2x, both sampled nearest-neighbor.
@@ -850,6 +1058,13 @@ fn headless() -> Headless {
 /// Compares `frame` with the reference screenshot `name`, panicking on a mismatch, or with
 /// `UPDATE_SCREENSHOTS` set, replacing the reference.
 fn assert_screenshot(adapter: &str, name: &str, frame: Image) {
+    assert_screenshot_allowing(adapter, name, frame, 0);
+}
+
+/// [`assert_screenshot`], letting up to `allowed` pixels differ by any amount: for textures in
+/// perspective, where some pixels' middles land so near the edge between two texels that GPUs
+/// pick either.
+fn assert_screenshot_allowing(adapter: &str, name: &str, frame: Image, allowed: usize) {
     let actual = RgbaImage::from_raw(frame.width(), frame.height(), frame.into_pixels())
         .expect("frame dimensions match its pixel data");
     let reference_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -861,6 +1076,9 @@ fn assert_screenshot(adapter: &str, name: &str, frame: Image) {
         Ok(reference) => compare(&actual, &reference.into_rgba8()),
         Err(err) => Some(Mismatch::Missing(err.to_string())),
     };
+    let mismatch = mismatch.filter(
+        |mismatch| !matches!(mismatch, Mismatch::Pixels { count, .. } if *count <= allowed),
+    );
     let Some(mismatch) = mismatch else {
         return;
     };

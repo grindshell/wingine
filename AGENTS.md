@@ -1,15 +1,16 @@
 # Wingine
 
 Wingine is a desktop game engine written in Rust, built as a library crate (`wingine`). It is
-primarily a **2D** engine. 3D is possible but not a focus — don't let 3D concerns drive the design
-of 2D systems, and don't build 3D features unless asked.
+primarily a **2D** engine, with limited 3D: meshes drawn in 3D views among the 2D, from Rust. 3D
+is not a focus — don't let 3D concerns drive the design of 2D systems, and don't build more 3D
+features unless asked.
 
 ## Scope
 
-Wingine has what its examples need: tilemaps and batched sprites, sprite animation, a camera,
-keyboard, mouse and gamepad input bound to actions, grid movement, text, audio, saves, Luau
-scripting with tasks, native libraries written in Rust, scenes (levels, screens and rigged
-characters), egui interfaces, and an editor built on the engine. Each feature is finished with a game or example that uses it, with tests.
+Wingine has what its examples need: tilemaps and batched sprites, meshes in 3D views, sprite
+animation, a camera, keyboard, mouse and gamepad input bound to actions, grid movement, text,
+audio, saves, Luau scripting with tasks, native libraries written in Rust, scenes (levels,
+screens and rigged characters), egui interfaces, and an editor built on the engine. Each feature is finished with a game or example that uses it, with tests.
 
 - Scenes are data: files of plain Luau values, with no calls or expressions, so tools write back
   what they read. Behavior stays in games, which find nodes by path, tag or kind and read their
@@ -141,6 +142,23 @@ networking or 3D pipelines.
   output with the same pipeline. Shaders are WGSL files next to the code that loads them. Sprites
   aren't instanced: rendering is a fifth of the shmup's frame with its bullets in Rust, so it
   isn't what limits it.
+- 3D (`camera3d.rs`, `mesh.rs`, `view3d.rs`, `mesh.wgsl`): `Canvas::begin_3d` takes a `View3d`
+  (a `Camera3d`, the rect of the canvas it shows on, moved by the 2D camera, and its `Lighting`:
+  one sun and ambient light) and returns a `Canvas3d`, which draws `Mesh`es, made from `MeshData`
+  with `Context::create_mesh`, placed by an `Affine3`, showing a `Sprite` (its UVs from 0 to 1
+  span the sprite's region) times their vertices' colors and a tint. Texels less than half opaque
+  are discarded, and nothing blends. 3D coordinates are right-handed with `y` up, as glTF's are.
+  The canvas records each view as a `Segment3d` before the batch of quads that follows it, and
+  `begin_3d` starts that batch empty, so quads drawn after a view never join a batch drawn before
+  it; `push_quad` doesn't know about 3D. `Renderer::render` draws the quads up to each view in a
+  pass of their own, then the view in a pass that keeps the color and clears a depth buffer (kept
+  for the last few target sizes), with its viewport and scissor cut to the target and its
+  projection corrected to match (`Viewport`), so a view's projection is the same however much of
+  it shows. Meshes keep their vertices on the GPU (36 bytes each); each draw's transform, normal
+  matrix, sprite region and tint go into an instance buffer written each frame, bound at the
+  draw's offset, so a mesh is one draw call. Mirroring transforms draw with a second pipeline
+  whose front faces wind the other way. Rendering is at the target's resolution, so a fixed
+  resolution renders 3D at the canvas's pixels. The `meshes` example uses all of it.
 - `src/graphics/font.rs` and `default_font.rs`: `Font` (glyphs packed into one texture, with
   their metrics) and `TextLayout`. `Font::layout` wraps text between words to a width
   (`layout_aligned` also lines its lines up by an `Align`, moving each by whole pixels), and
@@ -383,7 +401,8 @@ networking or 3D pipelines.
   of 2. `orchard.grow(x)` starts an apple growing, and tests turn
   `orchard.growing` off so only theirs grow. The scene files are in the canonical layout, and
   `tests/orchard.rs` checks they stay so. The game's state is the global `orchard`.
-- `src/math.rs`: geometry types: `Rect`, and `Affine`, a 2D transform that composes with `*`.
+- `src/math.rs`: geometry types: `Rect`, and `Affine` and `Affine3`, 2D and 3D transforms that
+  compose with `*`.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
   `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
   `Simulation`, and its events and NPC are scripted in `sprites.luau`. `pong/` is a game written
@@ -402,7 +421,8 @@ networking or 3D pipelines.
   a `cdylib` built as `particles`, which `tests/native.rs` builds and loads. `gui.rs` shows egui
   over a game: sprites bouncing about, tuned from a panel that shows a `GuiCanvas` map of them,
   and the debug window on F3. `shapes.rs` draws each kind of shape: fills, outlines, a line and
-  circles.
+  circles. `meshes.rs` draws meshes in a 3D view at a fixed resolution, with a HUD over it: crates,
+  a post and a bouncing ball on a field it builds as a mesh of its own, and it has tests too.
 - `README.md`: the project's overview, with a screenshot of each example in `docs/screenshots/`.
   They were taken headlessly at 640x360 (768x432 for `sprites`, so its 256x144 canvas scales
   without bars, 960x720 for `shmup`, twice its canvas, and 1280x720 for the editor, with the
@@ -619,6 +639,9 @@ GPU. Add a test there when adding a drawing feature.
   `target/tmp/screenshots/`. In CI they are uploaded as a build artifact.
 - To create or update references, run with `UPDATE_SCREENSHOTS=1`. Only missing or mismatched
   references are rewritten. Look at every changed PNG before committing it.
+- Where a pixel's middle lands on the edge between two texels, GPUs pick either, so 2D scenes keep
+  sprites on whole pixels at whole scales. Textures in perspective can't, so `meshes_textured`
+  lets a few pixels differ (`assert_screenshot_allowing`); the other 3D scenes are untextured.
 - CI runners have no GPU: Linux uses lavapipe (`mesa-vulkan-drivers`) and Windows uses WARP. To
   reproduce locally, pick the adapter with wgpu's environment variables, e.g. on Windows:
   `WGPU_BACKEND=dx12 WGPU_ADAPTER_NAME="Microsoft Basic Render Driver" WGPU_DX12_COMPILER=fxc`.

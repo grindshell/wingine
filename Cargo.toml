@@ -69,6 +69,10 @@ name = "sprites"
 test = true
 
 [[example]]
+name = "meshes"
+test = true
+
+[[example]]
 name = "gui"
 required-features = ["egui"]
 

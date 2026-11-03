@@ -1,25 +1,31 @@
-//! 2D drawing.
+//! Drawing: 2D, and meshes in 3D views drawn among it.
 
 mod animation;
 mod camera;
+mod camera3d;
 mod canvas;
 mod color;
 mod default_font;
 mod font;
 pub(crate) mod gpu;
+mod mesh;
 pub(crate) mod renderer;
 pub(crate) mod screen;
 mod sprite;
 pub(crate) mod surface;
 mod texture;
+mod view3d;
 
 pub use animation::Animation;
 pub use camera::Camera;
+pub use camera3d::{Camera3d, Projection, Ray};
 pub use canvas::Canvas;
 pub use color::Color;
 pub use font::{Align, Font, TextLayout};
+pub use mesh::{Mesh, MeshData, MeshVertex};
 pub use screen::Resolution;
 pub use sprite::{Sprite, SpriteSheet};
 pub use texture::Texture;
 #[cfg(feature = "egui")]
 pub(crate) use texture::WeakTexture;
+pub use view3d::{Canvas3d, Lighting, View3d};

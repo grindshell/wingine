@@ -4,7 +4,7 @@ use crate::{
     Error, Result, Waker,
     app::Redraws,
     audio::Audio,
-    graphics::{Font, Texture, gpu::Gpu, renderer::Renderer},
+    graphics::{Font, Mesh, MeshData, Texture, gpu::Gpu, renderer::Renderer},
     input::Input,
     save::Saves,
 };
@@ -45,7 +45,10 @@ pub struct FrameStats {
     pub render: f32,
     /// The quads the game drew: sprites, rectangles and glyphs.
     pub quads: u32,
-    /// The draw calls they took: one for each run of quads drawn with the same texture.
+    /// The triangles of the meshes the game drew in 3D views.
+    pub triangles: u32,
+    /// The draw calls they took: one for each run of quads drawn with the same texture, and one
+    /// for each mesh.
     pub draw_calls: u32,
 }
 
@@ -144,6 +147,12 @@ impl Context {
     /// game is being created, the size the first frame will have.
     pub fn canvas_size(&self) -> [f32; 2] {
         self.canvas_size
+    }
+
+    /// Uploads `data` to the GPU as a mesh, to draw in 3D views. Fails if its indices aren't three
+    /// for each triangle, or reach past its vertices.
+    pub fn create_mesh(&mut self, data: &MeshData) -> Result<Mesh> {
+        Mesh::new(&self.gpu.device, data).map_err(Error::Mesh)
     }
 
     /// Loads a PNG file into a texture.

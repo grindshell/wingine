@@ -359,6 +359,7 @@ fn show_overlay(ctx: &mut Context, egui: &egui::Context) {
                         ("Draw", ms(stats.draw)),
                         ("Render", ms(stats.render)),
                         ("Quads", stats.quads.to_string()),
+                        ("Triangles", stats.triangles.to_string()),
                         ("Draw calls", stats.draw_calls.to_string()),
                         ("Canvas", format!("{width} x {height}")),
                     ];
@@ -496,7 +497,7 @@ impl GuiCanvas {
             }
         }
         let target = self.target.as_ref().expect("created above");
-        renderer.render(device, &gpu.queue, &self.canvas, &target.render.view);
+        renderer.render(device, &gpu.queue, &self.canvas, &target.render.view, size);
         SizedTexture::new(target.id, egui::vec2(size[0] as f32, size[1] as f32))
     }
 }

@@ -162,6 +162,199 @@ impl Mul for Affine {
     }
 }
 
+/// A 3D affine transform: rotation, scaling and mirroring, then a translation. It moves a point
+/// `[x, y, z]` to `x_axis * x + y_axis * y + z_axis * z + translation`.
+///
+/// 3D coordinates are right-handed with `y` up: with `x` pointing right and `y` up, `z` points
+/// toward the viewer. That's glTF's convention, unlike 2D drawing's, where `y` points down.
+///
+/// Composing transforms with `*` applies the right-hand one first, as with [`Affine`]: `parent *
+/// child` places what `child` places, then moves it as `parent` does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Affine3 {
+    /// Where a step of 1 along `x` goes.
+    pub x_axis: [f32; 3],
+    /// Where a step of 1 along `y` goes.
+    pub y_axis: [f32; 3],
+    /// Where a step of 1 along `z` goes.
+    pub z_axis: [f32; 3],
+    /// Where the origin goes.
+    pub translation: [f32; 3],
+}
+
+impl Affine3 {
+    pub const IDENTITY: Self = Self::from_translation([0.0, 0.0, 0.0]);
+
+    pub const fn from_translation(translation: [f32; 3]) -> Self {
+        Self {
+            x_axis: [1.0, 0.0, 0.0],
+            y_axis: [0.0, 1.0, 0.0],
+            z_axis: [0.0, 0.0, 1.0],
+            translation,
+        }
+    }
+
+    /// Scales by `scale` along each axis, negative to mirror.
+    pub const fn from_scale(scale: [f32; 3]) -> Self {
+        Self {
+            x_axis: [scale[0], 0.0, 0.0],
+            y_axis: [0.0, scale[1], 0.0],
+            z_axis: [0.0, 0.0, scale[2]],
+            translation: [0.0, 0.0, 0.0],
+        }
+    }
+
+    /// Turns by `angle` radians about the `x` axis, counter-clockwise seen from `+x`: `y` turns
+    /// toward `z`.
+    pub fn from_rotation_x(angle: f32) -> Self {
+        let (sin, cos) = sin_cos(angle);
+        Self {
+            x_axis: [1.0, 0.0, 0.0],
+            y_axis: [0.0, cos, sin],
+            z_axis: [0.0, -sin, cos],
+            translation: [0.0, 0.0, 0.0],
+        }
+    }
+
+    /// Turns by `angle` radians about the `y` axis, counter-clockwise seen from above: `z` turns
+    /// toward `x`.
+    pub fn from_rotation_y(angle: f32) -> Self {
+        let (sin, cos) = sin_cos(angle);
+        Self {
+            x_axis: [cos, 0.0, -sin],
+            y_axis: [0.0, 1.0, 0.0],
+            z_axis: [sin, 0.0, cos],
+            translation: [0.0, 0.0, 0.0],
+        }
+    }
+
+    /// Turns by `angle` radians about the `z` axis, counter-clockwise seen from `+z`: `x` turns
+    /// toward `y`.
+    pub fn from_rotation_z(angle: f32) -> Self {
+        let (sin, cos) = sin_cos(angle);
+        Self {
+            x_axis: [cos, sin, 0.0],
+            y_axis: [-sin, cos, 0.0],
+            z_axis: [0.0, 0.0, 1.0],
+            translation: [0.0, 0.0, 0.0],
+        }
+    }
+
+    /// Where `point` goes.
+    pub fn apply(&self, point: [f32; 3]) -> [f32; 3] {
+        add3(self.apply_vector(point), self.translation)
+    }
+
+    /// Where the step `vector` goes, which the translation doesn't move.
+    pub fn apply_vector(&self, [x, y, z]: [f32; 3]) -> [f32; 3] {
+        [0, 1, 2].map(|i| self.x_axis[i] * x + self.y_axis[i] * y + self.z_axis[i] * z)
+    }
+
+    /// How much the transform scales volumes by: negative if it mirrors, 0 if it squashes
+    /// everything flat.
+    pub fn determinant(&self) -> f32 {
+        dot3(self.x_axis, cross3(self.y_axis, self.z_axis))
+    }
+
+    /// The transform that undoes this one, unless it squashes everything flat (such as with a
+    /// scale of 0), which nothing undoes.
+    pub fn inverse(&self) -> Option<Self> {
+        let determinant = self.determinant();
+        if determinant == 0.0 || !determinant.is_finite() {
+            return None;
+        }
+        // The inverse's rows are the cofactors' columns, over the determinant.
+        let rows = self.cofactors().map(|row| scale3(row, 1.0 / determinant));
+        let inverse = Self {
+            x_axis: rows.map(|row| row[0]),
+            y_axis: rows.map(|row| row[1]),
+            z_axis: rows.map(|row| row[2]),
+            translation: [0.0, 0.0, 0.0],
+        };
+        Some(Self {
+            translation: scale3(inverse.apply_vector(self.translation), -1.0),
+            ..inverse
+        })
+    }
+
+    /// The columns of what moves surfaces' normals as this moves the surfaces: the inverse's
+    /// transpose, scaled, so normals keep their direction but not their length. Mirroring
+    /// transforms flip it, so normals still point out of what they're on.
+    pub(crate) fn normal_matrix(&self) -> [[f32; 3]; 3] {
+        let sign = if self.determinant() < 0.0 { -1.0 } else { 1.0 };
+        self.cofactors().map(|column| scale3(column, sign))
+    }
+
+    /// The cross products of each pair of axes, which are the determinant times the rows of the
+    /// inverse.
+    fn cofactors(&self) -> [[f32; 3]; 3] {
+        [
+            cross3(self.y_axis, self.z_axis),
+            cross3(self.z_axis, self.x_axis),
+            cross3(self.x_axis, self.y_axis),
+        ]
+    }
+}
+
+impl Default for Affine3 {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+impl Mul for Affine3 {
+    type Output = Self;
+
+    /// `rhs`, then `self`.
+    fn mul(self, rhs: Self) -> Self {
+        Self {
+            x_axis: self.apply_vector(rhs.x_axis),
+            y_axis: self.apply_vector(rhs.y_axis),
+            z_axis: self.apply_vector(rhs.z_axis),
+            translation: self.apply(rhs.translation),
+        }
+    }
+}
+
+/// The sine and cosine of `angle`, without calling into the math library for an angle of 0.
+fn sin_cos(angle: f32) -> (f32, f32) {
+    if angle == 0.0 {
+        (0.0, 1.0)
+    } else {
+        angle.sin_cos()
+    }
+}
+
+pub(crate) fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+pub(crate) fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+pub(crate) fn scale3(a: [f32; 3], scale: f32) -> [f32; 3] {
+    a.map(|v| v * scale)
+}
+
+pub(crate) fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+pub(crate) fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// `a` scaled to a length of 1, or `None` if it has no direction to keep.
+pub(crate) fn normalize3(a: [f32; 3]) -> Option<[f32; 3]> {
+    let length = dot3(a, a).sqrt();
+    (length > 0.0 && length.is_finite()).then(|| scale3(a, 1.0 / length))
+}
+
 #[cfg(test)]
 mod tests {
     use std::f32::consts::FRAC_PI_2;
@@ -214,6 +407,78 @@ mod tests {
         let bounds = transform.bounds(Rect::new(0.0, 0.0, 4.0, 2.0));
         assert_near([bounds.x, bounds.y], [-2.0, 0.0]);
         assert_near([bounds.w, bounds.h], [2.0, 4.0]);
+    }
+
+    fn assert_near3(actual: [f32; 3], expected: [f32; 3]) {
+        assert!(
+            (0..3).all(|i| (actual[i] - expected[i]).abs() < 1e-5),
+            "{actual:?} is not {expected:?}"
+        );
+    }
+
+    #[test]
+    fn rotations_turn_counter_clockwise_about_their_axes() {
+        assert_near3(
+            Affine3::from_rotation_x(FRAC_PI_2).apply([0.0, 1.0, 0.0]),
+            [0.0, 0.0, 1.0],
+        );
+        assert_near3(
+            Affine3::from_rotation_y(FRAC_PI_2).apply([0.0, 0.0, 1.0]),
+            [1.0, 0.0, 0.0],
+        );
+        assert_near3(
+            Affine3::from_rotation_z(FRAC_PI_2).apply([1.0, 0.0, 0.0]),
+            [0.0, 1.0, 0.0],
+        );
+    }
+
+    #[test]
+    fn composing_in_3d_applies_the_right_hand_side_first() {
+        let parent = Affine3::from_translation([10.0, 0.0, 0.0]) * Affine3::from_rotation_y(0.4);
+        let child = Affine3::from_translation([0.0, 2.0, 5.0]) * Affine3::from_scale([2.0; 3]);
+        let point = [1.0, -3.0, 0.5];
+        assert_near3(
+            (parent * child).apply(point),
+            parent.apply(child.apply(point)),
+        );
+        // Translating after scaling doesn't scale the translation.
+        assert_near3(child.apply([0.0, 0.0, 0.0]), [0.0, 2.0, 5.0]);
+    }
+
+    #[test]
+    fn inverses_undo_3d_transforms() {
+        let transform = Affine3::from_translation([4.0, -6.0, 2.0])
+            * Affine3::from_rotation_x(0.7)
+            * Affine3::from_rotation_z(-1.2)
+            * Affine3::from_scale([2.0, -0.5, 3.0]);
+        let inverse = transform.inverse().unwrap();
+        let point = [3.0, 9.0, -1.0];
+        assert_near3(inverse.apply(transform.apply(point)), point);
+        assert_near3(transform.apply(inverse.apply(point)), point);
+        assert_eq!(Affine3::from_scale([1.0, 0.0, 1.0]).inverse(), None);
+        assert!((Affine3::from_scale([2.0, 3.0, -1.0]).determinant() + 6.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn normals_stay_perpendicular_to_what_they_are_on() {
+        // A slope rising along x, stretched to rise twice as steeply.
+        let stretch = Affine3::from_scale([1.0, 2.0, 1.0]);
+        let along = stretch.apply_vector([1.0, 1.0, 0.0]);
+        let [x, y, z] = stretch.normal_matrix();
+        let normal = [-1.0, 1.0, 0.0];
+        let moved = [0, 1, 2].map(|i| x[i] * normal[0] + y[i] * normal[1] + z[i] * normal[2]);
+        assert!(dot3(moved, along).abs() < 1e-5, "{moved:?}");
+        assert!(moved[1] > 0.0, "still facing up");
+
+        // Mirrored, the up face of a cube still faces out of it, now down.
+        let [_, y, _] = Affine3::from_scale([1.0, -1.0, 1.0]).normal_matrix();
+        assert!(y[1] < 0.0);
+    }
+
+    #[test]
+    fn normalizing_keeps_direction() {
+        assert_near3(normalize3([0.0, 3.0, 4.0]).unwrap(), [0.0, 0.6, 0.8]);
+        assert_eq!(normalize3([0.0; 3]), None);
     }
 
     #[test]

@@ -3,7 +3,10 @@ use std::ops::{Bound, Range, RangeBounds};
 use bytemuck::{Pod, Zeroable};
 
 use super::{
-    Camera, Color, Font, Sprite, TextLayout, Texture, camera::Transform, font::PlacedGlyph,
+    Camera, Canvas3d, Color, Font, Sprite, TextLayout, Texture, View3d,
+    camera::Transform,
+    font::PlacedGlyph,
+    view3d::{Instance, MeshDraw, Segment3d},
 };
 use crate::{
     FrameStats,
@@ -32,11 +35,17 @@ pub(crate) struct Batch {
 /// Coordinates are canvas pixels, with the origin at the top-left and `y` growing downward. The
 /// canvas is the window's size in logical pixels, or the fixed size set by
 /// [`Resolution::Fixed`](super::Resolution::Fixed). With a camera set, drawing is in world
-/// coordinates instead. Shapes are drawn in the order they are submitted, later shapes on top.
+/// coordinates instead. Shapes are drawn in the order they are submitted, later shapes on top, and
+/// 3D views ([`Canvas::begin_3d`]) take their place in that order too.
 pub struct Canvas {
     pub(crate) clear_color: Color,
     pub(crate) vertices: Vec<Vertex>,
     pub(crate) batches: Vec<Batch>,
+    /// 3D views, in the order they were drawn.
+    pub(crate) segments: Vec<Segment3d>,
+    /// The meshes drawn in them, in order, and how each is placed.
+    pub(crate) mesh_draws: Vec<MeshDraw>,
+    pub(crate) instances: Vec<Instance>,
     width: f32,
     height: f32,
     transform: Transform,
@@ -51,6 +60,9 @@ impl Canvas {
             clear_color: Color::BLACK,
             vertices: Vec::new(),
             batches: Vec::new(),
+            segments: Vec::new(),
+            mesh_draws: Vec::new(),
+            instances: Vec::new(),
             width: 0.0,
             height: 0.0,
             transform: Transform::IDENTITY,
@@ -97,9 +109,19 @@ impl Canvas {
         (self.vertices.len() / 4) as u32
     }
 
-    /// The draw calls rendering the quads drawn so far this frame will take.
+    /// The draw calls rendering what was drawn so far this frame will take: one for each run of
+    /// quads with the same texture, and one for each mesh.
     pub(crate) fn draw_call_count(&self) -> u32 {
-        self.batches.len() as u32
+        let quads = self.batches.iter().filter(|b| !b.quads.is_empty()).count();
+        (quads + self.mesh_draws.len()) as u32
+    }
+
+    /// The triangles of the meshes drawn so far this frame.
+    pub(crate) fn triangle_count(&self) -> u32 {
+        self.mesh_draws
+            .iter()
+            .map(|draw| draw.mesh.triangle_count())
+            .sum()
     }
 
     /// Fills the whole canvas with `color`, discarding anything drawn so far this frame.
@@ -107,6 +129,32 @@ impl Canvas {
         self.clear_color = color;
         self.vertices.clear();
         self.batches.clear();
+        self.segments.clear();
+        self.mesh_draws.clear();
+        self.instances.clear();
+    }
+
+    /// Begins a 3D view, which shows what [`Canvas3d::draw_mesh`] draws in it through
+    /// `view.camera`, on `view.rect` of the canvas, over what was drawn before. What's drawn on
+    /// the canvas after the returned [`Canvas3d`] is dropped goes over it.
+    ///
+    /// Each view has a depth buffer of its own: meshes in it hide one another by how near they
+    /// are, but a later view draws over an earlier one.
+    pub fn begin_3d(&mut self, view: View3d) -> Canvas3d<'_> {
+        let rect = self.transform.apply(view.rect);
+        // Quads drawn after the view mustn't join a batch drawn before it.
+        let quad = self.quad_count();
+        self.batches.push(Batch {
+            texture: None,
+            quads: quad..quad,
+        });
+        let first = self.mesh_draws.len() as u32;
+        self.segments.push(Segment3d {
+            view: View3d { rect, ..view },
+            before_batch: (self.batches.len() - 1) as u32,
+            draws: first..first,
+        });
+        Canvas3d { canvas: self }
     }
 
     pub fn fill_rect(&mut self, rect: Rect, color: Color) {
@@ -633,6 +681,41 @@ mod tests {
         assert_eq!(clamp_range(..9, 5), 0..5);
         assert_eq!(clamp_range(2..=3, 5), 2..4);
         assert_eq!(clamp_range(7.., 5), 5..5);
+    }
+
+    #[test]
+    fn quads_after_a_3d_view_go_over_it() {
+        use crate::graphics::Camera3d;
+
+        let mut canvas = Canvas::new();
+        canvas.begin(100.0, 100.0);
+        canvas.fill_rect(Rect::new(0.0, 0.0, 1.0, 1.0), Color::WHITE);
+        let camera = Camera3d::perspective([0.0, 0.0, 5.0], [0.0; 3], 1.0);
+        let view = View3d::new(camera, Rect::new(10.0, 20.0, 30.0, 40.0));
+        assert_eq!(canvas.begin_3d(view).view().rect, view.rect);
+        // Solid like the one before, but in a batch of its own, after the view.
+        canvas.fill_rect(Rect::new(2.0, 2.0, 1.0, 1.0), Color::WHITE);
+        let batches: Vec<_> = canvas.batches.iter().map(|b| b.quads.clone()).collect();
+        assert_eq!(batches, [0..1, 1..2]);
+        assert_eq!(canvas.segments[0].before_batch, 1);
+        assert_eq!(
+            canvas.draw_call_count(),
+            2,
+            "a view with no meshes draws nothing"
+        );
+
+        // Its rect is placed by the canvas's camera, as everything else is.
+        canvas.set_camera(Some(Camera {
+            zoom: 2.0,
+            ..Camera::new(50.0, 50.0)
+        }));
+        assert_eq!(
+            canvas.begin_3d(view).view().rect,
+            Rect::new(-30.0, -10.0, 60.0, 80.0)
+        );
+
+        canvas.clear(Color::BLACK);
+        assert!(canvas.segments.is_empty());
     }
 
     #[test]

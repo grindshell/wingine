@@ -268,6 +268,7 @@ pub(crate) fn run_frame(
         update,
         draw: start.elapsed().as_secs_f32(),
         quads: canvas.quad_count(),
+        triangles: canvas.triangle_count(),
         draw_calls: canvas.draw_call_count(),
         ..Default::default()
     }

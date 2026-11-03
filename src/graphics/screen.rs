@@ -90,13 +90,13 @@ impl Screen {
         output_size: [u32; 2],
     ) {
         let Resolution::Fixed { width, height } = self.resolution else {
-            renderer.render(device, queue, canvas, output);
+            renderer.render(device, queue, canvas, output, output_size);
             return;
         };
         let target = self
             .target
             .get_or_insert_with(|| renderer.create_render_target(device, width, height));
-        renderer.render(device, queue, canvas, &target.view);
+        renderer.render(device, queue, canvas, &target.view, [width, height]);
 
         // `begin` clears to black, which fills the bars around the scaled canvas.
         self.present
@@ -104,7 +104,7 @@ impl Screen {
         let dest = viewport([width, height], output_size);
         self.present
             .draw_sprite(&target.texture.sprite(), dest, Color::WHITE);
-        renderer.render(device, queue, &self.present, output);
+        renderer.render(device, queue, &self.present, output, output_size);
     }
 }
 

@@ -18,6 +18,9 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **Timing**: games update once a frame by the frame's time, or at a fixed rate, such as 60 times
   a second, so they play the same at any frame rate. Frame stats and a headless benchmark show
   where each frame's time goes.
+- **3D views** among 2D drawing: meshes lit by a sun, textured with sprites, seen through a
+  perspective or orthographic camera, and rendered at the canvas's resolution, so they keep a
+  pixel-art look. Cubes, planes and spheres are built in, and games build their own meshes.
 - **Tilemaps** with layers and tilesets, culled to the view, and a **camera** that follows the
   player and stays inside the map.
 - **Scenes**: trees of sprites, rectangles, text, areas and tilemaps laid out in files of plain
@@ -81,6 +84,7 @@ need ALSA's library (`libasound2`) and glibc 2.35 or newer.
 | [Orchard](#orchard) | Luau, around a rigged character | `cargo run -- examples/orchard` |
 | [Sprites](#sprites) | Rust, with Luau scripts | `cargo run --example sprites` |
 | [Shapes](#shapes) | Rust | `cargo run --example shapes` |
+| [Meshes](#meshes) | Rust, in 3D | `cargo run --example meshes` |
 | [egui](#egui) | Rust, with an egui panel | `cargo run --example gui` |
 
 ### RPG
@@ -254,6 +258,16 @@ square sliding across it, a ball circling the middle on the end of a line, and a
 drawn over them.
 
 ![Shapes](docs/screenshots/shapes.png)
+
+### Meshes
+
+[`examples/meshes.rs`](examples/meshes.rs) draws meshes in a 3D view: crates, a post and a
+bouncing ball on a field of grass, lit by the sun and seen through a camera circling them. The view
+renders at the canvas's 320x180 pixels, with a HUD over it and a label that follows the ball. The
+field is a mesh the example builds itself, a quad for each tile. Left and Right turn the camera
+round faster.
+
+![Crates, a post and a ball on a field of grass](docs/screenshots/meshes.png)
 
 ### egui
 
