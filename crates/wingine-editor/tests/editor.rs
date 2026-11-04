@@ -1465,7 +1465,7 @@ fn the_examples_scripts_check_against_the_engines_definitions() {
         return;
     }
     let (definitions, luaurc) = lsp::support_files().unwrap();
-    for game in ["pong", "rpg", "shmup", "garden", "orchard"] {
+    for game in ["pong", "rpg", "shmup", "garden", "orchard", "cellar"] {
         let folder = examples().join(game);
         let scripts: Vec<String> = project_scripts(&folder, "");
         let output = Command::new(lsp::program())

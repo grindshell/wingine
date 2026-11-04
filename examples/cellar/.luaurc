@@ -1,0 +1,4 @@
+{
+    "globals": ["cellar"],
+    "lint": { "BuiltinGlobalWrite": false }
+}

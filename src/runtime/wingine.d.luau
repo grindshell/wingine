@@ -64,8 +64,91 @@ type FrameStats = {
     render: number,
     --- Quads drawn: sprites, rectangles and glyphs of text.
     quads: number,
-    --- Draw calls: one for each run of quads with the same texture.
+    --- Triangles of the meshes and billboards drawn in 3D views.
+    triangles: number,
+    --- Draw calls: one for each run of quads with the same texture, and one for each mesh or
+    --- billboard.
     draw_calls: number,
+}
+
+--- A camera looking into a 3D world, for a `View3d`. 3D coordinates are right-handed with `y` up:
+--- looking along `-z`, `x` points right and `z` toward the camera.
+type Camera3d = {
+    --- Where the camera is.
+    position: vector,
+    --- The point it looks at, which shows in the middle of the view.
+    target: vector,
+    --- Which way is up the view, as near as it can be. By default, `vector.create(0, 1, 0)`.
+    up: vector?,
+    --- With perspective, the angle the view takes in from its bottom edge to its top, in
+    --- radians. By default, 0.8.
+    fov: number?,
+    --- Without perspective, how many world units the view shows from its bottom edge to its top.
+    --- A camera has a `fov` or a `height`, not both.
+    height: number?,
+    --- How near to the camera things show. By default, 0.1.
+    near: number?,
+    --- How far from the camera things show. By default, 1000.
+    far: number?,
+}
+
+--- How a 3D view is lit: by a sun, from one direction, and ambient light from all around. White
+--- light shows surfaces as they are, and the two together light them no brighter than that.
+type Lighting = {
+    --- The way the sun's light goes. By default, down from above, a little to the right and in
+    --- front: `vector.create(-0.3, -1, -0.5)`.
+    direction: vector?,
+    --- The sun's light, on surfaces facing it. By default, `"#cccccc"`.
+    color: Color?,
+    --- The light on every surface. By default, `"#808080"`.
+    ambient: Color?,
+}
+
+--- A 3D view, for `graphics.begin_3d`, `graphics.project` and `graphics.ray`.
+type View3d = {
+    camera: Camera3d,
+    --- Where on the canvas the view shows. By default, the whole canvas.
+    rect: Rect?,
+    --- By default, the default sun and ambient light.
+    lighting: Lighting?,
+}
+
+--- How `graphics.draw_mesh` places and colors a mesh: scaled, rolled, pitched and turned, in that
+--- order, about its origin.
+type MeshOptions = {
+    --- Radians to turn about `y`, counter-clockwise seen from above.
+    yaw: number?,
+    --- Radians to turn about `x`, counter-clockwise seen from `+x`.
+    pitch: number?,
+    --- Radians to turn about `z`, counter-clockwise seen from `+z`.
+    roll: number?,
+    --- A scale along every axis, or a vector of one for each.
+    scale: (number | vector)?,
+    --- The sprite the mesh shows. By default, none: white.
+    sprite: Sprite?,
+    --- A color the mesh's colors are multiplied by. By default, white.
+    tint: Color?,
+}
+
+--- A corner of a mesh's triangles, for `graphics.new_mesh`.
+type MeshVertex = {
+    position: vector,
+    --- Which way the surface faces here, for lighting. By default, up.
+    normal: vector?,
+    --- Where on the sprite this corner shows, from 0 at its left and top to 1 at its right and
+    --- bottom. By default, 0.
+    u: number?,
+    v: number?,
+    --- Multiplies the sprite's colors here. By default, white.
+    color: Color?,
+}
+
+--- The triangles of a mesh, for `graphics.new_mesh`.
+type MeshData = {
+    vertices: { MeshVertex },
+    --- Three vertices for each triangle, counting from 1, counter-clockwise seen from the side it
+    --- faces. Triangles show only from that side.
+    indices: { number },
 }
 
 --- A window of an interface, for `ui:window`. Positions and sizes are in points: the window's
@@ -114,6 +197,12 @@ declare extern type SpriteSheet with
     function sprite(self, column: number, row: number): Sprite
     --- Returns how many columns and rows of sprites the sheet has.
     function size(self): (number, number)
+end
+
+--- A mesh uploaded to the GPU, to draw in 3D views.
+declare extern type Mesh with
+    --- Returns how many triangles it has.
+    function triangle_count(self): number
 end
 
 --- Sprites shown one after another at a steady pace. It doesn't keep time: games keep how long
@@ -392,7 +481,7 @@ declare extern type Ui with
     function space(self, amount: number?): ()
 end
 
---- Drawing, the camera, sprites, animations and text. Drawing works only in `draw`.
+--- Drawing, the camera, sprites, animations, text and 3D views. Drawing works only in `draw`.
 declare graphics: {
     --- Fills the canvas with `color`, discarding anything drawn so far this frame.
     clear: (color: Color) -> (),
@@ -436,6 +525,34 @@ declare graphics: {
     new_animation: (frames: { Sprite }, frame_time: number) -> Animation,
     --- Returns the built-in pixel font.
     default_font: () -> Font,
+    --- Begins a 3D view, over what was drawn before. Meshes and billboards drawn after go in it,
+    --- until anything else is drawn, which goes over it.
+    begin_3d: (view: View3d) -> (),
+    --- Draws `mesh` in the 3D view begun last, its origin at `position`.
+    draw_mesh: (mesh: Mesh, position: vector, options: MeshOptions?) -> (),
+    --- Draws `sprite` standing upright in the 3D view begun last, facing the camera, with the
+    --- middle of its bottom edge at `position`: `height` world units tall (1 by default), and
+    --- `width` wide (by default, as its shape makes it). A negative `width` mirrors it.
+    draw_billboard: (sprite: Sprite, position: vector, tint: Color?, width: number?, height: number?) -> (),
+    --- Returns where `point` shows on the canvas through `view`, or nothing if it's nearer than
+    --- the camera's near plane, such as behind it, or beyond its far plane.
+    project: (view: View3d, point: vector) -> (number?, number?),
+    --- Returns the ray into `view` through `x`, `y` on the canvas: where it starts, on the near
+    --- plane, and the way it goes, of length 1.
+    ray: (view: View3d, x: number, y: number) -> (vector, vector),
+    --- Returns a mesh of `data`'s triangles.
+    new_mesh: (data: MeshData) -> Mesh,
+    --- Returns a cube `size` along each side, centered on its origin, showing the whole sprite on
+    --- each side.
+    new_cube: (size: number) -> Mesh,
+    --- Returns a box `width`, `height` and `depth` along `x`, `y` and `z`, as `new_cube` does.
+    new_cuboid: (width: number, height: number, depth: number) -> Mesh,
+    --- Returns a flat rectangle facing up, `width` along `x` and `depth` along `z`, centered on
+    --- its origin, showing the sprite with its top toward `-z`.
+    new_plane: (width: number, depth: number) -> Mesh,
+    --- Returns a sphere of `radius`, `segments` slices around (16 by default) and `rings` from top
+    --- to bottom (8 by default).
+    new_sphere: (radius: number, segments: number?, rings: number?) -> Mesh,
 }
 
 --- The keyboard, mouse and gamepads, and actions bound to keys and buttons. Works while the game

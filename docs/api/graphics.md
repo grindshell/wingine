@@ -1,9 +1,10 @@
 # `graphics`
 
-Drawing, the camera, sprites, animations and text.
+Drawing, the camera, sprites, animations, text, and 3D views.
 
 Everything drawn in a frame is drawn in order, later things on top of earlier ones, onto a canvas
-that starts the frame cleared to black. Drawing functions work only in `draw`.
+that starts the frame cleared to black. 3D views take their place in that order too. Drawing
+functions work only in `draw`.
 
 - [Drawing](#drawing): [`clear`](#graphicsclear), [`fill_rect`](#graphicsfill_rect),
   [`outline_rect`](#graphicsoutline_rect), [`draw_line`](#graphicsdraw_line),
@@ -19,6 +20,12 @@ that starts the frame cleared to black. Drawing functions work only in `draw`.
 - [Animation](#animation): [`new_animation`](#graphicsnew_animation), [`Animation`](#animation-1)
 - [Text](#text): [`default_font`](#graphicsdefault_font), [`Font`](#font),
   [`TextLayout`](#textlayout)
+- [3D views](#3d-views): [`begin_3d`](#graphicsbegin_3d), [`draw_mesh`](#graphicsdraw_mesh),
+  [`draw_billboard`](#graphicsdraw_billboard), [`project`](#graphicsproject),
+  [`ray`](#graphicsray)
+- [Meshes](#meshes): [`new_cube`](#graphicsnew_cube), [`new_cuboid`](#graphicsnew_cuboid),
+  [`new_plane`](#graphicsnew_plane), [`new_sphere`](#graphicsnew_sphere),
+  [`new_mesh`](#graphicsnew_mesh), [`Mesh`](#mesh)
 
 ## Drawing
 
@@ -341,7 +348,8 @@ seconds, measured on the CPU:
 | `draw` | `draw` and native libraries' draw hooks: recording what to draw. |
 | `render` | Rendering what was drawn: uploading it to the GPU and submitting draw calls. Not the GPU's own work. |
 | `quads` | How many quads the frame drew: sprites, rectangles and glyphs of text. |
-| `draw_calls` | How many draw calls those took: one for each run of quads with the same texture. |
+| `triangles` | How many triangles of meshes and billboards the frame drew in [3D views](#3d-views). |
+| `draw_calls` | How many draw calls those took: one for each run of quads with the same texture, and one for each mesh or billboard. |
 
 Before the first frame has finished, everything is 0. To see what a frame really costs, turn
 [`vsync`](../project-structure.md#vsync) off, and run a release build. See
@@ -607,3 +615,271 @@ layout:line_count(): number
 ```
 
 Returns how many lines the text takes.
+
+## 3D views
+
+A 3D view shows meshes, and sprites standing among them, in a 3D world, on all or part of the
+canvas. It takes its place among what's drawn in 2D: what's drawn before it is under it, and what's
+drawn after it, such as a HUD, is over it. Within a view, nearer things hide farther ones, whatever
+order they're drawn in. A view renders at the canvas's resolution, so with a fixed
+[`resolution`](../project-structure.md#resolution) it has the same large pixels as the rest of the
+game.
+
+3D positions are Luau's vectors, made with `vector.create(x, y, z)`, which add, subtract and
+scale with `+`, `-` and `*`. Coordinates are right-handed with `y` up: looking along `-z`, `x` points
+right and `z` toward the camera. A world unit is whatever the game makes it; a tile or a crate is
+a good size for 1. Angles in 3D are radians, and positive angles turn counter-clockwise about
+their axis, seen from its positive end.
+
+```lua
+local crate = graphics.new_cube(1)
+local ground = graphics.new_plane(6, 6)
+local hero = graphics.load_sprite_sheet("tiles.png", 16, 16):sprite(27, 0)
+local font = graphics.default_font()
+
+local view = {
+    camera = { position = vector.create(0, 4, 6), target = vector.create(0, 0.5, 0) },
+}
+
+function draw()
+    graphics.clear("#8cc4e8")
+    graphics.begin_3d(view)
+    graphics.draw_mesh(ground, vector.zero, { tint = "#4f8a3c" })
+    graphics.draw_mesh(crate, vector.create(0, 0.5, 0), { yaw = 0.3, tint = "#b07a48" })
+    graphics.draw_billboard(hero, vector.create(1.5, 0, 0.5))
+    -- Anything else drawn ends the view, and goes over it.
+    graphics.draw_text(font, "Crates: 1", 4, 4, "#ffffff")
+end
+```
+
+### `graphics.begin_3d`
+
+```lua
+graphics.begin_3d(view: View3d)
+```
+
+Begins a 3D view over what's been drawn so far. The meshes and billboards drawn after it go in it,
+until anything else is drawn, which ends it and goes over it. Each view has its own depth: things
+in one hide each other by how near they are, but a later view draws over an earlier one.
+
+`view` is a table:
+
+| Field | What it is |
+|---|---|
+| `camera` | The camera the view looks through: a table, below. |
+| `rect` | Where on the canvas the view shows, a [`Rect`](README.md#rect). By default, the whole canvas. With a [camera](#graphicsset_camera) set, it's in world positions, as everything drawn is. |
+| `lighting` | How the view is lit: a table, below. By default, the default sun and ambient light. |
+
+The camera's table:
+
+| Field | What it is |
+|---|---|
+| `position` | Where the camera is, a vector. |
+| `target` | The point it looks at, a vector, which shows in the middle of the view. |
+| `up` | Which way is up the view, as near as it can be: a vector, `+y` by default. Looking straight down, up the view is `-z`, and looking straight up, `+z`. |
+| `fov` | With perspective, where farther things look smaller: the angle the view takes in from its bottom edge to its top, in radians. By default, 0.8, about 46 degrees. |
+| `height` | Without perspective, where things look the same size however far away they are, as in isometric games: how many world units the view shows from its bottom edge to its top. A camera has a `fov` or a `height`, not both. |
+| `near`, `far` | How near to the camera and how far from it things show, by default 0.1 and 1000 world units. Depth is told apart more finely the closer they are to each other. |
+
+The lighting's table:
+
+| Field | What it is |
+|---|---|
+| `direction` | The way the sun's light goes, a vector of any length. By default, `vector.create(-0.3, -1, -0.5)`: down from above, a little to the right and in front. |
+| `color` | The sun's light, a [`Color`](README.md#color), on surfaces facing it, and less on those turned partly away. By default, `"#cccccc"`. |
+| `ambient` | The light on every surface, even those facing away from the sun. By default, `"#808080"`. |
+
+White light shows a surface as it is, and the sun and ambient light together light it no brighter
+than that. For no shading at all, light everything with ambient light alone:
+`{ color = "#000000", ambient = "#ffffff" }`.
+
+### `graphics.draw_mesh`
+
+```lua
+graphics.draw_mesh(mesh: Mesh, position: vector, options: MeshOptions?)
+```
+
+Draws `mesh` in the 3D view begun last, with its origin at `position`. Drawing one when no view is
+open, or after something else has ended it, is an error. `options` is a table that places and
+colors it:
+
+| Field | What it is |
+|---|---|
+| `yaw` | Radians to turn it about `y`, counter-clockwise seen from above. |
+| `pitch` | Radians to turn it about `x`, counter-clockwise seen from `+x`. |
+| `roll` | Radians to turn it about `z`, counter-clockwise seen from `+z`. |
+| `scale` | How much to scale it: a number, along every axis, or a vector, along each. A negative scale mirrors it. |
+| `sprite` | The sprite it shows. A mesh's corners show points of the sprite from 0 to 1 across it, so each side of a [cube](#graphicsnew_cube) shows the whole sprite. By default, none: the mesh is white. |
+| `tint` | A color its colors are multiplied by. By default, white. |
+
+The mesh is scaled, rolled, pitched and turned, in that order, about its origin, then moved to
+`position`. Pixels of the sprite less than half opaque aren't drawn, so what's behind shows through
+them, and the rest are drawn opaque: meshes don't blend.
+
+```lua
+-- A crate turned the way the player last walked, showing planks, and a ball stretched tall.
+graphics.draw_mesh(crate, vector.create(2, 0.5, -1), { yaw = facing, sprite = planks })
+graphics.draw_mesh(ball, vector.create(0, 1, 0), { scale = vector.create(1, 2, 1), tint = "#e05040" })
+```
+
+Each mesh is a draw call of its own.
+
+### `graphics.draw_billboard`
+
+```lua
+graphics.draw_billboard(sprite: Sprite, position: vector, tint: Color?, width: number?, height: number?)
+```
+
+Draws `sprite` standing upright in the 3D view begun last, with the middle of its bottom edge at
+`position`, turned to face the camera across the ground, as characters do in 2.5D games: it stays
+upright however far down the camera looks. It's `height` world units tall, 1 by default, and
+`width` wide, by default as wide as its shape makes it at that height. A negative `width` mirrors
+it, as [`sprite:flipped_x`](#spriteflipped_x) does.
+
+A billboard is lit as the ground is, whichever way it faces, so it matches what it stands on. It
+hides what's behind it as meshes do, its pixels less than half opaque left out, and its colors are
+multiplied by `tint`, white by default. Drawing one when no view is open is an error.
+
+```lua
+-- The player, a tile tall, facing the way they last walked.
+local sprite = if player.facing == "left" then hero:flipped_x() else hero
+graphics.draw_billboard(sprite, player.position)
+```
+
+### `graphics.project`
+
+```lua
+graphics.project(view: View3d, point: vector): (number?, number?)
+```
+
+Returns where `point` shows on the canvas through `view`, in the coordinates its rect is in, or
+nothing if it's nearer than the camera's near plane, such as behind the camera, or beyond its far
+plane. Points to the sides of the view are outside its rect, but still placed. Labels over things
+in a 3D view are drawn where it puts them:
+
+```lua
+local x, y = graphics.project(view, player.position + vector.create(0, 1.2, 0))
+if x and y then
+    local width = font:measure(player.name)
+    graphics.draw_text(font, player.name, x - width / 2, y - 10, "#ffffff")
+end
+```
+
+Works in `draw`, and while the game loads and in `update`, where a view without a rect fills the
+whole canvas.
+
+### `graphics.ray`
+
+```lua
+graphics.ray(view: View3d, x: number, y: number): (vector, vector)
+```
+
+Returns the ray into `view` through `x`, `y` on the canvas: where it starts, on the camera's near
+plane, and the way it goes, a vector of length 1. Everything that shows at that point lies along
+it. To find the point on the ground, at height 0, under the mouse:
+
+```lua
+local mouse_x, mouse_y = input.mouse_position()
+if mouse_x and mouse_y then
+    local origin, direction = graphics.ray(view, mouse_x, mouse_y)
+    if direction.y < 0 then
+        pointed_at = origin + direction * (-origin.y / direction.y)
+    end
+end
+```
+
+Works when [`project`](#graphicsproject) does.
+
+## Meshes
+
+A mesh is triangles, uploaded to the GPU once and drawn as many times as a game likes, in
+[3D views](#3d-views). Meshes are made while the game loads and in `update`.
+
+### `graphics.new_cube`
+
+```lua
+graphics.new_cube(size: number): Mesh
+```
+
+Returns a cube `size` along each side, centered on its origin. Each side shows the whole sprite it's
+drawn with, upright seen from outside, and the top shows it with its top toward `-z`.
+
+### `graphics.new_cuboid`
+
+```lua
+graphics.new_cuboid(width: number, height: number, depth: number): Mesh
+```
+
+Returns a box `width` along `x`, `height` along `y` and `depth` along `z`, centered on its origin,
+showing the sprite as a cube does.
+
+### `graphics.new_plane`
+
+```lua
+graphics.new_plane(width: number, depth: number): Mesh
+```
+
+Returns a flat rectangle facing up, `width` along `x` and `depth` along `z`, centered on its origin,
+showing the sprite once across it with its top toward `-z`. It shows only from above.
+
+### `graphics.new_sphere`
+
+```lua
+graphics.new_sphere(radius: number, segments: number?, rings: number?): Mesh
+```
+
+Returns a sphere of `radius` about its origin, made of `segments` slices around it (16 by default,
+at least 3) and `rings` from top to bottom (8 by default, at least 2). The sprite wraps once around
+it, its left and right edges meeting at the back, toward `-z`.
+
+### `graphics.new_mesh`
+
+```lua
+graphics.new_mesh(data: MeshData): Mesh
+```
+
+Returns a mesh of the triangles `data` describes, a table of `vertices` and `indices`. Each vertex
+is a table:
+
+| Field | What it is |
+|---|---|
+| `position` | Where the corner is, a vector. |
+| `normal` | Which way the surface faces there, for lighting: a vector of any length. By default, up. |
+| `u`, `v` | Where on the sprite the corner shows, from 0 at its left and top to 1 at its right and bottom. By default, 0. |
+| `color` | A color the sprite's colors are multiplied by there, and between corners, by a blend of theirs. By default, white. |
+
+`indices` lists three vertices for each triangle, counting from 1, as Luau's tables do,
+counter-clockwise seen from the side the triangle faces. Triangles show only from that side.
+
+```lua
+-- A floor of 1x1 tiles, each showing the whole sprite, alternately shaded.
+local vertices, indices = {}, {}
+for row = 0, 7 do
+    for column = 0, 7 do
+        local color = if (row + column) % 2 == 0 then "#ffffff" else "#d8d8d8"
+        local x, z = column - 4, row - 4
+        local first = #vertices
+        table.insert(vertices, { position = vector.create(x, 0, z + 1), u = 0, v = 1, color = color })
+        table.insert(vertices, { position = vector.create(x + 1, 0, z + 1), u = 1, v = 1, color = color })
+        table.insert(vertices, { position = vector.create(x + 1, 0, z), u = 1, v = 0, color = color })
+        table.insert(vertices, { position = vector.create(x, 0, z), u = 0, v = 0, color = color })
+        for _, corner in { 1, 2, 3, 1, 3, 4 } do
+            table.insert(indices, first + corner)
+        end
+    end
+end
+local floor = graphics.new_mesh({ vertices = vertices, indices = indices })
+```
+
+An index that isn't one of the vertices, or a count of indices that isn't three for each triangle,
+is an error.
+
+### `Mesh`
+
+#### `mesh:triangle_count`
+
+```lua
+mesh:triangle_count(): number
+```
+
+Returns how many triangles the mesh has.

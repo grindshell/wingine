@@ -18,9 +18,10 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **Timing**: games update once a frame by the frame's time, or at a fixed rate, such as 60 times
   a second, so they play the same at any frame rate. Frame stats and a headless benchmark show
   where each frame's time goes.
-- **3D views** among 2D drawing: meshes lit by a sun, textured with sprites, seen through a
-  perspective or orthographic camera, and rendered at the canvas's resolution, so they keep a
-  pixel-art look. Cubes, planes and spheres are built in, and games build their own meshes.
+- **3D views** among 2D drawing, from Rust or Luau: meshes lit by a sun, textured with sprites,
+  and sprites standing among them as billboards, for 2.5D games, seen through a perspective or
+  orthographic camera and rendered at the canvas's resolution, so they keep a pixel-art look.
+  Cubes, planes and spheres are built in, and games build their own meshes.
 - **Tilemaps** with layers and tilesets, culled to the view, and a **camera** that follows the
   player and stays inside the map.
 - **Scenes**: trees of sprites, rectangles, text, areas and tilemaps laid out in files of plain
@@ -82,6 +83,7 @@ need ALSA's library (`libasound2`) and glibc 2.35 or newer.
 | [Pong](#pong) | Luau | `cargo run -- examples/pong` |
 | [Garden](#garden) | Luau, around a scene file | `cargo run -- examples/garden` |
 | [Orchard](#orchard) | Luau, around a rigged character | `cargo run -- examples/orchard` |
+| [Cellar](#cellar) | Luau, in 2.5D | `cargo run -- examples/cellar` |
 | [Sprites](#sprites) | Rust, with Luau scripts | `cargo run --example sprites` |
 | [Shapes](#shapes) | Rust | `cargo run --example shapes` |
 | [Meshes](#meshes) | Rust, in 3D | `cargo run --example meshes` |
@@ -238,6 +240,18 @@ blinking, catching, missing and giving up. Each frame the game poses the picker 
 another, weighting the walk by how much they're walking, so they ease between standing and
 walking, and fading the reactions in and out. The orchard places the picker as an instance of
 that file, and their clips pose it there. When the day is over, the camera zooms in on the picker.
+
+### Cellar
+
+[`examples/cellar`](examples/cellar) is a dark cellar in 2.5D, written entirely in Luau. The hero
+walks it tile by tile, lighting its candles by standing on them. Its walls are meshes in a
+[3D view](docs/api/graphics.md#3d-views), on a floor the game builds as a mesh of its own, and the
+hero and the candles are sprites standing among them, billboards that turn to face the camera as
+it follows the hero.
+
+![The hero after lighting every candle in the cellar](docs/screenshots/cellar.png)
+
+Walk with the arrow keys or WASD.
 
 ### Sprites
 

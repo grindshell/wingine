@@ -2004,6 +2004,197 @@ fn games_that_fail_to_load_are_errors() {
     assert!(err.contains("nope.wav"), "{err}");
 }
 
+/// A view of the middle of the world, 2 units across, looking along -z without perspective or
+/// shading, for 3D tests on the 20x20 canvas of `SMALL_WINDOW`.
+const FLAT_VIEW: &str = "view = {
+    camera = { position = vector.create(0, 0, 5), target = vector.zero, height = 2 },
+    lighting = { color = '#000000', ambient = '#ffffff' },
+}";
+
+#[test]
+fn luau_games_draw_meshes_and_billboards_in_3d_views() {
+    let folder = game(
+        "meshes",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                &format!(
+                    "{FLAT_VIEW}
+                    cube = graphics.new_cube(1)
+                    hero = graphics.load_sprite_sheet('tiles.png', 16, 16):sprite(27, 0)
+                    seen = {{}}
+                    function update()
+                        table.insert(seen, graphics.frame_stats())
+                    end
+                    function draw()
+                        graphics.begin_3d(view)
+                        -- Half the view across: the middle 10 pixels.
+                        graphics.draw_mesh(cube, vector.zero, {{ tint = '#ff0000' }})
+                        -- A quarter of it across, nearer the camera, its bottom at the middle.
+                        graphics.draw_billboard(hero, vector.create(-0.75, 0, 1), '#00ff00', 0.5)
+                        -- Over the view, across the cube.
+                        graphics.fill_rect(0, 12, 20, 2, '#0000ff')
+                    end"
+                ),
+            ),
+        ],
+    );
+    fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/kenney_1-bit-pack_transparent-packed.png"
+        ),
+        folder.join("tiles.png"),
+    )
+    .unwrap();
+    let mut simulation = simulation(&folder);
+    simulation.run_frames(2);
+    assert_eq!(simulation.game().error().map(ToString::to_string), None);
+    let stats = "seen[2].triangles, seen[2].draw_calls";
+    // The cube's 12 and the billboard's 2; the two meshes, then the rect.
+    assert_eq!(eval::<(u32, u32)>(&simulation, stats), (14, 3));
+
+    let frame = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&frame, 10, 7), [255, 0, 0, 255], "the cube");
+    assert_eq!(pixel(&frame, 17, 7), [0, 0, 0, 255], "beside it");
+    assert_eq!(
+        pixel(&frame, 10, 13),
+        [0, 0, 255, 255],
+        "the rect over the view"
+    );
+    // The hero's sprite is mostly transparent, so the canvas shows through it, apart from its
+    // green pixels, all left of the cube, above the middle.
+    let green = (0..20)
+        .flat_map(|x| (0..20).map(move |y| (x, y)))
+        .filter(|&(x, y)| {
+            let [r, g, b, _] = pixel(&frame, x, y);
+            g > 128 && r < 32 && b < 32
+        })
+        .collect::<Vec<_>>();
+    assert!(!green.is_empty());
+    assert!(green.iter().all(|&(x, y)| x < 5 && y < 10), "{green:?}");
+}
+
+#[test]
+fn meshes_draw_only_in_an_open_3d_view() {
+    let draw = |test: &str, body: &str| {
+        let main = format!(
+            "{FLAT_VIEW}
+            cube = graphics.new_cube(1)
+            function draw()
+                {body}
+            end"
+        );
+        let mut simulation = simulation(&game(test, &[("main.luau", &main)]));
+        simulation.run_frames(1);
+        simulation.game().error().map(ToString::to_string)
+    };
+    let without = draw("mesh_without_view", "graphics.draw_mesh(cube, vector.zero)").unwrap();
+    assert!(
+        without.contains("call graphics.begin_3d first"),
+        "{without}"
+    );
+    let after_2d = draw(
+        "mesh_after_2d",
+        "graphics.begin_3d(view)
+        graphics.fill_rect(0, 0, 1, 1, '#ffffff')
+        graphics.draw_mesh(cube, vector.zero)",
+    );
+    assert!(after_2d.unwrap().contains("begin_3d"));
+    let in_view = draw(
+        "mesh_in_view",
+        "graphics.begin_3d(view)
+        graphics.set_camera(5, 5)
+        graphics.draw_mesh(cube, vector.zero)
+        graphics.draw_mesh(cube, vector.zero, { yaw = 1, scale = vector.create(1, 2, 1) })",
+    );
+    assert_eq!(in_view, None);
+}
+
+#[test]
+fn luau_games_make_meshes() {
+    let folder = game(
+        "making_meshes",
+        &[(
+            "main.luau",
+            "counts = {
+                graphics.new_cube(1):triangle_count(),
+                graphics.new_cuboid(1, 2, 3):triangle_count(),
+                graphics.new_plane(2, 2):triangle_count(),
+                graphics.new_sphere(1):triangle_count(),
+                graphics.new_sphere(1, 4, 2):triangle_count(),
+                graphics.new_mesh({
+                    vertices = {
+                        { position = vector.create(0, 0, 0) },
+                        { position = vector.create(1, 0, 0), u = 1, color = '#ff0000' },
+                        { position = vector.create(1, 0, -1), normal = vector.create(0, 1, 0) },
+                    },
+                    indices = { 1, 2, 3 },
+                }):triangle_count(),
+            }
+            from_zero = pcall(graphics.new_mesh, {
+                vertices = { { position = vector.zero } },
+                indices = { 0, 1, 1 },
+            })
+            _, too_few = pcall(graphics.new_mesh, {
+                vertices = { { position = vector.zero } },
+                indices = { 1, 1 },
+            })
+            _, infinite = pcall(graphics.new_cube, math.huge)",
+        )],
+    );
+    let simulation = simulation(&folder);
+    assert_eq!(
+        eval::<Vec<u32>>(&simulation, "counts"),
+        [12, 12, 2, 16 * 2 * 6 + 16 * 2, 4 * 2, 1]
+    );
+    assert!(!eval::<bool>(&simulation, "from_zero"));
+    let too_few: String = eval(&simulation, "tostring(too_few)");
+    assert!(too_few.contains("2 indices"), "{too_few}");
+    let infinite: String = eval(&simulation, "tostring(infinite)");
+    assert!(infinite.contains("finite"), "{infinite}");
+}
+
+#[test]
+fn cameras_place_points_on_the_canvas_and_rays_into_the_world() {
+    let folder = game(
+        "projecting",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                &format!(
+                    "{FLAT_VIEW}
+                    -- The middle, and the top-right corner of the view, which a rect moves.
+                    middle = {{ graphics.project(view, vector.zero) }}
+                    corner = {{ graphics.project({{ camera = view.camera, rect = {{ x = 4, y = 6, width = 10, height = 10 }} }}, vector.create(1, 1, 0)) }}
+                    behind = {{ graphics.project(view, vector.create(0, 0, 10)) }}
+                    origin, direction = graphics.ray(view, 15, 10)
+                    _, both = pcall(graphics.project, {{ camera = {{ position = vector.one, target = vector.zero, fov = 1, height = 2 }} }}, vector.zero)"
+                ),
+            ),
+        ],
+    );
+    let simulation = simulation(&folder);
+    assert_eq!(
+        eval::<(f32, f32)>(&simulation, "middle[1], middle[2]"),
+        (10.0, 10.0)
+    );
+    assert_eq!(
+        eval::<(f32, f32)>(&simulation, "corner[1], corner[2]"),
+        (14.0, 6.0)
+    );
+    assert_eq!(eval::<usize>(&simulation, "#behind"), 0);
+    // Half way from the middle to the right edge, a unit to the right; without perspective, rays
+    // all go the way the camera looks.
+    let ray: (f32, f32, f32, f32) =
+        eval(&simulation, "origin.x, origin.z, direction.x, direction.z");
+    assert_eq!(ray, (0.5, 4.9, 0.0, -1.0));
+    let both: String = eval(&simulation, "tostring(both)");
+    assert!(both.contains("not both"), "{both}");
+}
+
 /// Interfaces Luau games lay out in `gui(ui)`, driven by clicking their widgets by label.
 #[cfg(feature = "egui")]
 mod gui {

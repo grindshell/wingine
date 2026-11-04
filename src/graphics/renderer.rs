@@ -4,7 +4,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use super::{
-    Texture,
+    Mesh, MeshData, Texture,
     camera3d::{self, Mat4},
     canvas::{Batch, Canvas, Vertex},
     mesh::GpuVertex,
@@ -73,6 +73,8 @@ struct MeshRenderer {
     instance_buffer: wgpu::Buffer,
     /// The most recently used last.
     depth_textures: Vec<DepthTexture>,
+    /// The quad billboards are drawn as.
+    billboard: Mesh,
 }
 
 struct DepthTexture {
@@ -501,6 +503,7 @@ impl MeshRenderer {
             view_stride,
             instance_buffer,
             depth_textures: Vec::new(),
+            billboard: Mesh::new(device, &MeshData::billboard()).expect("a quad can be drawn"),
         }
     }
 
@@ -626,18 +629,16 @@ impl MeshRenderer {
             }
             let texture = draw.texture.as_ref().unwrap_or(white);
             pass.set_bind_group(1, texture.bind_group(), &[]);
-            pass.set_vertex_buffer(0, draw.mesh.vertex_buffer().slice(..));
+            let mesh = draw.mesh.as_ref().unwrap_or(&self.billboard);
+            pass.set_vertex_buffer(0, mesh.vertex_buffer().slice(..));
             let instance = u64::from(i) * instance_size;
             pass.set_vertex_buffer(
                 1,
                 self.instance_buffer
                     .slice(instance..instance + instance_size),
             );
-            pass.set_index_buffer(
-                draw.mesh.index_buffer().slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
-            pass.draw_indexed(0..draw.mesh.index_count(), 0, 0..1);
+            pass.set_index_buffer(mesh.index_buffer().slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..mesh.index_count(), 0, 0..1);
         }
     }
 }

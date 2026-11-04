@@ -141,6 +141,22 @@ impl MeshData {
         self.indices.len() / 3
     }
 
+    /// The quad billboards are drawn as: 1 wide and 1 tall, facing `+z`, with the middle of its
+    /// bottom edge at the origin.
+    pub(crate) fn billboard() -> Self {
+        let mut mesh = Self::default();
+        mesh.push_quad(
+            [0.0, 0.0, 1.0],
+            [
+                [-0.5, 0.0, 0.0],
+                [0.5, 0.0, 0.0],
+                [0.5, 1.0, 0.0],
+                [-0.5, 1.0, 0.0],
+            ],
+        );
+        mesh
+    }
+
     /// Adds a quad facing `normal`, its corners counter-clockwise seen from that side from the
     /// one showing the sprite's bottom-left.
     fn push_quad(&mut self, normal: [f32; 3], corners: [[f32; 3]; 4]) {

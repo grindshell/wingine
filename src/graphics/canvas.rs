@@ -3,7 +3,7 @@ use std::ops::{Bound, Range, RangeBounds};
 use bytemuck::{Pod, Zeroable};
 
 use super::{
-    Camera, Canvas3d, Color, Font, Sprite, TextLayout, Texture, View3d,
+    Camera, Canvas3d, Color, Font, Mesh, Sprite, TextLayout, Texture, View3d,
     camera::Transform,
     font::PlacedGlyph,
     view3d::{Instance, MeshDraw, Segment3d},
@@ -120,7 +120,7 @@ impl Canvas {
     pub(crate) fn triangle_count(&self) -> u32 {
         self.mesh_draws
             .iter()
-            .map(|draw| draw.mesh.triangle_count())
+            .map(|draw| draw.mesh.as_ref().map_or(2, Mesh::triangle_count))
             .sum()
     }
 
@@ -155,6 +155,14 @@ impl Canvas {
             draws: first..first,
         });
         Canvas3d { canvas: self }
+    }
+
+    /// The 3D view begun last, to draw more in, unless something else has been drawn since.
+    pub(crate) fn open_view(&mut self) -> Option<Canvas3d<'_>> {
+        let segment = self.segments.last()?;
+        let last = self.batches.len().checked_sub(1)?;
+        let open = segment.before_batch as usize == last && self.batches[last].quads.is_empty();
+        open.then_some(Canvas3d { canvas: self })
     }
 
     pub fn fill_rect(&mut self, rect: Rect, color: Color) {

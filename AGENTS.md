@@ -1,9 +1,9 @@
 # Wingine
 
 Wingine is a desktop game engine written in Rust, built as a library crate (`wingine`). It is
-primarily a **2D** engine, with limited 3D: meshes drawn in 3D views among the 2D, from Rust. 3D
-is not a focus — don't let 3D concerns drive the design of 2D systems, and don't build more 3D
-features unless asked.
+primarily a **2D** engine, with limited 3D: meshes and billboarded sprites drawn in 3D views
+among the 2D, from Rust and Luau. 3D is not a focus — don't let 3D concerns drive the design of 2D
+systems, and don't build more 3D features unless asked.
 
 ## Scope
 
@@ -146,8 +146,12 @@ networking or 3D pipelines.
   (a `Camera3d`, the rect of the canvas it shows on, moved by the 2D camera, and its `Lighting`:
   one sun and ambient light) and returns a `Canvas3d`, which draws `Mesh`es, made from `MeshData`
   with `Context::create_mesh`, placed by an `Affine3`, showing a `Sprite` (its UVs from 0 to 1
-  span the sprite's region) times their vertices' colors and a tint. Texels less than half opaque
-  are discarded, and nothing blends. 3D coordinates are right-handed with `y` up, as glTF's are.
+  span the sprite's region) times their vertices' colors and a tint, and billboards: sprites
+  standing upright, turned across the ground toward the camera (`Camera3d::billboard_axes`),
+  drawn as the renderer's own quad mesh (a `MeshDraw` without a mesh), with normals that all
+  point up, so they're lit as the ground is. Texels less than half opaque are discarded, and
+  nothing blends, so billboards need no sorting. 3D coordinates are right-handed with `y` up, as
+  glTF's are.
   The canvas records each view as a `Segment3d` before the batch of quads that follows it, and
   `begin_3d` starts that batch empty, so quads drawn after a view never join a batch drawn before
   it; `push_quad` doesn't know about 3D. `Renderer::render` draws the quads up to each view in a
@@ -158,7 +162,11 @@ networking or 3D pipelines.
   matrix, sprite region and tint go into an instance buffer written each frame, bound at the
   draw's offset, so a mesh is one draw call. Mirroring transforms draw with a second pipeline
   whose front faces wind the other way. Rendering is at the target's resolution, so a fixed
-  resolution renders 3D at the canvas's pixels. The `meshes` example uses all of it.
+  resolution renders 3D at the canvas's pixels. The `meshes` example uses all of it from Rust,
+  and `cellar` from Luau, whose `graphics.begin_3d` records a view and whose `draw_mesh` and
+  `draw_billboard` add to the last one while nothing else has been drawn since
+  (`Canvas::open_view`), and fail otherwise. Luau's 3D points are its native `vector`s
+  (`mlua::Vector`), and views, cameras and lighting are plain tables read each call.
 - `src/graphics/font.rs` and `default_font.rs`: `Font` (glyphs packed into one texture, with
   their metrics) and `TextLayout`. `Font::layout` wraps text between words to a width
   (`layout_aligned` also lines its lines up by an `Align`, moving each by whole pixels), and
@@ -206,8 +214,9 @@ networking or 3D pipelines.
   button asks the game's global `close_requested`, lent the context as `update` is, and closes
   unless it returns false; a game stopped by an error always closes. The module docs are the
   reference for script authors; the engine types those tables hand out (sprites, animations,
-  tilemaps, grid movers, text layouts, scene nodes) are userdata, documented with their methods in
-  `src/lua.rs`. Sprite sheets and scenes share one cache of images (`Textures`), so each is read
+  meshes, tilemaps, grid movers, text layouts, scene nodes) are userdata, documented with their
+  methods in `src/lua.rs`. Sprite sheets and scenes share one cache of images (`Textures`), so
+  each is read
   once. `wingine.d.luau` (`runtime::DEFINITIONS`) declares that API's types, with short docs, as
   a definitions file for luau-lsp (`declare extern type ... with` for userdata, `declare name: {}`
   for tables; methods can't be generic there, so generic ones are properties of generic function
@@ -401,6 +410,13 @@ networking or 3D pipelines.
   of 2. `orchard.grow(x)` starts an apple growing, and tests turn
   `orchard.growing` off so only theirs grow. The scene files are in the canonical layout, and
   `tests/orchard.rs` checks they stay so. The game's state is the global `orchard`.
+- `examples/cellar/`: a 2.5D game in a 3D view: the hero walks a cellar tile by tile with a
+  `GridMover` and lights its candles by standing on them. The map is rows of characters in
+  `main.luau`; its walls are low cuboids, so the hero shows over them, on a floor built with
+  `graphics.new_mesh`, and the hero and candles are billboards, the candles toward the back of
+  their tiles so the hero standing on one isn't in the same place. The camera follows the hero
+  from above and behind (`cellar.view()`), and `graphics.project` places the message over their
+  head once every candle is lit. The game's state is the global `cellar`.
 - `src/math.rs`: geometry types: `Rect`, and `Affine` and `Affine3`, 2D and 3D transforms that
   compose with `*`.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
@@ -411,7 +427,8 @@ networking or 3D pipelines.
   is random, and its ball's angles come from `exact`, so the same inputs play the same match on
   every platform. The sounds and music in
   `examples/sounds/` were synthesized for `sprites`; `pong`, `rpg` and `shmup` have copies of
-  the ones they use, and `rpg`, `shmup` and `garden` copies of the tileset. `shmup/bullets.png`
+  the ones they use, and `rpg`, `shmup`, `garden` and `cellar` copies of the tileset.
+  `shmup/bullets.png`
   was drawn pixel by pixel for it: pellets, orbs and rice in eight colors, the hitbox, and the
   player's shot. `orchard/orchard.png` was drawn pixel by pixel for it too: the picker's parts and
   faces and their basket in 16x16 cells, apples, and clumps of leaves, a cloud and a bush in 32x32
@@ -445,7 +462,7 @@ networking or 3D pipelines.
 - `tests/gui.rs`: tests for egui over games, through `Simulation`: clicking widgets by label,
   typing into a focused field, input egui takes not reaching the game, and the debug key.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders,
-  their saves, and in its `gui` module (with the `egui` feature), their interfaces, clicked by
+  their saves, their 3D views, and in its `gui` module (with the `egui` feature), their interfaces, clicked by
   label. A hash of what `exact` gives for spreads of arguments is pinned, so CI checks it's the
   same on Windows and Linux.
 - `tests/scene.rs`: tests for scenes loaded to play: finding nodes, transforms, hit testing,
@@ -466,6 +483,9 @@ networking or 3D pipelines.
 - `tests/orchard.rs`: tests for the `orchard` example, the same way: its clips, the picker's walk
   easing in and out, catching and missing apples, the reactions, the end of the day and the
   camera's close-up, and that its scene files are in the canonical layout.
+- `tests/cellar.rs`: tests for the `cellar` example, the same way: walls stopping the hero,
+  walking through the cellar lighting every candle, what each frame draws, from its frame stats,
+  and the camera following the hero.
 - `tests/shmup.rs`: tests for the `shmup` example, the same way: the title menu by key and by
   mouse, its HUD's scene, the player, the bullet systems
   through `shmup.bullets`, spell cards, clearing the stage with cheats, the same seed firing the
@@ -572,6 +592,8 @@ cargo run -- examples/pong
 cargo run -- examples/rpg
 cargo run -- examples/garden
 cargo run -- examples/orchard
+cargo run -- examples/cellar
+cargo run --example meshes
 cargo run --release -- examples/shmup
 cargo build --release -p native-danmaku
 cargo bench

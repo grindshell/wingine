@@ -118,6 +118,15 @@ impl Camera3d {
         }
     }
 
+    /// The ways a billboard's right and its front point: across the view, level with the ground,
+    /// and toward the camera across the ground.
+    pub(crate) fn billboard_axes(&self) -> ([f32; 3], [f32; 3]) {
+        let Basis { right, .. } = self.basis();
+        let level = normalize3([right[0], 0.0, right[2]]).unwrap_or([1.0, 0.0, 0.0]);
+        // Right, up and toward the camera, as `x`, `y` and `z` are to a camera looking along -z.
+        (level, cross3(level, [0.0, 1.0, 0.0]))
+    }
+
     /// Maps world coordinates to clip space, for a view `aspect` times as wide as it's tall.
     pub(crate) fn view_projection(&self, aspect: f32) -> Mat4 {
         mul(&self.projection_matrix(aspect), &from_affine(&self.view()))
@@ -353,6 +362,22 @@ mod tests {
             direction: [0.0, 1.0, 0.0],
         };
         assert_eq!(up.hit_plane([0.0; 3], [0.0, 1.0, 0.0]), None);
+    }
+
+    #[test]
+    fn billboards_face_the_camera_across_the_ground() {
+        let from_front = Camera3d::perspective([0.0, 5.0, 10.0], [0.0; 3], 1.0);
+        let (right, facing) = from_front.billboard_axes();
+        assert_near(right, [1.0, 0.0, 0.0]);
+        assert_near(facing, [0.0, 0.0, 1.0]);
+
+        let from_right = Camera3d::perspective([10.0, 2.0, 0.0], [0.0; 3], 1.0);
+        let (right, facing) = from_right.billboard_axes();
+        assert_near(right, [0.0, 0.0, -1.0]);
+        assert_near(facing, [1.0, 0.0, 0.0]);
+        // Looking straight down, they face down the view, where its bottom edge is.
+        let down = Camera3d::orthographic([0.0, 10.0, 0.0], [0.0; 3], 2.0);
+        assert_near(down.billboard_axes().1, [0.0, 0.0, 1.0]);
     }
 
     #[test]

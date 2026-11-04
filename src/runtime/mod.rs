@@ -56,8 +56,9 @@
 //! The engine's API is in eight global tables:
 //!
 //! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.color`, `graphics.default_font`,
-//! `graphics.frame_stats` and `graphics.new_animation` work anywhere, and
-//! `graphics.load_sprite_sheet` while the game loads and in `update`.
+//! `graphics.frame_stats` and `graphics.new_animation` work anywhere, `graphics.load_sprite_sheet`
+//! and the functions that make meshes while the game loads and in `update`, and
+//! `graphics.project` and `graphics.ray` then and in `draw`.
 //!
 //! - `graphics.clear(color)` fills the canvas with `color`, discarding anything drawn so far.
 //! - `graphics.fill_rect(x, y, width, height, color)`
@@ -110,6 +111,30 @@
 //!   the list `frames` for `frame_time` seconds, then starts over. Draw it with
 //!   `graphics.draw_sprite(animation:frame(time), x, y)`, where `time` is how long it has been
 //!   playing.
+//! - `graphics.begin_3d(view)` begins a 3D view over what's been drawn. The meshes and billboards
+//!   drawn after it go in it, nearer ones hiding farther ones, until anything else is drawn, which
+//!   goes over it. `view` is a table of `camera`, a table of `position` and `target` (vectors),
+//!   and optionally `up`, `fov` (with perspective, 0.8 radians by default) or `height` (without),
+//!   `near` and `far`; `rect`, where on the canvas it shows (the whole canvas by default, moved by
+//!   the camera `set_camera` sets); and `lighting`, a table of any of `direction` (a vector),
+//!   `color` and `ambient`, a sun's light and light from all around.
+//! - `graphics.draw_mesh(mesh, position, options)` draws a mesh in the view begun last, its origin
+//!   at `position`, a vector, scaled by `options.scale` (a number, or a vector for each axis),
+//!   turned by `roll` about `z`, `pitch` about `x` and `yaw` about `y`, in that order, showing
+//!   `sprite` multiplied by `tint`. Drawing one with no view open is an error.
+//! - `graphics.draw_billboard(sprite, position, tint, width, height)` draws a sprite standing
+//!   upright in the view begun last, the middle of its bottom edge at `position`, turned to face
+//!   the camera across the ground: `height` tall (1 by default) and `width` wide (by default, as
+//!   its shape makes it).
+//! - `graphics.project(view, point)` returns where `point` shows on the canvas through `view`, or
+//!   nothing if it's nearer than the near plane or beyond the far one. `graphics.ray(view, x, y)`
+//!   returns the ray through `x`, `y` into the view: its origin, on the near plane, and its
+//!   direction, of length 1.
+//! - `graphics.new_cube(size)`, `graphics.new_cuboid(width, height, depth)`,
+//!   `graphics.new_plane(width, depth)` and `graphics.new_sphere(radius, segments, rings)` make
+//!   meshes, and `graphics.new_mesh(data)` one of `data.vertices`, each a table of `position`
+//!   and optionally `normal`, `u`, `v` and `color`, and `data.indices`, three vertices for each
+//!   triangle, counting from 1.
 //!
 //! `tilemap`, for building maps of tiles, anywhere:
 //!

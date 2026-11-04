@@ -968,6 +968,43 @@ fn meshes_textured() {
     assert_screenshot_allowing(&headless.adapter_name(), "meshes_textured", frame, 16);
 }
 
+/// Sprites standing upright on the ground of a 3D view seen from above at an angle, each facing
+/// the camera: a hero in front of a crate, a tree behind it and partly hidden, and the hero
+/// mirrored by a negative width. They're lit as the ground is, so the white hero shows as bright
+/// as white ground would. A few pixels may differ, as for `meshes_textured`.
+#[test]
+fn meshes_billboards() {
+    let mut headless = headless();
+    let sheet = SpriteSheet::new(headless.context().load_texture(TILESET).unwrap(), 16, 16);
+    let ctx = headless.context();
+    let cube = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let ground = ctx.create_mesh(&MeshData::plane([5.0, 5.0])).unwrap();
+    let hero = sheet.sprite(27, 0);
+    let tree = sheet.sprite(0, 1);
+    let frame = headless
+        .render(128, 96, |canvas| {
+            canvas.clear(Color::rgb8(0x10, 0x10, 0x18));
+            let camera = Camera3d::perspective([1.03, 3.52, 4.01], [0.0, 0.3, 0.0], 0.8);
+            let rect = Rect::new(0.0, 0.0, 128.0, 96.0);
+            let mut view = canvas.begin_3d(View3d::new(camera, rect));
+            view.draw_mesh(
+                &ground,
+                Affine3::IDENTITY,
+                None,
+                Color::rgb8(0x3e, 0x6b, 0x3f),
+            );
+            let crate_ = Affine3::from_translation([0.0, 0.5, 0.0]);
+            view.draw_mesh(&cube, crate_, None, Color::rgb8(0xb0, 0x7a, 0x48));
+            view.draw_billboard(&hero, [0.3, 0.0, 1.0], [1.0, 1.0], Color::WHITE);
+            let tree_tint = Color::rgb8(0x6a, 0xa8, 0x4f);
+            view.draw_billboard(&tree, [-0.4, 0.0, -1.2], [1.5, 1.5], tree_tint);
+            let skin = Color::rgb8(0xf2, 0xd3, 0xab);
+            view.draw_billboard(&hero, [1.6, 0.0, 0.2], [-1.0, 1.0], skin);
+        })
+        .unwrap();
+    assert_screenshot_allowing(&headless.adapter_name(), "meshes_billboards", frame, 16);
+}
+
 /// An egui window over a game with a 40x30 canvas drawn 4x, at the window's own resolution, so its
 /// text is crisp over the canvas's big pixels. In it, a canvas the engine rendered, shown 2x, and
 /// one cell of a texture, shown 2x, both sampled nearest-neighbor.

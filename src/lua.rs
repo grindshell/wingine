@@ -64,6 +64,12 @@
 //!   loops never is), and `animation:once()`, `animation:flipped_x()` and
 //!   `animation:flipped_y()`, which return copies that play once and hold the last frame, or
 //!   have mirrored frames.
+//! - 3D positions and directions are Luau vectors, `vector.create(x, y, z)`. A [`Camera3d`] is a
+//!   table `{ position, target, up, fov, height, near, far }`: `position` and `target` are
+//!   vectors, and the rest optional, `fov` (radians, for perspective, 0.8 by default) and
+//!   `height` (world units, for none) being the projection, one or the other. [`Lighting`] is a
+//!   table `{ direction, color, ambient }`, any of them left out keeping its default. A [`Mesh`]
+//!   is userdata with `mesh:triangle_count()`.
 //! - A [`Tileset`] is userdata with `tileset:add(tile)`, which adds a kind of tile and returns
 //!   its ID, a number. A [`Tile`] is a table `{ sprite, tint, solid }`, where `tint` defaults to
 //!   white and `solid` to false.
@@ -137,7 +143,10 @@ use mlua::{ErrorContext, FromLua, FromLuaMulti, IntoLua, IntoLuaMulti, thread::T
 use crate::{
     Error, Result,
     audio::{PlaySettings, Sound},
-    graphics::{Animation, Color, Font, Sprite, SpriteSheet, TextLayout},
+    graphics::{
+        Animation, Camera3d, Color, Font, Lighting, Mesh, Projection, Sprite, SpriteSheet,
+        TextLayout,
+    },
     grid::{Direction, GridMover},
     input::{Control, GamepadButton, Key, MouseButton},
     math::Rect,
@@ -669,6 +678,93 @@ impl mlua::UserData for Animation {
             Ok(animation.clone().flipped_y())
         });
     }
+}
+
+impl mlua::UserData for Mesh {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("triangle_count", |_, mesh, ()| Ok(mesh.triangle_count()));
+    }
+}
+
+/// The vertical field of view of a camera given none, in radians: about 46 degrees.
+pub(crate) const DEFAULT_FOV: f32 = 0.8;
+
+impl FromLua for Camera3d {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        let mlua::Value::Table(table) = &value else {
+            let message = "expected a table { position, target, ... }".into();
+            return Err(conversion_error(&value, "Camera3d", message));
+        };
+        let position: mlua::Vector = table.get("position")?;
+        let target: mlua::Vector = table.get("target")?;
+        let up: Option<mlua::Vector> = table.get("up")?;
+        let fov: Option<f32> = table.get("fov")?;
+        let height: Option<f32> = table.get("height")?;
+        let projection = match (fov, height) {
+            (Some(_), Some(_)) => {
+                let message = "a camera has a fov, for perspective, or a height, not both";
+                return Err(mlua::Error::runtime(message));
+            }
+            (_, Some(height)) => {
+                if !(height > 0.0 && height.is_finite()) {
+                    let message = format!("a camera's height must be above 0, not {height}");
+                    return Err(mlua::Error::runtime(message));
+                }
+                Projection::Orthographic { height }
+            }
+            (fov, None) => {
+                let fov_y = fov.unwrap_or(DEFAULT_FOV);
+                if !(fov_y > 0.0 && fov_y < std::f32::consts::PI) {
+                    let message = format!("a camera's fov must be between 0 and pi, not {fov_y}");
+                    return Err(mlua::Error::runtime(message));
+                }
+                Projection::Perspective { fov_y }
+            }
+        };
+        let mut camera = Camera3d {
+            projection,
+            ..Camera3d::perspective(vector3(position), vector3(target), DEFAULT_FOV)
+        };
+        if let Some(up) = up {
+            camera.up = vector3(up);
+        }
+        camera.near = table.get::<Option<f32>>("near")?.unwrap_or(camera.near);
+        camera.far = table.get::<Option<f32>>("far")?.unwrap_or(camera.far);
+        if !(camera.near > 0.0 && camera.far > camera.near && camera.far.is_finite()) {
+            let message = format!(
+                "a camera's near must be above 0 and its far above that, not {} and {}",
+                camera.near, camera.far
+            );
+            return Err(mlua::Error::runtime(message));
+        }
+        Ok(camera)
+    }
+}
+
+impl FromLua for Lighting {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        let mlua::Value::Table(table) = &value else {
+            let message = "expected a table { direction, color, ambient }".into();
+            return Err(conversion_error(&value, "Lighting", message));
+        };
+        let default = Lighting::default();
+        Ok(Lighting {
+            direction: table
+                .get::<Option<mlua::Vector>>("direction")?
+                .map_or(default.direction, vector3),
+            color: table
+                .get::<Option<Color>>("color")?
+                .unwrap_or(default.color),
+            ambient: table
+                .get::<Option<Color>>("ambient")?
+                .unwrap_or(default.ambient),
+        })
+    }
+}
+
+/// A Luau vector's components.
+pub(crate) fn vector3(vector: mlua::Vector) -> [f32; 3] {
+    [vector.x(), vector.y(), vector.z()]
 }
 
 impl FromLua for Tile {

@@ -3,7 +3,7 @@ use std::ops::Range;
 use bytemuck::{Pod, Zeroable};
 
 use super::{Camera3d, Canvas, Color, Mesh, Sprite, Texture};
-use crate::math::{Affine3, Rect};
+use crate::math::{Affine3, Rect, scale3};
 
 /// What a 3D view shows, where on the canvas, and how it's lit: see [`Canvas::begin_3d`].
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -79,8 +79,51 @@ impl Canvas3d<'_> {
         sprite: Option<&Sprite>,
         tint: Color,
     ) {
+        if mesh.index_count() > 0 {
+            let normal = transform.normal_matrix();
+            self.push(Some(mesh), transform, normal, sprite, tint);
+        }
+    }
+
+    /// Draws `sprite` standing upright with the middle of its bottom edge at `position`, `size`
+    /// world units wide and tall, turned to face the camera across the ground, as characters do
+    /// in 2.5D games: it stays upright however far the camera looks down. A negative width mirrors
+    /// it. It's lit as the ground is, whichever way it faces, and hides what's behind it as meshes
+    /// do, so pixels of the sprite less than half opaque aren't drawn.
+    pub fn draw_billboard(
+        &mut self,
+        sprite: &Sprite,
+        position: [f32; 3],
+        size: [f32; 2],
+        tint: Color,
+    ) {
+        if size[0] == 0.0 || size[1] == 0.0 {
+            return;
+        }
+        let (right, facing) = self.view().camera.billboard_axes();
+        let transform = Affine3 {
+            x_axis: scale3(right, size[0]),
+            y_axis: [0.0, size[1], 0.0],
+            z_axis: facing,
+            translation: position,
+        };
+        // Whichever way the quad faces, its normal points up, as the ground's do.
+        let normal = [[0.0; 3], [0.0; 3], [0.0, 1.0, 0.0]];
+        self.push(None, transform, normal, Some(sprite), tint);
+    }
+
+    /// Records `mesh`, or the billboard quad for `None`, placed by `transform`, with `normal`
+    /// moving its normals.
+    fn push(
+        &mut self,
+        mesh: Option<&Mesh>,
+        transform: Affine3,
+        normal: [[f32; 3]; 3],
+        sprite: Option<&Sprite>,
+        tint: Color,
+    ) {
         let determinant = transform.determinant();
-        if mesh.index_count() == 0 || !determinant.is_finite() {
+        if !determinant.is_finite() {
             return;
         }
         let ([u0, v0], [u1, v1]) = sprite.map_or(([0.0, 0.0], [1.0, 1.0]), Sprite::uv_bounds);
@@ -92,12 +135,12 @@ impl Canvas3d<'_> {
                 transform.z_axis,
                 transform.translation,
             ],
-            normal: transform.normal_matrix(),
+            normal,
             uv: [u0, v0, u1, v1],
             tint: tint.to_rgba8(),
         });
         canvas.mesh_draws.push(MeshDraw {
-            mesh: mesh.clone(),
+            mesh: mesh.cloned(),
             texture: sprite.map(|sprite| sprite.texture().clone()),
             mirrored: determinant < 0.0,
         });
@@ -123,7 +166,8 @@ pub(crate) struct Segment3d {
 
 /// A mesh recorded in a 3D view. Its transform and colors are its [`Instance`].
 pub(crate) struct MeshDraw {
-    pub mesh: Mesh,
+    /// `None` for a billboard, which draws the renderer's quad.
+    pub mesh: Option<Mesh>,
     /// `None` draws with a plain white texture.
     pub texture: Option<Texture>,
     /// Whether its transform mirrors it, which turns its triangles' winding round.
