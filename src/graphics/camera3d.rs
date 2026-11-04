@@ -118,13 +118,16 @@ impl Camera3d {
         }
     }
 
-    /// The ways a billboard's right and its front point: across the view, level with the ground,
-    /// and toward the camera across the ground.
+    /// The ways a billboard's right and its front point, level with the ground: its front toward
+    /// the camera across the ground, however the camera's rolled, or looking straight down or up,
+    /// toward the view's bottom edge.
     pub(crate) fn billboard_axes(&self) -> ([f32; 3], [f32; 3]) {
-        let Basis { right, .. } = self.basis();
-        let level = normalize3([right[0], 0.0, right[2]]).unwrap_or([1.0, 0.0, 0.0]);
-        // Right, up and toward the camera, as `x`, `y` and `z` are to a camera looking along -z.
-        (level, cross3(level, [0.0, 1.0, 0.0]))
+        let Basis { up, forward, .. } = self.basis();
+        let facing = normalize3([-forward[0], 0.0, -forward[2]])
+            .or_else(|| normalize3([-up[0], 0.0, -up[2]]))
+            .unwrap_or([0.0, 0.0, 1.0]);
+        // Right, up and front, as `x`, `y` and `z` are.
+        (cross3([0.0, 1.0, 0.0], facing), facing)
     }
 
     /// Maps world coordinates to clip space, for a view `aspect` times as wide as it's tall.
@@ -378,6 +381,36 @@ mod tests {
         // Looking straight down, they face down the view, where its bottom edge is.
         let down = Camera3d::orthographic([0.0, 10.0, 0.0], [0.0; 3], 2.0);
         assert_near(down.billboard_axes().1, [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn billboards_face_the_camera_however_its_rolled() {
+        let ups = [
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            // Nearly back the way it looks, so up the view is down.
+            [0.0, 0.0, 1.0],
+        ];
+        for up in ups {
+            let camera = Camera3d {
+                up,
+                ..Camera3d::orthographic([0.0, 1.0, 5.0], [0.0, 0.5, 0.0], 2.0)
+            };
+            let (right, facing) = camera.billboard_axes();
+            assert_near(right, [1.0, 0.0, 0.0]);
+            assert_near(facing, [0.0, 0.0, 1.0]);
+        }
+        // Looking straight down, toward the view's bottom edge, which rolling turns.
+        let down = Camera3d {
+            up: [1.0, 0.0, 0.0],
+            ..Camera3d::orthographic([0.0, 10.0, 0.0], [0.0; 3], 2.0)
+        };
+        let (right, facing) = down.billboard_axes();
+        assert_near(right, [0.0, 0.0, 1.0]);
+        assert_near(facing, [-1.0, 0.0, 0.0]);
     }
 
     #[test]

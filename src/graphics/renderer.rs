@@ -694,14 +694,16 @@ impl Viewport {
         let scale = [0, 1].map(|i| target[i] as f32 / canvas[i]);
         let start = [rect.x * scale[0], rect.y * scale[1]];
         let size = [rect.w * scale[0], rect.h * scale[1]];
-        // The pixels whose middles are inside it, as a quad over it would cover.
+        // The pixels whose middles are inside it, as a quad over it would cover: by rasterizers'
+        // top-left rule, a middle on its left or top edge is inside, and one on its right or bottom
+        // edge isn't, so each edge is at the first pixel whose middle is on it or past it.
         let [left, top, right, bottom] = [
             (start[0], target[0]),
             (start[1], target[1]),
             (start[0] + size[0], target[0]),
             (start[1] + size[1], target[1]),
         ]
-        .map(|(edge, limit)| edge.round().clamp(0.0, limit as f32));
+        .map(|(edge, limit)| (edge - 0.5).ceil().clamp(0.0, limit as f32));
         let [width, height] = [right - left, bottom - top];
         if !(width > 0.0 && height > 0.0 && size[0] > 0.0 && size[1] > 0.0) {
             return None;
@@ -878,7 +880,8 @@ mod tests {
         // Hanging off the top-left, and on fractions of pixels.
         let rect = Rect::new(-20.5, -10.25, 60.0, 30.0);
         let viewport = Viewport::new(rect, [100.0, 50.0], [100, 50]).unwrap();
-        assert_eq!(viewport.pixels, [0, 0, 40, 20]);
+        // Its right edge is on the middle of the 40th pixel, which it doesn't cover.
+        assert_eq!(viewport.pixels, [0, 0, 39, 20]);
         let near = |[x, y]: [f32; 2], [ex, ey]: [f32; 2]| {
             assert!((x - ex).abs() < 1e-4 && (y - ey).abs() < 1e-4, "{x}, {y}");
         };
@@ -903,5 +906,40 @@ mod tests {
             Viewport::new(Rect::new(0.0, 0.0, 10.0, 10.0), [0.0, 0.0], [100, 50]),
             None
         );
+    }
+
+    /// The first pixel, and the one past the last, that a quad from `start` to `end` covers of a
+    /// row `limit` pixels long: those whose middles are inside it, counting a middle on its left
+    /// or top edge but not one on its right or bottom edge, as rasterizers do.
+    fn covered(start: f32, end: f32, limit: u32) -> Option<[u32; 2]> {
+        let inside = |i: &u32| (start..end).contains(&(*i as f32 + 0.5));
+        let first = (0..limit).find(inside)?;
+        let last = (0..limit).rev().find(inside)?;
+        Some([first, last + 1])
+    }
+
+    #[test]
+    fn viewports_cover_the_pixels_a_quad_over_their_rect_would() {
+        let canvas = [64.0, 48.0];
+        // Eighths of a pixel, some of which put edges on pixels' middles at each scale, and either
+        // side of a middle.
+        let eighths = (-48..=528).map(|i| i as f32 / 8.0);
+        let positions: Vec<f32> = eighths.chain([0.49, 0.51, 10.49, 10.51]).collect();
+        for scale in [1.0, 1.25, 1.5, 2.0, 2.5] {
+            let target = canvas.map(|v| (v * scale) as u32);
+            let s = [0, 1].map(|i| target[i] as f32 / canvas[i]);
+            for &position in &positions {
+                let rect = Rect::new(position, position - 4.0, 10.0, 7.5);
+                let viewport = Viewport::new(rect, canvas, target).map(|v| v.pixels);
+                // From the rect's edges on the target, worked out as the viewport does.
+                let [x, y] = [rect.x * s[0], rect.y * s[1]];
+                let across = covered(x, x + rect.w * s[0], target[0]);
+                let down = covered(y, y + rect.h * s[1], target[1]);
+                let expected = across
+                    .zip(down)
+                    .map(|([left, right], [top, bottom])| [left, top, right - left, bottom - top]);
+                assert_eq!(viewport, expected, "{rect:?} at {scale}x");
+            }
+        }
     }
 }

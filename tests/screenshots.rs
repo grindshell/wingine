@@ -11,12 +11,12 @@
 
 use std::{env, fs, path::Path, rc::Rc};
 
-use image::{Rgba, RgbaImage};
+use image::{Rgba, RgbaImage, imageops};
 use wingine::{
     Context,
     graphics::{
-        Camera, Camera3d, Canvas, Color, Lighting, MeshData, Resolution, SpriteSheet, Texture,
-        View3d,
+        Camera, Camera3d, Canvas, Color, Lighting, Mesh, MeshData, MeshVertex, Resolution,
+        SpriteSheet, Texture, View3d,
     },
     headless::{Headless, Image},
     math::{Affine, Affine3, Rect},
@@ -1005,6 +1005,171 @@ fn meshes_billboards() {
     assert_screenshot_allowing(&headless.adapter_name(), "meshes_billboards", frame, 16);
 }
 
+/// Billboards face the camera however it's rolled about the way it looks, standing upright in
+/// the world, so the view turns with the camera: rolled a half turn, it shows them upside down,
+/// and a quarter turn, on their sides. A negative width still mirrors them.
+#[test]
+fn meshes_billboards_rolled() {
+    let mut headless = headless();
+    let sheet = SpriteSheet::new(headless.context().load_texture(TILESET).unwrap(), 16, 16);
+    let hero = sheet.sprite(27, 0);
+    let background = Color::rgb8(0x10, 0x10, 0x18);
+    let mut render = |up: [f32; 3], width: f32| {
+        let frame = headless
+            .render(64, 64, |canvas| {
+                canvas.clear(background);
+                let camera = Camera3d {
+                    up,
+                    ..Camera3d::orthographic([0.0, 1.0, 5.0], [0.0, 0.5, 0.0], 2.0)
+                };
+                let view = View3d {
+                    lighting: Lighting::UNLIT,
+                    ..View3d::new(camera, Rect::new(0.0, 0.0, 64.0, 64.0))
+                };
+                canvas
+                    .begin_3d(view)
+                    .draw_billboard(&hero, [0.0; 3], [width, 1.0], Color::WHITE);
+            })
+            .unwrap();
+        rgba(&frame)
+    };
+    let upright = render([0.0, 1.0, 0.0], 1.0);
+    let corner = *upright.get_pixel(0, 0);
+    let shown = upright.pixels().filter(|p| **p != corner).count();
+    assert!(shown > 100, "the billboard shows only {shown} pixels");
+
+    // Up the view is the world's `+x`, so its up is to the left of the view.
+    let on_its_side = imageops::rotate270(&upright);
+    assert_alike(
+        &on_its_side,
+        &render([1.0, 0.0, 0.0], 1.0),
+        16,
+        "a quarter turn",
+    );
+    let upside_down = imageops::rotate180(&upright);
+    assert_alike(
+        &upside_down,
+        &render([0.0, -1.0, 0.0], 1.0),
+        16,
+        "a half turn",
+    );
+    let on_its_other_side = imageops::rotate90(&upright);
+    assert_alike(
+        &on_its_other_side,
+        &render([-1.0, 0.0, 0.0], 1.0),
+        16,
+        "three quarters of a turn",
+    );
+
+    let mirrored = imageops::flip_horizontal(&upright);
+    assert!(
+        compare(&mirrored, &upright).is_some(),
+        "the sprite is lopsided"
+    );
+    assert_alike(&mirrored, &render([0.0, 1.0, 0.0], -1.0), 16, "mirrored");
+    assert_alike(
+        &imageops::rotate180(&mirrored),
+        &render([0.0, -1.0, 0.0], -1.0),
+        16,
+        "mirrored, a half turn",
+    );
+}
+
+/// A triangle whose normal points out of it at its bottom-left corner and up at its others, lit
+/// from straight above, so it brightens away from that corner. How long its normals are doesn't
+/// change its shading, nor do transforms that stretch or mirror it but don't turn its normals.
+#[test]
+fn meshes_normals() {
+    let mut headless = headless();
+    let triangle = |out_of_it: f32| MeshData {
+        vertices: vec![
+            MeshVertex::new([-1.0, -1.0, 0.0], [0.0, 0.0, out_of_it], [0.0; 2]),
+            MeshVertex::new([1.0, -1.0, 0.0], [0.0, 1.0, 0.0], [0.0; 2]),
+            MeshVertex::new([0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0; 2]),
+        ],
+        indices: vec![0, 1, 2],
+    };
+    let ctx = headless.context();
+    let unit = ctx.create_mesh(&triangle(1.0)).unwrap();
+    let long = ctx.create_mesh(&triangle(10.0)).unwrap();
+    let mut render = |mesh: &Mesh, transform: Affine3| {
+        headless
+            .render(64, 64, |canvas| {
+                canvas.clear(Color::rgb8(0x20, 0x30, 0x60));
+                let camera = Camera3d::orthographic([0.0, 0.0, 5.0], [0.0; 3], 2.0);
+                let view = View3d {
+                    lighting: Lighting {
+                        direction: [0.0, -1.0, 0.0],
+                        color: Color::WHITE,
+                        ambient: Color::BLACK,
+                    },
+                    ..View3d::new(camera, Rect::new(0.0, 0.0, 64.0, 64.0))
+                };
+                canvas
+                    .begin_3d(view)
+                    .draw_mesh(mesh, transform, None, Color::WHITE);
+            })
+            .unwrap()
+    };
+    let frame = render(&unit, Affine3::IDENTITY);
+    let shaded = rgba(&frame);
+    let longer = render(&long, Affine3::IDENTITY);
+    assert_alike(&shaded, &rgba(&longer), 0, "a longer normal");
+    // Stretching it along `z` makes the normals pointing up three times as long as the one out of
+    // it, but leaves their directions as they were, mirrored or not.
+    let stretched = render(&unit, Affine3::from_scale([1.0, 1.0, 3.0]));
+    assert_alike(&shaded, &rgba(&stretched), 0, "stretched");
+    let mirrored = render(&unit, Affine3::from_scale([-1.0, 1.0, 3.0]));
+    let flipped = imageops::flip_horizontal(&shaded);
+    assert_alike(&flipped, &rgba(&mirrored), 0, "mirrored and stretched");
+
+    assert_screenshot(&headless.adapter_name(), "meshes_normals", frame);
+}
+
+/// A 3D view covers the pixels a 2D fill of its rect does, whichever pixels' middles its edges
+/// fall on, on the target or hanging off it: a plane bigger than the view, seen face on, fills
+/// it.
+#[test]
+fn meshes_cover_their_views_rect() {
+    let mut headless = headless();
+    let plane = headless
+        .context()
+        .create_mesh(&MeshData::plane([4.0, 4.0]))
+        .unwrap();
+    let lit = |frame: &RgbaImage| frame.pixels().filter(|p| p.0 != [0, 0, 0, 255]).count();
+    for offset in [0.49, 0.5, 0.51] {
+        for [x, y] in [[0.0, 0.0], [3.0, 0.0], [-3.0, -2.0], [8.0, 9.0]] {
+            let rect = Rect::new(x + offset, y + offset, 10.0, 10.0);
+            let fill = headless
+                .render(16, 16, |canvas| {
+                    canvas.clear(Color::BLACK);
+                    canvas.fill_rect(rect, Color::WHITE);
+                })
+                .unwrap();
+            let view = headless
+                .render(16, 16, |canvas| {
+                    canvas.clear(Color::BLACK);
+                    let camera = Camera3d::orthographic([0.0, 5.0, 0.0], [0.0; 3], 2.0);
+                    let view = View3d {
+                        lighting: Lighting::UNLIT,
+                        ..View3d::new(camera, rect)
+                    };
+                    canvas
+                        .begin_3d(view)
+                        .draw_mesh(&plane, Affine3::IDENTITY, None, Color::WHITE);
+                })
+                .unwrap();
+            let [fill, view] = [fill, view].map(|frame| rgba(&frame));
+            assert!(
+                fill == view,
+                "{rect:?}: the view covers {} pixels, and a fill of its rect {}",
+                lit(&view),
+                lit(&fill)
+            );
+        }
+    }
+}
+
 /// An egui window over a game with a 40x30 canvas drawn 4x, at the window's own resolution, so its
 /// text is crisp over the canvas's big pixels. In it, a canvas the engine rendered, shown 2x, and
 /// one cell of a texture, shown 2x, both sampled nearest-neighbor.
@@ -1161,6 +1326,29 @@ fn assert_screenshot_allowing(adapter: &str, name: &str, frame: Image, allowed: 
         actual_path.display(),
         adapter,
     );
+}
+
+/// Asserts that `actual` matches `expected`, rendered the same scene another way, but for at most
+/// `allowed` pixels.
+fn assert_alike(expected: &RgbaImage, actual: &RgbaImage, allowed: usize, what: &str) {
+    match compare(actual, expected) {
+        None => {}
+        Some(Mismatch::Pixels { count, .. }) if count <= allowed => {}
+        Some(Mismatch::Pixels {
+            count,
+            largest_difference,
+            ..
+        }) => panic!(
+            "{what}: {count} pixels differ by more than {CHANNEL_TOLERANCE} \
+             (largest channel difference: {largest_difference})"
+        ),
+        Some(_) => panic!("{what}: the frames' sizes differ"),
+    }
+}
+
+fn rgba(frame: &Image) -> RgbaImage {
+    RgbaImage::from_raw(frame.width(), frame.height(), frame.pixels().to_vec())
+        .expect("frame dimensions match its pixel data")
 }
 
 enum Mismatch {

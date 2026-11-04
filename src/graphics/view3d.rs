@@ -87,8 +87,8 @@ impl Canvas3d<'_> {
 
     /// Draws `sprite` standing upright with the middle of its bottom edge at `position`, `size`
     /// world units wide and tall, turned to face the camera across the ground, as characters do
-    /// in 2.5D games: it stays upright however far the camera looks down. A negative width mirrors
-    /// it. It's lit as the ground is, whichever way it faces, and hides what's behind it as meshes
+    /// in 2.5D games: it stays upright in the world however far the camera looks down, and turns
+    /// with the world in the view as the camera rolls. A negative width mirrors it. It's lit as the ground is, whichever way it faces, and hides what's behind it as meshes
     /// do, so pixels of the sprite less than half opaque aren't drawn.
     pub fn draw_billboard(
         &mut self,

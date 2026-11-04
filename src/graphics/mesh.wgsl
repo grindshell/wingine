@@ -44,7 +44,9 @@ struct VertexOut {
     @location(0) uv: vec2<f32>,
     // Linear.
     @location(1) color: vec4<f32>,
-    // In the world, of any length.
+    // In the world, of length 1 at each corner, or 0 for none, so how long the mesh's normals are,
+    // and how the transform stretches them, doesn't sway how they blend between corners. Blending
+    // shortens them.
     @location(2) normal: vec3<f32>,
 }
 
@@ -67,7 +69,9 @@ fn vs_main(vertex: VertexIn, instance: InstanceIn) -> VertexOut {
         srgb_to_linear(vertex.color.rgb) * srgb_to_linear(instance.tint.rgb),
         vertex.color.a * instance.tint.a,
     );
-    out.normal = instance.normal_x * n.x + instance.normal_y * n.y + instance.normal_z * n.z;
+    let normal = instance.normal_x * n.x + instance.normal_y * n.y + instance.normal_z * n.z;
+    let length_squared = dot(normal, normal);
+    out.normal = select(vec3<f32>(0.0), normal * inverseSqrt(length_squared), length_squared > 0.0);
     return out;
 }
 
