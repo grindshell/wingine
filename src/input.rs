@@ -275,6 +275,13 @@ impl Input {
             .map(|(_, gamepad)| gamepad)
     }
 
+    /// What `action` is bound to: its keys, its gamepad buttons, and the gamepad whose buttons
+    /// count, or `None` for any gamepad's.
+    pub(crate) fn binding(&self, action: &str) -> Option<(&[Key], &[GamepadButton], Option<u32>)> {
+        let binding = self.actions.get(action)?;
+        Some((&binding.keys, &binding.buttons, binding.gamepad))
+    }
+
     fn any_bound(
         &self,
         action: &str,

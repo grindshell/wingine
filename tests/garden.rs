@@ -7,7 +7,6 @@ use std::{fs, path::Path};
 use wingine::{
     headless::Simulation,
     input::Key,
-    lua::mlua::FromLuaMulti,
     runtime::{self, LuauGame},
     scene::SceneFile,
 };
@@ -22,22 +21,6 @@ fn simulation() -> Simulation<LuauGame> {
     .expect("game starts")
 }
 
-/// The value of the Luau `expression`, such as `"garden.walk_time"`.
-fn eval<T: FromLuaMulti>(simulation: &Simulation<LuauGame>, expression: &str) -> T {
-    let lua = simulation.game().scripts().lua();
-    lua.load(format!("return {expression}"))
-        .eval()
-        .unwrap_or_else(|err| panic!("`{expression}`: {err}"))
-}
-
-/// Runs the Luau `code`, such as to change the game's state.
-fn exec(simulation: &Simulation<LuauGame>, code: &str) {
-    let scripts = simulation.game().scripts();
-    scripts
-        .load_source("test", code)
-        .unwrap_or_else(|err| panic!("{err}"));
-}
-
 fn run_for(simulation: &mut Simulation<LuauGame>, seconds: f32) {
     simulation.run_for(seconds);
     if let Some(err) = simulation.game().error() {
@@ -46,18 +29,16 @@ fn run_for(simulation: &mut Simulation<LuauGame>, seconds: f32) {
 }
 
 /// Where the middle of the player's feet is.
-fn player(simulation: &Simulation<LuauGame>) -> [f32; 2] {
-    let (x, y) = eval(simulation, "garden.player:position()");
+fn player(simulation: &mut Simulation<LuauGame>) -> [f32; 2] {
+    let (x, y) = simulation.eval("garden.player:position()");
     [x, y]
 }
 
 #[test]
 fn f1_outlines_what_is_solid() {
     let mut simulation = simulation();
-    let (x, y, width): (f32, f32, f32) = eval(
-        &simulation,
-        "(function() local b = garden.solids[1]:bounds() return b.x, b.y, b.width end)()",
-    );
+    let (x, y, width): (f32, f32, f32) = simulation
+        .eval("(function() local b = garden.solids[1]:bounds() return b.x, b.y, b.width end)()");
     // The canvas pixel in the middle of the outline's top edge, in the screenshot, which is
     // scaled up from the canvas.
     let middle_of_top = |simulation: &mut Simulation<LuauGame>| {
@@ -71,7 +52,7 @@ fn f1_outlines_what_is_solid() {
     let before = middle_of_top(&mut simulation);
 
     simulation.tap(Key::F1);
-    assert!(eval::<bool>(&simulation, "garden.debug"));
+    assert!(simulation.eval::<bool>("garden.debug"));
     let [red, green, blue, _] = middle_of_top(&mut simulation);
     assert!(
         red > green + 60 && red > blue + 60,
@@ -80,7 +61,7 @@ fn f1_outlines_what_is_solid() {
     );
 
     simulation.tap(Key::F1);
-    assert!(!eval::<bool>(&simulation, "garden.debug"));
+    assert!(!simulation.eval::<bool>("garden.debug"));
     assert_eq!(middle_of_top(&mut simulation), before);
 }
 
@@ -102,25 +83,25 @@ fn the_scene_files_are_in_the_canonical_layout() {
 #[test]
 fn the_player_walks_and_faces_the_way_it_goes() {
     let mut simulation = simulation();
-    let [x, y] = player(&simulation);
+    let [x, y] = player(&mut simulation);
     simulation.hold(Key::Left, 0.5);
-    let [left, same] = player(&simulation);
+    let [left, same] = player(&mut simulation);
     // 64 pixels a second.
     assert!((x - left - 32.0).abs() < 2.0, "from {x} to {left}");
     assert_eq!(same, y);
     assert_eq!(
-        eval::<(f32, f32)>(&simulation, "garden.player:scale()"),
+        simulation.eval::<(f32, f32)>("garden.player:scale()"),
         (-1.0, 1.0),
         "mirrored to face left"
     );
-    assert!(eval::<f32>(&simulation, "garden.walk_time") > 0.0);
+    assert!(simulation.eval::<f32>("garden.walk_time") > 0.0);
 
     run_for(&mut simulation, 0.1);
-    assert_eq!(player(&simulation), [left, same], "stopped");
-    assert_eq!(eval::<f32>(&simulation, "garden.player:rotation()"), 0.0);
+    assert_eq!(player(&mut simulation), [left, same], "stopped");
+    assert_eq!(simulation.eval::<f32>("garden.player:rotation()"), 0.0);
     simulation.hold(Key::D, 0.1);
     assert_eq!(
-        eval::<(f32, f32)>(&simulation, "garden.player:scale()"),
+        simulation.eval::<(f32, f32)>("garden.player:scale()"),
         (1.0, 1.0)
     );
 }
@@ -129,97 +110,91 @@ fn the_player_walks_and_faces_the_way_it_goes() {
 fn solid_things_are_in_the_way() {
     let mut simulation = simulation();
     // Below the bench, which covers 168 to 184 across and 80 to 96 down.
-    exec(&simulation, "garden.player:set_position(176, 120)");
+    simulation.exec("garden.player:set_position(176, 120)");
     simulation.hold(Key::Up, 1.0);
-    let [x, y] = player(&simulation);
+    let [x, y] = player(&mut simulation);
     assert_eq!(x, 176.0);
     assert!((96.0..98.0).contains(&y), "stopped below the bench at {y}");
 
     // Sliding along it to the right, until it's clear, then up past it.
     simulation.hold(Key::Right, 0.5);
     simulation.hold(Key::Up, 0.5);
-    let [x, y] = player(&simulation);
+    let [x, y] = player(&mut simulation);
     assert!(x > 188.0 && y < 80.0, "went around the bench to {x}, {y}");
 
     // A tree, from `tree.scene.luau`, covering 50 to 66 across and 38 to 54 down.
-    exec(&simulation, "garden.player:set_position(58, 70)");
+    simulation.exec("garden.player:set_position(58, 70)");
     simulation.hold(Key::Up, 1.0);
-    let [_, y] = player(&simulation);
+    let [_, y] = player(&mut simulation);
     assert!((54.0..56.0).contains(&y), "stopped below the tree at {y}");
 }
 
 #[test]
 fn space_plants_and_picks_flowers() {
     let mut simulation = simulation();
-    let flowers = |simulation: &Simulation<LuauGame>| -> u32 {
-        eval(simulation, "#garden.flowers:children()")
+    let flowers = |simulation: &mut Simulation<LuauGame>| -> u32 {
+        simulation.eval("#garden.flowers:children()")
     };
-    assert_eq!(flowers(&simulation), 5);
+    assert_eq!(flowers(&mut simulation), 5);
 
-    exec(&simulation, "garden.player:set_position(160, 120)");
+    simulation.exec("garden.player:set_position(160, 120)");
     simulation.tap(Key::Space);
     run_for(&mut simulation, 0.05);
-    assert_eq!(flowers(&simulation), 6);
+    assert_eq!(flowers(&mut simulation), 6);
     assert_eq!(
-        eval::<(f32, f32)>(&simulation, "garden.flowers:find('planted_1'):position()"),
+        simulation.eval::<(f32, f32)>("garden.flowers:find('planted_1'):position()"),
         (160.0, 120.0),
         "at the player's feet"
     );
     assert_eq!(
-        eval::<(f32, f32)>(
-            &simulation,
-            "garden.flowers:find('planted_1/flower'):size()"
-        ),
+        simulation.eval::<(f32, f32)>("garden.flowers:find('planted_1/flower'):size()"),
         (16.0, 16.0)
     );
 
     // Standing on it, Space picks it.
     simulation.tap(Key::Space);
     run_for(&mut simulation, 0.05);
-    assert_eq!(flowers(&simulation), 5);
-    assert!(eval::<bool>(
-        &simulation,
-        "garden.flowers:find('planted_1') == nil"
-    ));
+    assert_eq!(flowers(&mut simulation), 5);
+    assert!(simulation.eval::<bool>("garden.flowers:find('planted_1') == nil"));
 
     // So it does a flower the scene placed, which covers 196 to 212 across and 150 to 166 down.
-    exec(&simulation, "garden.player:set_position(204, 162)");
+    simulation.exec("garden.player:set_position(204, 162)");
     simulation.tap(Key::Space);
     run_for(&mut simulation, 0.05);
-    assert_eq!(flowers(&simulation), 4);
-    assert!(eval::<bool>(&simulation, "garden.flowers:find('3') == nil"));
+    assert_eq!(flowers(&mut simulation), 4);
+    assert!(simulation.eval::<bool>("garden.flowers:find('3') == nil"));
 }
 
 #[test]
 fn standing_beside_things_shows_their_notes() {
     let mut simulation = simulation();
-    assert!(!eval::<bool>(&simulation, "garden.note:is_visible()"));
+    assert!(!simulation.eval::<bool>("garden.note:is_visible()"));
     // Just below the well.
-    exec(&simulation, "garden.player:set_position(112, 94)");
+    simulation.exec("garden.player:set_position(112, 94)");
     run_for(&mut simulation, 0.05);
-    assert!(eval::<bool>(&simulation, "garden.note:is_visible()"));
-    let text: String = eval(&simulation, "garden.note_text:text()");
-    let expected: String = eval(&simulation, "garden.scene:find('well/rim'):props().text");
+    assert!(simulation.eval::<bool>("garden.note:is_visible()"));
+    let text: String = simulation.eval("garden.note_text:text()");
+    let expected: String = simulation.eval("garden.scene:find('well/rim'):props().text");
     assert_eq!(text, expected);
     assert!(text.contains("well"), "{text}");
 
-    exec(&simulation, "garden.player:set_position(160, 140)");
+    simulation.exec("garden.player:set_position(160, 140)");
     run_for(&mut simulation, 0.05);
-    assert!(!eval::<bool>(&simulation, "garden.note:is_visible()"));
-    assert!(eval::<bool>(&simulation, "garden.showing == nil"));
+    assert!(!simulation.eval::<bool>("garden.note:is_visible()"));
+    assert!(simulation.eval::<bool>("garden.showing == nil"));
 }
 
 #[test]
 fn the_sails_and_the_flock_turn_at_their_speeds() {
     let mut simulation = simulation();
     let bird = "garden.scene:find('flock/1'):world_position()";
-    let start: (f32, f32) = eval(&simulation, bird);
+    let start: (f32, f32) = simulation.eval(bird);
     run_for(&mut simulation, 1.0);
-    let sails: f32 = eval(&simulation, "garden.scene:find('mill/sails'):rotation()");
+    let sails: f32 = simulation.eval("garden.scene:find('mill/sails'):rotation()");
     assert!((sails - 0.8).abs() < 0.05, "{sails}");
-    let flock: f32 = eval(&simulation, "garden.scene:find('flock'):rotation()");
+    let flock: f32 = simulation.eval("garden.scene:find('flock'):rotation()");
     assert!((flock - 0.6).abs() < 0.05, "{flock}");
-    let moved: (f32, f32) = eval(&simulation, bird);
+    let moved: (f32, f32) = simulation.eval(bird);
     assert!(
         moved.1 > start.1 + 20.0,
         "circled clockwise, from {start:?} to {moved:?}"

@@ -2,7 +2,7 @@
 //! with simulated input, and for offline rendering.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::Path,
     sync::{Condvar, Mutex, PoisonError, mpsc},
     thread::{self, ThreadId},
@@ -15,6 +15,8 @@ use crate::{
     audio::Audio,
     graphics::{Canvas, Resolution, gpu::Gpu, renderer::Renderer, screen::Screen},
     input::{Axis, GamepadButton, Key, MouseButton, Stick},
+    lua::mlua::FromLuaMulti,
+    runtime::LuauGame,
     save::{Saves, TemporaryFolder},
 };
 
@@ -224,7 +226,9 @@ impl Default for KeyRepeat {
 /// that time holds, as a window would. Input takes effect on the next frame, as events from a
 /// window would: for example, a key held down is pressed on the next frame and held until
 /// released. Keys held down repeat as a window's system would repeat them, at the delay and rate
-/// [`Simulation::set_key_repeat`] sets.
+/// [`Simulation::set_key_repeat`] sets. A game's actions can be pressed by name, through what
+/// they're bound to ([`Simulation::action_down`]), and a Luau game's state set up and read with
+/// Luau ([`Simulation::exec`] and [`Simulation::eval`]).
 ///
 /// Frames are drawn but not rendered, unless [`Simulation::set_render_every_frame`] says to:
 /// only screenshots render.
@@ -249,6 +253,8 @@ pub struct Simulation<G> {
     repeating: Option<(Key, f64)>,
     /// The keys held down, whether the game or the interface has them.
     keys_held: HashSet<Key>,
+    /// What `action_down` pressed for each action it holds down.
+    actions_held: HashMap<String, Pressed>,
     /// Input for the game's interface, gathered until the next frame.
     #[cfg(feature = "egui")]
     gui_input: crate::gui::SimulatedInput,
@@ -314,6 +320,7 @@ impl<G: Game> Simulation<G> {
             key_repeat: Some(KeyRepeat::default()),
             repeating: None,
             keys_held: HashSet::new(),
+            actions_held: HashMap::new(),
             #[cfg(feature = "egui")]
             gui_input: Default::default(),
             _saves: temporary,
@@ -670,6 +677,83 @@ impl<G: Game> Simulation<G> {
         self.button_up(gamepad, button);
     }
 
+    /// Presses what `action` is bound to, as the player would: its first key, as
+    /// [`Simulation::key_down`] does, or if it has none, its first gamepad button, as
+    /// [`Simulation::button_down`] does, on the gamepad it's bound to, or if it's bound to any, the
+    /// first connected. So a test presses what the game binds, wherever the game binds it.
+    ///
+    /// # Panics
+    ///
+    /// If `action` isn't bound to a key, nor to a button of a connected gamepad.
+    pub fn action_down(&mut self, action: &str) {
+        let pressed = self.action_control(action);
+        match pressed {
+            Pressed::Key(key) => self.key_down(key),
+            Pressed::Button(gamepad, button) => self.button_down(gamepad, button),
+        }
+        self.actions_held.insert(action.to_owned(), pressed);
+    }
+
+    /// Releases what [`Simulation::action_down`] pressed for `action`, if it's holding it down,
+    /// even if the game has bound it to something else since.
+    pub fn action_up(&mut self, action: &str) {
+        match self.actions_held.remove(action) {
+            Some(Pressed::Key(key)) => self.key_up(key),
+            Some(Pressed::Button(gamepad, button)) => self.button_up(gamepad, button),
+            None => {}
+        }
+    }
+
+    /// Presses `action`, runs one frame, and releases it, as [`Simulation::tap`] does with a key.
+    pub fn tap_action(&mut self, action: &str) {
+        self.action_down(action);
+        self.step();
+        self.action_up(action);
+    }
+
+    /// Holds `action` down for `seconds` of game time, rounded to whole frames.
+    pub fn hold_action(&mut self, action: &str, seconds: f32) {
+        self.hold_action_frames(action, Self::frames_in(seconds));
+    }
+
+    /// Holds `action` down for `frames` frames.
+    pub fn hold_action_frames(&mut self, action: &str, frames: u32) {
+        self.action_down(action);
+        self.run_frames(frames);
+        self.action_up(action);
+    }
+
+    /// What [`Simulation::action_down`] presses for `action`.
+    fn action_control(&self, action: &str) -> Pressed {
+        let input = &self.headless.ctx.input;
+        let Some((keys, buttons, gamepad)) = input.binding(action) else {
+            panic!("`{action}` isn't bound to anything");
+        };
+        if let Some(&key) = keys.first() {
+            return Pressed::Key(key);
+        }
+        let Some(&button) = buttons.first() else {
+            panic!("`{action}` isn't bound to anything");
+        };
+        let connected = match gamepad {
+            Some(gamepad) => input
+                .gamepad(gamepad)
+                .is_some_and(|pad| pad.is_connected())
+                .then_some(gamepad),
+            None => input.gamepads().next().map(|(number, _)| number),
+        };
+        match (connected, gamepad) {
+            (Some(number), _) => Pressed::Button(number, button),
+            (None, Some(gamepad)) => panic!(
+                "`{action}` is bound only to gamepad {gamepad}'s buttons, and it isn't connected"
+            ),
+            (None, None) => panic!(
+                "`{action}` is bound only to gamepads' buttons, and none is connected: connect one \
+                 with `connect_gamepad`"
+            ),
+        }
+    }
+
     /// Moves `stick` on `gamepad` to `x`, `y`, each from -1 to 1, with `y` down: `0, 0` is its
     /// middle and `-1, 0` all the way left. The game sees it from a dead zone around the middle.
     pub fn move_stick(&mut self, gamepad: u32, stick: Stick, x: f32, y: f32) {
@@ -836,6 +920,59 @@ impl<G: Game> Simulation<G> {
         }
         self.headless.capture(self.output)
     }
+}
+
+/// Luau games' state, for tests to set up and look at.
+///
+/// Each call runs a chunk of its own, between frames, lent the context as `update` is, so the
+/// engine's functions work in it as they do there: loading a level, playing a sound, reading
+/// input. Its globals are the game's, and it `require`s modules by their paths from the game's
+/// folder, as `main.luau` does, getting the same ones the game has, such as
+/// `require("./sim/rng")`. Since each is a chunk of its own, it sees fields of the game's globals
+/// as they are now, even those a chunk before replaced (a chunk reads the fields of globals it
+/// names as it loads).
+impl Simulation<LuauGame> {
+    /// Runs the Luau `code`, such as to set up a state.
+    ///
+    /// # Panics
+    ///
+    /// If it fails, with its error.
+    pub fn exec(&mut self, code: &str) {
+        if let Err(err) = self.try_exec(code) {
+            panic!("`{code}`: {err}");
+        }
+    }
+
+    /// The value of the Luau `expression`, such as `"pong.ball.vx"`, converted to `R`.
+    ///
+    /// # Panics
+    ///
+    /// If it fails, or its value doesn't convert, with its error.
+    pub fn eval<R: FromLuaMulti>(&mut self, expression: &str) -> R {
+        self.try_eval(expression)
+            .unwrap_or_else(|err| panic!("`{expression}`: {err}"))
+    }
+
+    /// Runs the Luau `code`, as [`Simulation::exec`] does, returning its error if it fails, for
+    /// a test that expects it to.
+    pub fn try_exec(&mut self, code: &str) -> Result<()> {
+        self.game.run_chunk(&mut self.headless.ctx, code)
+    }
+
+    /// The value of the Luau `expression`, as [`Simulation::eval`] gives it, or the error
+    /// evaluating it fails with.
+    pub fn try_eval<R: FromLuaMulti>(&mut self, expression: &str) -> Result<R> {
+        let source = format!("return {expression}");
+        self.game.run_chunk(&mut self.headless.ctx, &source)
+    }
+}
+
+/// A control a [`Simulation`] pressed for an action.
+#[derive(Clone, Copy, Debug)]
+enum Pressed {
+    Key(Key),
+    /// A button of a gamepad, by its number.
+    Button(u32, GamepadButton),
 }
 
 /// The device shared by every [`Headless`] in the process.

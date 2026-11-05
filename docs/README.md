@@ -26,7 +26,7 @@ Read these in order the first time:
 2. [Project structure](project-structure.md): what goes in a game's folder, how `main.luau` runs,
    the settings in `conf.luau`, and where native libraries go.
 3. [Running games](running-games.md): running a game, reading its errors and output, checking it
-   without a window, and measuring how fast it runs.
+   without a window, testing it from Rust, and measuring how fast it runs.
 
 When a game's levels, screens or characters are laid out rather than coded:
 

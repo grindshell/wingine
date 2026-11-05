@@ -11,7 +11,6 @@ use wingine::{
     graphics::Resolution,
     headless::{Image, Simulation},
     input::{GamepadButton, Key, Stick},
-    lua::mlua::FromLuaMulti,
     runtime::{self, LibraryConfig, LuauGame},
 };
 
@@ -42,14 +41,6 @@ fn simulation(folder: &Path) -> Simulation<LuauGame> {
         LuauGame::load_with(ctx, folder, &config)
     })
     .expect("game starts")
-}
-
-/// The value of the Luau `expression` in the game.
-fn eval<T: FromLuaMulti>(simulation: &Simulation<LuauGame>, expression: &str) -> T {
-    let lua = simulation.game().scripts().lua();
-    lua.load(format!("return {expression}"))
-        .eval()
-        .unwrap_or_else(|err| panic!("`{expression}`: {err}"))
 }
 
 /// The error that stopped the game, which a test expects there to be.
@@ -147,14 +138,14 @@ fn scripts_see_the_stats_of_the_frame_before() {
     );
     let mut simulation = simulation(&folder);
     simulation.run_frames(2);
-    assert_eq!(eval::<u32>(&simulation, "loading.quads"), 0);
-    assert_eq!(eval::<f32>(&simulation, "seen[1].frame"), 0.0);
+    assert_eq!(simulation.eval::<u32>("loading.quads"), 0);
+    assert_eq!(simulation.eval::<f32>("seen[1].frame"), 0.0);
     assert_eq!(
-        eval::<(u32, u32)>(&simulation, "seen[2].quads, seen[2].draw_calls"),
+        simulation.eval::<(u32, u32)>("seen[2].quads, seen[2].draw_calls"),
         (2, 1)
     );
-    assert!(eval::<f32>(&simulation, "seen[2].frame") > 0.0);
-    assert_eq!(eval::<u32>(&simulation, "drawing.quads"), 2);
+    assert!(simulation.eval::<f32>("seen[2].frame") > 0.0);
+    assert_eq!(simulation.eval::<u32>("drawing.quads"), 2);
 }
 
 #[test]
@@ -178,7 +169,7 @@ fn frames_without_updates_draw_with_the_stats_of_the_frame_before() {
     );
     let mut simulation = simulation(&folder);
     simulation.run_frames(4);
-    assert_eq!(eval::<Vec<u32>>(&simulation, "seen"), [0, 1, 2, 3]);
+    assert_eq!(simulation.eval::<Vec<u32>>("seen"), [0, 1, 2, 3]);
 }
 
 #[test]
@@ -255,10 +246,10 @@ fn an_update_rate_updates_by_the_same_dt() {
     );
     let mut simulation = simulation(&folder);
     simulation.run_frames(4);
-    assert_eq!(eval::<(u32, u32)>(&simulation, "updates, draws"), (2, 4));
-    let dt: f32 = eval(&simulation, "next(dts)");
+    assert_eq!(simulation.eval::<(u32, u32)>("updates, draws"), (2, 4));
+    let dt: f32 = simulation.eval("next(dts)");
     assert!((dt - 1.0 / 30.0).abs() < 1e-6, "{dt}");
-    assert!(eval::<bool>(&simulation, "next(dts, next(dts)) == nil"));
+    assert!(simulation.eval::<bool>("next(dts, next(dts)) == nil"));
 }
 
 #[test]
@@ -296,12 +287,12 @@ fn update_and_tasks_run_each_frame_and_draw_draws() {
     );
     let mut simulation = simulation(&folder);
     simulation.run_frames(3);
-    assert!(!eval::<bool>(&simulation, "jumped"));
+    assert!(!simulation.eval::<bool>("jumped"));
     simulation.tap(Key::Space);
-    assert!(eval::<bool>(&simulation, "jumped"));
-    assert_eq!(eval::<u32>(&simulation, "frames"), 4);
+    assert!(simulation.eval::<bool>("jumped"));
+    assert_eq!(simulation.eval::<u32>("frames"), 4);
     assert_eq!(
-        eval::<u32>(&simulation, "ticks"),
+        simulation.eval::<u32>("ticks"),
         5,
         "once when spawned, then after each update"
     );
@@ -332,9 +323,9 @@ fn tasks_started_in_update_resume_on_the_next_frame() {
     );
     let mut simulation = simulation(&folder);
     simulation.run_frames(2);
-    assert_eq!(eval::<Option<u32>>(&simulation, "resumed_on"), None);
+    assert_eq!(simulation.eval::<Option<u32>>("resumed_on"), None);
     simulation.step();
-    assert_eq!(eval::<Option<u32>>(&simulation, "resumed_on"), Some(3));
+    assert_eq!(simulation.eval::<Option<u32>>("resumed_on"), Some(3));
 }
 
 #[test]
@@ -355,7 +346,7 @@ fn a_task_failing_as_it_starts_does_not_stop_the_game() {
     let mut simulation = simulation(&folder);
     simulation.run_frames(3);
     assert!(simulation.game().error().is_none());
-    assert_eq!(eval::<u32>(&simulation, "frames"), 3);
+    assert_eq!(simulation.eval::<u32>("frames"), 3);
 }
 
 #[test]
@@ -378,11 +369,7 @@ fn an_error_stops_the_game_and_shows_it() {
     );
     let mut simulation = simulation(&folder);
     simulation.run_frames(5);
-    assert_eq!(
-        eval::<u32>(&simulation, "frames"),
-        2,
-        "stopped at the error"
-    );
+    assert_eq!(simulation.eval::<u32>("frames"), 2, "stopped at the error");
     let err = stopped_with(&simulation);
     assert!(err.contains("main.luau:5: out of cheese"), "{err}");
 
@@ -483,12 +470,12 @@ fn close_requested_decides_whether_the_window_closes() {
     );
     let mut asking = simulation(&folder);
     assert!(!asking.request_close(), "false keeps it open");
-    assert_eq!(eval::<u32>(&asking, "asked"), 1);
+    assert_eq!(asking.eval::<u32>("asked"), 1);
     asking.step();
     assert!(!asking.has_quit());
     asking.tap(Key::Y);
     assert!(asking.has_quit(), "the game closes it once answered");
-    eval::<()>(&asking, "(function() willing = true end)()");
+    asking.exec("(function() willing = true end)()");
     assert!(asking.request_close(), "anything but false closes it");
 
     // A game that can't answer can't keep its window open.
@@ -522,9 +509,62 @@ fn scripts_require_modules_relative_to_themselves() {
         ],
     );
     let mut simulation = simulation(&folder);
-    assert_eq!(eval::<u32>(&simulation, "doubled"), 42);
+    assert_eq!(simulation.eval::<u32>("doubled"), 42);
     simulation.tap(Key::Enter);
     assert!(simulation.context().input().released("confirm"));
+}
+
+#[test]
+fn tests_run_luau_in_the_game_between_frames() {
+    let folder = game(
+        "test_chunks",
+        &[
+            (
+                "main.luau",
+                "local counter = require('./lib/counter')
+                function update()
+                    counter.add(1)
+                end",
+            ),
+            (
+                "lib/counter.luau",
+                "local counter = { count = 0 }
+                function counter.add(n)
+                    counter.count += n
+                end
+                return counter",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.run_frames(2);
+
+    // A test's chunk requires from the game's folder, getting the module the game has.
+    simulation.exec("require('./lib/counter').add(10)");
+    assert_eq!(simulation.eval::<u32>("require('./lib/counter').count"), 12);
+    simulation.step();
+    assert_eq!(simulation.eval::<u32>("require('./lib/counter').count"), 13);
+
+    // It's lent the context, so the engine's functions work in it.
+    simulation.exec("input.bind('jump', { 'Space' })");
+    simulation.key_down(Key::Space);
+    assert!(simulation.eval::<bool>("input.held('jump')"));
+    assert_eq!(
+        simulation.eval::<(f32, f32)>("graphics.size()"),
+        (1280.0, 720.0)
+    );
+
+    // Its errors say where they are and what failed, without stopping the game.
+    let err = simulation
+        .try_exec("local t = nil\nreturn t.x")
+        .unwrap_err();
+    assert!(err.to_string().contains("test:2:"), "{err}");
+    let err = simulation
+        .try_exec("graphics.clear('#000000')")
+        .unwrap_err();
+    assert!(err.to_string().contains("only works in `draw`"), "{err}");
+    simulation.step();
+    assert!(simulation.game().error().is_none());
 }
 
 #[test]
@@ -549,13 +589,13 @@ fn held_keys_repeat_for_scripts() {
     let mut simulation = simulation(&folder);
     // Pressed, then repeated after half a second, 30 times a second.
     simulation.hold(Key::L, 1.0);
-    assert_eq!(eval::<u32>(&simulation, "steps"), 16);
-    assert_eq!(eval::<u32>(&simulation, "repeats"), 15);
+    assert_eq!(simulation.eval::<u32>("steps"), 16);
+    assert_eq!(simulation.eval::<u32>("repeats"), 15);
 
     // The D-pad doesn't repeat.
     simulation.connect_gamepad("Pad");
     simulation.hold_button(1, GamepadButton::DPadRight, 1.0);
-    assert_eq!(eval::<u32>(&simulation, "steps"), 17);
+    assert_eq!(simulation.eval::<u32>("steps"), 17);
 }
 
 #[test]
@@ -581,16 +621,16 @@ fn scripts_read_what_is_typed() {
     simulation.key_up(Key::LeftShift);
     simulation.type_text("ß");
     simulation.step();
-    assert_eq!(eval::<String>(&simulation, "typed"), ">ß");
+    assert_eq!(simulation.eval::<String>("typed"), ">ß");
 
     simulation.tap(Key::Tab);
     simulation.compose("にほ");
     simulation.step();
-    assert_eq!(eval::<String>(&simulation, "composing"), "にほ");
+    assert_eq!(simulation.eval::<String>("composing"), "にほ");
     simulation.type_text("日本");
     simulation.step();
-    assert_eq!(eval::<String>(&simulation, "typed"), ">ß日本");
-    assert_eq!(eval::<String>(&simulation, "composing"), "");
+    assert_eq!(simulation.eval::<String>("typed"), ">ß日本");
+    assert_eq!(simulation.eval::<String>("composing"), "");
 }
 
 #[test]
@@ -627,7 +667,9 @@ fn gamepads_are_read_by_number_and_through_actions() {
     );
     let mut simulation = simulation(&folder);
     assert!(
-        eval::<String>(&simulation, "bind_error").contains("unknown key or gamepad button `Shift`")
+        simulation
+            .eval::<String>("bind_error")
+            .contains("unknown key or gamepad button `Shift`")
     );
     let one = simulation.connect_gamepad("Left Hand");
     let two = simulation.connect_gamepad("Right Hand");
@@ -637,32 +679,32 @@ fn gamepads_are_read_by_number_and_through_actions() {
     simulation.push_button(1, GamepadButton::RightTrigger, 0.3);
     simulation.move_stick(1, Stick::Left, -0.55, 0.0);
     simulation.step();
-    assert_eq!(eval::<Vec<u32>>(&simulation, "seen.gamepads"), [1, 2]);
-    assert_eq!(eval::<String>(&simulation, "seen.name"), "Left Hand");
-    assert!(eval::<Option<String>>(&simulation, "seen.unknown").is_none());
-    assert!(eval::<bool>(&simulation, "seen.jump"));
-    assert!(eval::<bool>(&simulation, "seen.south_on_1"));
+    assert_eq!(simulation.eval::<Vec<u32>>("seen.gamepads"), [1, 2]);
+    assert_eq!(simulation.eval::<String>("seen.name"), "Left Hand");
+    assert!(simulation.eval::<Option<String>>("seen.unknown").is_none());
+    assert!(simulation.eval::<bool>("seen.jump"));
+    assert!(simulation.eval::<bool>("seen.south_on_1"));
     assert!(
-        !eval::<bool>(&simulation, "seen.p2_jump"),
+        !simulation.eval::<bool>("seen.p2_jump"),
         "gamepad 1 isn't 2"
     );
-    assert!(!eval::<bool>(&simulation, "seen.south_on_2"));
-    let axis: f64 = eval(&simulation, "seen.axis");
+    assert!(!simulation.eval::<bool>("seen.south_on_2"));
+    let axis: f64 = simulation.eval("seen.axis");
     assert!((axis + 0.5).abs() < 1e-6, "{axis}");
-    assert!((eval::<f64>(&simulation, "seen.shield") - 0.3).abs() < 1e-6);
-    assert!(!eval::<bool>(&simulation, "seen.shield_held"));
-    assert!((eval::<f64>(&simulation, "seen.trigger") - 0.3).abs() < 1e-6);
+    assert!((simulation.eval::<f64>("seen.shield") - 0.3).abs() < 1e-6);
+    assert!(!simulation.eval::<bool>("seen.shield_held"));
+    assert!((simulation.eval::<f64>("seen.trigger") - 0.3).abs() < 1e-6);
 
     simulation.button_down(2, GamepadButton::South);
     simulation.disconnect_gamepad(1);
     simulation.step();
-    assert_eq!(eval::<Vec<u32>>(&simulation, "seen.gamepads"), [2]);
-    assert!(eval::<bool>(&simulation, "seen.p2_jump"));
+    assert_eq!(simulation.eval::<Vec<u32>>("seen.gamepads"), [2]);
+    assert!(simulation.eval::<bool>("seen.p2_jump"));
     assert!(
-        eval::<bool>(&simulation, "seen.south_released"),
+        simulation.eval::<bool>("seen.south_released"),
         "disconnecting releases it"
     );
-    assert_eq!(eval::<f64>(&simulation, "seen.axis"), 0.0);
+    assert_eq!(simulation.eval::<f64>("seen.axis"), 0.0);
 }
 
 /// The fields of the table `name` declares in the definitions file, a line each.
@@ -706,17 +748,17 @@ fn the_definitions_declare_every_function_of_the_engine() {
             end",
         )],
     );
-    let simulation = simulation(&folder);
+    let mut simulation = simulation(&folder);
     let tables = [
         "graphics", "input", "audio", "tilemap", "grid", "scene", "save", "exact", "window",
     ];
     for table in tables {
-        let functions: Vec<String> = eval(&simulation, &format!("names.{table}"));
+        let functions: Vec<String> = simulation.eval(&format!("names.{table}"));
         assert_eq!(declared_fields(table), functions, "the fields of `{table}`");
     }
     for built_in in ["spawn", "wait", "wait_until"] {
         assert_eq!(
-            eval::<String>(&simulation, &format!("type({built_in})")),
+            simulation.eval::<String>(&format!("type({built_in})")),
             "function"
         );
         let declared = format!("\ndeclare function {built_in}");
@@ -726,11 +768,9 @@ fn the_definitions_declare_every_function_of_the_engine() {
 
 /// What `library`, `exact` or `math`, gives for a spread of arguments to each of its functions,
 /// hashed together bit for bit.
-fn math_fingerprint(simulation: &Simulation<LuauGame>, library: &str) -> u64 {
-    let results: Vec<f64> = eval(
-        simulation,
-        &format!(
-            "(function()
+fn math_fingerprint(simulation: &mut Simulation<LuauGame>, library: &str) -> u64 {
+    let results: Vec<f64> = simulation.eval(&format!(
+        "(function()
                 local m = {library}
                 local results = {{}}
                 for i = -500, 500 do
@@ -748,8 +788,7 @@ fn math_fingerprint(simulation: &Simulation<LuauGame>, library: &str) -> u64 {
                 end
                 return results
             end)()"
-        ),
-    );
+    ));
     assert_eq!(results.len(), 1001 * 16);
     // FNV-1a over each result's bits.
     results.iter().fold(0xcbf2_9ce4_8422_2325, |hash, value| {
@@ -760,26 +799,17 @@ fn math_fingerprint(simulation: &Simulation<LuauGame>, library: &str) -> u64 {
 #[test]
 fn exact_math_gives_the_same_bits_on_every_platform() {
     let folder = game("exact_math", &[("main.luau", "")]);
-    let simulation = simulation(&folder);
+    let mut simulation = simulation(&folder);
     // CI checks it on Windows and Linux. `math`'s comes out differently on each, from their C
     // libraries.
     assert_eq!(
-        math_fingerprint(&simulation, "exact"),
+        math_fingerprint(&mut simulation, "exact"),
         0x0c4f_400f_fe58_5058
     );
     assert_eq!(
-        eval::<(f64, f64, f64)>(&simulation, "exact.sin(0), exact.cos(0), exact.log(8, 2)"),
+        simulation.eval::<(f64, f64, f64)>("exact.sin(0), exact.cos(0), exact.log(8, 2)"),
         (0.0, 1.0, 3.0)
     );
-}
-
-/// The error running the Luau `code` in the game fails with.
-fn error_of(simulation: &Simulation<LuauGame>, code: &str) -> String {
-    let lua = simulation.game().scripts().lua();
-    match lua.load(code).exec() {
-        Ok(()) => panic!("`{code}` ran"),
-        Err(err) => err.to_string(),
-    }
 }
 
 #[test]
@@ -798,11 +828,10 @@ fn saves_last_after_the_game_ends() {
         .expect("game starts")
     };
 
-    let first = start();
-    assert!(eval::<bool>(&first, "progress == nil"));
-    assert!(eval::<Vec<String>>(&first, "save.list()").is_empty());
-    eval::<()>(
-        &first,
+    let mut first = start();
+    assert!(first.eval::<bool>("progress == nil"));
+    assert!(first.eval::<Vec<String>>("save.list()").is_empty());
+    first.exec(
         "save.write('progress', {
             stage = 'hunt',
             coins = 12.5,
@@ -812,9 +841,9 @@ fn saves_last_after_the_game_ends() {
             ['found places'] = {},
         })",
     );
-    eval::<()>(&first, "save.write('best', 900)");
+    first.exec("save.write('best', 900)");
     assert_eq!(
-        eval::<Vec<String>>(&first, "save.list()"),
+        first.eval::<Vec<String>>("save.list()"),
         ["best", "progress"]
     );
     drop(first);
@@ -825,30 +854,26 @@ fn saves_last_after_the_game_ends() {
     assert!(text.contains("\n    stage = \"hunt\",\n"), "{text}");
     assert!(text.contains("\n    [\"found places\"] = {},\n"), "{text}");
 
-    let second = start();
+    let mut second = start();
     assert_eq!(
-        eval::<(String, f64, String, String, bool)>(
-            &second,
+        second.eval::<(String, f64, String, String, bool)>(
             "progress.stage, progress.coins, progress.items[2], progress.gear.weapon, \
              progress.done"
         ),
         ("hunt".into(), 12.5, "tonic".into(), "staff".into(), false)
     );
-    assert!(eval::<bool>(
-        &second,
-        "next(progress['found places']) == nil"
-    ));
-    assert_eq!(eval::<u32>(&second, "save.read('best')"), 900);
-    eval::<()>(&second, "save.remove('best')");
-    eval::<()>(&second, "save.remove('never_saved')");
-    assert_eq!(eval::<Vec<String>>(&second, "save.list()"), ["progress"]);
-    assert!(eval::<bool>(&second, "save.read('best') == nil"));
+    assert!(second.eval::<bool>("next(progress['found places']) == nil"));
+    assert_eq!(second.eval::<u32>("save.read('best')"), 900);
+    second.exec("save.remove('best')");
+    second.exec("save.remove('never_saved')");
+    assert_eq!(second.eval::<Vec<String>>("save.list()"), ["progress"]);
+    assert!(second.eval::<bool>("save.read('best') == nil"));
 }
 
 #[test]
 fn only_plain_data_can_be_saved() {
     let folder = game("unplain_saves", &[("main.luau", "")]);
-    let simulation = simulation(&folder);
+    let mut simulation = simulation(&folder);
     for (code, message) in [
         (
             "save.write('slot', function() end)",
@@ -872,19 +897,19 @@ fn only_plain_data_can_be_saved() {
         ),
         ("save.read('slot 2')", "may hold only letters"),
     ] {
-        let err = error_of(&simulation, code);
+        let err = simulation.try_exec(code).unwrap_err().to_string();
         assert!(err.contains(message), "`{code}`: {err}");
     }
-    assert!(eval::<Vec<String>>(&simulation, "save.list()").is_empty());
+    assert!(simulation.eval::<Vec<String>>("save.list()").is_empty());
 }
 
 #[test]
 fn simulations_keep_saves_of_their_own() {
     let folder = game("own_saves", &[("main.luau", "")]);
     let mut first = simulation(&folder);
-    let second = simulation(&folder);
-    eval::<()>(&first, "save.write('slot', 1)");
-    assert!(eval::<bool>(&second, "save.read('slot') == nil"));
+    let mut second = simulation(&folder);
+    first.exec("save.write('slot', 1)");
+    assert!(second.eval::<bool>("save.read('slot') == nil"));
     let saves = first.context().saves().folder().unwrap().to_owned();
     assert!(saves.join("slot.luau").is_file());
     drop(first);
@@ -912,7 +937,7 @@ fn sounds_load_from_the_game_folder() {
     fs::copy(blip, sounds.join("blip.wav")).unwrap();
 
     let mut simulation = simulation(&folder);
-    assert!(eval::<f32>(&simulation, "length") > 0.0);
+    assert!(simulation.eval::<f32>("length") > 0.0);
     simulation.tap(Key::Space);
     assert_eq!(simulation.context().audio().sounds_playing(), 1);
 }
@@ -930,12 +955,12 @@ fn fonts_measure_and_scale() {
             zero_scale_fails = not pcall(function() font:scaled(0) end)",
         )],
     );
-    let simulation = simulation(&folder);
-    let (width, height): (f32, f32) = eval(&simulation, "width, height");
+    let mut simulation = simulation(&folder);
+    let (width, height): (f32, f32) = simulation.eval("width, height");
     assert!(width > 0.0);
-    assert_eq!(height, eval::<f32>(&simulation, "line_height"));
-    assert_eq!(eval::<f32>(&simulation, "big_width"), width * 2.0);
-    assert!(eval::<bool>(&simulation, "zero_scale_fails"));
+    assert_eq!(height, simulation.eval::<f32>("line_height"));
+    assert_eq!(simulation.eval::<f32>("big_width"), width * 2.0);
+    assert!(simulation.eval::<bool>("zero_scale_fails"));
 }
 
 /// Writes a PNG `width` by `height` pixels to `path`, with `pixels` row by row.
@@ -979,10 +1004,10 @@ fn sprites_load_from_sheets_and_draw() {
     write_png(&folder.join("art/sheet.png"), 2, 1, &[RED, BLUE]);
 
     let mut simulation = simulation(&folder);
-    assert_eq!(eval::<(u32, u32)>(&simulation, "columns, rows"), (2, 1));
-    assert_eq!(eval::<(f32, f32)>(&simulation, "width, height"), (1.0, 1.0));
-    assert!(eval::<bool>(&simulation, "outside_fails"));
-    assert!(eval::<bool>(&simulation, "empty_tiles_fail"));
+    assert_eq!(simulation.eval::<(u32, u32)>("columns, rows"), (2, 1));
+    assert_eq!(simulation.eval::<(f32, f32)>("width, height"), (1.0, 1.0));
+    assert!(simulation.eval::<bool>("outside_fails"));
+    assert!(simulation.eval::<bool>("empty_tiles_fail"));
 
     simulation.step();
     let image = simulation.screenshot().unwrap();
@@ -1043,7 +1068,7 @@ fn colors_can_be_made_numbers() {
     );
     let mut simulation = simulation(&folder);
     assert_eq!(
-        eval::<(u32, u32)>(&simulation, "hex, table"),
+        simulation.eval::<(u32, u32)>("hex, table"),
         (0xff804080, 0x0000ffff)
     );
     simulation.step();
@@ -1085,23 +1110,19 @@ fn animations_show_their_frames_in_turn() {
     let indices = "blink:frame_index(0), blink:frame_index(0.3), blink:frame_index(0.6), \
                    blink:frame_index(0.8)";
     assert_eq!(
-        eval::<(u32, u32, u32, u32)>(&simulation, indices),
+        simulation.eval::<(u32, u32, u32, u32)>(indices),
         (1, 2, 3, 1)
     );
-    assert_eq!(eval::<u32>(&simulation, "once:frame_index(10)"), 3);
+    assert_eq!(simulation.eval::<u32>("once:frame_index(10)"), 3);
     assert_eq!(
-        eval::<(u32, f32)>(&simulation, "blink:frame_count(), blink:duration()"),
+        simulation.eval::<(u32, f32)>("blink:frame_count(), blink:duration()"),
         (3, 0.75)
     );
-    assert_eq!(eval::<u32>(&simulation, "mirrored:frame_count()"), 3);
-    assert!(eval::<bool>(
-        &simulation,
+    assert_eq!(simulation.eval::<u32>("mirrored:frame_count()"), 3);
+    assert!(simulation.eval::<bool>(
         "once:is_finished(0.75) and not once:is_finished(0.7) and not blink:is_finished(100)"
     ));
-    assert!(eval::<bool>(
-        &simulation,
-        "no_frames_fail and no_time_fails"
-    ));
+    assert!(simulation.eval::<bool>("no_frames_fail and no_time_fails"));
 
     simulation.step();
     assert_eq!(pixel(&simulation.screenshot().unwrap(), 0, 0), RED);
@@ -1160,32 +1181,34 @@ fn scenes_load_and_their_nodes_are_found() {
         ],
     );
     write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
-    let simulation = simulation(&folder);
-    assert_eq!(eval::<String>(&simulation, "room:props().title"), "Room");
+    let mut simulation = simulation(&folder);
+    assert_eq!(simulation.eval::<String>("room:props().title"), "Room");
     assert_eq!(
-        eval::<(String, String, String)>(&simulation, "hand:name(), hand:kind(), hand:path()"),
+        simulation.eval::<(String, String, String)>("hand:name(), hand:kind(), hand:path()"),
         ("hand".into(), "sprite".into(), "arm/hand".into())
     );
     assert_eq!(
-        eval::<(f64, String)>(&simulation, "hand:props().weight, hand:props().names[2]"),
+        simulation.eval::<(f64, String)>("hand:props().weight, hand:props().names[2]"),
         (3.0, "b".into())
     );
     assert_eq!(
-        eval::<(f32, f32)>(&simulation, "hand:world_position()"),
+        simulation.eval::<(f32, f32)>("hand:world_position()"),
         (10.0, 14.0),
         "4 along the arm, which points down"
     );
-    assert_eq!(eval::<(f32, f32)>(&simulation, "hand:size()"), (2.0, 2.0));
-    assert!(eval::<bool>(
-        &simulation,
+    assert_eq!(simulation.eval::<(f32, f32)>("hand:size()"), (2.0, 2.0));
+    assert!(simulation.eval::<bool>(
         "room:find('arm/hand') == hand and room:tagged('held')[1] == hand
          and #room:tagged('held') == 2 and again:find('arm/hand') ~= hand
          and room:find('nothing') == nil and hand:parent():name() == 'arm'
          and #room:children() == 3 and hand:has_tag('held') and hand:tags()[1] == 'held'"
     ));
-    assert!(eval::<String>(&simulation, "tostring(hand)").contains("arm/hand"));
-    assert!(eval::<bool>(
-        &simulation,
+    assert!(
+        simulation
+            .eval::<String>("tostring(hand)")
+            .contains("arm/hand")
+    );
+    assert!(simulation.eval::<bool>(
         "room:find('door'):contains(1, 1) and not room:find('door'):contains(5, 5)
          and room:find('door'):bounds().width == 4 and room:bounds() == nil"
     ));
@@ -1219,11 +1242,7 @@ fn scenes_draw_and_change() {
     assert_eq!(pixel(&image, 10, 14), BLUE);
     assert_eq!(pixel(&image, 8, 13), BLACK);
 
-    let exec = |code: &str| {
-        let scripts = simulation.game().scripts();
-        scripts.load_source("test", code).unwrap();
-    };
-    exec(
+    simulation.exec(
         "room:find('arm'):set_rotation(0)
          room:find('arm/hand'):set_sprite(red)
          room:find('floor'):set_color('#0000ff')
@@ -1237,10 +1256,7 @@ fn scenes_draw_and_change() {
     assert_eq!(pixel(&image, 0, 19), BLUE);
     assert_eq!(pixel(&image, 10, 19), BLACK);
 
-    let scripts = simulation.game().scripts();
-    scripts
-        .load_source("test", "room:find('arm'):set_visible(false)")
-        .unwrap();
+    simulation.exec("room:find('arm'):set_visible(false)");
     simulation.step();
     let image = simulation.screenshot().unwrap();
     assert_eq!(pixel(&image, 13, 9), BLACK);
@@ -1281,31 +1297,25 @@ fn scenes_lay_out_on_the_canvas() {
     let mut simulation = simulation(&folder);
     let bounds = "corner:bounds().x, corner:bounds().y";
     assert_eq!(
-        eval::<(f32, f32)>(&simulation, bounds),
+        simulation.eval::<(f32, f32)>(bounds),
         (38.0, 18.0),
         "laid out on the canvas once loaded"
     );
-    assert_eq!(
-        eval::<(f32, f32)>(&simulation, "corner:anchor()"),
-        (1.0, 1.0)
-    );
+    assert_eq!(simulation.eval::<(f32, f32)>("corner:anchor()"), (1.0, 1.0));
     simulation.resize(60, 30);
     simulation.step();
-    assert_eq!(eval::<(f32, f32)>(&simulation, bounds), (58.0, 28.0));
+    assert_eq!(simulation.eval::<(f32, f32)>(bounds), (58.0, 28.0));
     let image = simulation.screenshot().unwrap();
     assert_eq!(pixel(&image, 59, 29), [255, 0, 0, 255]);
 
-    let scripts = simulation.game().scripts();
-    scripts
-        .load_source("test", "corner:set_anchor(0.5, 0) label:set_anchor(nil)")
-        .unwrap();
-    assert_eq!(eval::<(f32, f32)>(&simulation, bounds), (28.0, -2.0));
-    assert!(eval::<bool>(
-        &simulation,
-        "label:anchor() == nil and label:bounds().x + label:bounds().width == 0"
-    ));
-    let err = scripts
-        .load_source("test", "corner:set_anchor(1)")
+    simulation.exec("corner:set_anchor(0.5, 0) label:set_anchor(nil)");
+    assert_eq!(simulation.eval::<(f32, f32)>(bounds), (28.0, -2.0));
+    assert!(
+        simulation
+            .eval::<bool>("label:anchor() == nil and label:bounds().x + label:bounds().width == 0")
+    );
+    let err = simulation
+        .try_exec("corner:set_anchor(1)")
         .unwrap_err()
         .to_string();
     assert!(err.contains("set_anchor takes fractions"), "{err}");
@@ -1321,12 +1331,11 @@ fn scene_nodes_refuse_what_they_do_not_have() {
         ],
     );
     write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
-    let simulation = simulation(&folder);
-    let error = |code: &str| -> String {
-        eval(
-            &simulation,
-            &format!("tostring(select(2, pcall(function() {code} end)))"),
-        )
+    let mut simulation = simulation(&folder);
+    let mut error = |code: &str| -> String {
+        simulation.eval(&format!(
+            "tostring(select(2, pcall(function() {code} end)))"
+        ))
     };
     let err = error("room:find('floor'):set_tint('#ff0000')");
     assert!(
@@ -1398,48 +1407,33 @@ fn clips_pose_scene_nodes() {
     write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
     let mut simulation = simulation(&folder);
     assert_eq!(
-        eval::<(f32, bool, bool, bool)>(
-            &simulation,
+        simulation.eval::<(f32, bool, bool, bool)>(
             "clips.wave:duration(), clips.wave:is_looping(), clips.drop:is_finished(0.4), \
              clips.drop:is_finished(0.5)"
         ),
         (1.0, true, false, true)
     );
 
-    let run = |simulation: &Simulation<LuauGame>, code: &str| {
-        let scripts = simulation.game().scripts();
-        scripts.load_source("test", code).unwrap();
-    };
-    run(&simulation, "puppet:pose(clips.wave, 1.25)");
-    assert_eq!(eval::<f32>(&simulation, "arm:rotation()"), 0.5, "looped");
+    simulation.exec("puppet:pose(clips.wave, 1.25)");
+    assert_eq!(simulation.eval::<f32>("arm:rotation()"), 0.5, "looped");
     // Halfway there from 2, at 4 for the clip.
-    run(
-        &simulation,
-        "arm:set_position(10, 2) puppet:pose(clips.drop, 0.25, 0.5)",
-    );
-    assert_eq!(
-        eval::<(f32, f32)>(&simulation, "arm:position()"),
-        (10.0, 3.0)
-    );
+    simulation.exec("arm:set_position(10, 2) puppet:pose(clips.drop, 0.25, 0.5)");
+    assert_eq!(simulation.eval::<(f32, f32)>("arm:position()"), (10.0, 3.0));
 
     // The hand shows the clip's cell, the blue one.
-    run(
-        &simulation,
-        "puppet:pose(clips.wave, 0.5) arm:set_rotation(0)",
-    );
+    simulation.exec("puppet:pose(clips.wave, 0.5) arm:set_rotation(0)");
     simulation.step();
     let image = simulation.screenshot().unwrap();
     assert_eq!(pixel(&image, 14, 3), BLUE);
-    run(&simulation, "hand:set_cell(0, 0)");
+    simulation.exec("hand:set_cell(0, 0)");
     simulation.step();
     let image = simulation.screenshot().unwrap();
     assert_eq!(pixel(&image, 14, 3), RED);
 
-    let error = |code: &str| -> String {
-        eval(
-            &simulation,
-            &format!("tostring(select(2, pcall(function() {code} end)))"),
-        )
+    let mut error = |code: &str| -> String {
+        simulation.eval(&format!(
+            "tostring(select(2, pcall(function() {code} end)))"
+        ))
     };
     let err = error("puppet:pose(clips.lost, 0)");
     assert!(
@@ -1523,28 +1517,27 @@ fn scene_tilemaps_and_instances_work_from_luau() {
     );
     write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
     let mut simulation = simulation(&folder);
-    assert!(eval::<bool>(
-        &simulation,
+    assert!(simulation.eval::<bool>(
         "map:is_solid(1, 1) and not map:is_solid(0, 0) and map:is_solid(-1, 0)
          and walls:is_solid(1, 1)"
     ));
     assert_eq!(
-        eval::<(f32, f32)>(&simulation, "map:tile_to_world(1, 1)"),
+        simulation.eval::<(f32, f32)>("map:tile_to_world(1, 1)"),
         (6.0, 4.0)
     );
     assert_eq!(
-        eval::<(i32, i32)>(&simulation, "map:world_to_tile(7, 5)"),
+        simulation.eval::<(i32, i32)>("map:world_to_tile(7, 5)"),
         (1, 1)
     );
-    assert_eq!(eval::<(u32, u32)>(&simulation, "map:grid_size()"), (4, 3));
-    assert_eq!(eval::<(u32, u32)>(&simulation, "map:tile_size()"), (2, 2));
-    assert!(eval::<bool>(&simulation, "map:tile_props('blue').cold"));
+    assert_eq!(simulation.eval::<(u32, u32)>("map:grid_size()"), (4, 3));
+    assert_eq!(simulation.eval::<(u32, u32)>("map:tile_size()"), (2, 2));
+    assert!(simulation.eval::<bool>("map:tile_props('blue').cold"));
     assert_eq!(
-        eval::<(Option<String>, Option<String>)>(&simulation, "walls:tile(1, 1), walls:tile(0, 0)"),
+        simulation.eval::<(Option<String>, Option<String>)>("walls:tile(1, 1), walls:tile(0, 0)"),
         (Some("blue".into()), None)
     );
     assert_eq!(
-        eval::<String>(&simulation, "level:find('guide'):props().talk"),
+        simulation.eval::<String>("level:find('guide'):props().talk"),
         "hello"
     );
 
@@ -1560,23 +1553,16 @@ fn scene_tilemaps_and_instances_work_from_luau() {
         "the guide's body, overridden"
     );
 
-    let scripts = simulation.game().scripts();
-    scripts
-        .load_source(
-            "test",
-            "walls:set_tile(1, 1, nil) walls:set_tile(0, 0, 'blue')",
-        )
-        .unwrap();
+    simulation.exec("walls:set_tile(1, 1, nil) walls:set_tile(0, 0, 'blue')");
     simulation.step();
     let image = simulation.screenshot().unwrap();
     assert_eq!(pixel(&image, 6, 4), RED);
     assert_eq!(pixel(&image, 4, 2), BLUE);
 
-    let error = |code: &str| -> String {
-        eval(
-            &simulation,
-            &format!("tostring(select(2, pcall(function() {code} end)))"),
-        )
+    let mut error = |code: &str| -> String {
+        simulation.eval(&format!(
+            "tostring(select(2, pcall(function() {code} end)))"
+        ))
     };
     let err = error("walls:set_tile(0, 0, 'green')");
     assert!(err.contains("there's no tile `green`"), "{err}");
@@ -1611,20 +1597,18 @@ fn scene_nodes_are_added_and_removed_from_luau() {
     );
     write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
     let mut simulation = simulation(&folder);
-    assert!(eval::<bool>(
-        &simulation,
+    assert!(simulation.eval::<bool>(
         "room:find('floor/spare/arm/hand') ~= nil and twin:path() == 'twin'
          and twin ~= hand and spare:props().title == 'Room'"
     ));
-    let error = |simulation: &Simulation<LuauGame>, code: &str| -> String {
-        eval(
-            simulation,
-            &format!("tostring(select(2, pcall(function() {code} end)))"),
-        )
+    let error = |simulation: &mut Simulation<LuauGame>, code: &str| -> String {
+        simulation.eval(&format!(
+            "tostring(select(2, pcall(function() {code} end)))"
+        ))
     };
-    let err = error(&simulation, "room:add(twin)");
+    let err = error(&mut simulation, "room:add(twin)");
     assert!(err.contains("a node named `twin` there already"), "{err}");
-    let err = error(&simulation, "room:add(room)");
+    let err = error(&mut simulation, "room:add(room)");
     assert!(err.contains("takes a name"), "{err}");
 
     simulation.step();
@@ -1632,21 +1616,17 @@ fn scene_nodes_are_added_and_removed_from_luau() {
     assert_eq!(pixel(&simulation.screenshot().unwrap(), 4, 0), BLUE);
     assert_eq!(pixel(&simulation.screenshot().unwrap(), 2, 0), BLACK);
 
-    let scripts = simulation.game().scripts();
-    scripts.load_source("test", "twin:remove()").unwrap();
+    simulation.exec("twin:remove()");
     simulation.step();
     assert_eq!(pixel(&simulation.screenshot().unwrap(), 4, 0), BLACK);
-    assert!(eval::<bool>(
-        &simulation,
-        "twin:is_removed() and not hand:is_removed()"
-    ));
-    let err = error(&simulation, "twin:position()");
+    assert!(simulation.eval::<bool>("twin:is_removed() and not hand:is_removed()"));
+    let err = error(&mut simulation, "twin:position()");
     assert!(err.contains("has been removed"), "{err}");
     assert_eq!(
-        eval::<String>(&simulation, "tostring(twin)"),
+        simulation.eval::<String>("tostring(twin)"),
         "SceneNode(removed)"
     );
-    let err = error(&simulation, "room:remove()");
+    let err = error(&mut simulation, "room:remove()");
     assert!(err.contains("root can't be removed"), "{err}");
 }
 
@@ -1740,25 +1720,23 @@ fn tilemaps_hold_tiles_in_layers_and_draw_them() {
     write_png(&folder.join("white.png"), 1, 1, &[WHITE]);
 
     let mut simulation = simulation(&folder);
-    let check = |expression: &str| eval::<bool>(&simulation, expression);
+    let mut check = |expression: &str| simulation.eval::<bool>(expression);
     assert!(check(
         "map:get(walls, 1, 0) ~= nil and map:get(walls, 2, 1) == nil"
     ));
     assert!(check("map:is_solid(1, 0) and not map:is_solid(2, 1)"));
     assert!(check("map:is_solid(-1, 0) and not map:contains(-1, 0)"));
-    assert_eq!(eval::<(u32, u32)>(&simulation, "map:size()"), (3, 2));
-    assert_eq!(eval::<usize>(&simulation, "map:layer_count()"), 2);
-    let bounds: (f32, f32, f32, f32) = eval(
-        &simulation,
-        "map:bounds().x, map:bounds().y, map:bounds().width, map:bounds().height",
-    );
+    assert_eq!(simulation.eval::<(u32, u32)>("map:size()"), (3, 2));
+    assert_eq!(simulation.eval::<usize>("map:layer_count()"), 2);
+    let bounds: (f32, f32, f32, f32) =
+        simulation.eval("map:bounds().x, map:bounds().y, map:bounds().width, map:bounds().height");
     assert_eq!(bounds, (0.0, 0.0, 30.0, 20.0));
     assert_eq!(
-        eval::<(i32, i32)>(&simulation, "map:world_to_tile(15, 19.5)"),
+        simulation.eval::<(i32, i32)>("map:world_to_tile(15, 19.5)"),
         (1, 1)
     );
     assert_eq!(
-        eval::<(f32, f32)>(&simulation, "map:tile_to_world(1.5, 1)"),
+        simulation.eval::<(f32, f32)>("map:tile_to_world(1.5, 1)"),
         (15.0, 10.0)
     );
     for (name, message) in [
@@ -1766,7 +1744,7 @@ fn tilemaps_hold_tiles_in_layers_and_draw_them() {
         ("no_tile", "the map's tileset has no tile 7"),
         ("no_layer", "there's no layer 2 in a map of 2 layers"),
     ] {
-        let err: String = eval(&simulation, name);
+        let err: String = simulation.eval(name);
         assert!(err.contains(message), "{name}: {err}");
     }
 
@@ -1774,11 +1752,7 @@ fn tilemaps_hold_tiles_in_layers_and_draw_them() {
     let image = simulation.screenshot().unwrap();
     assert_eq!(pixel(&image, 15, 5), BLUE, "the wall, over the ground");
     assert_eq!(pixel(&image, 25, 15), RED);
-    simulation
-        .game()
-        .scripts()
-        .load_source("test", "only_ground = true")
-        .unwrap();
+    simulation.exec("only_ground = true");
     simulation.step();
     let image = simulation.screenshot().unwrap();
     assert_eq!(pixel(&image, 15, 5), RED);
@@ -1814,24 +1788,24 @@ fn grid_movers_walk_from_tile_to_tile() {
                 and not pcall(function() mover:update(-0.1) end)",
         )],
     );
-    let simulation = simulation(&folder);
-    assert!(eval::<bool>(&simulation, "started"));
-    assert_eq!(eval::<(i32, i32)>(&simulation, "column, row"), (3, 2));
-    assert_eq!(eval::<(f32, f32)>(&simulation, "x, y"), (2.5, 2.0));
-    assert!(eval::<bool>(&simulation, "moving and arrived"));
-    assert!(!eval::<bool>(&simulation, "blocked_step"));
+    let mut simulation = simulation(&folder);
+    assert!(simulation.eval::<bool>("started"));
+    assert_eq!(simulation.eval::<(i32, i32)>("column, row"), (3, 2));
+    assert_eq!(simulation.eval::<(f32, f32)>("x, y"), (2.5, 2.0));
+    assert!(simulation.eval::<bool>("moving and arrived"));
+    assert!(!simulation.eval::<bool>("blocked_step"));
     assert_eq!(
-        eval::<(i32, i32, i32, i32)>(&simulation, "checked[1], checked[2], from[1], from[2]"),
+        simulation.eval::<(i32, i32, i32, i32)>("checked[1], checked[2], from[1], from[2]"),
         (3, 1, 3, 2)
     );
-    assert_eq!(eval::<String>(&simulation, "facing"), "up", "turned");
+    assert_eq!(simulation.eval::<String>("facing"), "up", "turned");
     assert_eq!(
-        eval::<(i32, i32)>(&simulation, "neighbor[1], neighbor[2]"),
+        simulation.eval::<(i32, i32)>("neighbor[1], neighbor[2]"),
         (-1, 0)
     );
-    assert_eq!(eval::<String>(&simulation, "opposite"), "down");
-    assert!(eval::<bool>(&simulation, "zero_step_time_fails"));
-    assert!(eval::<bool>(&simulation, "bad_frame_times_fail"));
+    assert_eq!(simulation.eval::<String>("opposite"), "down");
+    assert!(simulation.eval::<bool>("zero_step_time_fails"));
+    assert!(simulation.eval::<bool>("bad_frame_times_fail"));
 }
 
 #[test]
@@ -1851,12 +1825,12 @@ fn tilemaps_too_big_to_hold_are_errors() {
             layers = map:layer_count()",
         )],
     );
-    let simulation = simulation(&folder);
-    let too_big: String = eval(&simulation, "too_big");
+    let mut simulation = simulation(&folder);
+    let too_big: String = simulation.eval("too_big");
     assert!(too_big.contains("more than the 16777216"), "{too_big}");
-    let second_layer: String = eval(&simulation, "second_layer");
+    let second_layer: String = simulation.eval("second_layer");
     assert!(second_layer.contains("with 2 layers"), "{second_layer}");
-    assert_eq!(eval::<usize>(&simulation, "layers"), 1);
+    assert_eq!(simulation.eval::<usize>("layers"), 1);
 }
 
 #[test]
@@ -1880,14 +1854,10 @@ fn each_image_is_loaded_once() {
     let mut simulation = simulation(&folder);
     // Gone from disk, it loads all the same.
     fs::remove_file(&sheet).unwrap();
-    simulation
-        .game()
-        .scripts()
-        .load_source("test", "reload = true")
-        .unwrap();
+    simulation.exec("reload = true");
     simulation.step();
     assert!(simulation.game().error().is_none());
-    assert_eq!(eval::<(u32, u32)>(&simulation, "again:size()"), (1, 1));
+    assert_eq!(simulation.eval::<(u32, u32)>("again:size()"), (1, 1));
 }
 
 #[test]
@@ -1916,15 +1886,11 @@ fn text_layouts_reveal_their_glyphs() {
         ],
     );
     let mut simulation = simulation(&folder);
-    assert_eq!(eval::<usize>(&simulation, "lines"), 2, "wrapped");
-    assert_eq!(
-        eval::<usize>(&simulation, "glyphs"),
-        7,
-        "spaces don't count"
-    );
-    let (width, height): (f32, f32) = eval(&simulation, "width, height");
-    assert!(width <= eval::<f32>(&simulation, "max_width"));
-    assert_eq!(height, 2.0 * eval::<f32>(&simulation, "line_height"));
+    assert_eq!(simulation.eval::<usize>("lines"), 2, "wrapped");
+    assert_eq!(simulation.eval::<usize>("glyphs"), 7, "spaces don't count");
+    let (width, height): (f32, f32) = simulation.eval("width, height");
+    assert!(width <= simulation.eval::<f32>("max_width"));
+    assert_eq!(height, 2.0 * simulation.eval::<f32>("line_height"));
 
     let lit = |simulation: &mut Simulation<LuauGame>| {
         simulation.step();
@@ -1932,17 +1898,9 @@ fn text_layouts_reveal_their_glyphs() {
         image.pixels().chunks(4).filter(|p| p[0] > 0).count()
     };
     assert_eq!(lit(&mut simulation), 0, "none shown");
-    simulation
-        .game()
-        .scripts()
-        .load_source("test", "shown = 1.9")
-        .unwrap();
+    simulation.exec("shown = 1.9");
     let one = lit(&mut simulation);
-    simulation
-        .game()
-        .scripts()
-        .load_source("test", "shown = nil")
-        .unwrap();
+    simulation.exec("shown = nil");
     let all = lit(&mut simulation);
     assert!(0 < one && one < all, "{one} of {all}");
 }
@@ -2041,18 +1999,15 @@ fn the_camera_zooms_about_the_middle_of_the_view() {
     assert_eq!(pixel(&image, 14, 14), BLACK);
     assert_eq!(pixel(&image, 9, 9), BLACK);
 
-    let scripts = simulation.game().scripts();
-    scripts.load_source("test", "zoom = 0.5").unwrap();
+    simulation.exec("zoom = 0.5");
     simulation.step();
     let image = simulation.screenshot().unwrap();
     assert_eq!(pixel(&image, 10, 10), RED);
     assert_eq!(pixel(&image, 11, 11), BLACK);
 
     for zoom in ["0", "-1", "0 / 0", "math.huge"] {
-        let err = error_of(
-            &simulation,
-            &format!("graphics.set_camera(0, 0, nil, {zoom})"),
-        );
+        let code = format!("graphics.set_camera(0, 0, nil, {zoom})");
+        let err = simulation.try_exec(&code).unwrap_err().to_string();
         assert!(err.contains("zoom must be above 0"), "{zoom}: {err}");
     }
 }
@@ -2119,7 +2074,7 @@ fn luau_games_draw_meshes_and_billboards_in_3d_views() {
     assert_eq!(simulation.game().error().map(ToString::to_string), None);
     let stats = "seen[2].triangles, seen[2].draw_calls";
     // The cube's 12 and the billboard's 2; the two meshes, then the rect.
-    assert_eq!(eval::<(u32, u32)>(&simulation, stats), (14, 3));
+    assert_eq!(simulation.eval::<(u32, u32)>(stats), (14, 3));
 
     let frame = simulation.screenshot().unwrap();
     assert_eq!(pixel(&frame, 10, 7), [255, 0, 0, 255], "the cube");
@@ -2215,22 +2170,22 @@ fn luau_games_make_meshes() {
             most = graphics.new_sphere(1, 4000000000, 4000000000):triangle_count()",
         )],
     );
-    let simulation = simulation(&folder);
+    let mut simulation = simulation(&folder);
     assert_eq!(
-        eval::<Vec<u32>>(&simulation, "counts"),
+        simulation.eval::<Vec<u32>>("counts"),
         [12, 12, 2, 16 * 2 * 6 + 16 * 2, 4 * 2, 1]
     );
-    assert!(!eval::<bool>(&simulation, "from_zero"));
-    let too_few: String = eval(&simulation, "tostring(too_few)");
+    assert!(!simulation.eval::<bool>("from_zero"));
+    let too_few: String = simulation.eval("tostring(too_few)");
     assert!(too_few.contains("2 indices"), "{too_few}");
     for name in ["infinite", "negative", "flat", "no_radius"] {
-        let err: String = eval(&simulation, &format!("tostring({name})"));
+        let err: String = simulation.eval(&format!("tostring({name})"));
         assert!(err.contains("must be above 0 and finite"), "{name}: {err}");
     }
     // The poles' rings are a triangle a slice, and the rest two.
     let most = 512;
     assert_eq!(
-        eval::<u32>(&simulation, "most"),
+        simulation.eval::<u32>("most"),
         most * 2 + most * (most - 2) * 2
     );
 }
@@ -2255,22 +2210,21 @@ fn cameras_place_points_on_the_canvas_and_rays_into_the_world() {
             ),
         ],
     );
-    let simulation = simulation(&folder);
+    let mut simulation = simulation(&folder);
     assert_eq!(
-        eval::<(f32, f32)>(&simulation, "middle[1], middle[2]"),
+        simulation.eval::<(f32, f32)>("middle[1], middle[2]"),
         (10.0, 10.0)
     );
     assert_eq!(
-        eval::<(f32, f32)>(&simulation, "corner[1], corner[2]"),
+        simulation.eval::<(f32, f32)>("corner[1], corner[2]"),
         (14.0, 6.0)
     );
-    assert_eq!(eval::<usize>(&simulation, "#behind"), 0);
+    assert_eq!(simulation.eval::<usize>("#behind"), 0);
     // Half way from the middle to the right edge, a unit to the right; without perspective, rays
     // all go the way the camera looks.
-    let ray: (f32, f32, f32, f32) =
-        eval(&simulation, "origin.x, origin.z, direction.x, direction.z");
+    let ray: (f32, f32, f32, f32) = simulation.eval("origin.x, origin.z, direction.x, direction.z");
     assert_eq!(ray, (0.5, 4.9, 0.0, -1.0));
-    let both: String = eval(&simulation, "tostring(both)");
+    let both: String = simulation.eval("tostring(both)");
     assert!(both.contains("not both"), "{both}");
 }
 
@@ -2330,26 +2284,22 @@ fn scene_views_work_from_luau() {
     assert_eq!(pixel(&image, 10, 2), BLUE, "the wall");
 
     assert_eq!(
-        eval::<(String, String, String)>(&simulation, "view:kind(), box:kind(), hero:kind()"),
+        simulation.eval::<(String, String, String)>("view:kind(), box:kind(), hero:kind()"),
         ("view3d".into(), "mesh".into(), "billboard".into())
     );
     assert_eq!(
-        eval::<(f32, f32, f32)>(
-            &simulation,
+        simulation.eval::<(f32, f32, f32)>(
             "box:position_3d().x, box:position_3d().y, box:position_3d().z"
         ),
         (-0.5, 0.0, 1.0)
     );
     assert_eq!(
-        eval::<(f32, f32, f32)>(
-            &simulation,
+        simulation.eval::<(f32, f32, f32)>(
             "hero:world_position_3d().x, hero:world_position_3d().y, hero:world_position_3d().z"
         ),
         (0.5, -0.2, 1.0)
     );
-    let bounds: [f32; 6] = eval::<(f32, f32, f32, f32, f32, f32)>(
-        &simulation,
-        "(function() local low, high = box:bounds_3d() return low.x, low.y, low.z, high.x, high.y, high.z end)()",
+    let bounds: [f32; 6] = simulation.eval::<(f32, f32, f32, f32, f32, f32)>("(function() local low, high = box:bounds_3d() return low.x, low.y, low.z, high.x, high.y, high.z end)()",
     )
     .into();
     let expected = [-0.7, -0.2, 0.8, -0.3, 0.2, 1.2];
@@ -2361,39 +2311,27 @@ fn scene_views_work_from_luau() {
         "{bounds:?}"
     );
     // Picked nearest first, and placed on the canvas.
-    let picked = |x: f32, y: f32| {
-        eval::<Vec<String>>(
-            &simulation,
-            &format!(
-                "(function() local names = {{}} for _, node in view:pick({x}, {y}) do \
+    let mut picked = |x: f32, y: f32| {
+        simulation.eval::<Vec<String>>(&format!(
+            "(function() local names = {{}} for _, node in view:pick({x}, {y}) do \
                  table.insert(names, node:name()) end return names end)()"
-            ),
-        )
+        ))
     };
     assert_eq!(picked(5.0, 10.0), ["box", "wall"]);
     assert_eq!(picked(15.0, 10.0), ["hero", "wall"]);
     assert_eq!(picked(10.0, 2.0), ["wall"]);
     assert_eq!(
-        eval::<(f32, f32)>(&simulation, "view:project(vector.create(-0.5, 0, 1))"),
+        simulation.eval::<(f32, f32)>("view:project(vector.create(-0.5, 0, 1))"),
         (5.0, 10.0)
     );
     assert_eq!(
-        eval::<(f32, f32, String)>(
-            &simulation,
-            "view:camera().height, view:camera().target.z, string.format('%08x', view:lighting().ambient)"
+        simulation.eval::<(f32, f32, String)>("view:camera().height, view:camera().target.z, string.format('%08x', view:lighting().ambient)"
         ),
         (2.0, 0.0, "ffffffff".into())
     );
 
     // Moved, turned, stretched and recolored, as the next frame shows.
-    let exec = |code: &str| {
-        simulation
-            .game()
-            .scripts()
-            .load_source("test", code)
-            .unwrap();
-    };
-    exec(
+    simulation.exec(
         "box:set_position_3d(vector.create(0, 0.5, 1))
          box:set_orientation(0.25)
          box:set_scale_3d(0.5)
@@ -2403,22 +2341,21 @@ fn scene_views_work_from_luau() {
          view:set_camera({ position = vector.create(0, 0, 5), target = vector.zero, height = 4 })",
     );
     assert_eq!(
-        eval::<(f32, f32, f32)>(&simulation, "box:orientation()"),
+        simulation.eval::<(f32, f32, f32)>("box:orientation()"),
         (0.25, 0.0, 0.0)
     );
     assert_eq!(
-        eval::<(f32, f32)>(&simulation, "box:scale_3d().x, box:scale_3d().z"),
+        simulation.eval::<(f32, f32)>("box:scale_3d().x, box:scale_3d().z"),
         (0.5, 0.5)
     );
-    assert_eq!(eval::<(f32, f32)>(&simulation, "hero:size()"), (-0.4, 0.4));
-    assert_eq!(eval::<f32>(&simulation, "view:camera().height"), 4.0);
+    assert_eq!(simulation.eval::<(f32, f32)>("hero:size()"), (-0.4, 0.4));
+    assert_eq!(simulation.eval::<f32>("view:camera().height"), 4.0);
 
     // What nodes in 3D views don't have, and what other nodes don't.
-    let error = |code: &str| {
-        eval::<String>(
-            &simulation,
-            &format!("tostring(select(2, pcall(function() return {code} end)))"),
-        )
+    let mut error = |code: &str| {
+        simulation.eval::<String>(&format!(
+            "tostring(select(2, pcall(function() return {code} end)))"
+        ))
     };
     assert!(
         error("box:rotation()").contains("is placed in 3D, in a 3D view, so it has no rotation"),
@@ -2491,12 +2428,10 @@ fn luau_games_load_and_draw_models() {
     assert_eq!(simulation.game().error().map(ToString::to_string), None);
 
     // A top and four legs, each a box.
-    assert_eq!(eval::<u32>(&simulation, "desk:triangle_count()"), 60);
-    let bounds: [f32; 6] = eval::<(f32, f32, f32, f32, f32, f32)>(
-        &simulation,
-        "low.x, low.y, low.z, high.x, high.y, high.z",
-    )
-    .into();
+    assert_eq!(simulation.eval::<u32>("desk:triangle_count()"), 60);
+    let bounds: [f32; 6] = simulation
+        .eval::<(f32, f32, f32, f32, f32, f32)>("low.x, low.y, low.z, high.x, high.y, high.z")
+        .into();
     let expected = [-0.5, 0.0, -0.3, 0.5, 0.5, 0.3];
     assert!(
         bounds
@@ -2507,27 +2442,23 @@ fn luau_games_load_and_draw_models() {
     );
     let stats = "seen[2].triangles, seen[2].draw_calls";
     // The table's top, its four legs, one mesh, in a draw call, and the crate.
-    assert_eq!(eval::<(u32, u32)>(&simulation, stats), (72, 3));
+    assert_eq!(simulation.eval::<(u32, u32)>(stats), (72, 3));
     let frame = simulation.screenshot().unwrap();
     // Seen from the front, the table's top is a row of pixels from 0.4 to 0.5 up, tinted red.
     let [r, g, b, _] = pixel(&frame, 10, 5);
     assert!(r > 100 && g < 20 && b < 20, "{:?}", [r, g, b]);
 
-    let missing: String = eval(&simulation, "tostring(missing)");
+    let missing: String = simulation.eval("tostring(missing)");
     assert!(missing.contains("none.glb"), "{missing}");
-    let with_sprite: String = eval(&simulation, "tostring(with_sprite)");
+    let with_sprite: String = simulation.eval("tostring(with_sprite)");
     assert!(with_sprite.contains("no sprite"), "{with_sprite}");
 
     // Gone from disk, it loads all the same.
     fs::remove_file(folder.join("models/crate.glb")).unwrap();
-    simulation
-        .game()
-        .scripts()
-        .load_source("test", "reload = true")
-        .unwrap();
+    simulation.exec("reload = true");
     simulation.step();
     assert!(simulation.game().error().is_none());
-    assert_eq!(eval::<u32>(&simulation, "again:triangle_count()"), 12);
+    assert_eq!(simulation.eval::<u32>("again:triangle_count()"), 12);
 }
 
 #[test]
@@ -2551,17 +2482,15 @@ fn rays_hit_boxes_from_luau() {
             empty = { graphics.new_mesh({ vertices = {}, indices = {} }):bounds() }",
         )],
     );
-    let simulation = simulation(&folder);
+    let mut simulation = simulation(&folder);
     assert_eq!(
-        eval::<(f32, f32, f32, f32, f32, f32)>(
-            &simulation,
-            "low.x, low.y, low.z, high.x, high.y, high.z"
-        ),
+        simulation
+            .eval::<(f32, f32, f32, f32, f32, f32)>("low.x, low.y, low.z, high.x, high.y, high.z"),
         (-1.0, -2.0, -1.0, 1.0, 2.0, 1.0)
     );
-    assert_eq!(eval::<Vec<f32>>(&simulation, "hits"), [4.0, 4.0, 0.0, 8.0]);
-    assert!(eval::<bool>(&simulation, "miss == nil"));
-    assert_eq!(eval::<usize>(&simulation, "#empty"), 0);
+    assert_eq!(simulation.eval::<Vec<f32>>("hits"), [4.0, 4.0, 0.0, 8.0]);
+    assert!(simulation.eval::<bool>("miss == nil"));
+    assert_eq!(simulation.eval::<usize>("#empty"), 0);
 }
 
 /// Interfaces Luau games lay out in `gui(ui)`, driven by clicking their widgets by label.
@@ -2612,23 +2541,23 @@ mod gui {
             end)",
         );
         simulation.click_gui("Press me");
-        assert_eq!(eval::<u32>(&simulation, "clicks"), 1);
+        assert_eq!(simulation.eval::<u32>("clicks"), 1);
         simulation.click_gui("Checked");
-        assert!(eval::<bool>(&simulation, "checked"));
+        assert!(simulation.eval::<bool>("checked"));
         simulation.click_gui("Hard");
-        assert_eq!(eval::<String>(&simulation, "mode"), "hard");
+        assert_eq!(simulation.eval::<String>("mode"), "hard");
         simulation.click_gui("Easy");
-        assert_eq!(eval::<String>(&simulation, "mode"), "easy");
+        assert_eq!(simulation.eval::<String>("mode"), "easy");
 
         simulation.click_gui("Your name");
         simulation.type_text("Ada");
         simulation.step();
-        assert_eq!(eval::<String>(&simulation, "name"), "Ada");
-        assert_eq!(eval::<Option<String>>(&simulation, "submitted"), None);
+        assert_eq!(simulation.eval::<String>("name"), "Ada");
+        assert_eq!(simulation.eval::<Option<String>>("submitted"), None);
         simulation.tap(Key::Enter);
         simulation.step();
         assert_eq!(
-            eval::<Option<String>>(&simulation, "submitted").as_deref(),
+            simulation.eval::<Option<String>>("submitted").as_deref(),
             Some("Ada")
         );
     }
@@ -2675,7 +2604,7 @@ mod gui {
         simulation.run_frames(2);
         simulation.click_gui("middle");
         simulation.step();
-        assert_eq!(eval::<String>(&simulation, "stage"), "middle");
+        assert_eq!(simulation.eval::<String>("stage"), "middle");
     }
 
     #[test]
@@ -2700,7 +2629,7 @@ mod gui {
         simulation.step();
         simulation.mouse_up(MouseButton::Left);
         simulation.step();
-        assert_eq!(eval::<f64>(&simulation, "speed"), 10.0);
+        assert_eq!(simulation.eval::<f64>("speed"), 10.0);
 
         // Typed into, and kept within its range.
         let coins = *simulation.gui_rects("Coins").first().unwrap();
@@ -2716,7 +2645,7 @@ mod gui {
         simulation.type_text("42");
         simulation.tap(Key::Enter);
         simulation.run_frames(2);
-        assert_eq!(eval::<f64>(&simulation, "coins"), 9.0);
+        assert_eq!(simulation.eval::<f64>("coins"), 9.0);
     }
 
     #[test]

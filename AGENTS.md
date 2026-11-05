@@ -229,7 +229,13 @@ networking or 3D pipelines.
   only the last pressed, after a delay and at a rate in game time (`set_key_repeat`, by default
   half a second, then 30 a second), so repeats land on the same frames every run, and keys type
   as on a US keyboard (`Key::us_text`); `type_text` types any text, and `compose` composes as an
-  input method would. Its frames render only for screenshots, unless
+  input method would. Actions are pressed by name (`action_down`, `tap_action`, `hold_action`),
+  through their first key, or without one, their first gamepad button, so tests needn't copy a
+  game's bindings. A `Simulation` of a `LuauGame` runs tests' Luau between frames (`exec`, `eval`,
+  and `try_` versions returning the error), each a chunk of its own named `test`, lent the context
+  as `update` is (`LuauGame::run_chunk`); the runtime's `Requirer` has chunks that aren't files
+  (named `=...`) `require` as `main.luau` does, so they get the game's modules. Its frames render
+  only for screenshots, unless
   `set_render_every_frame` asks for every frame to render and wait for the GPU, as benchmarks
   want. All of them in a process share one GPU device, and
   only one thread at a time may hold any (a reentrant lease): lavapipe crashes with a device per
@@ -561,7 +567,8 @@ networking or 3D pipelines.
   builds `native-particles` with a nested `cargo build` into a target folder of its own and loads
   it from a file.
 - `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
-  expressions such as `pong.ball.vx`, and play it with simulated keys, mouse and gamepad. One
+  expressions such as `pong.ball.vx` (`Simulation::eval`), and play it with simulated keys, mouse
+  and gamepad. One
   plays a whole match and checks a hash of it, pinned, so CI checks it's the same to the bit on
   Windows and Linux; a change to how Pong plays changes the hash.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest, using
@@ -656,7 +663,7 @@ networking or 3D pipelines.
   chunk that changes such a field, such as by calling a function, and reads it back sees the old
   value, and so does a module loaded after a game's global table exists, if the field is replaced
   later. Games create their global table after requiring their modules, and tests read state
-  back with a chunk of its own (`eval`), not in the chunk that changed it.
+  back with a chunk of its own (`Simulation::eval`), not in the chunk that changed it.
 - Native libraries reach the engine only through the ABI's function pointers, and get the same
   lent services scripts do: a library function called from `draw` gets the canvas, not the
   context. Hooks run in the order libraries are listed, before and after each `update` (and its
@@ -733,10 +740,10 @@ Check how a game behaves headlessly instead of opening a window and driving it b
   `benchmark 10s results.csv` renders every frame for that long and prints the mean, median,
   99th percentile and longest of each frame time, optionally saving each frame's stats as CSV.
   Benchmark release builds (`cargo run --release`): Luau and the engine are far slower in debug.
-- **As tests:** drive the game with `Simulation` (`tap`, `hold`, `click`, `run_for`, `game()`)
-  and assert on its state, as `examples/sprites.rs` does. For a Luau game, evaluate Luau
-  expressions against its state, as `tests/pong.rs` does. Prefer this for anything worth
-  keeping, so CI catches regressions.
+- **As tests:** drive the game with `Simulation` (`tap`, `hold`, `tap_action`, `click`,
+  `run_for`, `game()`) and assert on its state, as `examples/sprites.rs` does. For a Luau game,
+  evaluate Luau expressions against its state and set it up with `eval` and `exec`, as
+  `tests/pong.rs` does. Prefer this for anything worth keeping, so CI catches regressions.
 
 Windowing itself (focus, minimizing, real resizes, DPI) still needs a real window. Audio in these
 runs is silent; `cargo test -- --ignored` runs a check that plays (muted) through the real sound

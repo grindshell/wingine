@@ -188,9 +188,49 @@ Mouse positions are canvas pixels, but screenshots are the size of the window. W
 resolution, divide a position in a screenshot by the scale, after taking away the black bars, to
 find the canvas pixel to click.
 
-For checks worth keeping, the engine's own tests drive games the same way from Rust, with
-`wingine::headless::Simulation`, and check the game's state by evaluating Luau expressions:
-[`tests/pong.rs`](../tests/pong.rs) is a small example.
+## Testing a game from Rust
+
+For checks worth keeping, write them as Rust tests, as the engine's own are, so `cargo test` runs
+them with everything else. A test starts the game in a `wingine::headless::Simulation`, drives it
+with simulated input, and reads the game's state with Luau:
+
+```rust
+use wingine::{
+    headless::Simulation,
+    runtime::{self, LuauGame},
+};
+
+const GAME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/pong");
+
+#[test]
+fn serving_starts_a_rally() {
+    let config = runtime::config(GAME).unwrap();
+    let mut simulation =
+        Simulation::new(&config.window, |ctx| LuauGame::load_with(ctx, GAME, &config)).unwrap();
+    simulation.exec("pong.score.left = 4");
+    simulation.run_for(1.0);
+    simulation.tap_action("serve");
+    assert_eq!(simulation.eval::<String>("pong.phase"), "rally");
+    assert_eq!(simulation.eval::<u32>("pong.score.left"), 4);
+}
+```
+
+- `tap`, `hold`, `key_down` and `key_up` press keys, as the script commands of the same names do,
+  and `click`, `move_mouse`, `connect_gamepad` and `button_down` the rest.
+- `tap_action`, `hold_action`, `action_down` and `action_up` press what an action is bound to:
+  its first key, or if it has none, its first gamepad button. So a test presses `"serve"` and
+  keeps working when the game binds it to another key.
+- `eval::<T>(expression)` returns the value of a Luau expression, and `exec(code)` runs Luau, such
+  as to set up a state. Each is a chunk of its own, run between frames, which the engine lends what
+  it lends `update`, so engine functions work in it: it can load a level, bind an action or play a
+  sound. Its globals are the game's, and it `require`s modules by their paths from the game's
+  folder, as `main.luau` does, getting the same ones the game has: `require("./opponent")`. Both
+  panic with the error if the Luau fails; `try_exec` and `try_eval` return it instead, for a test
+  that expects one.
+
+Keep the game's state in a global, such as Pong's `pong`, so tests can reach it.
+[`tests/pong.rs`](../tests/pong.rs) is a small example, and [`tests/rpg.rs`](../tests/rpg.rs) a
+larger one.
 
 ## Measuring performance
 

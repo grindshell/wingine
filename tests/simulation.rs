@@ -6,7 +6,7 @@ use wingine::{
     Context, Error, FrameStats, Game, Redraw, WindowConfig,
     graphics::{Canvas, Color, Resolution},
     headless::{KeyRepeat, Simulation},
-    input::{GamepadButton, Key, MouseButton},
+    input::{Control, GamepadButton, Key, MouseButton},
     math::Rect,
     save::Saves,
     scene::Value,
@@ -156,6 +156,98 @@ fn a_hold_lasts_its_duration() {
     simulation.run_frames(2);
     assert_eq!(simulation.game().space_presses, 1);
     assert_eq!(simulation.game().space_held_frames, 30);
+}
+
+/// Counts the frames its actions are held, and binds what a test asks it to in its next update.
+#[derive(Default)]
+struct Actions {
+    jump_held: u32,
+    fire_held: u32,
+    /// What to bind `jump` to in the next update.
+    rebind: Option<Key>,
+}
+
+impl Game for Actions {
+    fn update(&mut self, ctx: &mut Context, _dt: f32) {
+        if let Some(key) = self.rebind.take() {
+            ctx.input_mut().bind("jump", [key]);
+        }
+        let input = ctx.input();
+        self.jump_held += u32::from(input.held("jump"));
+        self.fire_held += u32::from(input.held("fire"));
+    }
+
+    fn draw(&mut self, _canvas: &mut Canvas) {}
+}
+
+/// A game with `jump` on W and any gamepad's South, `fire` on gamepad 2's right trigger, and
+/// `pause` on any gamepad's Start.
+fn actions() -> Simulation<Actions> {
+    Simulation::new(&config(), |ctx| {
+        let input = ctx.input_mut();
+        input.bind(
+            "jump",
+            [Control::Key(Key::W), Control::Button(GamepadButton::South)],
+        );
+        input.bind_gamepad("fire", 2, [GamepadButton::RightTrigger]);
+        input.bind("pause", [GamepadButton::Start]);
+        Ok(Actions::default())
+    })
+    .unwrap()
+}
+
+#[test]
+fn actions_are_pressed_by_what_they_are_bound_to() {
+    let mut simulation = actions();
+
+    // An action with keys presses its first key.
+    simulation.hold_action("jump", 0.5);
+    assert_eq!(simulation.game().jump_held, 30);
+    simulation.action_down("jump");
+    simulation.step();
+    assert!(simulation.context().input().key_held(Key::W));
+
+    // Releasing it lets go of what was pressed, even after the game binds it elsewhere.
+    simulation.game_mut().rebind = Some(Key::Up);
+    simulation.step();
+    simulation.action_up("jump");
+    simulation.step();
+    assert!(!simulation.context().input().key_held(Key::W));
+
+    // One with only buttons presses its first, on its gamepad, or with any, the first connected.
+    simulation.connect_gamepad("first");
+    simulation.connect_gamepad("second");
+    simulation.tap_action("fire");
+    assert_eq!(simulation.game().fire_held, 1);
+    simulation.action_down("pause");
+    simulation.step();
+    let input = simulation.context().input();
+    assert!(input.gamepad(1).unwrap().held(GamepadButton::Start));
+    assert!(!input.gamepad(2).unwrap().held(GamepadButton::Start));
+    simulation.action_up("pause");
+    simulation.step();
+    let input = simulation.context().input();
+    assert!(!input.gamepad(1).unwrap().held(GamepadButton::Start));
+}
+
+#[test]
+#[should_panic(expected = "`dash` isn't bound to anything")]
+fn pressing_an_unbound_action_panics() {
+    actions().action_down("dash");
+}
+
+#[test]
+#[should_panic(expected = "`pause` is bound only to gamepads' buttons, and none is connected")]
+fn pressing_a_gamepads_action_without_one_panics() {
+    actions().action_down("pause");
+}
+
+#[test]
+#[should_panic(expected = "`fire` is bound only to gamepad 2's buttons, and it isn't connected")]
+fn pressing_an_action_of_a_disconnected_gamepad_panics() {
+    let mut simulation = actions();
+    simulation.connect_gamepad("first");
+    simulation.action_down("fire");
 }
 
 /// The updates from `first` to `last` that come `every` updates apart, each with `key`.

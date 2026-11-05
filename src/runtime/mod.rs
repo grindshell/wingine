@@ -301,7 +301,13 @@ pub use native::link_library;
 use crate::{
     Context, Error, Game, Result, WindowConfig,
     graphics::{Canvas, Color, Font, Model, Resolution, Texture},
-    lua::{Scripts, mlua},
+    lua::{
+        Scripts, mlua,
+        mlua::{
+            FromLuaMulti,
+            luau::{FsRequirer, NavigateError, Require},
+        },
+    },
 };
 
 /// The types of the engine's API for Luau games, as a definitions file for
@@ -521,8 +527,14 @@ impl LuauGame {
         globals.set("window", window::module(lua, &lent)?)?;
         #[cfg(feature = "egui")]
         gui::register(lua, &lent)?;
+        let main = folder.join("main.luau");
+        let requirer = Requirer {
+            files: FsRequirer::new(),
+            main: format!("@{}", main.display()),
+        };
+        globals.set("require", lua.create_require_function(requirer)?)?;
         let natives = Natives::load(lua, &lent, ctx, folder, &config.libraries)?;
-        lent.lend(ctx, || scripts.load(folder.join("main.luau")))?;
+        lent.lend(ctx, || scripts.load(&main))?;
         Ok(Self {
             scripts,
             natives,
@@ -540,6 +552,13 @@ impl LuauGame {
     /// The error that stopped the game, if one has.
     pub fn error(&self) -> Option<&Error> {
         self.error.as_ref()
+    }
+
+    /// Runs the Luau `source` as a chunk of its own, named `test`, lent the context as `update`
+    /// is lent it, and returns what it returns. It `require`s as the game's `main.luau` does.
+    pub(crate) fn run_chunk<R: FromLuaMulti>(&self, ctx: &mut Context, source: &str) -> Result<R> {
+        let chunk = self.scripts.lua().load(source).set_name("=test");
+        self.lent.lend(ctx, || Ok(chunk.eval()?))
     }
 
     /// Calls the script's global function `name`, if it has one.
@@ -685,6 +704,74 @@ fn draw_error(canvas: &mut Canvas, font: &Font, err: &Error) {
     let width = (canvas.width() - MARGIN * 2.0).max(MARGIN);
     let layout = font.layout(&text, Some(width));
     canvas.draw_text_layout(&layout, .., [MARGIN, MARGIN], Color::WHITE);
+}
+
+/// Finds the modules a game's scripts `require` as mlua's own requirer does, by their paths
+/// relative to the script requiring them, but has chunks that aren't files, named `=name`, such as
+/// those tests run, require as the game's `main.luau` does, so they get the modules the game has.
+struct Requirer {
+    files: FsRequirer,
+    /// The chunk name of the game's `main.luau`.
+    main: String,
+}
+
+impl Requirer {
+    /// The name of the chunk that a chunk called `name` requires as.
+    fn requiring_as<'a>(main: &'a str, name: &'a str) -> &'a str {
+        if name.starts_with('=') { main } else { name }
+    }
+}
+
+impl Require for Requirer {
+    fn is_require_allowed(&self, chunk_name: &str) -> bool {
+        let name = Self::requiring_as(&self.main, chunk_name);
+        self.files.is_require_allowed(name)
+    }
+
+    fn reset(&mut self, chunk_name: &str) -> Result<(), NavigateError> {
+        let name = Self::requiring_as(&self.main, chunk_name);
+        self.files.reset(name)
+    }
+
+    fn jump_to_alias(&mut self, path: &str) -> Result<(), NavigateError> {
+        self.files.jump_to_alias(path)
+    }
+
+    fn to_alias_override(&mut self, alias: &str) -> Result<(), NavigateError> {
+        self.files.to_alias_override(alias)
+    }
+
+    fn to_alias_fallback(&mut self, alias: &str) -> Result<(), NavigateError> {
+        self.files.to_alias_fallback(alias)
+    }
+
+    fn to_parent(&mut self) -> Result<(), NavigateError> {
+        self.files.to_parent()
+    }
+
+    fn to_child(&mut self, name: &str) -> Result<(), NavigateError> {
+        self.files.to_child(name)
+    }
+
+    fn has_module(&self) -> bool {
+        self.files.has_module()
+    }
+
+    fn cache_key(&self) -> String {
+        self.files.cache_key()
+    }
+
+    fn has_config(&self) -> bool {
+        self.files.has_config()
+    }
+
+    fn config(&self) -> std::io::Result<Vec<u8>> {
+        self.files.config()
+    }
+
+    fn loader(&self, lua: &mlua::Lua) -> mlua::Result<mlua::Function> {
+        self.files.loader(lua)
+    }
 }
 
 /// The images and model files a game has loaded, by path, so each is read once however many

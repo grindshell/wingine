@@ -14,7 +14,6 @@ use wingine::{
     Error,
     headless::{Image, Simulation},
     input::Key,
-    lua::mlua::FromLuaMulti,
     runtime::{self, LibraryConfig, LuauGame},
 };
 use wingine_native::{
@@ -66,14 +65,6 @@ fn start(folder: &Path) -> Result<Simulation<LuauGame>, Error> {
 
 fn simulation(folder: &Path) -> Simulation<LuauGame> {
     start(folder).expect("game starts")
-}
-
-/// The value of the Luau `expression` in the game.
-fn eval<T: FromLuaMulti>(simulation: &Simulation<LuauGame>, expression: &str) -> T {
-    let lua = simulation.game().scripts().lua();
-    lua.load(format!("return {expression}"))
-        .eval()
-        .unwrap_or_else(|err| panic!("`{expression}`: {err}"))
 }
 
 fn pixel(image: &Image, x: u32, y: u32) -> [u8; 4] {
@@ -286,7 +277,7 @@ fn probe_game(test: &str, main: &str) -> Simulation<LuauGame> {
 
 #[test]
 fn functions_convert_their_arguments_and_results() {
-    let simulation = probe_game(
+    let mut simulation = probe_game(
         "conversions",
         "sum = probe.add(2, 3.5)
         described = probe.describe(1, 'hi', { r = 0, g = 0.5, b = 0 }, { x = 0, y = 0, width = 3, height = 4 })
@@ -301,16 +292,13 @@ fn functions_convert_their_arguments_and_results() {
         _, err = pcall(probe.describe, true, 'hi', 'red')
         not_a_color = tostring(err)",
     );
-    assert_eq!(eval::<f64>(&simulation, "sum"), 5.5);
+    assert_eq!(simulation.eval::<f64>("sum"), 5.5);
+    assert_eq!(simulation.eval::<String>("described"), "true hi 0.5 3 None");
     assert_eq!(
-        eval::<String>(&simulation, "described"),
-        "true hi 0.5 3 None"
-    );
-    assert_eq!(
-        eval::<(String, i64)>(&simulation, "word, number"),
+        simulation.eval::<(String, i64)>("word, number"),
         ("one".into(), 2)
     );
-    assert_eq!(eval::<u8>(&simulation, "largest"), 255);
+    assert_eq!(simulation.eval::<u8>("largest"), 255);
     for (name, message) in [
         ("too_big", "bad argument #1 to `probe.byte`"),
         ("too_big", "256 is out of range: expected 0 to 255"),
@@ -318,11 +306,11 @@ fn functions_convert_their_arguments_and_results() {
         ("not_a_number", "bad argument #2 to `probe.add`"),
         ("not_a_color", "bad argument #3 to `probe.describe`"),
     ] {
-        let err: String = eval(&simulation, name);
+        let err: String = simulation.eval(name);
         assert!(err.contains(message), "{name}: {err}");
     }
     assert_eq!(
-        eval::<(f32, f32)>(&simulation, "probe.canvas_size()"),
+        simulation.eval::<(f32, f32)>("probe.canvas_size()"),
         (20.0, 20.0),
         "`new` had the context"
     );
@@ -330,25 +318,25 @@ fn functions_convert_their_arguments_and_results() {
 
 #[test]
 fn errors_and_panics_are_luau_errors() {
-    let simulation = probe_game(
+    let mut simulation = probe_game(
         "errors",
         "local _, err = pcall(probe.fail, 'no luck')
         failed = tostring(err)
         _, err = pcall(probe.panic)
         panicked = tostring(err)",
     );
-    assert!(eval::<String>(&simulation, "failed").contains("no luck"));
-    let panicked: String = eval(&simulation, "panicked");
+    assert!(simulation.eval::<String>("failed").contains("no luck"));
+    let panicked: String = simulation.eval("panicked");
     assert!(panicked.contains("panicked: on purpose"), "{panicked}");
 }
 
 #[test]
 fn the_libraries_table_is_read_only() {
-    let simulation = probe_game(
+    let mut simulation = probe_game(
         "read_only",
         "replaced = pcall(function() probe.add = nil end)",
     );
-    assert!(!eval::<bool>(&simulation, "replaced"));
+    assert!(!simulation.eval::<bool>("replaced"));
 }
 
 #[test]
@@ -365,7 +353,7 @@ fn hooks_run_around_update_and_draw() {
     );
     simulation.step();
     assert_eq!(
-        eval::<String>(&simulation, "probe.log()"),
+        simulation.eval::<String>("probe.log()"),
         "before_update update after_update before_draw draw after_draw"
     );
     let image = simulation.screenshot().unwrap();
@@ -384,7 +372,7 @@ fn a_failing_hook_stops_the_game() {
         "{err}"
     );
     assert_eq!(
-        eval::<String>(&simulation, "probe.log()"),
+        simulation.eval::<String>("probe.log()"),
         "before_update after_update",
         "nothing ran after the hook failed"
     );
@@ -407,14 +395,14 @@ fn functions_get_the_context_or_canvas_as_scripts_do() {
         end",
     );
     assert!(
-        eval::<bool>(&simulation, "probe.lent_while_loading()"),
+        simulation.eval::<bool>("probe.lent_while_loading()"),
         "the library's Luau had the context"
     );
     simulation.tap(Key::Space);
-    assert!(eval::<bool>(&simulation, "jumped"));
-    let err: String = eval(&simulation, "tostring(fill_in_update)");
+    assert!(simulation.eval::<bool>("jumped"));
+    let err: String = simulation.eval("tostring(fill_in_update)");
     assert!(err.contains("drawing only works in `draw`"), "{err}");
-    let err: String = eval(&simulation, "tostring(held_in_draw)");
+    let err: String = simulation.eval("tostring(held_in_draw)");
     assert!(err.contains("not in `draw`"), "{err}");
     let image = simulation.screenshot().unwrap();
     assert_eq!(pixel(&image, 0, 0), [0, 0, 255, 255]);
@@ -466,14 +454,14 @@ fn libraries_make_meshes_and_draw_in_3d_views() {
             end
         end",
     );
-    assert_eq!(eval::<u32>(&simulation, "square:triangle_count()"), 2);
+    assert_eq!(simulation.eval::<u32>("square:triangle_count()"), 2);
     assert_eq!(
-        eval::<(f32, f32, f32)>(&simulation, "middle.x, middle.y, middle.z"),
+        simulation.eval::<(f32, f32, f32)>("middle.x, middle.y, middle.z"),
         (1.0, 2.0, 3.0)
     );
-    let bad_mesh: String = eval(&simulation, "tostring(bad_mesh)");
+    let bad_mesh: String = simulation.eval("tostring(bad_mesh)");
     assert!(bad_mesh.contains("past the last"), "{bad_mesh}");
-    let not_drawing: String = eval(&simulation, "tostring(not_drawing)");
+    let not_drawing: String = simulation.eval("tostring(not_drawing)");
     assert!(
         not_drawing.contains("only works in `draw`"),
         "{not_drawing}"
@@ -493,17 +481,15 @@ fn libraries_make_meshes_and_draw_in_3d_views() {
         assert_eq!(pixel(&image, 10, 2), [0, 0, 0, 255], "above them");
     };
     picture(&mut simulation);
-    let bad_view: String = eval(&simulation, "tostring(bad_view)");
+    let bad_view: String = simulation.eval("tostring(bad_view)");
     assert!(bad_view.contains("near"), "{bad_view}");
 
     // In a view the script began.
-    let scripts = simulation.game().scripts();
-    scripts.load_source("test", "mode = 'script'").unwrap();
+    simulation.exec("mode = 'script'");
     picture(&mut simulation);
 
     // With no view open.
-    let scripts = simulation.game().scripts();
-    scripts.load_source("test", "mode = 'none'").unwrap();
+    simulation.exec("mode = 'none'");
     simulation.step();
     let err = simulation
         .game()
@@ -515,7 +501,7 @@ fn libraries_make_meshes_and_draw_in_3d_views() {
 
 #[test]
 fn objects_have_methods_and_borrow_safely() {
-    let simulation = probe_game(
+    let mut simulation = probe_game(
         "objects",
         "local counter = probe.new_counter(2)
         counter:add(3)
@@ -538,34 +524,34 @@ fn objects_have_methods_and_borrow_safely() {
         itself = fails(function() counter:absorb(counter) end)
         missing = counter.subtract",
     );
-    assert_eq!(eval::<i64>(&simulation, "value"), 5);
-    assert_eq!(eval::<String>(&simulation, "name"), "Counter");
-    assert_eq!(eval::<i64>(&simulation, "total"), 15);
-    assert_eq!(eval::<i64>(&simulation, "absorbed"), 15);
-    assert_eq!(eval::<i64>(&simulation, "reset"), 0);
+    assert_eq!(simulation.eval::<i64>("value"), 5);
+    assert_eq!(simulation.eval::<String>("name"), "Counter");
+    assert_eq!(simulation.eval::<i64>("total"), 15);
+    assert_eq!(simulation.eval::<i64>("absorbed"), 15);
+    assert_eq!(simulation.eval::<i64>("reset"), 0);
     for (name, message) in [
         ("with_dot", "call methods with `:`"),
         ("not_a_counter", "bad argument #2 to `probe.total`"),
         ("not_a_counter", "error converting Lua number to Counter"),
         ("itself", "bad argument #2 to `Counter:absorb`"),
     ] {
-        let err: String = eval(&simulation, name);
+        let err: String = simulation.eval(name);
         assert!(err.contains(message), "{name}: {err}");
     }
-    assert!(eval::<bool>(&simulation, "missing == nil"));
+    assert!(simulation.eval::<bool>("missing == nil"));
 }
 
 #[test]
 fn objects_work_in_games_that_loaded_earlier_registrations() {
-    let first = probe_game("registered_first", "kept = probe.new_counter(1)");
+    let mut first = probe_game("registered_first", "kept = probe.new_counter(1)");
     // Registers `Probe` again, under another name.
-    let second = probe_game("registered_second", "kept = probe.new_counter(2)");
-    for (simulation, kept) in [(&first, 1), (&second, 2)] {
+    let mut second = probe_game("registered_second", "kept = probe.new_counter(2)");
+    for (simulation, kept) in [(&mut first, 1), (&mut second, 2)] {
         assert_eq!(
-            eval::<i64>(simulation, "probe.total(kept, probe.new_counter(10))"),
+            simulation.eval::<i64>("probe.total(kept, probe.new_counter(10))"),
             kept + 10
         );
-        assert_eq!(eval::<i64>(simulation, "probe.new_counter(3):value()"), 3);
+        assert_eq!(simulation.eval::<i64>("probe.new_counter(3):value()"), 3);
     }
 }
 
@@ -580,10 +566,10 @@ fn luau_from_the_library_can_wait() {
         end)",
     );
     simulation.step();
-    assert!(!eval::<bool>(&simulation, "done"));
-    eval::<()>(&simulation, "probe.mark('go')");
+    assert!(!simulation.eval::<bool>("done"));
+    simulation.exec("probe.mark('go')");
     simulation.step();
-    assert!(eval::<bool>(&simulation, "done"));
+    assert!(simulation.eval::<bool>("done"));
 }
 
 /// How many games have created and destroyed `Lifecycle`'s state, and freed its objects.
@@ -818,7 +804,7 @@ fn optional_libraries_load_only_if_theyre_there() {
             ("main.luau", "has_probe = probe ~= nil"),
         ],
     );
-    assert!(eval::<bool>(&simulation(&folder), "has_probe"));
+    assert!(simulation(&folder).eval::<bool>("has_probe"));
 
     // One that's there but doesn't load is an error all the same.
     let folder = game(
@@ -854,11 +840,11 @@ fn games_load_the_libraries_of_the_settings_theyre_given() {
         name: "given_probe".to_owned(),
         optional: false,
     }];
-    let simulation = Simulation::new(&config.window, |ctx| {
+    let mut simulation = Simulation::new(&config.window, |ctx| {
         LuauGame::load_with(ctx, &folder, &config)
     })
     .expect("game starts");
-    assert!(eval::<bool>(&simulation, "has_probe"));
+    assert!(simulation.eval::<bool>("has_probe"));
 }
 
 /// Builds the `native-particles` example, returning the library file. It builds in a target
@@ -914,8 +900,8 @@ fn libraries_load_from_the_games_native_folder() {
     fs::copy(&file, native.join(file.file_name().unwrap())).unwrap();
 
     let mut simulation = simulation(&folder);
-    assert_eq!(eval::<u32>(&simulation, "sparks:bursts()"), 2);
-    assert_eq!(eval::<usize>(&simulation, "particles.count()"), 17);
+    assert_eq!(simulation.eval::<u32>("sparks:bursts()"), 2);
+    assert_eq!(simulation.eval::<usize>("particles.count()"), 17);
     simulation.step();
     let image = simulation.screenshot().unwrap();
     let lit = image.pixels().chunks(4).filter(|p| p[0] > 0).count();
@@ -925,6 +911,6 @@ fn libraries_load_from_the_games_native_folder() {
     assert_eq!((stats.triangles, stats.draw_calls), (10, 1 + 1));
 
     simulation.run_for(1.0);
-    assert_eq!(eval::<usize>(&simulation, "particles.count()"), 0);
-    assert!(eval::<bool>(&simulation, "gone"));
+    assert_eq!(simulation.eval::<usize>("particles.count()"), 0);
+    assert!(simulation.eval::<bool>("gone"));
 }
