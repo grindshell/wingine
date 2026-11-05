@@ -19,8 +19,8 @@ Without a folder, it starts with a choice of the repository's examples, and **Pr
 Folder…** opens any game.
 
 The editor is new, and grows with each part of the current milestone. It edits scenes' nodes, the
-scene's sheets and props, tilemaps' tiles, instances' overrides, screens' layouts, clips and
-scripts now.
+scene's sheets and props, tilemaps' tiles, instances' overrides, screens' layouts, clips, 3D
+views and scripts now.
 
 ## The layout
 
@@ -28,8 +28,9 @@ scripts now.
   open scene and the **Script** screen of the open scripts; and **Play** and **Stop** on the right.
 - **The Scene dock**, at the top left: the open scene's tree of nodes.
 - **The FileSystem dock**, below it: the files in the game's folder. Double-click a scene to open
-  it, or drag it into the viewport or onto a node to place it there. Double-click any other Luau
-  file to [edit it](#editing-scripts).
+  it, or drag it into the viewport or onto a node to place it there. Drag a model file, `.glb` or
+  `.gltf`, into a [3D view](#3d-views) to add it. Double-click any other Luau file to
+  [edit it](#editing-scripts).
 - **The Inspector**, on the right: every field of the selected node.
 - **The bottom panel**: **Output**, with what the editor says and what a game played from it
   prints, **Tiles**, to [paint tilemaps](#painting-tiles) with, and **Animation**, to
@@ -50,9 +51,9 @@ origin. A screen anchored to the canvas's edges is laid out as it is in the game
 - **Pan** by dragging with the middle button, or with the left while holding Space.
 - **Zoom** with the wheel, about the pointer. **Frame** shows the whole canvas again, and **1:1**
   shows a pixel of the scene for each of the screen's.
-- **Select** a node by clicking it. What can be seen comes first, then areas, then plain nodes near
-  their origins, then tilemaps. Click again in the same place for the node under that one, and so
-  on, round to the first.
+- **Select** a node by clicking it. What can be seen comes first, a 3D view's nodes before the
+  view, then areas, then plain nodes near their origins, then tilemaps. Click again in the same
+  place for the node under that one, and so on, round to the first.
 
 The selected node is outlined in blue, with a cross at its origin. Text and tilemaps move with
 their node but don't turn or stretch, and their outline shows that.
@@ -157,6 +158,33 @@ and **Revert All** puts back every field. Changing a field back to the scene's v
 of the overrides too. Props the overrides add can be removed, but those the scene has can only be
 changed, since overrides change props one by one.
 
+## 3D views
+
+A [3D view](scenes.md#3d-views) shows its world in the viewport as the game draws it, through its
+own camera: the editor has no camera of its own, so what you edit is what the game shows. Add one
+with **➕**, as any node; it's laid out as an area, so the Anchors menu and its handles place and
+size it.
+
+- **➕** inside a view adds what views hold: a **mesh**, a **model** of one of the game's model
+  files, a **billboard** of one of the scene's sheets, or a plain **node**. Instances can go in
+  views too, from **⛓** or dropped in, placed in 3D.
+- **Dragging a model file** from the FileSystem dock into a view adds a model node showing it,
+  where the ray under the pointer meets the ground. A scene file dropped in a view is placed there
+  the same way.
+- **Clicking** in a view selects what's under the pointer, by the boxes around what nodes show,
+  the nearest first; clicking again in the same place reaches the next, as elsewhere. The
+  selection's box is outlined.
+- **The Move tool**, or the Select tool's drag, moves the selected node across the ground at its
+  height, or holding Shift, up and down. The Rotate and Scale tools leave nodes in views alone;
+  turn and stretch them in the Inspector.
+
+The Inspector shows a node in a view by `x`, `y` and `z`, `yaw`, `pitch` and `roll` in degrees,
+and its scale along each axis, with no rotation or anchor; a view's camera (where it is and looks,
+which way is up, perspective with a field of view or orthographic with a height, and how near and
+far it sees) and lighting; a mesh's shape, its size, and a sprite of the scene's sheets to show;
+a model's file; and a billboard's sprite, size and tint. While the Animation panel shows a clip,
+**♦** keys a node's `z`, `yaw`, `pitch`, `roll` and scale as it does `x` and `y`.
+
 ## Animating rigs
 
 A scene's [clips](scenes.md) animate its nodes, as a character's walk turns its limbs. The
@@ -181,7 +209,8 @@ straight line, squares for those that jump, and for visibility and cells.
   the track.
 
 Key nodes' properties from the Inspector. While the panel shows a clip, each property a clip can
-change, `visible`, `x`, `y`, `rotation`, `scale` and a sprite's `cell`, has a **♦** beside it,
+change, `visible`, `x`, `y`, `rotation`, `scale` and a sprite's `cell`, or in a 3D view `z`,
+`yaw`, `pitch` and `roll` too, and a billboard's or mesh's `cell`, has a **♦** beside it,
 which puts a key of its value at the playhead, adding a track for it if the clip has none.
 Properties the clip has tracks of are marked in yellow, and show as the clip poses them. Changing
 one, in the Inspector or with the viewport's tools, keys it at the playhead: it changes the key

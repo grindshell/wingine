@@ -103,6 +103,10 @@ pub fn kind_icon(kind: &str) -> &'static str {
         "tilemap" => "🗺",
         "tile_layer" => "☰",
         "instance" => "⛓",
+        "view3d" => "📷",
+        "mesh" => "⬛",
+        "model" => "🗿",
+        "billboard" => "👤",
         "scene" => "🎬",
         _ => "?",
     }
@@ -116,6 +120,8 @@ pub fn file_icon(name: &str) -> &'static str {
         "🗺"
     } else if name.ends_with(".luau") {
         "📜"
+    } else if name.ends_with(".glb") || name.ends_with(".gltf") {
+        "🗿"
     } else if name.ends_with(".png") {
         "🖼"
     } else if name.ends_with(".ogg") || name.ends_with(".wav") {

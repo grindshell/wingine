@@ -9,25 +9,31 @@
 //! with the Select tool, a node with a size has handles on its edges and corners that resize it.
 //! The scene can be previewed laid out on canvases of other sizes, chosen in the toolbar or by
 //! dragging the canvas's bottom-right corner.
+//!
+//! In a 3D view, clicking picks the nodes whose boxes are under the pointer, nearest first, the
+//! selection's box is outlined, and the Move tool drags a node across the ground at its height, or
+//! with Shift, up and down. Scenes and model files dropped in a view are placed where the ray
+//! under the pointer meets the ground.
 
 use std::f32::consts::PI;
 
 use wingine::{
     Context,
-    graphics::{Camera, Canvas},
+    graphics::{Camera, Camera3d, Canvas, Ray},
     gui::{GuiCanvas, egui},
-    math::{Affine, Rect},
+    math::{Affine, Affine3, Rect},
     scene::{Kind, KindDef, NodeDef, NodeId, Scene},
 };
 
 use crate::{
     docks::{
-        filesystem::ScenePath,
+        filesystem::{ModelPath, ScenePath},
         tiles::{Palette, TileTool, Tiles},
     },
     document::{Document, View},
     edit::{self, NodePath},
     layout::{self, PRESETS, Place, Preset},
+    project::is_model_file,
     theme,
 };
 
@@ -124,6 +130,19 @@ struct Sizing {
 pub enum Action {
     /// Place the scene file at `scene` at `at`, a point of the scene.
     Instance { scene: String, at: [f32; 2] },
+    /// Place the scene file at `scene` in the 3D view at `view`, at `at` in its world.
+    Instance3d {
+        scene: String,
+        view: NodePath,
+        at: [f32; 3],
+    },
+    /// Add a node showing the model file at `model` to the 3D view at `view`, at `at` in its
+    /// world.
+    Model {
+        model: String,
+        view: NodePath,
+        at: [f32; 3],
+    },
 }
 
 /// Painting a tile layer while a button is held.
@@ -212,6 +231,48 @@ struct Drag {
     origin: [f32; 2],
     /// From the scene to its own coordinates, as it was.
     to_node: Option<Affine>,
+    /// For a node placed in 3D, how moving it in its view works.
+    space: Option<Drag3d>,
+}
+
+/// Moving a node placed in 3D: across the ground at its height, or up and down.
+struct Drag3d {
+    /// Its view's camera, and where the view is in the scene.
+    camera: Camera3d,
+    view: Rect,
+    /// Its origin in the view's world.
+    origin: [f32; 3],
+    /// Which way the plane it moves up and down in faces: toward the camera, across the ground.
+    facing: [f32; 3],
+    /// Where the pointer's ray met the ground at its height, and the upright plane, as the drag
+    /// began.
+    across: Option<[f32; 3]>,
+    upright: Option<[f32; 3]>,
+    /// From the world's directions to its parent's, for turning moves into its `x`, `y` and `z`.
+    to_parent: Affine3,
+}
+
+impl Drag3d {
+    /// The ray through `point` of the scene, in the view's world.
+    fn ray(&self, [x, y]: [f32; 2]) -> Ray {
+        let rect = self.view;
+        self.camera.ray([x - rect.x, y - rect.y], [rect.w, rect.h])
+    }
+
+    /// How far the node moves in the world, in its parent's directions, for the pointer at `now`:
+    /// across the ground, or if `upright`, up and down.
+    fn moved(&self, now: [f32; 2], upright: bool) -> Option<[f32; 3]> {
+        let ray = self.ray(now);
+        let world = if upright {
+            let hit = ray.hit_plane(self.origin, self.facing)?;
+            [0.0, hit[1] - self.upright?[1], 0.0]
+        } else {
+            let hit = ray.hit_plane(self.origin, [0.0, 1.0, 0.0])?;
+            let from = self.across?;
+            [hit[0] - from[0], 0.0, hit[2] - from[2]]
+        };
+        Some(self.to_parent.apply_vector(world))
+    }
 }
 
 impl Default for Viewport {
@@ -376,6 +437,11 @@ impl Viewport {
             .as_ref()
             .and_then(|path| document.shown_node(path))
             .filter(|node| !matches!(node.kind, KindDef::TileLayer(_)));
+        if node.as_ref().is_some_and(|node| node.placement3.is_some()) {
+            ui.add_enabled(false, egui::Button::new("Anchors"))
+                .on_disabled_hover_text("Nodes in 3D views have no anchors");
+            return;
+        }
         let (Some(path), Some(node)) = (selected, node) else {
             ui.add_enabled(false, egui::Button::new("Anchors"))
                 .on_disabled_hover_text("Select a node to lay it out in its parent");
@@ -389,7 +455,7 @@ impl Viewport {
                 .spacing([4.0, 4.0])
                 .show(ui, |ui| {
                     for (i, preset) in PRESETS.iter().enumerate() {
-                        let fits = layout::fits(&node.kind, preset);
+                        let fits = layout::fits(&node, preset);
                         if preset_button(ui, preset, fits).clicked() {
                             chosen = Some(preset);
                         }
@@ -503,17 +569,42 @@ impl Viewport {
 
         let mut action = None;
         let pointer = ui.ctx().pointer_latest_pos();
-        if let Some(scene) = response.dnd_release_payload::<ScenePath>()
+        // Taking a payload takes it whatever it is, so the model's is taken only if it's one.
+        let model_dropped = response.dnd_hover_payload::<ModelPath>().is_some();
+        if model_dropped
+            && let Some(model) = response.dnd_release_payload::<ModelPath>()
             && let Some(pointer) = pointer
+            && let Some((view, at)) = ground_under(document, map.to_scene(pointer))
         {
-            action = Some(Action::Instance {
-                scene: scene.0.clone(),
-                at: self.snapped(map.to_scene(pointer)),
+            action = Some(Action::Model {
+                model: model.0.clone(),
+                view,
+                at,
             });
         }
+        if !model_dropped
+            && let Some(scene) = response.dnd_release_payload::<ScenePath>()
+            && let Some(pointer) = pointer
+        {
+            let point = map.to_scene(pointer);
+            let scene = scene.0.clone();
+            action = Some(match ground_under(document, point) {
+                Some((view, at)) => Action::Instance3d { scene, view, at },
+                None => Action::Instance {
+                    scene,
+                    at: self.snapped(point),
+                },
+            });
+        }
+        let pointer_in = pointer.filter(|pointer| rect.contains(*pointer));
         let dropping = response
             .dnd_hover_payload::<ScenePath>()
-            .zip(pointer.filter(|pointer| rect.contains(*pointer)));
+            .map(|scene| scene.0.clone())
+            .or_else(|| {
+                let model = response.dnd_hover_payload::<ModelPath>()?;
+                Some(model.0.clone())
+            })
+            .zip(pointer_in);
 
         // What the selection is, for tiles: a tilemap, or a layer of one.
         let selected = document
@@ -584,16 +675,24 @@ impl Viewport {
                 palette,
             );
         }
-        if let Some((scene, pointer)) = dropping {
-            let name = scene.0.rsplit('/').next().unwrap_or(&scene.0);
-            let at = map.to_screen(self.snapped(map.to_scene(pointer)));
+        if let Some((file, pointer)) = dropping {
+            let name = file.rsplit('/').next().unwrap_or(&file);
+            let point = map.to_scene(pointer);
+            let in_view = ground_under(document, point).is_some();
+            let at = if in_view {
+                pointer
+            } else {
+                map.to_screen(self.snapped(point))
+            };
             cross(&painter, at, 8.0, egui::Stroke::new(1.5, theme::ACCENT));
+            let text = if in_view || !is_model_file(&file) {
+                format!("Place {name} here")
+            } else {
+                format!("Drop {name} in a 3D view")
+            };
             // Above the pointer, as the name being dragged is below it.
-            let galley = painter.layout_no_wrap(
-                format!("Place {name} here"),
-                egui::FontId::proportional(13.0),
-                theme::ACCENT,
-            );
+            let galley =
+                painter.layout_no_wrap(text, egui::FontId::proportional(13.0), theme::ACCENT);
             let corner = at + egui::vec2(12.0, -8.0 - galley.size().y);
             painter.rect_filled(
                 egui::Rect::from_min_size(corner, galley.size()).expand(3.0),
@@ -1064,6 +1163,7 @@ impl Viewport {
             mirrored,
             origin,
             to_node,
+            space,
         } = drag;
         let from = *from;
         let snap = |value: f32, step: f32| {
@@ -1075,6 +1175,17 @@ impl Viewport {
         };
         let mut node = start.clone();
         match tool {
+            Tool::Select | Tool::Move if space.is_some() => {
+                let space = space.as_ref().expect("the node is placed in 3D");
+                let (Some([dx, dy, dz]), Some(placement)) =
+                    (space.moved(now, shift), &mut node.placement3)
+                else {
+                    return;
+                };
+                node.x = start.x + dx;
+                node.y = start.y + dy;
+                placement.z += dz;
+            }
             Tool::Select | Tool::Move => {
                 let moved = to_parent.apply([now[0] - from[0], now[1] - from[1]]);
                 node.x = snap(start.x + moved[0], self.step);
@@ -1119,6 +1230,9 @@ impl Viewport {
         target.rotation = node.rotation;
         target.scale_x = node.scale_x;
         target.scale_y = node.scale_y;
+        if let (Some(shown), Some(moved)) = (&mut target.placement3, node.placement3) {
+            shown.z = moved.z;
+        }
         document.set_node(path, target);
     }
 
@@ -1134,6 +1248,10 @@ impl Viewport {
             return;
         };
         let stroke = egui::Stroke::new(1.5, theme::ACCENT);
+        if let Some(view) = scene.view_of(id) {
+            self.overlay_3d(painter, map, document, scene, view, id);
+            return;
+        }
         let transform = scene.transform(id);
         if let Some((placement, rect)) = placement(scene, id) {
             let corners = placement
@@ -1199,6 +1317,70 @@ impl Viewport {
     }
 }
 
+impl Viewport {
+    /// The outline of the box around what `id`, a node in the 3D view `view`, shows, as its camera
+    /// shows it, its origin, and with the Move tool, the world's axes from it.
+    fn overlay_3d(
+        &self,
+        painter: &egui::Painter,
+        map: &ViewMap,
+        document: &Document,
+        scene: &Scene,
+        view: NodeId,
+        id: NodeId,
+    ) {
+        let stroke = egui::Stroke::new(1.5, theme::ACCENT);
+        let shown = |point: [f32; 3]| project(scene, view, point).map(|at| map.to_screen(at));
+        if let Some(bounds) = scene.bounds_3d(id) {
+            let corner = |i: usize| {
+                [0, 1, 2].map(|axis| {
+                    if i >> axis & 1 == 0 {
+                        bounds.min[axis]
+                    } else {
+                        bounds.max[axis]
+                    }
+                })
+            };
+            for a in 0..8 {
+                for axis in 0..3 {
+                    let b = a | 1 << axis;
+                    if b == a {
+                        continue;
+                    }
+                    if let (Some(from), Some(to)) = (shown(corner(a)), shown(corner(b))) {
+                        painter.line_segment([from, to], stroke);
+                    }
+                }
+            }
+        }
+        let Some(transform) = scene.transform_3d(id) else {
+            return;
+        };
+        let origin = transform.translation;
+        let Some(at) = shown(origin) else {
+            return;
+        };
+        cross(painter, at, 6.0, stroke);
+        if document.inner().is_some() || !matches!(self.tool, Tool::Move) {
+            return;
+        }
+        for (axis, color) in [
+            ([1.0, 0.0, 0.0], egui::Color32::from_rgb(0xf0, 0x60, 0x70)),
+            ([0.0, 1.0, 0.0], egui::Color32::from_rgb(0x80, 0xe0, 0x70)),
+            ([0.0, 0.0, 1.0], egui::Color32::from_rgb(0x70, 0x90, 0xf0)),
+        ] {
+            let end = [0, 1, 2].map(|i| origin[i] + axis[i] * 0.5);
+            let Some(end) = shown(end) else {
+                continue;
+            };
+            let direction = (end - at).normalized();
+            if direction.is_finite() {
+                painter.arrow(at, direction * 28.0, egui::Stroke::new(2.0, color));
+            }
+        }
+    }
+}
+
 /// A view showing the whole of a canvas `canvas_size` in size in a viewport `size` points in
 /// size, with a margin around it, at a whole number of points per unit if it's at least 1.
 fn frame(canvas_size: [f32; 2], size: egui::Vec2) -> View {
@@ -1258,7 +1440,7 @@ fn placement(scene: &Scene, id: NodeId) -> Option<(Affine, Rect)> {
     let transform = scene.transform(id);
     let only_moves = matches!(
         scene.node(id).kind(),
-        Kind::Text(_) | Kind::Tilemap(_) | Kind::TileLayer(_)
+        Kind::Text(_) | Kind::Tilemap(_) | Kind::TileLayer(_) | Kind::View3d(_)
     );
     let transform = if only_moves {
         Affine::from_translation(transform.translation)
@@ -1293,7 +1475,8 @@ enum Pickable {
 }
 
 /// The nodes of the file under `pos`, in points, in the order a click picks them: what can be
-/// seen, topmost first, then areas, then plain nodes with their origins nearby, then tilemaps.
+/// seen, topmost first, a 3D view's nodes whose boxes are under it, nearest first, before the
+/// view, then areas, then plain nodes with their origins nearby, then tilemaps.
 fn under(document: &Document, map: &ViewMap, pos: egui::Pos2) -> Vec<NodePath> {
     let Some(scene) = document.preview.as_ref() else {
         return Vec::new();
@@ -1314,12 +1497,29 @@ fn under(document: &Document, map: &ViewMap, pos: egui::Pos2) -> Vec<NodePath> {
             .copied()
             .filter(move |&id| pickable(id) == which && scene.contains(id, point))
     };
+    // A view's nodes, picked by their boxes, come before the view.
+    let seen = covering(Pickable::Seen).flat_map(|id| {
+        let inside = match scene.node(id).kind() {
+            Kind::View3d(_) => scene.pick(id, point),
+            _ => Vec::new(),
+        };
+        inside.into_iter().chain([id])
+    });
+    // Plain nodes, by where their origins show, in 3D views as their cameras show them.
     let near_origin = nodes.iter().copied().filter(|&id| {
-        scene.rect(id).is_none()
-            && map.to_screen(scene.transform(id).translation).distance(pos) <= PICK_DISTANCE
+        let node = scene.node(id);
+        let origin = match node.placement3() {
+            Some(_) if matches!(node.kind(), Kind::Node) => origin_3d(scene, id),
+            Some(_) => None,
+            None => scene
+                .rect(id)
+                .is_none()
+                .then(|| scene.transform(id).translation),
+        };
+        origin.is_some_and(|origin| map.to_screen(origin).distance(pos) <= PICK_DISTANCE)
     });
     let mut found: Vec<NodePath> = Vec::new();
-    let ids = covering(Pickable::Seen)
+    let ids = seen
         .chain(covering(Pickable::Area))
         .chain(near_origin)
         .chain(covering(Pickable::Tiles));
@@ -1432,7 +1632,7 @@ fn node_handles(document: &Document) -> Option<(NodePath, Vec<Handle>)> {
     let node = edit::node(document.file(), &path)?;
     if !matches!(
         node.kind,
-        KindDef::Sprite(_) | KindDef::Rect(_) | KindDef::Area(_)
+        KindDef::Sprite(_) | KindDef::Rect(_) | KindDef::Area(_) | KindDef::View3d(_)
     ) {
         return None;
     }
@@ -1510,6 +1710,7 @@ fn size_to(document: &mut Document, sizing: &Sizing, point: [f32; 2]) {
         KindDef::Sprite(sprite) => sprite.size = Some(own),
         KindDef::Rect(rect) => rect.size = own,
         KindDef::Area(area) => area.size = own,
+        KindDef::View3d(view) => view.size = own,
         _ => return,
     }
     // Keyed, if a clip posing the preview moves it.
@@ -1555,6 +1756,12 @@ fn start_drag(document: &Document, tool: Tool, path: NodePath, from: [f32; 2]) -
     let [a, b] = parent.x_axis;
     let [c, d] = parent.y_axis;
     let transform = scene.transform(id);
+    let space = match scene.view_of(id) {
+        // Nodes in 3D views only move: the Inspector turns and stretches them.
+        Some(_) if !matches!(tool, Tool::Select | Tool::Move) => return None,
+        Some(view) => Some(start_drag_3d(scene, view, id, from)?),
+        None => None,
+    };
     Some(Drag {
         tool,
         path,
@@ -1564,7 +1771,106 @@ fn start_drag(document: &Document, tool: Tool, path: NodePath, from: [f32; 2]) -
         mirrored: a * d - b * c < 0.0,
         origin: transform.translation,
         to_node: transform.inverse(),
+        space,
     })
+}
+
+/// Moving `id`, a node in the 3D view `view`, with the pointer at `from` in the scene.
+fn start_drag_3d(scene: &Scene, view: NodeId, id: NodeId, from: [f32; 2]) -> Option<Drag3d> {
+    let Kind::View3d(shown) = scene.node(view).kind() else {
+        return None;
+    };
+    let rect = scene.bounds(view)?;
+    let origin = scene.transform_3d(id)?.translation;
+    let parent = scene
+        .node(id)
+        .parent()
+        .and_then(|parent| scene.transform_3d(parent))
+        .unwrap_or(Affine3::IDENTITY);
+    let mut drag = Drag3d {
+        camera: shown.camera,
+        view: rect,
+        origin,
+        facing: [0.0, 0.0, 1.0],
+        across: None,
+        upright: None,
+        to_parent: Affine3 {
+            translation: [0.0; 3],
+            ..parent
+        }
+        .inverse()
+        .unwrap_or(Affine3::IDENTITY),
+    };
+    let ray = drag.ray(from);
+    // Upright, facing back along the ray, across the ground.
+    let [x, _, z] = ray.direction;
+    let length = x.hypot(z);
+    if length > 1e-6 {
+        drag.facing = [-x / length, 0.0, -z / length];
+    }
+    drag.across = ray.hit_plane(origin, [0.0, 1.0, 0.0]);
+    drag.upright = ray.hit_plane(origin, drag.facing);
+    Some(drag)
+}
+
+/// The 3D view of the file under `point`, in the scene, topmost first, and where the ray under it
+/// meets the ground in the view's world, or if it doesn't, where it's as far from the camera as
+/// what the camera looks at.
+fn ground_under(document: &Document, point: [f32; 2]) -> Option<(NodePath, [f32; 3])> {
+    let scene = document.preview.as_ref()?;
+    let root = scene.root();
+    let mut nodes = scene.descendants(root);
+    nodes.reverse();
+    nodes.into_iter().find_map(|id| {
+        let Kind::View3d(view) = scene.node(id).kind() else {
+            return None;
+        };
+        if !shown(scene, id) {
+            return None;
+        }
+        let ray = scene.ray(id, point)?;
+        let path = document.file_node(id)?;
+        // Only a view of the file itself, not one an instance places.
+        if !matches!(
+            edit::node(document.file(), &path).map(|node| &node.kind),
+            Some(KindDef::View3d(_))
+        ) {
+            return None;
+        }
+        let camera = view.camera;
+        let distance = camera
+            .position
+            .iter()
+            .zip(camera.target)
+            .map(|(a, b)| (a - b) * (a - b))
+            .sum::<f32>()
+            .sqrt();
+        let at = ray
+            .hit_plane([0.0; 3], [0.0, 1.0, 0.0])
+            .unwrap_or_else(|| ray.at(distance));
+        Some((path, at))
+    })
+}
+
+/// Where the origin of `id`, a node in a 3D view, shows in the scene, if it's in front of the
+/// view's camera.
+fn origin_3d(scene: &Scene, id: NodeId) -> Option<[f32; 2]> {
+    project(
+        scene,
+        scene.view_of(id)?,
+        scene.transform_3d(id)?.translation,
+    )
+}
+
+/// Where `point` in the world of the 3D view `view` shows in the scene, if it's in front of the
+/// camera.
+fn project(scene: &Scene, view: NodeId, point: [f32; 3]) -> Option<[f32; 2]> {
+    let Kind::View3d(shown) = scene.node(view).kind() else {
+        return None;
+    };
+    let rect = scene.bounds(view)?;
+    let [x, y] = shown.camera.project(point, [rect.w, rect.h])?;
+    Some([rect.x + x, rect.y + y])
 }
 
 #[cfg(test)]

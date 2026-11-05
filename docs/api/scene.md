@@ -18,6 +18,14 @@ the files.
 - [What nodes show](#what-nodes-show): [`set_sprite`](#nodeset_sprite),
   [`set_cell`](#nodeset_cell), [`set_tint`](#nodeset_tint), [`set_color`](#nodeset_color),
   [`text`](#nodetext), [`set_text`](#nodeset_text)
+- [Nodes in 3D views](#nodes-in-3d-views): [`position_3d`](#nodeposition_3d),
+  [`set_position_3d`](#nodeset_position_3d), [`orientation`](#nodeorientation),
+  [`set_orientation`](#nodeset_orientation), [`scale_3d`](#nodescale_3d),
+  [`set_scale_3d`](#nodeset_scale_3d), [`world_position_3d`](#nodeworld_position_3d),
+  [`bounds_3d`](#nodebounds_3d)
+- [3D views](#3d-views): [`camera`](#nodecamera), [`set_camera`](#nodeset_camera),
+  [`lighting`](#nodelighting), [`set_lighting`](#nodeset_lighting), [`pick`](#nodepick),
+  [`project`](#nodeproject)
 - [Posing](#posing): [`pose`](#nodepose), [`Clip`](#clip)
 - [Adding and removing nodes](#adding-and-removing-nodes): [`add`](#nodeadd),
   [`remove`](#noderemove), [`is_removed`](#nodeis_removed)
@@ -84,8 +92,8 @@ Returns the node's name, unique among its siblings. The root's is `""`.
 node:kind(): string
 ```
 
-Returns `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"tilemap"` or `"tile_layer"`. An
-instance is a `"node"` once loaded.
+Returns `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"tilemap"`, `"tile_layer"`,
+`"view3d"`, `"mesh"`, `"model"` or `"billboard"`. An instance is a `"node"` once loaded.
 
 ### `node:path`
 
@@ -159,7 +167,10 @@ makes a table each time, so read them once, not every frame.
 ## Placing nodes
 
 A node is placed within its parent: its position, rotation and scale are in its parent's
-coordinates, and its children move, turn and stretch with it.
+coordinates, and its children move, turn and stretch with it. A node in a 3D view is placed in 3D
+instead (see [Nodes in 3D views](#nodes-in-3d-views)): `position` and `set_position` are its `x`
+and `y`, and `scale` and `set_scale` its `scale_x` and `scale_y`, but it has no rotation or anchor,
+so `rotation`, `set_rotation` and `set_anchor` are errors.
 
 ### `node:position`
 
@@ -253,8 +264,9 @@ Positions, anchors, rotations and scales must be finite numbers.
 
 ## What nodes cover
 
-A sprite, rect, text or area covers a rectangle, with its pivot at the node's origin, and a
-tilemap, or a layer of one, covers its map. A plain node covers nothing.
+A sprite, rect, text, area or 3D view covers a rectangle, with its pivot at the node's origin,
+and a tilemap, or a layer of one, covers its map. A plain node covers nothing, and nor do nodes in
+3D views, which have [boxes](#nodebounds_3d) instead.
 
 ### `node:size`
 
@@ -262,10 +274,11 @@ tilemap, or a layer of one, covers its map. A plain node covers nothing.
 node:size(): (number, number)
 ```
 
-Returns the width and height it covers, before any scaling: a sprite's size, a rect's or an
-area's, the size of a text's text, or the size of a tilemap's map. For a node that
+Returns the width and height it covers, before any scaling: a sprite's size, a rect's, an
+area's or a 3D view's, the size of a text's text, or the size of a tilemap's map. For a node that
 [stretches](../scenes.md#laying-out-screens) with its parent, it's the size it has before
-stretching, as [`set_size`](#nodeset_size) sets it; [`bounds`](#nodebounds) is where it is.
+stretching, as [`set_size`](#nodeset_size) sets it; [`bounds`](#nodebounds) is where it is. A
+billboard's is its width and height in its view's world.
 
 ### `node:set_size`
 
@@ -273,7 +286,8 @@ stretching, as [`set_size`](#nodeset_size) sets it; [`bounds`](#nodebounds) is w
 node:set_size(width: number, height: number)
 ```
 
-Changes the size of a sprite, a rect or an area. A sprite stretches to it.
+Changes the size of a sprite, a rect, an area, a 3D view or a billboard. A sprite stretches to
+it, and a billboard with a negative width is mirrored.
 
 ### `node:bounds`
 
@@ -333,9 +347,9 @@ Changes the sprite a sprite node shows, such as to a frame of an
 node:set_cell(column: number, row: number)
 ```
 
-Shows the sprite in another cell of the sheet the scene file gave the sprite node, counting from 0
-at the top-left. A cell outside the sheet is an error. Clips change cells too, with a `cell`
-track.
+Shows the sprite in another cell of the sheet the scene file gave a sprite, billboard or mesh
+node, counting from 0 at the top-left. A cell outside the sheet is an error. Clips change cells
+too, with a `cell` track.
 
 ```lua
 -- A face that frowns.
@@ -348,7 +362,7 @@ hero:find("head/face"):set_cell(4, 0)
 node:set_tint(tint: Color)
 ```
 
-Changes the color a sprite node's colors are multiplied by.
+Changes the color the colors of a sprite, mesh, model or billboard node are multiplied by.
 
 ### `node:set_color`
 
@@ -374,6 +388,150 @@ node:set_text(text: string)
 
 Changes a text node's text, laying it out again if it's different, so setting the same text
 every frame costs little.
+
+## Nodes in 3D views
+
+The nodes of a [3D view](../scenes.md#3d-views) are placed in 3D, in its world: by `x`, `y` and
+`z`, turned by `yaw`, `pitch` and `roll`, and stretched by `scale_x`, `scale_y` and `scale_z`.
+These are errors for a node that isn't in a 3D view. Positions, angles and scales must be finite.
+
+### `node:position_3d`
+
+```lua
+node:position_3d(): vector
+```
+
+Returns where its origin is within its parent.
+
+### `node:set_position_3d`
+
+```lua
+node:set_position_3d(position: vector)
+```
+
+```lua
+-- The hero, where the grid mover has them.
+local column, row = mover:position()
+hero:set_position_3d(vector.create(column + 0.5, 0, row + 0.5))
+```
+
+### `node:orientation`
+
+```lua
+node:orientation(): (number, number, number)
+```
+
+Returns its yaw, pitch and roll, in radians.
+
+### `node:set_orientation`
+
+```lua
+node:set_orientation(yaw: number, pitch: number?, roll: number?)
+```
+
+Turns it about its origin: by `roll` about `z`, then `pitch` about `x`, then `yaw` about `y`, each
+counter-clockwise seen from that axis's end, so a yaw turns it as seen from above. `pitch` and
+`roll` are 0 if left out.
+
+### `node:scale_3d`
+
+```lua
+node:scale_3d(): vector
+```
+
+### `node:set_scale_3d`
+
+```lua
+node:set_scale_3d(scale: number | vector)
+```
+
+Stretches it along its own axes by a vector, or by a number along all three.
+
+### `node:world_position_3d`
+
+```lua
+node:world_position_3d(): vector
+```
+
+Returns where its origin is in its view's world, after every node it's inside has placed it.
+
+### `node:bounds_3d`
+
+```lua
+node:bounds_3d(): (vector?, vector?)
+```
+
+Returns the least and greatest corners of the box in its view's world around what a mesh or
+model shows, moved, turned and stretched as it's drawn, or around a billboard, standing as it faces
+the camera; or nothing for a plain node.
+
+## 3D views
+
+These work on a `view3d` node.
+
+### `node:camera`
+
+```lua
+node:camera(): Camera3d
+```
+
+Returns the view's camera, a table as [`graphics.begin_3d`](graphics.md#graphicsbegin_3d) takes,
+with every field: `position`, `target`, `up`, `fov` or `height`, `near` and `far`.
+
+### `node:set_camera`
+
+```lua
+node:set_camera(camera: Camera3d)
+```
+
+Changes the view's camera, whose fields are the defaults where they're left out, as in
+[`graphics.begin_3d`](graphics.md#graphicsbegin_3d).
+
+```lua
+-- Following the hero from above and behind.
+local feet = hero:position_3d()
+view:set_camera({ position = feet + vector.create(0, 7, 3.5), target = feet })
+```
+
+### `node:lighting`
+
+```lua
+node:lighting(): Lighting
+```
+
+Returns the view's lighting: `direction`, and `color` and `ambient` as numbers `0xRRGGBBAA`.
+
+### `node:set_lighting`
+
+```lua
+node:set_lighting(lighting: Lighting)
+```
+
+### `node:pick`
+
+```lua
+node:pick(x: number, y: number): { SceneNode }
+```
+
+Returns the nodes of the view under the point `x`, `y` in the scene's coordinates, nearest the
+camera first: those that show whose [boxes](#nodebounds_3d) the ray through the point goes into.
+Nothing is under a point outside the view. A scene drawn without a camera is in canvas pixels, as
+the mouse is.
+
+```lua
+local x, y = input.mouse_position()
+local under = if x and y then view:pick(x, y)[1] else nil
+```
+
+### `node:project`
+
+```lua
+node:project(point: vector): (number?, number?)
+```
+
+Returns where `point` in the view's world shows in the scene, or nothing if it's behind the camera
+or beyond what it sees, as [`graphics.project`](graphics.md#graphicsproject) does for a view
+drawn by hand.
 
 ## Posing
 
@@ -401,8 +559,10 @@ hero:pose(clips.walk, walk_time, walking)
 hero:pose(clips.blink, time)
 ```
 
-A track whose node isn't there, or a `cell` track of a node that isn't a sprite from a sheet with
-those cells, is an error, and the pose changes nothing. `time` and `weight` must be finite.
+A track whose node isn't there, a `cell` track of a node that isn't a sprite, billboard or mesh
+from a sheet with those cells, a `rotation` track of a node in a 3D view, or a `z`, `yaw`,
+`pitch`, `roll` or `scale_z` track of one that isn't, is an error, and the pose changes nothing.
+`time` and `weight` must be finite.
 
 ### `Clip`
 
@@ -461,8 +621,9 @@ bat:set_position(48, 96)
 ```
 
 A name that's empty, holds `/`, or is one of `node`'s children's already is an error, as is
-copying a tile layer without its tilemap. Nodes can't nest more than 200 levels below a scene's
-root, so a copy that would place one deeper is an error too.
+copying a tile layer without its tilemap, a node of a 3D view anywhere but into one, or a node of
+the 2D scene into one. Nodes can't nest more than 200 levels below a scene's root, so a copy that
+would place one deeper is an error too.
 
 ### `node:remove`
 

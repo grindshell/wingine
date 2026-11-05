@@ -6,7 +6,7 @@ use std::{collections::HashMap, f32::consts::FRAC_PI_2, fs, path::Path, rc::Rc};
 
 use wingine::{
     Context, Error, Result,
-    graphics::{Color, Texture},
+    graphics::{Color, Mesh, MeshData, Model, Texture},
     headless::Headless,
     math::Rect,
     scene::{Assets, Kind, Scene, SceneFile, TilesetFile, Value},
@@ -16,6 +16,9 @@ const TILESET: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/examples/kenney_1-bit-pack_transparent-packed.png"
 );
+
+/// The examples' folder, which scenes' model files are in.
+const EXAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
 
 /// A garden: a mill whose sails are inside it, a hidden flower bed with a flower, and areas.
 const GARDEN: &str = r##"return {
@@ -72,6 +75,14 @@ impl Assets for Files<'_> {
     fn tileset(&mut self, path: &str) -> Result<Rc<TilesetFile>> {
         let source = self.files.get(path).unwrap_or_else(|| panic!("no {path}"));
         TilesetFile::parse(source, path).map(Rc::new)
+    }
+
+    fn model(&mut self, path: &str) -> Result<Model> {
+        wingine::scene::load_model(self.ctx, &Path::new(EXAMPLES).join(path))
+    }
+
+    fn mesh(&mut self, data: &MeshData) -> Result<Mesh> {
+        self.ctx.create_mesh(data)
     }
 }
 
@@ -901,4 +912,295 @@ fn clips_pose_every_instance_of_their_scene() {
     let [left_x, _] = hand("left/body/arm");
     let [right_x, _] = hand("right/body/arm");
     assert!(left_x < 20.0 && right_x > 60.0, "{left_x}, {right_x}");
+}
+
+/// A cellar seen from straight above through an orthographic camera, so a world unit is 10
+/// canvas pixels, `x` to the right and `z` down the canvas, with the world's origin at the
+/// middle of the view, (70, 35) on the canvas: a floor, a crate in a stack turned a quarter turn,
+/// the hero as a billboard, and a chair placed by an instance, after a rect of the 2D scene.
+const CELLAR: &str = r##"return {
+    format = 2,
+    sheets = { tiles = { path = "tiles.png", tile_width = 16, tile_height = 16 } },
+    children = {
+        { name = "title", kind = "rect", width = 10, height = 10 },
+        {
+            name = "view", kind = "view3d", x = 20, y = 10, width = 100, height = 50,
+            camera = { position = { 0, 10, 0 }, target = { 0, 0, 0 }, height = 5 },
+            children = {
+                { name = "floor", kind = "mesh", shape = "plane", size = { 10, 5 } },
+                {
+                    name = "stack", kind = "node", x = 2, yaw = 1.5707964,
+                    children = {
+                        { name = "crate", kind = "mesh", shape = "cuboid", x = 1, y = 0.5 },
+                    },
+                },
+                { name = "hero", kind = "billboard", sheet = "tiles", cell = { 27, 0 }, x = -2 },
+                { name = "chair", kind = "instance", scene = "chair.scene.luau", x = -3, z = 1 },
+            },
+        },
+    },
+    clips = {
+        spin = {
+            duration = 1,
+            tracks = {
+                { node = "view/stack", property = "yaw", keys = { { 0, 0 }, { 1, 3.1415927 } } },
+                { node = "view/stack/crate", property = "scale_z", keys = { { 0, 2 } } },
+                { node = "view/stack/crate", property = "y", keys = { { 0, 1 } } },
+            },
+        },
+        tilt = { duration = 1, tracks = { { node = "view/stack", property = "rotation", keys = { { 0, 1 } } } } },
+        lift = { duration = 1, tracks = { { node = "title", property = "z", keys = { { 0, 1 } } } } },
+    },
+}"##;
+
+/// A chair, a file of its own for placing in views: a seat, and a plain node holding its back,
+/// placed in 3D only once an instance places it in a view.
+const CHAIR: &str = r##"return {
+    format = 2,
+    children = {
+        { name = "seat", kind = "mesh", shape = "cuboid", y = 0.25, size = { 0.5, 0.5, 0.5 } },
+        {
+            name = "frame", kind = "node",
+            children = { { name = "back", kind = "mesh", shape = "cuboid", y = 0.75, z = -0.2, size = { 0.5, 0.5, 0.1 } } },
+        },
+    },
+}"##;
+
+fn cellar(headless: &mut Headless) -> Scene {
+    let files = [("chair.scene.luau", CHAIR), ("cellar.scene.luau", CELLAR)];
+    let mut scene = load(headless, &files, "cellar.scene.luau").unwrap();
+    scene.set_size([160.0, 90.0]);
+    scene
+}
+
+fn assert_near3(actual: [f32; 3], expected: [f32; 3]) {
+    assert!(
+        (0..3).all(|i| (actual[i] - expected[i]).abs() < 1e-4),
+        "{actual:?} is not {expected:?}"
+    );
+}
+
+#[test]
+fn nodes_in_3d_views_compose_their_placement() {
+    let scene = cellar(&mut headless());
+    let root = scene.root();
+    let find = |path| scene.find(root, path).unwrap();
+    let view = find("view");
+    let crate_ = find("view/stack/crate");
+    assert_eq!(
+        scene.node(view).placement3(),
+        None,
+        "a view is in the 2D scene"
+    );
+    assert_eq!(scene.transform_3d(view), None);
+    assert_eq!(scene.view_of(crate_), Some(view));
+    assert_eq!(scene.view_of(find("title")), None);
+    assert!(scene.node(find("view/floor")).placement3().is_some());
+
+    // The stack turns the crate a quarter turn about it, from `+x` to `-z`.
+    let at = |path| scene.transform_3d(find(path)).unwrap().translation;
+    assert_near3(at("view/stack/crate"), [2.0, 0.5, -1.0]);
+    let bounds = scene.bounds_3d(crate_).unwrap();
+    assert_near3(bounds.min, [1.5, 0.0, -1.5]);
+    assert_near3(bounds.max, [2.5, 1.0, -0.5]);
+    assert_eq!(
+        scene.bounds_3d(find("view/stack")),
+        None,
+        "a plain node shows nothing"
+    );
+
+    // A billboard stands in a flat box facing the camera, which looks straight down here, so
+    // its front is toward the view's bottom edge, `+z`.
+    let hero = scene.bounds_3d(find("view/hero")).unwrap();
+    assert_near3(hero.min, [-2.5, 0.0, 0.0]);
+    assert_near3(hero.max, [-1.5, 1.0, 0.0]);
+
+    // The chair's nodes are placed in 3D in the view, the plain node holding its back too.
+    assert_near3(at("view/chair/seat"), [-3.0, 0.25, 1.0]);
+    assert_near3(at("view/chair/frame/back"), [-3.0, 0.75, 0.8]);
+    assert!(scene.node(find("view/chair/frame")).placement3().is_some());
+
+    // Nodes in 3D views cover nothing in the 2D scene, and the view what an area would.
+    assert_eq!(scene.bounds(crate_), None);
+    assert_eq!(scene.bounds(view), Some(Rect::new(20.0, 10.0, 100.0, 50.0)));
+}
+
+#[test]
+fn views_pick_their_nodes_nearest_first() {
+    let mut scene = cellar(&mut headless());
+    let root = scene.root();
+    let find = |scene: &Scene, path| scene.find(root, path).unwrap();
+    let view = find(&scene, "view");
+    let paths = |scene: &Scene, picked: Vec<_>| -> Vec<String> {
+        picked.into_iter().map(|id| scene.path(id)).collect()
+    };
+    // The crate's top is nearer the camera than the floor under it.
+    let on_crate = [70.0 + 20.0, 35.0 - 10.0];
+    assert_eq!(
+        paths(&scene, scene.pick(view, on_crate)),
+        ["view/stack/crate", "view/floor"]
+    );
+    assert_eq!(
+        paths(&scene, scene.pick(view, [75.0, 40.0])),
+        ["view/floor"]
+    );
+    assert_eq!(
+        paths(&scene, scene.pick(view, [70.0 - 30.0, 35.0 + 10.0])),
+        ["view/chair/seat", "view/floor"]
+    );
+    assert_eq!(scene.pick(view, [5.0, 5.0]), [], "outside the view");
+    assert_eq!(
+        scene.pick(find(&scene, "title"), [5.0, 5.0]),
+        [],
+        "not a view"
+    );
+    let ray = scene.ray(view, on_crate).unwrap();
+    assert_near3(ray.direction, [0.0, -1.0, 0.0]);
+    assert_near3(
+        ray.hit_plane([0.0; 3], [0.0, 1.0, 0.0]).unwrap(),
+        [2.0, 0.0, -1.0],
+    );
+
+    // What doesn't show isn't picked.
+    let stack = find(&scene, "view/stack");
+    scene.node_mut(stack).set_visible(false);
+    assert_eq!(paths(&scene, scene.pick(view, on_crate)), ["view/floor"]);
+    scene.node_mut(view).set_visible(false);
+    assert_eq!(scene.pick(view, on_crate), []);
+}
+
+#[test]
+fn clips_pose_nodes_in_3d() {
+    let mut scene = cellar(&mut headless());
+    let clips = SceneFile::parse(CELLAR, "cellar.scene.luau").unwrap().clips;
+    let root = scene.root();
+    scene.pose(root, &clips["spin"], 0.5, 1.0).unwrap();
+    let crate_ = scene.find(root, "view/stack/crate").unwrap();
+    let placement = scene.node(crate_).placement3().unwrap();
+    assert_eq!(placement.scale_z, 2.0);
+    assert_eq!(scene.node(crate_).position(), [1.0, 1.0]);
+    let stack = scene.find(root, "view/stack").unwrap();
+    assert!((scene.node(stack).placement3().unwrap().yaw - 1.5707964).abs() < 1e-6);
+    assert_near3(
+        scene.transform_3d(crate_).unwrap().translation,
+        [2.0, 1.0, -1.0],
+    );
+
+    let err = scene.pose(root, &clips["tilt"], 0.0, 1.0).unwrap_err();
+    assert!(
+        err.contains("node `view/stack` is placed in 3D, where it turns by yaw, pitch and roll"),
+        "{err}"
+    );
+    let err = scene.pose(root, &clips["lift"], 0.0, 1.0).unwrap_err();
+    assert!(
+        err.contains("node `title` isn't in a 3D view, so it has no z"),
+        "{err}"
+    );
+}
+
+#[test]
+fn only_views_hold_nodes_in_3d() {
+    let mut headless = headless();
+    let scene = |children: &str| {
+        format!(
+            "return {{ format = 2, sheets = {{ tiles = {{ path = 'tiles.png', tile_width = 16, \
+             tile_height = 16 }} }}, children = {{ {children} }} }}"
+        )
+    };
+    let view = |children: &str| {
+        scene(&format!(
+            "{{ name = 'view', kind = 'view3d', width = 10, height = 10, camera = {{ position = \
+             {{ 0, 1, 2 }}, target = {{ 0, 0, 0 }} }}, children = {{ {children} }} }}"
+        ))
+    };
+    let cases = [
+        (
+            scene("{ name = 'box', kind = 'mesh', shape = 'cuboid' }"),
+            "node `box`: a mesh node is only in a 3D view: put it inside a view3d node",
+        ),
+        (
+            scene("{ name = 'chair', kind = 'instance', scene = 'chair.scene.luau' }"),
+            "node `chair/seat`: a mesh node is only in a 3D view",
+        ),
+        (
+            view("{ name = 'sign', kind = 'rect', width = 1, height = 1 }"),
+            "node `view/sign`: a rect node can't be in a 3D view",
+        ),
+        (
+            view(
+                "{ name = 'inner', kind = 'view3d', width = 1, height = 1, camera = { position = { 0, 1, 2 }, target = { 0, 0, 0 } } }",
+            ),
+            "node `view/inner`: a view3d node can't be in a 3D view",
+        ),
+        (
+            view("{ name = 'lamp', kind = 'instance', scene = 'lamp.scene.luau' }"),
+            "node `view/lamp/post`: a node in a 3D view turns by `yaw`, `pitch` and `roll`, \
+             and has no `rotation` or `anchor`",
+        ),
+        (
+            scene("{ name = 'turned', kind = 'node', yaw = 1 }"),
+            "node `turned`: only nodes in 3D views are placed in 3D",
+        ),
+    ];
+    let lamp =
+        "return { format = 2, children = { { name = 'post', kind = 'node', rotation = 1 } } }";
+    for (source, expected) in cases {
+        let files = [
+            ("chair.scene.luau", CHAIR),
+            ("lamp.scene.luau", lamp),
+            ("test.scene.luau", &source),
+        ];
+        let err = load(&mut headless, &files, "test.scene.luau")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(expected), "{source}\n{err}");
+    }
+}
+
+#[test]
+fn nodes_in_3d_are_added_only_to_views() {
+    let mut scene = cellar(&mut headless());
+    let root = scene.root();
+    let view = scene.find(root, "view").unwrap();
+    let crate_ = scene.find(root, "view/stack/crate").unwrap();
+    let (copy, from) = scene.copy_of(crate_);
+    let added = scene.add(view, &copy, from, Some("spare")).unwrap();
+    assert!(scene.node(added).placement3().is_some());
+    assert_eq!(scene.view_of(added), Some(view));
+    let err = scene.add(root, &copy, from, Some("spare")).unwrap_err();
+    assert!(
+        err.contains("a mesh node placed in 3D can only be copied into a 3D view"),
+        "{err}"
+    );
+    let title = scene.find(root, "title").unwrap();
+    let (copy, from) = scene.copy_of(title);
+    let err = scene.add(view, &copy, from, None).unwrap_err();
+    assert!(
+        err.contains("a rect node of the 2D scene can't be copied into a 3D view"),
+        "{err}"
+    );
+}
+
+#[test]
+#[cfg(feature = "models")]
+fn model_nodes_show_their_files() {
+    let mut headless = headless();
+    let source = "return { format = 2, children = { { name = 'view', kind = 'view3d', width = 10, \
+                  height = 10, camera = { position = { 0, 1, 2 }, target = { 0, 0, 0 } }, \
+                  children = { { name = 'barrel', kind = 'model', model = 'models/barrel.glb', \
+                  x = 3 } } } } }";
+    let scene = load(
+        &mut headless,
+        &[("test.scene.luau", source)],
+        "test.scene.luau",
+    )
+    .unwrap();
+    let barrel = scene.find(scene.root(), "view/barrel").unwrap();
+    let Kind::Model(model) = scene.node(barrel).kind() else {
+        panic!("the barrel is a model");
+    };
+    let own = model.model.bounds().unwrap();
+    let placed = scene.bounds_3d(barrel).unwrap();
+    assert_near3(placed.min, [own.min[0] + 3.0, own.min[1], own.min[2]]);
+    assert_near3(placed.max, [own.max[0] + 3.0, own.max[1], own.max[2]]);
 }

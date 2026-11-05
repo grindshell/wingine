@@ -50,7 +50,8 @@ pub enum KeyValue {
     Cell([u32; 2]),
 }
 
-/// A number of a node a track changes.
+/// A number of a node a track changes. `Rotation` is only for nodes of the 2D scene, and `Z`,
+/// `Yaw`, `Pitch`, `Roll` and `ScaleZ` only for nodes placed in 3D.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Property {
     X,
@@ -58,6 +59,11 @@ pub enum Property {
     Rotation,
     ScaleX,
     ScaleY,
+    Z,
+    Yaw,
+    Pitch,
+    Roll,
+    ScaleZ,
 }
 
 /// How a number gets from one key to the next.
@@ -123,10 +129,20 @@ impl Keys {
 }
 
 impl Property {
-    pub const ALL: [Property; 5] = [Self::X, Self::Y, Self::Rotation, Self::ScaleX, Self::ScaleY];
+    pub const ALL: [Property; 10] = [
+        Self::X,
+        Self::Y,
+        Self::Rotation,
+        Self::ScaleX,
+        Self::ScaleY,
+        Self::Z,
+        Self::Yaw,
+        Self::Pitch,
+        Self::Roll,
+        Self::ScaleZ,
+    ];
 
-    /// Its name in scene files, as a node's field: `"x"`, `"y"`, `"rotation"`, `"scale_x"` or
-    /// `"scale_y"`.
+    /// Its name in scene files, as a node's field, such as `"x"` or `"scale_z"`.
     pub fn name(self) -> &'static str {
         match self {
             Self::X => "x",
@@ -134,7 +150,25 @@ impl Property {
             Self::Rotation => "rotation",
             Self::ScaleX => "scale_x",
             Self::ScaleY => "scale_y",
+            Self::Z => "z",
+            Self::Yaw => "yaw",
+            Self::Pitch => "pitch",
+            Self::Roll => "roll",
+            Self::ScaleZ => "scale_z",
         }
+    }
+
+    /// Whether nodes of the 2D scene have it: all but those of nodes placed in 3D.
+    pub fn is_2d(self) -> bool {
+        !matches!(
+            self,
+            Self::Z | Self::Yaw | Self::Pitch | Self::Roll | Self::ScaleZ
+        )
+    }
+
+    /// Whether nodes placed in 3D have it: all but `rotation`.
+    pub fn is_3d(self) -> bool {
+        self != Self::Rotation
     }
 
     pub fn from_name(name: &str) -> Option<Self> {

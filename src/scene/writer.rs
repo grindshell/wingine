@@ -10,11 +10,14 @@ use std::{collections::BTreeMap, fmt::Write};
 
 use super::{
     clip::{Clip, Interpolation, Keys, Track},
-    file::{FORMAT, KindDef, NodeDef, SceneFile, SheetDef, TileDef, TilesetFile, Value},
+    file::{
+        FORMAT, KindDef, NodeDef, Placement3, SceneFile, Shape, SheetDef, TileDef, TilesetFile,
+        Value,
+    },
 };
 use crate::{
-    graphics::{Align, Color},
-    lua::is_identifier,
+    graphics::{Align, Camera3d, Color, Lighting, Projection},
+    lua::{DEFAULT_FOV, is_identifier},
 };
 
 /// `scene` as the text of a scene file, or why it can't be written: only finite numbers can.
@@ -148,6 +151,91 @@ impl Writer {
         Ok(())
     }
 
+    fn triple_field(&mut self, key: &str, [x, y, z]: [f32; 3]) -> Result<(), String> {
+        let value = format!(
+            "{{ {}, {}, {} }}",
+            single(x, key)?,
+            single(y, key)?,
+            single(z, key)?
+        );
+        self.field(key, &value);
+        Ok(())
+    }
+
+    /// A view's `camera`, leaving out what's at its defaults.
+    fn camera(&mut self, camera: &Camera3d) -> Result<(), String> {
+        let at = |err: String| format!("camera: {err}");
+        self.key("camera");
+        self.open();
+        self.triple_field("position", camera.position).map_err(at)?;
+        self.triple_field("target", camera.target).map_err(at)?;
+        if camera.up != [0.0, 1.0, 0.0] {
+            self.triple_field("up", camera.up).map_err(at)?;
+        }
+        match camera.projection {
+            Projection::Perspective { fov_y } if fov_y != DEFAULT_FOV => {
+                self.number_field("fov", fov_y).map_err(at)?;
+            }
+            Projection::Perspective { .. } => {}
+            Projection::Orthographic { height } => {
+                self.number_field("height", height).map_err(at)?
+            }
+        }
+        let default = Camera3d::perspective([0.0; 3], [0.0; 3], DEFAULT_FOV);
+        if camera.near != default.near {
+            self.number_field("near", camera.near).map_err(at)?;
+        }
+        if camera.far != default.far {
+            self.number_field("far", camera.far).map_err(at)?;
+        }
+        self.close();
+        self.end_field();
+        Ok(())
+    }
+
+    /// A view's `lighting`, unless it's the default, leaving out what's at its defaults.
+    fn lighting(&mut self, lighting: &Lighting) -> Result<(), String> {
+        let default = Lighting::default();
+        let same_color = |a: Color, b: Color| a.to_rgba8() == b.to_rgba8();
+        let direction = lighting.direction != default.direction;
+        let color = !same_color(lighting.color, default.color);
+        let ambient = !same_color(lighting.ambient, default.ambient);
+        if !(direction || color || ambient) {
+            return Ok(());
+        }
+        self.key("lighting");
+        self.open();
+        if direction {
+            self.triple_field("direction", lighting.direction)
+                .map_err(|err| format!("lighting: {err}"))?;
+        }
+        if color {
+            self.any_color("color", lighting.color);
+        }
+        if ambient {
+            self.any_color("ambient", lighting.ambient);
+        }
+        self.close();
+        self.end_field();
+        Ok(())
+    }
+
+    /// A placed node's 3D fields, leaving out those at their defaults.
+    fn placement3(&mut self, placement: &Placement3) -> Result<(), String> {
+        let default = Placement3::default();
+        let numbers = [
+            ("yaw", placement.yaw, default.yaw),
+            ("pitch", placement.pitch, default.pitch),
+            ("roll", placement.roll, default.roll),
+        ];
+        for (key, value, default) in numbers {
+            if value != default {
+                self.number_field(key, value)?;
+            }
+        }
+        Ok(())
+    }
+
     /// The `sheets` field, if there are any.
     fn sheets(&mut self, sheets: &BTreeMap<String, SheetDef>) {
         if sheets.is_empty() {
@@ -214,21 +302,33 @@ impl Writer {
         self.open();
         self.field("name", &quoted(&node.name));
         self.field("kind", &quoted(node.kind.name()));
-        for (key, value) in [("x", node.x), ("y", node.y)] {
-            if value != 0.0 {
+        let z = node.placement3.map(|placement| placement.z);
+        for (key, value) in [("x", Some(node.x)), ("y", Some(node.y)), ("z", z)] {
+            if let Some(value) = value
+                && value != 0.0
+            {
                 self.number_field(key, value).map_err(at)?;
             }
         }
         if let Some(anchor) = node.anchor {
             self.pair_field("anchor", anchor).map_err(at)?;
         }
-        let numbers = [
-            ("rotation", node.rotation, 0.0),
-            ("scale_x", node.scale_x, 1.0),
-            ("scale_y", node.scale_y, 1.0),
+        if node.rotation != 0.0 {
+            self.number_field("rotation", node.rotation).map_err(at)?;
+        }
+        if let Some(placement) = &node.placement3 {
+            self.placement3(placement).map_err(at)?;
+        }
+        let scale_z = node.placement3.map(|placement| placement.scale_z);
+        let scales = [
+            ("scale_x", Some(node.scale_x)),
+            ("scale_y", Some(node.scale_y)),
+            ("scale_z", scale_z),
         ];
-        for (key, value, default) in numbers {
-            if value != default {
+        for (key, value) in scales {
+            if let Some(value) = value
+                && value != 1.0
+            {
                 self.number_field(key, value).map_err(at)?;
             }
         }
@@ -339,6 +439,48 @@ impl Writer {
                     self.end_field();
                 }
             }
+            KindDef::View3d(view) => {
+                self.number_field("width", view.size[0])?;
+                self.number_field("height", view.size[1])?;
+                self.stretch(view.stretch)?;
+                self.pivot(view.pivot)?;
+                self.camera(&view.camera)?;
+                self.lighting(&view.lighting)?;
+            }
+            KindDef::Mesh(mesh) => {
+                self.field("shape", &quoted(mesh.shape.name()));
+                match mesh.shape {
+                    Shape::Cuboid(size) if size != [1.0; 3] => self.triple_field("size", size)?,
+                    Shape::Plane(size) if size != [1.0; 2] => self.pair_field("size", size)?,
+                    Shape::Sphere(radius) if radius != 0.5 => {
+                        self.number_field("radius", radius)?;
+                    }
+                    _ => {}
+                }
+                if let Some(sprite) = &mesh.sprite {
+                    self.field("sheet", &quoted(&sprite.sheet));
+                    let [column, row] = sprite.cell;
+                    self.field("cell", &format!("{{ {column}, {row} }}"));
+                }
+                self.color("tint", mesh.tint);
+            }
+            KindDef::Model(model) => {
+                self.field("model", &quoted(&model.model));
+                self.color("tint", model.tint);
+            }
+            KindDef::Billboard(billboard) => {
+                self.field("sheet", &quoted(&billboard.sheet));
+                let [column, row] = billboard.cell;
+                self.field("cell", &format!("{{ {column}, {row} }}"));
+                let [width, height] = billboard.size;
+                if width != 1.0 {
+                    self.number_field("width", width)?;
+                }
+                if height != 1.0 {
+                    self.number_field("height", height)?;
+                }
+                self.color("tint", billboard.tint);
+            }
         }
         Ok(())
     }
@@ -426,11 +568,14 @@ impl Writer {
 
     /// A color field, as a hex string, unless it's white, the default.
     fn color(&mut self, key: &str, color: Color) {
-        let bytes = color.to_rgba8();
-        if bytes == Color::WHITE.to_rgba8() {
-            return;
+        if color.to_rgba8() != Color::WHITE.to_rgba8() {
+            self.any_color(key, color);
         }
-        let [r, g, b, a] = bytes;
+    }
+
+    /// A color field, as a hex string, whatever it is.
+    fn any_color(&mut self, key: &str, color: Color) {
+        let [r, g, b, a] = color.to_rgba8();
         let mut hex = format!("#{r:02x}{g:02x}{b:02x}");
         if a != 255 {
             write!(hex, "{a:02x}").unwrap();
@@ -540,7 +685,7 @@ mod tests {
 
     /// A scene in its canonical layout.
     const CANONICAL: &str = r##"return {
-    format = 1,
+    format = 2,
     sheets = {
         tiles = {
             path = "tiles.png",
@@ -707,7 +852,7 @@ mod tests {
 
     /// A level: a tilemap with two layers and people between them, and an instance.
     const LEVEL: &str = r##"return {
-    format = 1,
+    format = 2,
     children = {
         {
             name = "map",
@@ -772,7 +917,7 @@ mod tests {
     /// A screen: a bar along the bottom of the canvas, with a label at its right end, and a
     /// panel in the middle.
     const SCREEN: &str = r##"return {
-    format = 1,
+    format = 2,
     children = {
         {
             name = "bar",
@@ -815,7 +960,7 @@ mod tests {
 
     /// A rig: an arm with a hand, and clips that wave it and make it blink.
     const RIG: &str = r##"return {
-    format = 1,
+    format = 2,
     sheets = {
         hands = {
             path = "hands.png",
@@ -899,7 +1044,7 @@ mod tests {
 
     /// A tileset in its canonical layout.
     const TILESET: &str = r##"return {
-    format = 1,
+    format = 2,
     tile_width = 16,
     tile_height = 16,
     sheets = {
@@ -931,5 +1076,133 @@ mod tests {
     fn tilesets_write_and_read_back() {
         let tileset = TilesetFile::parse(TILESET, "world.tileset.luau").unwrap();
         assert_eq!(tileset.to_luau().unwrap(), TILESET);
+    }
+
+    /// A 3D level: a view with a camera and lighting holding meshes, a model, a billboard and a
+    /// node placed in 3D, and a view from above through an orthographic camera.
+    const WORLD: &str = r##"return {
+    format = 2,
+    sheets = {
+        tiles = {
+            path = "tiles.png",
+            tile_width = 16,
+            tile_height = 16,
+        },
+    },
+    children = {
+        {
+            name = "view",
+            kind = "view3d",
+            anchor = { 0.5, 0.5 },
+            width = 160,
+            height = 90,
+            pivot = { 80, 45 },
+            camera = {
+                position = { 0, 5, 4 },
+                target = { 0, 0, 0 },
+                fov = 0.6,
+                far = 50,
+            },
+            lighting = {
+                direction = { 0, -1, 0 },
+                ambient = "#202020",
+            },
+            children = {
+                {
+                    name = "floor",
+                    kind = "mesh",
+                    shape = "plane",
+                    size = { 8, 6 },
+                    tint = "#404040",
+                },
+                {
+                    name = "stack",
+                    kind = "node",
+                    x = 1,
+                    z = -2,
+                    yaw = 0.5,
+                    scale_z = 2,
+                    children = {
+                        {
+                            name = "crate",
+                            kind = "mesh",
+                            y = 0.5,
+                            shape = "cuboid",
+                            sheet = "tiles",
+                            cell = { 2, 3 },
+                        },
+                        {
+                            name = "ball",
+                            kind = "mesh",
+                            y = 1.25,
+                            pitch = -0.25,
+                            roll = 1,
+                            shape = "sphere",
+                            radius = 0.25,
+                        },
+                    },
+                },
+                {
+                    name = "barrel",
+                    kind = "model",
+                    x = -2,
+                    model = "models/barrel.glb",
+                    tint = "#c0a080",
+                },
+                {
+                    name = "hero",
+                    kind = "billboard",
+                    sheet = "tiles",
+                    cell = { 27, 0 },
+                    width = -1,
+                    height = 1.5,
+                    tags = { "hero" },
+                },
+            },
+        },
+        {
+            name = "map",
+            kind = "view3d",
+            width = 64,
+            height = 64,
+            camera = {
+                position = { 0, 10, 0 },
+                target = { 0, 0, 0 },
+                up = { 0, 0, -1 },
+                height = 12,
+                near = 1,
+            },
+        },
+    },
+    clips = {
+        spin = {
+            duration = 2,
+            loop = true,
+            tracks = {
+                {
+                    node = "view/stack",
+                    property = "yaw",
+                    keys = {
+                        { 0, 0 },
+                        { 2, 6.2831855 },
+                    },
+                },
+            },
+        },
+    },
+}
+"##;
+
+    #[test]
+    fn worlds_write_and_read_back() {
+        let scene = parse(WORLD);
+        assert_eq!(scene.to_luau().unwrap(), WORLD);
+        let KindDef::View3d(view) = &scene.children[0].kind else {
+            panic!("{:?}", scene.children[0].kind);
+        };
+        assert_eq!(view.lighting.color, Lighting::default().color);
+        // Written and read back from Rust, every field the same.
+        let written = scene.to_luau().unwrap();
+        assert_eq!(parse(&written), scene);
     }
 }

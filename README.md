@@ -25,11 +25,12 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
   files made in tools such as Blender, and the mouse picks what it points at by boxes.
 - **Tilemaps** with layers and tilesets, culled to the view, and a **camera** that follows the
   player and stays inside the map.
-- **Scenes**: trees of sprites, rectangles, text, areas and tilemaps laid out in files of plain
-  Luau data, which tools can write as well as people. Nodes turn and stretch about pivots,
-  carrying what's inside them along; screens anchor to the canvas's edges and middle, with text
-  aligned left, center or right; scenes place other scenes, changed by overrides; and games find
-  nodes by path or tag, test the mouse against them, and add and remove them as they play.
+- **Scenes**: trees of sprites, rectangles, text, areas, tilemaps and 3D views of meshes, models
+  and billboards, laid out in files of plain Luau data, which tools can write as well as people.
+  Nodes turn and stretch about pivots, carrying what's inside them along; screens anchor to the
+  canvas's edges and middle, with text aligned left, center or right; scenes place other scenes,
+  changed by overrides; and games find nodes by path or tag, test the mouse against them, pick
+  what's under it in 3D, and add and remove them as they play.
 - **Rigged characters**: sprites for parts that turn about their joints, animated by clips of
   keyframes in scene files, which games layer and crossfade.
 - **Grid movement** from tile to tile, with tile collision.
@@ -51,8 +52,8 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
   frame stats any game can show with a key. Tests click their widgets by name.
 - **An editor** for scenes and scripts, laid out like Godot's: a tree of nodes, an Inspector, a
   viewport with gizmos, painting tilemaps, placing and overriding instances, laying out screens,
-  animating rigs on a timeline, undo, playing the game, and a script editor that checks scripts
-  against the engine's API with luau-lsp.
+  animating rigs on a timeline, editing 3D views and dropping models into them, undo, playing the
+  game, and a script editor that checks scripts against the engine's API with luau-lsp.
 
 Wingine targets desktops: Windows, macOS and Linux. CI builds and tests it on Windows and Linux.
 
@@ -245,11 +246,11 @@ that file, and their clips pose it there. When the day is over, the camera zooms
 ### Cellar
 
 [`examples/cellar`](examples/cellar) is a dark cellar in 2.5D, written entirely in Luau. The hero
-walks it tile by tile, lighting its candles by standing on them. Its walls are meshes in a
-[3D view](docs/api/graphics.md#3d-views), on a floor the game builds as a mesh of its own, among
-barrels, crates and a table, models made in Blender ([`examples/models`](examples/models)), and the
-hero and the candles are sprites standing among them, billboards that turn to face the camera as
-it follows the hero.
+walks it tile by tile, lighting its candles by standing on them. Its level is a
+[scene](docs/scenes.md#3d-views), [`cellar.scene.luau`](examples/cellar/cellar.scene.luau), which
+the editor edits: a 3D view whose walls and floor are meshes, among barrels, crates and a table,
+models made in Blender ([`examples/models`](examples/models)), and the hero and the candles are
+sprites standing among them, billboards that turn to face the camera as it follows the hero.
 
 ![The hero after lighting every candle in the cellar, with the mouse naming a barrel](docs/screenshots/cellar.png)
 
@@ -317,7 +318,9 @@ tilemaps' layers from their tilesets and resize them; drag scenes in to place th
 the nodes they place, from the Inspector; lay screens out with anchor presets and resize handles,
 and preview them on canvases of other sizes; animate rigs, scrubbing and playing clips on a
 timeline that poses the scene, and keying nodes' properties from the Inspector and the viewport;
-undo; save, in the canonical layout; and play the game, in a process of its own. Its Script screen
+edit 3D views through their cameras, picking their nodes by their boxes, dragging them across the
+ground, and dropping model files in; undo; save, in the canonical layout; and play the game, in a
+process of its own. Its Script screen
 edits the game's Luau, colored, and with [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp)
 installed, checks it against the engine's API as it's typed: problems underlined, names' types and
 docs on hover, completion, and the parameters of calls. See [the editor's docs](docs/editor.md).

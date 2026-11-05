@@ -10,8 +10,9 @@ use wingine::scene::{
 use crate::edit;
 
 /// The properties of a node tracks change, as scene files name them.
-pub const PROPERTIES: [&str; 7] = [
-    "x", "y", "rotation", "scale_x", "scale_y", "visible", "cell",
+pub const PROPERTIES: [&str; 12] = [
+    "x", "y", "z", "rotation", "yaw", "pitch", "roll", "scale_x", "scale_y", "scale_z", "visible",
+    "cell",
 ];
 
 /// How near two times are to be one key's, in seconds: nearer than times are written.
@@ -23,22 +24,17 @@ pub fn tidy_time(time: f32) -> f32 {
     (time * 10_000.0).round() / 10_000.0
 }
 
-/// `node`'s value of `property`, one of [`PROPERTIES`], if it has the property: only sprites have
-/// cells.
+/// `node`'s value of `property`, one of [`PROPERTIES`], if it has the property: only nodes placed
+/// in 3D have `z`, `yaw`, `pitch`, `roll` and `scale_z`, and only the others `rotation`, and only
+/// sprites, billboards and meshes showing sprites have cells.
 pub fn value(node: &NodeDef, property: &str) -> Option<KeyValue> {
     if let Some(property) = Property::from_name(property) {
-        let number = match property {
-            Property::X => node.x,
-            Property::Y => node.y,
-            Property::Rotation => node.rotation,
-            Property::ScaleX => node.scale_x,
-            Property::ScaleY => node.scale_y,
-        };
+        let number = *number_field(&mut node.clone(), property)?;
         return Some(KeyValue::Number(number));
     }
-    match (property, &node.kind) {
-        ("visible", _) => Some(KeyValue::Visible(node.visible)),
-        ("cell", KindDef::Sprite(sprite)) => Some(KeyValue::Cell(sprite.cell)),
+    match property {
+        "visible" => Some(KeyValue::Visible(node.visible)),
+        "cell" => cell(&mut node.clone()).map(|cell| KeyValue::Cell(*cell)),
         _ => None,
     }
 }
@@ -47,22 +43,51 @@ pub fn value(node: &NodeDef, property: &str) -> Option<KeyValue> {
 pub fn set_value(node: &mut NodeDef, property: &str, value: KeyValue) {
     match (Property::from_name(property), value) {
         (Some(property), KeyValue::Number(number)) => {
-            let field = match property {
-                Property::X => &mut node.x,
-                Property::Y => &mut node.y,
-                Property::Rotation => &mut node.rotation,
-                Property::ScaleX => &mut node.scale_x,
-                Property::ScaleY => &mut node.scale_y,
-            };
-            *field = number;
+            if let Some(field) = number_field(node, property) {
+                *field = number;
+            }
         }
         (None, KeyValue::Visible(visible)) if property == "visible" => node.visible = visible,
-        (None, KeyValue::Cell(cell)) if property == "cell" => {
-            if let KindDef::Sprite(sprite) = &mut node.kind {
-                sprite.cell = cell;
+        (None, KeyValue::Cell(value)) if property == "cell" => {
+            if let Some(cell) = cell(node) {
+                *cell = value;
             }
         }
         _ => {}
+    }
+}
+
+/// `node`'s field of `property`, if it has it.
+fn number_field(node: &mut NodeDef, property: Property) -> Option<&mut f32> {
+    let in_3d = node.placement3.is_some();
+    if !(if in_3d {
+        property.is_3d()
+    } else {
+        property.is_2d()
+    }) {
+        return None;
+    }
+    Some(match property {
+        Property::X => &mut node.x,
+        Property::Y => &mut node.y,
+        Property::Rotation => &mut node.rotation,
+        Property::ScaleX => &mut node.scale_x,
+        Property::ScaleY => &mut node.scale_y,
+        Property::Z => &mut node.placement3.as_mut()?.z,
+        Property::Yaw => &mut node.placement3.as_mut()?.yaw,
+        Property::Pitch => &mut node.placement3.as_mut()?.pitch,
+        Property::Roll => &mut node.placement3.as_mut()?.roll,
+        Property::ScaleZ => &mut node.placement3.as_mut()?.scale_z,
+    })
+}
+
+/// The cell of the sprite `node` shows, if it shows one from a sheet.
+fn cell(node: &mut NodeDef) -> Option<&mut [u32; 2]> {
+    match &mut node.kind {
+        KindDef::Sprite(sprite) => Some(&mut sprite.cell),
+        KindDef::Billboard(billboard) => Some(&mut billboard.cell),
+        KindDef::Mesh(mesh) => mesh.sprite.as_mut().map(|sprite| &mut sprite.cell),
+        _ => None,
     }
 }
 

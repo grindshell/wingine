@@ -14,9 +14,9 @@ use std::{
 
 use wingine::{
     Context,
-    graphics::{Align, Color},
+    graphics::{Align, Camera3d, Color, Projection},
     gui::egui,
-    scene::{KindDef, NodeDef, Props, SheetDef, Value},
+    scene::{CellDef, KindDef, NodeDef, Placement3, Props, Shape, SheetDef, Value},
 };
 
 use crate::{
@@ -37,6 +37,7 @@ pub struct Services<'a> {
     pub images: &'a [String],
     pub tilesets: &'a [String],
     pub scenes: &'a [String],
+    pub models: &'a [String],
 }
 
 #[derive(Default)]
@@ -339,7 +340,7 @@ impl Inspector {
             ));
         });
         let mut revert_all = false;
-        let before = match placed.overridden(&change) {
+        let mut before = match placed.overridden(&change) {
             Ok(before) => before,
             Err(err) => {
                 ui.colored_label(
@@ -350,6 +351,12 @@ impl Inspector {
                 placed.node.clone()
             }
         };
+        // A node its own file places in the 2D scene may be in a 3D view here, as the preview has
+        // it, and is placed in 3D.
+        if before.placement3.is_none() && document.is_in_3d(instance, names) {
+            before.placement3 = Some(Placement3::default());
+            before.rotation = 0.0;
+        }
         if !change.is_empty() && !revert_all {
             revert_all = ui
                 .button("Revert All")
@@ -421,7 +428,9 @@ impl Inspector {
                 ui.end_row();
             });
         });
-        if !matches!(node.kind, KindDef::TileLayer(_)) {
+        if node.placement3.is_some() {
+            section(ui, "Transform", |ui| transform_3d(ui, node, over));
+        } else if !matches!(node.kind, KindDef::TileLayer(_)) {
             section(ui, "Transform", |ui| transform(ui, node, over));
         }
         self.kind(ui, node, sheets, services, over);
@@ -624,8 +633,231 @@ impl Inspector {
                     }
                 })
             }
+            KindDef::View3d(view) => section(ui, &title, |ui| {
+                grid(ui, "view3d", |ui| {
+                    over.label(ui, "size", &["width", "height"]);
+                    pair(ui, &mut view.size, 1.0);
+                    ui.end_row();
+                    over.label(ui, "stretch", &["stretch"]);
+                    pair(ui, &mut view.stretch, 0.01);
+                    ui.end_row();
+                    over.label(ui, "pivot", &["pivot"]);
+                    pair(ui, &mut view.pivot, 1.0);
+                    ui.end_row();
+                });
+                ui.strong("Camera");
+                grid(ui, "camera", |ui| camera(ui, &mut view.camera, over));
+                ui.strong("Lighting");
+                grid(ui, "lighting", |ui| {
+                    let lighting = &mut view.lighting;
+                    over.label(ui, "sun's direction", &["lighting"]);
+                    triple(ui, "sun's direction", &mut lighting.direction, 0.05);
+                    ui.end_row();
+                    over.label(ui, "sun", &["lighting"]);
+                    color(ui, &mut lighting.color);
+                    ui.end_row();
+                    over.label(ui, "ambient", &["lighting"]);
+                    color(ui, &mut lighting.ambient);
+                    ui.end_row();
+                });
+            }),
+            KindDef::Mesh(mesh) => section(ui, &title, |ui| {
+                grid(ui, "mesh", |ui| {
+                    over.label(ui, "shape", &["shape"]);
+                    egui::ComboBox::from_id_salt("shape")
+                        .selected_text(mesh.shape.name())
+                        .show_ui(ui, |ui| {
+                            for shape in [
+                                Shape::Cuboid([1.0; 3]),
+                                Shape::Plane([1.0; 2]),
+                                Shape::Sphere(0.5),
+                            ] {
+                                let chosen = mesh.shape.name() == shape.name();
+                                if ui.selectable_label(chosen, shape.name()).clicked() && !chosen {
+                                    mesh.shape = shape;
+                                }
+                            }
+                        });
+                    ui.end_row();
+                    match &mut mesh.shape {
+                        Shape::Cuboid(size) => {
+                            over.label(ui, "size", &["size"]);
+                            triple(ui, "size", size, 0.05);
+                        }
+                        Shape::Plane(size) => {
+                            over.label(ui, "size", &["size"]);
+                            ui.horizontal(|ui| {
+                                number(ui, "size x", &mut size[0], 0.05);
+                                number(ui, "size z", &mut size[1], 0.05);
+                            });
+                        }
+                        Shape::Sphere(radius) => {
+                            over.label(ui, "radius", &["radius"]);
+                            number(ui, "radius", radius, 0.05);
+                        }
+                    }
+                    ui.end_row();
+                    // Sizes are above 0.
+                    match &mut mesh.shape {
+                        Shape::Cuboid(size) => size.iter_mut().for_each(at_least_a_little),
+                        Shape::Plane(size) => size.iter_mut().for_each(at_least_a_little),
+                        Shape::Sphere(radius) => at_least_a_little(radius),
+                    }
+                    over.label(ui, "sprite", &["sheet", "cell"]);
+                    ui.horizontal(|ui| {
+                        let mut shows = mesh.sprite.is_some();
+                        let first = sheets.keys().next();
+                        let response = ui.add_enabled(
+                            first.is_some() || shows,
+                            egui::Checkbox::new(&mut shows, ""),
+                        );
+                        if response.changed() {
+                            mesh.sprite =
+                                shows
+                                    .then(|| first.cloned())
+                                    .flatten()
+                                    .map(|sheet| CellDef {
+                                        sheet,
+                                        cell: [0, 0],
+                                    });
+                        }
+                        if let Some(sprite) = &mut mesh.sprite {
+                            sheet_choice(ui, &mut sprite.sheet, sheets);
+                        }
+                    });
+                    ui.end_row();
+                    if let Some(sprite) = &mut mesh.sprite {
+                        over.label(ui, "cell", &["cell"]);
+                        cell_fields(ui, &mut sprite.cell, &mut self.picking_cell);
+                        ui.end_row();
+                    }
+                    over.label(ui, "tint", &["tint"]);
+                    color(ui, &mut mesh.tint);
+                    ui.end_row();
+                });
+                if self.picking_cell
+                    && let Some(sprite) = &mut mesh.sprite
+                    && let Some(sheet) = sheets.get(&sprite.sheet)
+                {
+                    cell_picker(ui, sheet, &mut sprite.cell, services);
+                }
+            }),
+            KindDef::Model(model) => section(ui, &title, |ui| {
+                grid(ui, "model", |ui| {
+                    over.label(ui, "model", &["model"]);
+                    file_choice(ui, "model file", &mut model.model, services.models);
+                    ui.end_row();
+                    over.label(ui, "tint", &["tint"]);
+                    color(ui, &mut model.tint);
+                    ui.end_row();
+                });
+            }),
+            KindDef::Billboard(billboard) => section(ui, &title, |ui| {
+                grid(ui, "billboard", |ui| {
+                    over.label(ui, "sheet", &["sheet"]);
+                    sheet_choice(ui, &mut billboard.sheet, sheets);
+                    ui.end_row();
+                    over.label(ui, "cell", &["cell"]);
+                    cell_fields(ui, &mut billboard.cell, &mut self.picking_cell);
+                    ui.end_row();
+                    over.label(ui, "size", &["width", "height"]);
+                    ui.horizontal(|ui| {
+                        number(ui, "width", &mut billboard.size[0], 0.05);
+                        number(ui, "height", &mut billboard.size[1], 0.05);
+                    });
+                    ui.end_row();
+                    over.label(ui, "tint", &["tint"]);
+                    color(ui, &mut billboard.tint);
+                    ui.end_row();
+                });
+                if self.picking_cell
+                    && let Some(sheet) = sheets.get(&billboard.sheet)
+                {
+                    cell_picker(ui, sheet, &mut billboard.cell, services);
+                }
+            }),
         }
     }
+}
+
+/// Keeps a size above 0, as a shape's must be.
+fn at_least_a_little(size: &mut f32) {
+    *size = size.max(0.01);
+}
+
+/// A choice of one of `sheets` for `sheet`.
+fn sheet_choice(ui: &mut egui::Ui, sheet: &mut String, sheets: &BTreeMap<String, SheetDef>) {
+    egui::ComboBox::from_id_salt("sheet")
+        .selected_text(sheet.as_str())
+        .show_ui(ui, |ui| {
+            for name in sheets.keys() {
+                ui.selectable_value(sheet, name.clone(), name);
+            }
+        });
+}
+
+/// A sprite's cell, its column and row, and a toggle that shows its sheet to pick one from.
+fn cell_fields(ui: &mut egui::Ui, cell: &mut [u32; 2], picking: &mut bool) {
+    ui.horizontal(|ui| {
+        ui.add(egui::DragValue::new(&mut cell[0]).prefix("column "));
+        ui.add(egui::DragValue::new(&mut cell[1]).prefix("row "));
+        ui.toggle_value(picking, "Pick…");
+    });
+}
+
+/// A view's camera: where it is and looks, which way is up, how it projects, and how near and far
+/// it sees.
+fn camera(ui: &mut egui::Ui, camera: &mut Camera3d, over: &mut Marks) {
+    over.label(ui, "position", &["camera"]);
+    triple(ui, "camera position", &mut camera.position, 0.05);
+    ui.end_row();
+    over.label(ui, "target", &["camera"]);
+    triple(ui, "camera target", &mut camera.target, 0.05);
+    ui.end_row();
+    over.label(ui, "up", &["camera"]);
+    triple(ui, "camera up", &mut camera.up, 0.05);
+    ui.end_row();
+    over.label(ui, "projection", &["camera"]);
+    ui.horizontal(|ui| {
+        let perspective = matches!(camera.projection, Projection::Perspective { .. });
+        if ui.selectable_label(perspective, "perspective").clicked() && !perspective {
+            camera.projection = Projection::Perspective { fov_y: 0.8 };
+        }
+        if ui.selectable_label(!perspective, "orthographic").clicked() && perspective {
+            let distance = camera
+                .position
+                .iter()
+                .zip(camera.target)
+                .map(|(a, b)| (a - b) * (a - b))
+                .sum::<f32>()
+                .sqrt();
+            camera.projection = Projection::Orthographic {
+                height: distance.max(1.0),
+            };
+        }
+    });
+    ui.end_row();
+    match &mut camera.projection {
+        Projection::Perspective { fov_y } => {
+            over.label(ui, "field of view", &["camera"]);
+            degrees(ui, "field of view", fov_y);
+            *fov_y = fov_y.clamp(1f32.to_radians(), 179f32.to_radians());
+        }
+        Projection::Orthographic { height } => {
+            over.label(ui, "height", &["camera"]);
+            number(ui, "camera height", height, 0.05);
+            *height = height.max(0.01);
+        }
+    }
+    ui.end_row();
+    over.label(ui, "near, far", &["camera"]);
+    ui.horizontal(|ui| {
+        number(ui, "near", &mut camera.near, 0.01);
+        number(ui, "far", &mut camera.far, 1.0);
+    });
+    camera.near = camera.near.max(0.001);
+    camera.far = camera.far.max(camera.near + 0.001);
+    ui.end_row();
 }
 
 /// An instance's override of a node, `change`, after the node as the instance made it, `before`,
@@ -782,7 +1014,10 @@ fn transform(ui: &mut egui::Ui, node: &mut NodeDef, over: &mut Marks) {
         over.label(ui, "y", &["y"]);
         number(ui, "y", &mut node.y, 1.0);
         ui.end_row();
-        if matches!(node.kind, KindDef::Tilemap(_) | KindDef::Text(_)) {
+        if matches!(
+            node.kind,
+            KindDef::Tilemap(_) | KindDef::Text(_) | KindDef::View3d(_)
+        ) {
             // They move with their node, but don't turn or stretch.
         } else {
             over.label(ui, "rotation", &["rotation"]);
@@ -812,6 +1047,68 @@ fn transform(ui: &mut egui::Ui, node: &mut NodeDef, over: &mut Marks) {
             }
         });
         ui.end_row();
+    });
+}
+
+/// A node placed in 3D's position, orientation and scale, along its view's world's axes, with `y`
+/// up. Billboards only move, so they have no orientation or scale.
+fn transform_3d(ui: &mut egui::Ui, node: &mut NodeDef, over: &mut Marks) {
+    let only_moves = matches!(node.kind, KindDef::Billboard(_));
+    let Some(placement) = &mut node.placement3 else {
+        return;
+    };
+    grid(ui, "transform", |ui| {
+        for (name, value) in [
+            ("x", &mut node.x),
+            ("y", &mut node.y),
+            ("z", &mut placement.z),
+        ] {
+            over.label(ui, name, &[name]);
+            number(ui, name, value, 0.05);
+            ui.end_row();
+        }
+        if only_moves {
+            return;
+        }
+        for (name, value) in [
+            ("yaw", &mut placement.yaw),
+            ("pitch", &mut placement.pitch),
+            ("roll", &mut placement.roll),
+        ] {
+            over.label(ui, name, &[name]);
+            degrees(ui, name, value);
+            ui.end_row();
+        }
+        over.label(ui, "scale", &["scale_x", "scale_y", "scale_z"]);
+        ui.horizontal(|ui| {
+            number(ui, "scale x", &mut node.scale_x, 0.01);
+            number(ui, "scale y", &mut node.scale_y, 0.01);
+            number(ui, "scale z", &mut placement.scale_z, 0.01);
+        });
+        ui.end_row();
+    });
+}
+
+/// A field for an angle in radians, shown in degrees, named `name` as [`number`] names fields.
+fn degrees(ui: &mut egui::Ui, name: &str, radians: &mut f32) {
+    let mut degrees = radians.to_degrees();
+    let response = ui.add(egui::DragValue::new(&mut degrees).speed(1.0).suffix("°"));
+    response.widget_info(|| {
+        let mut info = egui::WidgetInfo::drag_value(response.enabled(), f64::from(degrees));
+        info.label = Some(name.to_owned());
+        info
+    });
+    if response.changed() {
+        *radians = degrees.to_radians();
+    }
+}
+
+/// Fields for three numbers, `x`, `y` and `z`, named `name` and each axis's name.
+fn triple(ui: &mut egui::Ui, name: &str, values: &mut [f32; 3], speed: f32) {
+    ui.horizontal(|ui| {
+        for (axis, value) in ["x", "y", "z"].into_iter().zip(values) {
+            number(ui, &format!("{name} {axis}"), value, speed);
+        }
     });
 }
 

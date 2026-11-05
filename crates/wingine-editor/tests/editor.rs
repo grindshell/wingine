@@ -2,6 +2,7 @@
 //! widgets by their labels, typing, and pressing keys.
 
 use std::{
+    f32::consts::FRAC_PI_2,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -14,7 +15,8 @@ use wingine::{
     headless::Simulation,
     input::{Key, MouseButton},
     scene::{
-        Clip, Interpolation, KeyValue, Keys, KindDef, Property, SceneFile, TileLayerDef, Value,
+        Clip, Interpolation, KeyValue, Keys, Kind, KindDef, MeshDef, Placement3, Property,
+        SceneFile, Shape, TileLayerDef, Value,
     },
 };
 use wingine_editor::{
@@ -244,7 +246,7 @@ fn double_clicking_a_scene_opens_it_in_a_tab() {
 
 #[test]
 fn every_example_scene_opens_without_errors() {
-    for game in ["garden", "orchard", "rpg", "shmup"] {
+    for game in ["garden", "orchard", "rpg", "shmup", "cellar"] {
         let mut simulation = editor(Some(examples().join(game)));
         let scenes = simulation
             .game()
@@ -645,10 +647,214 @@ fn the_inspector_overrides_nodes_inside_instances_and_reverts_them() {
     assert!(!simulation.game().document().unwrap().is_dirty());
 }
 
+/// The editor with the cellar's level open, in a copy of the game of the test's own.
+fn cellar(test: &str) -> (Simulation<Editor>, PathBuf) {
+    let folder = copy_of("cellar", test);
+    let mut simulation = editor(Some(folder.clone()));
+    simulation
+        .game_mut()
+        .open_scene("cellar.scene.luau")
+        .unwrap();
+    simulation.run_frames(2);
+    (simulation, folder)
+}
+
+/// The middle of the box around what the open scene's node at `names` shows, in its view's
+/// world.
+fn center_3d(simulation: &Simulation<Editor>, names: &str) -> [f32; 3] {
+    let document = simulation.game().document().unwrap();
+    let id = document
+        .live_node(&edit::path_of(document.file(), names))
+        .unwrap();
+    document
+        .preview
+        .as_ref()
+        .unwrap()
+        .bounds_3d(id)
+        .unwrap()
+        .center()
+}
+
+/// Where `point` in the world of the open scene's 3D view at `view` shows in the window.
+fn world_to_window(simulation: &Simulation<Editor>, view: &str, point: [f32; 3]) -> [f32; 2] {
+    let document = simulation.game().document().unwrap();
+    let scene = document.preview.as_ref().unwrap();
+    let id = document
+        .live_node(&edit::path_of(document.file(), view))
+        .unwrap();
+    let Kind::View3d(shown) = scene.node(id).kind() else {
+        panic!("`{view}` is a 3D view");
+    };
+    let rect = scene.bounds(id).unwrap();
+    let [x, y] = shown.camera.project(point, [rect.w, rect.h]).unwrap();
+    simulation
+        .game()
+        .scene_to_window([rect.x + x, rect.y + y])
+        .unwrap()
+}
+
+/// Types `text` into the number field named `name` in the Inspector, the one after its label.
+fn set_field(simulation: &mut Simulation<Editor>, name: &str, text: &str) {
+    let fields = simulation.gui_rects(name);
+    let field = fields.last().unwrap_or_else(|| panic!("no field `{name}`"));
+    let [x, y] = middle(*field);
+    simulation.click(MouseButton::Left, x, y);
+    simulation.step();
+    control(simulation, Key::A);
+    simulation.type_text(text);
+    simulation.tap(Key::Enter);
+    simulation.run_frames(2);
+}
+
+#[test]
+fn views_and_their_nodes_are_added_and_inspected() {
+    let mut simulation = garden(copy_of("garden", "views_added"));
+    simulation.click_gui("garden");
+    menu(&mut simulation, "➕", "📷 view3d");
+    assert_eq!(selected_name(&simulation).as_deref(), Some("view3d"));
+    assert!(matches!(
+        node(&simulation, "view3d").kind,
+        KindDef::View3d(_)
+    ));
+
+    // Inside a view, only what's placed in 3D can be added, and a model needs a model file.
+    simulation.click_gui("➕");
+    simulation.step();
+    assert!(simulation.gui_rect("■ rect").is_none());
+    assert!(simulation.gui_rect("👤 billboard").is_some());
+    simulation.click_gui("⬛ mesh");
+    simulation.run_frames(2);
+    assert_eq!(selected_name(&simulation).as_deref(), Some("view3d/mesh"));
+    let mesh = node(&simulation, "view3d/mesh");
+    assert_eq!(mesh.placement3, Some(Placement3::default()));
+    assert!(simulation.game().document().unwrap().error.is_none());
+
+    // Its fields are 3D: no rotation, but a z and turns about each axis.
+    assert!(simulation.gui_rect("rotation").is_none());
+    set_field(&mut simulation, "z", "2.5");
+    set_field(&mut simulation, "yaw", "90");
+    let placement = node(&simulation, "view3d/mesh").placement3.unwrap();
+    assert_eq!(placement.z, 2.5);
+    assert!(
+        (placement.yaw - FRAC_PI_2).abs() < 1e-5,
+        "{}",
+        placement.yaw
+    );
+    set_field(&mut simulation, "size y", "3");
+    assert!(matches!(
+        node(&simulation, "view3d/mesh").kind,
+        KindDef::Mesh(MeshDef { shape: Shape::Cuboid([_, height, _]), .. }) if height == 3.0
+    ));
+
+    // The view's camera.
+    select(&mut simulation, "view3d");
+    set_field(&mut simulation, "camera position y", "6");
+    let KindDef::View3d(view) = &node(&simulation, "view3d").kind else {
+        unreachable!()
+    };
+    assert_eq!(view.camera.position, [0.0, 6.0, 5.0]);
+
+    // Each was a change of its own.
+    for _ in 0..6 {
+        control(&mut simulation, Key::Z);
+    }
+    assert!(!simulation.game().document().unwrap().is_dirty());
+}
+
+#[test]
+fn clicking_in_a_view_picks_its_nodes_nearest_first() {
+    let (mut simulation, _) = cellar("views_picked");
+    let crate_ = world_to_window(
+        &simulation,
+        "view",
+        center_3d(&simulation, "view/props/crate_2"),
+    );
+    let mut picked = Vec::new();
+    for _ in 0..3 {
+        simulation.click(MouseButton::Left, crate_[0], crate_[1]);
+        simulation.step();
+        picked.push(selected_name(&simulation).unwrap());
+    }
+    assert_eq!(picked, ["view/props/crate_2", "view/floor", "view"]);
+}
+
+#[test]
+fn the_move_tool_drags_nodes_across_the_ground_and_up() {
+    let (mut simulation, _) = cellar("views_dragged");
+    select(&mut simulation, "view/props/crate_2");
+    simulation.tap(Key::W);
+    let start = node(&simulation, "view/props/crate_2").clone();
+    let from = world_to_window(&simulation, "view", [8.5, 0.0, 3.5]);
+    let to = world_to_window(&simulation, "view", [9.5, 0.0, 3.0]);
+    drag(&mut simulation, from, to);
+    let moved = node(&simulation, "view/props/crate_2").clone();
+    assert!((moved.x - (start.x + 1.0)).abs() < 0.05, "{}", moved.x);
+    assert!(
+        (moved.placement3.unwrap().z - (start.placement3.unwrap().z - 0.5)).abs() < 0.05,
+        "{:?}",
+        moved.placement3
+    );
+    assert_eq!(moved.y, start.y, "across the ground");
+
+    // With Shift, up and down.
+    let from = world_to_window(&simulation, "view", [9.5, 0.0, 3.0]);
+    let to = world_to_window(&simulation, "view", [9.5, 1.0, 3.0]);
+    simulation.key_down(Key::LeftShift);
+    drag(&mut simulation, from, to);
+    simulation.key_up(Key::LeftShift);
+    let lifted = node(&simulation, "view/props/crate_2").clone();
+    assert!((lifted.y - 1.0).abs() < 0.05, "{}", lifted.y);
+    assert_eq!(lifted.x, moved.x);
+
+    // The Rotate tool leaves nodes in views alone: the Inspector turns them.
+    simulation.tap(Key::E);
+    drag(&mut simulation, from, to);
+    assert_eq!(*node(&simulation, "view/props/crate_2"), lifted);
+
+    // Each drag was a change of its own.
+    control(&mut simulation, Key::Z);
+    control(&mut simulation, Key::Z);
+    assert_eq!(*node(&simulation, "view/props/crate_2"), start);
+}
+
+#[test]
+fn model_files_dropped_in_a_view_are_placed_on_the_ground() {
+    let (mut simulation, folder) = cellar("models_dropped");
+    simulation.click_gui("📁 models");
+    simulation.run_frames(2);
+    let row = middle(simulation.gui_rect("barrel.glb").unwrap());
+    let to = world_to_window(&simulation, "view", [6.5, 0.0, 5.5]);
+    drag(&mut simulation, row, to);
+
+    assert_eq!(selected_name(&simulation).as_deref(), Some("view/barrel"));
+    let barrel = node(&simulation, "view/barrel").clone();
+    assert!(
+        matches!(&barrel.kind, KindDef::Model(def) if def.model == "models/barrel.glb"),
+        "{:?}",
+        barrel.kind
+    );
+    let z = barrel.placement3.unwrap().z;
+    assert!(
+        (barrel.x - 6.5).abs() < 0.05 && barrel.y == 0.0 && (z - 5.5).abs() < 0.05,
+        "{barrel:?}"
+    );
+    assert!(simulation.game().document().unwrap().error.is_none());
+
+    // Saved, the file holds it, and reads back as it is.
+    control(&mut simulation, Key::S);
+    let saved = SceneFile::read(folder.join("cellar.scene.luau")).unwrap();
+    let path = edit::path_of(&saved, "view/barrel");
+    assert_eq!(edit::node(&saved, &path), Some(&barrel));
+
+    control(&mut simulation, Key::Z);
+    let view = node(&simulation, "view");
+    assert!(!view.children.iter().any(|child| child.name == "barrel"));
+}
+
 /// Adds a 16 by 16 rect named `box` at the top of the open scene, at `x`, `y`, and selects it.
 fn add_box(simulation: &mut Simulation<Editor>, x: f32, y: f32) {
     let document = simulation.game_mut().document_mut().unwrap();
-    let mut node = edit::new_node("rect", "", "", "");
+    let mut node = edit::new_node("rect", edit::Showing::default());
     node.name = "box".into();
     node.x = x;
     node.y = y;

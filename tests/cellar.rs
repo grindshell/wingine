@@ -1,11 +1,14 @@
 //! Tests for the cellar example, a 2.5D game written entirely in Luau, in `examples/cellar`. They
 //! run it headlessly and check its state, which `main.luau` keeps in the global table `cellar`.
 
+use std::{fs, path::Path};
+
 use wingine::{
     headless::Simulation,
     input::Key,
     lua::mlua::FromLuaMulti,
     runtime::{self, LuauGame},
+    scene::SceneFile,
 };
 
 const GAME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/cellar");
@@ -53,27 +56,62 @@ fn the_cellar_starts_dark_with_the_hero_at_the_start() {
     assert_eq!(tile(&simulation), (5, 5));
     assert_eq!(eval::<u32>(&simulation, "#cellar.candles"), 4);
     assert_eq!(eval::<u32>(&simulation, "cellar.lit"), 0);
-    // The floor, a quad for each tile that isn't a wall, the walls, the props, and 5 billboards,
-    // then the HUD: its shade, then its text. The props are two barrels and two crates, a draw
-    // call each, and a table's top and four legs.
+    // The floor, a plane under the whole map, the walls, the props, and 5 billboards, then the
+    // HUD: its shade, then its text. The props are two barrels and two crates, a draw call each,
+    // and a table's top and four legs.
     let stats = simulation.context().frame_stats();
-    let floor_tiles = 7 * 11 - WALLS;
     assert_eq!(eval::<u32>(&simulation, "#cellar.props"), 5);
-    let prop_triangles: u32 = eval(
+    assert_eq!(
+        eval::<u32>(&simulation, "#cellar.world:tagged('solid')"),
+        WALLS + 5
+    );
+    let kinds: Vec<String> = eval(
         &simulation,
         "(function()
-            local triangles = 0
+            local kinds = {}
             for _, prop in cellar.props do
-                triangles += cellar.models[prop.kind]:triangle_count()
+                table.insert(kinds, prop.kind)
             end
-            return triangles
+            return kinds
         end)()",
     );
+    let prop_triangles: u32 = kinds
+        .iter()
+        .map(|kind| {
+            let path = Path::new(GAME).join(format!("models/{kind}.glb"));
+            let model = wingine::scene::load_model(simulation.context(), &path).unwrap();
+            model.triangle_count()
+        })
+        .sum();
     assert_eq!(stats.draw_calls, 1 + WALLS + 4 + 5 + 5 + 2);
-    assert_eq!(
-        stats.triangles,
-        floor_tiles * 2 + WALLS * 12 + prop_triangles + 5 * 2
+    assert_eq!(stats.triangles, 2 + WALLS * 12 + prop_triangles + 5 * 2);
+}
+
+#[test]
+fn the_level_is_a_scene_in_the_canonical_layout() {
+    let path = Path::new(GAME).join("cellar.scene.luau");
+    // As checked out, which may have turned line endings into CRLF.
+    let text = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+    let scene = SceneFile::parse(&text, &path).unwrap();
+    assert!(
+        scene.to_luau().unwrap() == text,
+        "cellar.scene.luau isn't in the layout scenes are written in: write it again with \
+         `SceneFile::write`"
     );
+}
+
+#[test]
+fn the_hero_is_drawn_where_they_walk() {
+    let mut simulation = simulation();
+    walk(&mut simulation, &[Key::Left]);
+    let (x, z): (f32, f32) = eval(
+        &simulation,
+        "cellar.hero:position_3d().x, cellar.hero:position_3d().z",
+    );
+    assert_eq!((x, z), (4.5, 5.5));
+    // Facing left, they're mirrored.
+    let (width, _): (f32, f32) = eval(&simulation, "cellar.hero:size()");
+    assert_eq!(width, -1.0);
 }
 
 #[test]

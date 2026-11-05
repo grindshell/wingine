@@ -7,7 +7,7 @@ use mlua::{Lua, Table};
 use super::{Lent, Textures};
 use crate::{
     Context, Result,
-    graphics::Texture,
+    graphics::{Mesh, MeshData, Model, Texture},
     lua::SceneNode,
     scene::{Assets, Scene, SceneFile, TilesetFile},
 };
@@ -126,5 +126,13 @@ impl Assets for GameAssets<'_> {
 
     fn tileset(&mut self, path: &str) -> Result<Rc<TilesetFile>> {
         self.files.tileset(path)
+    }
+
+    fn model(&mut self, path: &str) -> Result<Model> {
+        self.textures.model(self.ctx, self.files.folder.join(path))
+    }
+
+    fn mesh(&mut self, data: &MeshData) -> Result<Mesh> {
+        self.ctx.create_mesh(data)
     }
 }

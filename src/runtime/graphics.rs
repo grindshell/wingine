@@ -1,10 +1,6 @@
 //! The `graphics` table, for drawing.
 
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::path::Path;
 
 use mlua::{ErrorContext, Lua, Table, UserDataRef, Vector};
 
@@ -252,8 +248,13 @@ pub(super) fn module(
     graphics.set("load_model", {
         let lent = lent.clone();
         let root = folder.to_owned();
-        let models = RefCell::new(HashMap::new());
-        lua.create_function(move |_, path: String| load_model(&lent, &models, root.join(path)))?
+        let models = textures.clone();
+        lua.create_function(move |_, path: String| {
+            // Through the context even when loaded already, so this works at the same times
+            // either way.
+            lent.context(|ctx| models.model(ctx, root.join(path)))?
+                .map_err(mlua::Error::external)
+        })?
     })?;
     graphics.set(
         "new_animation",
@@ -567,33 +568,6 @@ fn mesh_data(data: &Table) -> mlua::Result<MeshData> {
         })
         .collect::<mlua::Result<Vec<_>>>()?;
     Ok(MeshData { vertices, indices })
-}
-
-/// The model file at `path`, loading it unless `models` has it already.
-fn load_model(
-    lent: &Lent,
-    models: &RefCell<HashMap<PathBuf, Model>>,
-    path: PathBuf,
-) -> mlua::Result<Model> {
-    // Through the context even when loaded already, so this works at the same times either way.
-    lent.context(|ctx| {
-        if let Some(model) = models.borrow().get(&path) {
-            return Ok(model.clone());
-        }
-        #[cfg(feature = "models")]
-        {
-            let model = ctx.load_model(&path).map_err(mlua::Error::external)?;
-            models.borrow_mut().insert(path, model.clone());
-            Ok(model)
-        }
-        #[cfg(not(feature = "models"))]
-        {
-            let _ = ctx;
-            Err(mlua::Error::runtime(
-                "graphics.load_model needs the engine built with its `models` feature",
-            ))
-        }
-    })?
 }
 
 fn create_mesh(lent: &Lent, data: &MeshData) -> mlua::Result<Mesh> {

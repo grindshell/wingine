@@ -1,5 +1,5 @@
 return {
-    format = 1,
+    format = 2,
     props = {
         music = false,
         title = "Shrine Hill",

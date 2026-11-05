@@ -235,9 +235,8 @@ networking or 3D pipelines.
   unless it returns false; a game stopped by an error always closes. The module docs are the
   reference for script authors; the engine types those tables hand out (sprites, animations,
   meshes, tilemaps, grid movers, text layouts, scene nodes) are userdata, documented with their
-  methods in `src/lua.rs`. Sprite sheets and scenes share one cache of images (`Textures`), so
-  each is read
-  once. `wingine.d.luau` (`runtime::DEFINITIONS`) declares that API's types, with short docs, as
+  methods in `src/lua.rs`. Sprite sheets, scenes and `graphics.load_model` share one cache of
+  images and models (`Textures`), so each is read once. `wingine.d.luau` (`runtime::DEFINITIONS`) declares that API's types, with short docs, as
   a definitions file for luau-lsp (`declare extern type ... with` for userdata, `declare name: {}`
   for tables; methods can't be generic there, so generic ones are properties of generic function
   types); `tests/runtime.rs` checks it declares exactly the functions the tables hold, and
@@ -258,12 +257,21 @@ networking or 3D pipelines.
   into `Value`s (`node_fields`), setting the fields and reading it again, so overrides are
   checked as files are (`NodeDef::overridden` does the same for tools, and `NodeDef::fields`
   gives the values); sprites then name sheets `file#sheet`, since nodes from many files are
-  together. `Build` then makes the live nodes, loading sheets and tilesets through `Assets`
-  (`FolderAssets` reads a folder; the runtime caches files). `Scene` keeps nodes in slots with
+  together. `Build` then makes the live nodes, loading sheets, tilesets and model files and
+  making the meshes of shapes through `Assets` (`FolderAssets` reads a folder; the runtime caches
+  files), and sharing a mesh between nodes of one shape. `Scene` keeps nodes in slots with
   generations, so `NodeId`s of removed nodes never reach nodes added since; each node keeps its
   local `Affine` up to date as it moves. A tilemap node holds a `Tilemap` whose layers are its
   `tile_layer` children, in order, which draw as children, so other nodes draw between layers.
   Drawing walks the tree, composing transforms from parent to child; text and tilemaps only move.
+  3D views (format 2) are `view3d` nodes, laid out as areas, whose children are `mesh`, `model`,
+  `billboard` and plain nodes placed in 3D: `NodeDef::placement3` (`z`, `yaw`, `pitch`, `roll`,
+  `scale_z`, with `x`, `y`, `scale_x` and `scale_y`) is `Some` for them, which the reader decides
+  from the node's kind, its parent, or its fields, so a prop's own file, placed by an instance,
+  can hold them at its top; `check_3d` checks where 3D kinds are once instances have expanded.
+  Live nodes keep a local `Affine3` (`Spatial`); drawing a view begins it on the canvas
+  (`begin_3d`) and draws its subtree in it (`draw_3d`), and `transform_3d`, `bounds_3d`, `ray`
+  and `pick` (nearest box first) work in its world.
   Layout is worked out as the tree is walked, from the root down (`Placed`): a node's anchor
   places it in its parent's rectangle, and its stretch sizes it by it, where the root's is the
   scene's `size` (the canvas's: drawing sets it, and `scene.load` starts it there;
@@ -272,8 +280,9 @@ networking or 3D pipelines.
   `clip.rs` holds `Clip`s, a file's tracks of keyframes on nodes' properties, which a file names
   apart from its nodes, so a clip poses whatever node it's given: `Scene::pose` finds every
   track's node first, failing before changing anything, then samples each, moving numbers by its
-  weight (`Keys::value_at` samples one track, as tools do). Sprite nodes keep the sheet their file
-  gave them, so cell tracks and `set_cell` pick from it. Scripts hold nodes as `lua::SceneNode`,
+  weight (`Keys::value_at` samples one track, as tools do); nodes in views have 3D properties
+  and no `rotation`. Sprite, billboard and mesh nodes keep the sheet their file gave them, so cell
+  tracks and `set_cell` pick from it. Scripts hold nodes as `lua::SceneNode`,
   an `Rc<RefCell<Scene>>` and a `NodeId`, so
   every node of a scene shares it, and clips as `Clip` userdata, copied from the cached file. Live
   scenes' tests are in `tests/scene.rs` and need a GPU; the formats' are unit tests that don't.
@@ -327,7 +336,16 @@ networking or 3D pipelines.
   at the same point of the node, and its size and stretch), the Select tool resizes sprites,
   rects and areas by handles on their edges, and the toolbar's canvas size, or dragging the
   canvas's corner, previews scenes laid out on canvases of other sizes (`Viewport::preview`),
-  which never changes the file. For rigs, the Animation panel (`docks/animation.rs`) shows one of
+  which never changes the file. In 3D views, seen through their own cameras (the editor has
+  none), the viewport picks by boxes (`Scene::pick`, a view's nodes before the view), outlines the
+  selection's box as the camera projects it, and drags with the Move tool across the ground at
+  the node's height, or with Shift, an upright plane facing the camera (`Drag3d`); model files
+  dragged from the FileSystem dock carry a `ModelPath`, and they and scene files dropped in a view
+  are placed where the ray meets the ground. `edit::add` fits nodes to where they go
+  (`place_for`), the Scene dock offers `KINDS_3D` inside views, the Inspector shows
+  `transform_3d` and sections for views, meshes, models and billboards (a node an instance places
+  is shown in 3D when the preview has it there, `Document::is_in_3d`), and `AssetCache` rereads
+  model files as it does images, keeping the latest meshes of shapes. For rigs, the Animation panel (`docks/animation.rs`) shows one of
   the file's clips on a timeline (`Document::timeline`, the clip and the playhead), whose tracks'
   keys it moves and removes through `clips.rs`, pure operations on clips that keep keys in order
   and a key to a time. While the panel shows, the clip poses the preview at the playhead
@@ -435,15 +453,18 @@ networking or 3D pipelines.
   `orchard.growing` off so only theirs grow. The scene files are in the canonical layout, and
   `tests/orchard.rs` checks they stay so. The game's state is the global `orchard`.
 - `examples/cellar/`: a 2.5D game in a 3D view: the hero walks a cellar tile by tile with a
-  `GridMover` and lights its candles by standing on them. The map is rows of characters in
-  `main.luau`; its walls are low cuboids, so the hero shows over them, on a floor built with
-  `graphics.new_mesh`, and the hero and candles are billboards, the candles toward the back of
-  their tiles so the hero standing on one isn't in the same place. Barrels, crates and a table
-  (`b`, `x` and `t` in the map) are models from its `models` folder, copies of
-  `examples/models`, which stop the hero, and the mouse names the one it points at, the nearest
-  whose box the ray under it enters (`cellar.pointed`). The camera follows the hero from above
-  and behind (`cellar.view()`), and `graphics.project` places the message over their head once
-  every candle is lit. The game's state is the global `cellar`.
+  `GridMover` and lights its candles by standing on them. Its level is `cellar.scene.luau`, a
+  view filling the canvas, which the editor edits: a floor (a plane), walls (low cuboids, so the
+  hero shows over them) tagged `solid`, barrels, crates and a table, models from its `models`
+  folder (copies of `examples/models`) tagged `solid` and `prop`, candles tagged `candle`, toward
+  the back of their tiles so the hero standing on one isn't in the same place, and the hero, the
+  last two billboards. `main.luau` finds each node's tile from its position (a tile is a world
+  unit), moves the hero's node and mirrors it, and the mouse names the prop it points at, the
+  nearest whose box is under it (`view:pick`, `cellar.pointed`). The camera follows the hero from
+  above and behind (`cellar.view()`, set on the view each frame), and `view:project` places the
+  message over their head once every candle is lit. The scene file is in the canonical layout,
+  and `tests/cellar.rs` checks it stays so. The game's state is the global `cellar`, its view
+  `cellar.world`.
 - `src/math.rs`: geometry types: `Rect`, `Affine` and `Affine3`, 2D and 3D transforms that
   compose with `*`, and `Bounds3`, a box in 3D.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
@@ -498,12 +519,14 @@ networking or 3D pipelines.
 - `tests/gui.rs`: tests for egui over games, through `Simulation`: clicking widgets by label,
   typing into a focused field, input egui takes not reaching the game, and the debug key.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders,
-  their saves, their 3D views, models and picking, and in its `gui` module (with the `egui`
-  feature), their interfaces, clicked by label. A hash of what `exact` gives for spreads of arguments is pinned, so CI checks it's the
-  same on Windows and Linux.
+  their saves, their 3D views, models and picking, scenes' views and their nodes, and in its
+  `gui` module (with the `egui` feature), their interfaces, clicked by label. A hash of what
+  `exact` gives for spreads of arguments is pinned, so CI checks it's the same on Windows and
+  Linux.
 - `tests/scene.rs`: tests for scenes loaded to play: finding nodes, transforms, hit testing,
-  anchors and stretching, tilemaps, instances and overrides, adding and removing nodes, and
-  posing with clips, with files held in memory.
+  anchors and stretching, tilemaps, instances and overrides, adding and removing nodes, posing
+  with clips, and 3D views: placement composing, instances in views, posing in 3D, picking
+  nearest first, and where 3D nodes may be, with files held in memory.
 - `tests/native.rs`: tests for native libraries, most of them linked into the test, its probe
   library making meshes and drawing them and billboards in views of its own and the script's. One
   builds `native-particles` with a nested `cargo build` into a target folder of its own and loads
@@ -522,7 +545,8 @@ networking or 3D pipelines.
   camera's close-up, and that its scene files are in the canonical layout.
 - `tests/cellar.rs`: tests for the `cellar` example, the same way: walls and props stopping the
   hero, walking through the cellar lighting every candle, what each frame draws, from its frame
-  stats, the mouse pointing at props, and the camera following the hero.
+  stats, the mouse pointing at props, the camera following the hero, and that its level is in the
+  canonical layout.
 - `tests/shmup.rs`: tests for the `shmup` example, the same way: the title menu by key and by
   mouse, its HUD's scene, the player, the bullet systems
   through `shmup.bullets`, spell cards, clearing the stage with cheats, the same seed firing the

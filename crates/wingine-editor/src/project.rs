@@ -17,15 +17,17 @@ use std::{
 
 use wingine::{
     Context, Waker,
-    graphics::{Resolution, Texture},
+    graphics::{Mesh, MeshData, Model, Resolution, Texture},
     runtime::{self, Config},
-    scene::{Assets, SceneFile, TilesetFile},
+    scene::{self, Assets, SceneFile, TilesetFile},
 };
 
 /// How deep into the folder's folders the file tree looks.
 const MAX_DEPTH: usize = 8;
 /// How often a [`Watcher`] looks at the folder's files.
 const WATCH_INTERVAL: Duration = Duration::from_secs(1);
+/// How many meshes of shapes an [`AssetCache`] keeps.
+const MAX_MESHES: usize = 64;
 
 /// A game's folder, opened in the editor.
 pub struct Project {
@@ -112,6 +114,19 @@ impl Project {
         found.sort();
         found
     }
+
+    /// The paths of the project's model files, `.glb` and `.gltf`, in order.
+    pub fn model_files(&self) -> Vec<String> {
+        let mut found = self.files_ending(".glb");
+        found.extend(self.files_ending(".gltf"));
+        found.sort();
+        found
+    }
+}
+
+/// Whether the file at `path` is a model file, `.glb` or `.gltf`, as model nodes show.
+pub fn is_model_file(path: &str) -> bool {
+    path.ends_with(".glb") || path.ends_with(".gltf")
 }
 
 fn collect(entries: &[Entry], visit: &mut impl FnMut(&Entry)) {
@@ -221,13 +236,16 @@ fn fingerprint(folder: &Path) -> u64 {
     hasher.finish()
 }
 
-/// The images, scene files and tileset files scenes use, each read once and again only when its
-/// file changes.
+/// The images, scene files, tileset files and model files scenes use, each read once and again
+/// only when its file changes, and the meshes of their shapes.
 #[derive(Default)]
 pub struct AssetCache {
     textures: HashMap<PathBuf, (Option<SystemTime>, Texture)>,
     scenes: HashMap<PathBuf, (Option<SystemTime>, Rc<SceneFile>)>,
     tilesets: HashMap<PathBuf, (Option<SystemTime>, Rc<TilesetFile>)>,
+    models: HashMap<PathBuf, (Option<SystemTime>, Model)>,
+    /// Meshes by their data, so a preview built again doesn't make its shapes' meshes again.
+    meshes: Vec<(MeshData, Mesh)>,
 }
 
 impl AssetCache {
@@ -290,5 +308,25 @@ impl Assets for Loader<'_> {
         cached(&mut self.cache.tilesets, self.folder.join(path), |path| {
             TilesetFile::read(path).map(Rc::new)
         })
+    }
+
+    fn model(&mut self, path: &str) -> wingine::Result<Model> {
+        let ctx = &mut *self.ctx;
+        cached(&mut self.cache.models, self.folder.join(path), |path| {
+            scene::load_model(ctx, path)
+        })
+    }
+
+    fn mesh(&mut self, data: &MeshData) -> wingine::Result<Mesh> {
+        if let Some((_, mesh)) = self.cache.meshes.iter().find(|(made, _)| made == data) {
+            return Ok(mesh.clone());
+        }
+        let mesh = self.ctx.create_mesh(data)?;
+        // Dragging a shape's size through many makes a mesh of each, so only the latest are kept.
+        if self.cache.meshes.len() >= MAX_MESHES {
+            self.cache.meshes.remove(0);
+        }
+        self.cache.meshes.push((data.clone(), mesh.clone()));
+        Ok(mesh)
     }
 }

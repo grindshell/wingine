@@ -341,7 +341,8 @@ end
 declare extern type SceneNode with
     --- Returns the node's name, unique among its siblings. The root's is `""`.
     function name(self): string
-    --- Returns `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"tilemap"` or `"tile_layer"`.
+    --- Returns `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"tilemap"`, `"tile_layer"`,
+    --- `"view3d"`, `"mesh"`, `"model"` or `"billboard"`.
     function kind(self): string
     --- Returns the names from the root to the node, separated by `/`.
     function path(self): string
@@ -369,10 +370,43 @@ declare extern type SceneNode with
     --- Places it from the point `x`, `y` of its parent's rectangle, keeping its position, or with
     --- `nil`, from its parent's origin.
     function set_anchor(self, x: number?, y: number?): ()
-    --- Returns how far it's turned about its origin, in radians, clockwise.
+    --- Returns how far it's turned about its origin, in radians, clockwise. Not for nodes in 3D
+    --- views, which turn by `set_orientation`.
     function rotation(self): number
     --- Turns it about its origin, in radians, clockwise.
     function set_rotation(self, angle: number): ()
+    --- Returns where the origin of a node in a 3D view is within its parent: `position`'s `x` and
+    --- `y`, and its `z`.
+    function position_3d(self): vector
+    --- Moves the origin of a node in a 3D view within its parent.
+    function set_position_3d(self, position: vector): ()
+    --- Returns how a node in a 3D view is turned about its origin: its yaw, pitch and roll.
+    function orientation(self): (number, number, number)
+    --- Turns a node in a 3D view about its origin: by `roll` about `z`, `pitch` about `x` and
+    --- `yaw` about `y`, in that order, in radians, counter-clockwise seen from the axis's end.
+    function set_orientation(self, yaw: number, pitch: number?, roll: number?): ()
+    --- Returns how much a node in a 3D view is stretched along its own axes.
+    function scale_3d(self): vector
+    --- Stretches a node in a 3D view by a vector, or a number for every axis.
+    function set_scale_3d(self, scale: number | vector): ()
+    --- Returns where a node in a 3D view is in its view's world.
+    function world_position_3d(self): vector
+    --- Returns the least and greatest corners of the box in its view's world around what a mesh,
+    --- model or billboard shows, or nothing.
+    function bounds_3d(self): (vector?, vector?)
+    --- Returns a 3D view's camera.
+    function camera(self): Camera3d
+    --- Changes a 3D view's camera.
+    function set_camera(self, camera: Camera3d): ()
+    --- Returns a 3D view's lighting, its colors as numbers.
+    function lighting(self): Lighting
+    --- Changes a 3D view's lighting.
+    function set_lighting(self, lighting: Lighting): ()
+    --- Returns the nodes of a 3D view under a point in the scene's coordinates, nearest first.
+    function pick(self, x: number, y: number): { SceneNode }
+    --- Returns where a point in a 3D view's world shows in the scene, or nothing if it's behind
+    --- the camera.
+    function project(self, point: vector): (number?, number?)
     --- Returns how much it's stretched along its own axes. Negative scales mirror it.
     function scale(self): (number, number)
     --- Stretches it by `x` and `y`, or by `x` both ways.
@@ -383,9 +417,9 @@ declare extern type SceneNode with
     function is_visible(self): boolean
     --- Shows or hides it and everything inside it.
     function set_visible(self, visible: boolean): ()
-    --- Returns the width and height it covers, before any scaling.
+    --- Returns the width and height it covers, before any scaling, or a billboard's.
     function size(self): (number, number)
-    --- Changes the size of a sprite, a rect or an area.
+    --- Changes the size of a sprite, a rect, an area, a 3D view or a billboard.
     function set_size(self, width: number, height: number): ()
     --- Returns the smallest rectangle in the scene's coordinates around what it covers, or `nil`
     --- for a plain node.
@@ -394,9 +428,10 @@ declare extern type SceneNode with
     function contains(self, x: number, y: number): boolean
     --- Changes the sprite a sprite node shows. It keeps its size.
     function set_sprite(self, sprite: Sprite): ()
-    --- Shows another cell of the sprite node's sheet, counting from 0 at the top-left.
+    --- Shows another cell of the sheet of a sprite, a billboard or a mesh, counting from 0 at the
+    --- top-left.
     function set_cell(self, column: number, row: number): ()
-    --- Changes the color a sprite node's colors are multiplied by.
+    --- Changes the color the colors of a sprite, mesh, model or billboard are multiplied by.
     function set_tint(self, tint: Color): ()
     --- Changes the color of a rect or text node.
     function set_color(self, color: Color): ()

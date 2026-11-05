@@ -1,5 +1,5 @@
-//! Scenes: trees of sprites, rectangles, text, areas and tilemaps, laid out in files that people
-//! and tools can both write, for levels, screens and characters.
+//! Scenes: trees of sprites, rectangles, text, areas, tilemaps and 3D views, laid out in files that
+//! people and tools can both write, for levels, screens and characters.
 //!
 //! A scene file is Luau that returns one table of plain data: tables, strings, numbers and
 //! booleans, with no function calls, variables or expressions apart from negative numbers. That
@@ -10,7 +10,7 @@
 //!
 //! ```lua
 //! return {
-//!     format = 1,
+//!     format = 2,
 //!     sheets = {
 //!         tiles = {
 //!             path = "tiles.png",
@@ -92,8 +92,8 @@
 //!
 //! At the top of the file:
 //!
-//! - `format`, required, is the version of the format, 1 ([`FORMAT`]). A newer engine reads older
-//!   formats; this one refuses newer ones.
+//! - `format`, required, is the version of the format, 2 ([`FORMAT`]), which added 3D views. A
+//!   newer engine reads older formats, as this one reads format 1; this one refuses newer ones.
 //! - `sheets` names the sprite sheets sprites come from: images, by their path relative to the
 //!   game's folder, divided into a grid of sprites `tile_width` by `tile_height` texels.
 //! - `props` is data for the game about the scene as a whole. The engine doesn't read props;
@@ -153,6 +153,33 @@
 //!   `{ ["body/hat"] = { tint = "#c8b8e8" } }` sets fields as the scene file would have them, apart
 //!   from `name`, `kind` and `children`, and changes `props` one by one rather than replacing
 //!   them. A `sheet` set by an override is one of the sheets of the file the node is from.
+//! - `view3d`: a rectangle of the scene showing a 3D world, as [`Canvas::begin_3d`] shows one,
+//!   whose nodes are its children. It's laid out as an area is, `width` by `height` with a
+//!   `stretch`, and moves with its node, but doesn't turn or stretch. `camera`, required, is
+//!   `{ position = { x, y, z }, target = { x, y, z } }`, with `up` (`{ 0, 1, 0 }`), `fov`
+//!   (`0.8`) or for an orthographic camera `height`, `near` (`0.1`) and `far` (`1000`) if they
+//!   aren't the defaults; `lighting`, `{ direction, color, ambient }`, is the default lighting,
+//!   field by field, where it leaves fields out.
+//! - `mesh`, in a view: a built-in shape centered on its origin, `shape`, `"cuboid"` with
+//!   `size = { width, height, depth }`, `"plane"`, facing up, with `size = { width, depth }`, or
+//!   `"sphere"` with a `radius`, sizes 1 and the radius a half by default; optionally a sprite,
+//!   `sheet` and `cell`, and a `tint`.
+//! - `model`, in a view: the model file `model`, its path relative to the game's folder, and a
+//!   `tint`.
+//! - `billboard`, in a view: a sprite, `sheet` and `cell`, standing upright with the middle of its
+//!   bottom edge at the node's origin, facing the camera across the ground, `width` by `height`
+//!   world units (1 by default; a negative width mirrors it), and a `tint`. It moves with its node,
+//!   but doesn't turn or stretch.
+//!
+//! Nodes in a view are placed in 3D, in its world, right-handed with `y` up: by `x`, `y` and `z`,
+//! turned by `yaw`, `pitch` and `roll`, radians about `y`, `x` and `z`, and stretched by `scale_x`,
+//! `scale_y` and `scale_z`, composed as `graphics.draw_mesh`'s options are: stretched, rolled,
+//! pitched, turned, then moved. They have no `rotation` or `anchor` ([`NodeDef::placement3`]).
+//! Plain nodes and instances can be in views too, so a prop can be a scene file of its own, whose
+//! nodes an instance places in a view: a file reads nodes as placed in 3D if they're of the kinds
+//! only views hold, inside a view or a node placed in 3D, or have fields only those nodes have.
+//! Once instances have placed their scenes, a mesh, model or billboard anywhere but in a view is an
+//! error, as is a node of another kind in one, naming the node.
 //!
 //! What a sprite, rect, text or area shows has its top-left corner at the node's origin, unless
 //! it has a `pivot`: the point of it, from its top-left corner, `{ x, y }`, that's at the origin
@@ -202,12 +229,13 @@
 //! turning about its pivot, its joint, as cutouts do. Clips animate them. Each is a `duration` in
 //! seconds, whether it `loop`s (false by default), and `tracks`, each changing one `property` of
 //! one `node`, by its path from the node the clip poses (without a `node`, that node itself).
-//! Tracks change `x`, `y`, `rotation`, `scale_x` and `scale_y`, which move from key to key in a
-//! straight line, or with `interpolation = "step"` jump at each key; and `visible` and a sprite's
-//! `cell`, which always step. `keys` are a time in seconds, from 0 to the duration, and the value
-//! then, in order of time; before the first key a property has the first key's value, and after
-//! the last, the last key's. A loop that should come back to where it started has its first
-//! key's value again at its end.
+//! Tracks change `x`, `y`, `rotation`, `scale_x` and `scale_y`, or for nodes in 3D views, `z`,
+//! `yaw`, `pitch`, `roll` and `scale_z` but not `rotation`, which move from key to key in a
+//! straight line, or with `interpolation = "step"` jump at each key; and `visible` and the `cell`
+//! of a sprite, billboard or mesh, which always step. `keys` are a time in seconds, from 0 to the
+//! duration, and the value then, in order of time; before the first key a property has the first
+//! key's value, and after the last, the last key's. A loop that should come back to where it
+//! started has its first key's value again at its end.
 //!
 //! ```lua
 //! clips = {
@@ -246,7 +274,7 @@
 //!
 //! ```lua
 //! return {
-//!     format = 1,
+//!     format = 2,
 //!     tile_width = 16,
 //!     tile_height = 16,
 //!     sheets = {
@@ -283,7 +311,8 @@
 //! scene loaded to play: its nodes, which a game finds by path or tag, moves, turns, changes,
 //! poses, adds and removes, drawn with [`Scene::draw`], which fits it to the canvas. A scene drawn
 //! without a camera is in canvas pixels, so [`Scene::bounds`] and [`Scene::contains`] test where
-//! the mouse is against its nodes.
+//! the mouse is against its nodes, and [`Scene::pick`] finds a 3D view's nodes under it. A view
+//! draws its world where it is in the tree: what's drawn after it goes over it.
 
 mod clip;
 mod file;
@@ -297,17 +326,21 @@ use std::{
 
 pub use clip::{Clip, Interpolation, KeyValue, Keys, Property, Track};
 pub use file::{
-    AreaDef, FORMAT, InstanceDef, KindDef, NodeDef, Props, RectDef, SceneFile, SheetDef, SpriteDef,
-    TextDef, TileDef, TileLayerDef, TilemapDef, TilesetFile, Value,
+    AreaDef, BillboardDef, CellDef, FORMAT, InstanceDef, KindDef, MeshDef, ModelDef, NodeDef,
+    Placement3, Props, RectDef, SceneFile, Shape, SheetDef, SpriteDef, TextDef, TileDef,
+    TileLayerDef, TilemapDef, TilesetFile, Value, View3dDef,
 };
 pub(crate) use file::{evaluate_any, plain};
 pub(crate) use writer::write_value;
 
 use crate::{
     Context, Error, Result,
-    graphics::{Align, Canvas, Color, Font, Sprite, SpriteSheet, TextLayout, Texture},
+    graphics::{
+        Align, Camera3d, Canvas, Canvas3d, Color, Font, Lighting, Mesh, MeshData, Model, Ray,
+        Sprite, SpriteSheet, TextLayout, Texture, View3d,
+    },
     lua::check_tilemap_size,
-    math::{Affine, Rect},
+    math::{Affine, Affine3, Bounds3, Rect, add3, scale3},
     save,
     tilemap::{Tile, TileId, Tilemap, Tileset},
 };
@@ -351,13 +384,17 @@ impl TilesetFile {
 pub(crate) const MAX_NODE_DEPTH: usize = 200;
 
 /// Where the files and images a scene uses come from as it's built: the scene files its
-/// instances place, the tileset files its tilemaps use, and the images of its sheets, each by
-/// its path as the file names it. [`FolderAssets`] reads them from a game's folder; a game can
-/// keep them loaded instead.
+/// instances place, the tileset files its tilemaps use, the images of its sheets and the model
+/// files of its model nodes, each by its path as the file names it, and the meshes of its mesh
+/// nodes' shapes. [`FolderAssets`] reads them from a game's folder; a game can keep them loaded
+/// instead.
 pub trait Assets {
     fn texture(&mut self, path: &str) -> Result<Texture>;
     fn scene(&mut self, path: &str) -> Result<Rc<SceneFile>>;
     fn tileset(&mut self, path: &str) -> Result<Rc<TilesetFile>>;
+    fn model(&mut self, path: &str) -> Result<Model>;
+    /// A mesh of `data`'s triangles, as [`Context::create_mesh`] makes one.
+    fn mesh(&mut self, data: &MeshData) -> Result<Mesh>;
 }
 
 /// [`Assets`] read from the files in a folder, each time they're asked for.
@@ -377,6 +414,31 @@ impl Assets for FolderAssets<'_> {
 
     fn tileset(&mut self, path: &str) -> Result<Rc<TilesetFile>> {
         TilesetFile::read(self.folder.join(path)).map(Rc::new)
+    }
+
+    fn model(&mut self, path: &str) -> Result<Model> {
+        load_model(self.ctx, &self.folder.join(path))
+    }
+
+    fn mesh(&mut self, data: &MeshData) -> Result<Mesh> {
+        self.ctx.create_mesh(data)
+    }
+}
+
+/// The model file at `path`, as [`Context::load_model`] reads it, or without the engine's
+/// `models` feature, an error saying so.
+pub fn load_model(ctx: &mut Context, path: &Path) -> Result<Model> {
+    #[cfg(feature = "models")]
+    {
+        ctx.load_model(path)
+    }
+    #[cfg(not(feature = "models"))]
+    {
+        let _ = ctx;
+        Err(Error::Model {
+            path: path.to_owned(),
+            message: "reading models needs the engine built with its `models` feature".into(),
+        })
     }
 }
 
@@ -423,10 +485,20 @@ pub struct Node {
     /// though it had no anchor.
     local: Affine,
     anchor: Option<[f32; 2]>,
+    /// The rest of where it is, for a node placed in 3D, in a 3D view.
+    spatial: Option<Spatial>,
     visible: bool,
     tags: Vec<String>,
     props: Props,
     kind: Kind,
+}
+
+/// Where a node placed in 3D is, besides its position's `x` and `y` and its scale's.
+#[derive(Clone, Copy, Debug)]
+struct Spatial {
+    placement: Placement3,
+    /// From the node's coordinates to its parent's, kept up to date with its placement.
+    local: Affine3,
 }
 
 /// What a node is, and what it shows.
@@ -443,6 +515,52 @@ pub enum Kind {
     Tilemap(TilemapNode),
     /// A layer of the tilemap that's its parent.
     TileLayer(TileLayerNode),
+    /// A rectangle showing a 3D world, whose nodes are its children.
+    View3d(View3dNode),
+    Mesh(MeshNode),
+    Model(ModelNode),
+    Billboard(BillboardNode),
+}
+
+/// What a 3D view shows, and how it's laid out, as an area is.
+#[derive(Clone, Debug)]
+pub struct View3dNode {
+    pub size: [f32; 2],
+    /// As a rect's.
+    pub stretch: [f32; 2],
+    /// As a sprite's.
+    pub pivot: [f32; 2],
+    pub camera: Camera3d,
+    pub lighting: Lighting,
+}
+
+/// What a mesh node shows: its shape's mesh, showing a sprite or white, times its tint.
+#[derive(Clone, Debug)]
+pub struct MeshNode {
+    pub mesh: Mesh,
+    pub sprite: Option<Sprite>,
+    /// The sheet its sprite is from, whose cells it shows with [`MeshNode::set_cell`] and clips.
+    pub sheet: Option<SpriteSheet>,
+    pub tint: Color,
+}
+
+/// What a model node shows.
+#[derive(Clone, Debug)]
+pub struct ModelNode {
+    pub model: Model,
+    pub tint: Color,
+}
+
+/// What a billboard node shows: a sprite standing upright, the middle of its bottom edge at the
+/// node's origin, turned to face the camera.
+#[derive(Clone, Debug)]
+pub struct BillboardNode {
+    pub sprite: Sprite,
+    /// The sheet whose cells it shows, with [`BillboardNode::set_cell`] and clips.
+    pub sheet: Option<SpriteSheet>,
+    /// Its width and height in world units. A negative width mirrors it.
+    pub size: [f32; 2],
+    pub tint: Color,
 }
 
 /// What a sprite node shows.
@@ -529,12 +647,66 @@ impl Kind {
             Self::Area(_) => "area",
             Self::Tilemap(_) => "tilemap",
             Self::TileLayer(_) => "tile_layer",
+            Self::View3d(_) => "view3d",
+            Self::Mesh(_) => "mesh",
+            Self::Model(_) => "model",
+            Self::Billboard(_) => "billboard",
         }
     }
 
     /// Whether it only moves with its node, rather than turning and stretching too.
     fn only_moves(&self) -> bool {
-        matches!(self, Self::Text(_) | Self::Tilemap(_) | Self::TileLayer(_))
+        matches!(
+            self,
+            Self::Text(_) | Self::Tilemap(_) | Self::TileLayer(_) | Self::View3d(_)
+        )
+    }
+
+    /// The sheet of the sprite it shows, whose cells it can show instead: a sprite's, a
+    /// billboard's or a mesh's, if it's from a sheet.
+    fn sheet(&self) -> Option<&SpriteSheet> {
+        match self {
+            Self::Sprite(sprite) => sprite.sheet.as_ref(),
+            Self::Billboard(billboard) => billboard.sheet.as_ref(),
+            Self::Mesh(mesh) => mesh.sheet.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Shows the sprite in `cell` of its sheet, if it shows a sprite: see [`Kind::sheet`].
+    /// `None` if it's a kind that doesn't.
+    pub fn set_cell(&mut self, cell: [u32; 2]) -> Option<Result<(), String>> {
+        match self {
+            Self::Sprite(sprite) => Some(sprite.set_cell(cell)),
+            Self::Billboard(billboard) => Some(billboard.set_cell(cell)),
+            Self::Mesh(mesh) => Some(mesh.set_cell(cell)),
+            _ => None,
+        }
+    }
+}
+
+/// The sprite in `cell` of `sheet`, its column and row. Fails if there's no sheet, or it has no
+/// such cell.
+fn cell_of(sheet: Option<&SpriteSheet>, [column, row]: [u32; 2]) -> Result<Sprite, String> {
+    let sheet = sheet.ok_or("the sprite isn't from a sheet")?;
+    sheet.try_sprite(column, row)
+}
+
+impl MeshNode {
+    /// Shows the sprite in `cell` of its sheet, its column and row. Fails if it has no sheet, or
+    /// the sheet has no such cell.
+    pub fn set_cell(&mut self, cell: [u32; 2]) -> Result<(), String> {
+        self.sprite = Some(cell_of(self.sheet.as_ref(), cell)?);
+        Ok(())
+    }
+}
+
+impl BillboardNode {
+    /// Shows the sprite in `cell` of its sheet, its column and row. Fails if it has no sheet, or
+    /// the sheet has no such cell.
+    pub fn set_cell(&mut self, cell: [u32; 2]) -> Result<(), String> {
+        self.sprite = cell_of(self.sheet.as_ref(), cell)?;
+        Ok(())
     }
 }
 
@@ -555,9 +727,8 @@ pub(crate) fn a_node_of(kind: &str) -> String {
 impl SpriteNode {
     /// Shows the sprite in `cell` of its sheet, its column and row. Fails if it has no sheet, or
     /// the sheet has no such cell.
-    pub fn set_cell(&mut self, [column, row]: [u32; 2]) -> Result<(), String> {
-        let sheet = self.sheet.as_ref().ok_or("the sprite isn't from a sheet")?;
-        self.sprite = sheet.try_sprite(column, row)?;
+    pub fn set_cell(&mut self, cell: [u32; 2]) -> Result<(), String> {
+        self.sprite = cell_of(self.sheet.as_ref(), cell)?;
         Ok(())
     }
 }
@@ -650,6 +821,7 @@ impl Node {
             scale: [1.0, 1.0],
             local: Affine::IDENTITY,
             anchor: None,
+            spatial: None,
             visible: true,
             tags: Vec::new(),
             props: Props::new(),
@@ -705,26 +877,81 @@ impl Node {
 
     fn update_local(&mut self) {
         self.local = Affine::from_parts(self.position, self.rotation, self.scale);
+        if let Some(spatial) = &mut self.spatial {
+            let Placement3 {
+                z,
+                yaw,
+                pitch,
+                roll,
+                scale_z,
+            } = spatial.placement;
+            let [x, y] = self.position;
+            let [scale_x, scale_y] = self.scale;
+            spatial.local = Affine3::from_translation([x, y, z])
+                * Affine3::from_rotation_y(yaw)
+                * Affine3::from_rotation_x(pitch)
+                * Affine3::from_rotation_z(roll)
+                * Affine3::from_scale([scale_x, scale_y, scale_z]);
+        }
+    }
+
+    /// For a node placed in 3D, in a 3D view: its `z`, how it's turned and how much it's
+    /// stretched along `z`, with [`Node::position`] and [`Node::scale`] the rest, along the view's
+    /// world's axes. `None` for a node of the 2D scene.
+    pub fn placement3(&self) -> Option<Placement3> {
+        self.spatial.map(|spatial| spatial.placement)
+    }
+
+    /// Fails for a node of the 2D scene, which isn't placed in 3D.
+    pub fn set_placement3(&mut self, placement: Placement3) -> Result<(), String> {
+        let spatial = self
+            .spatial
+            .as_mut()
+            .ok_or("the node isn't in a 3D view, so it isn't placed in 3D")?;
+        spatial.placement = placement;
+        self.update_local();
+        Ok(())
+    }
+
+    /// For a node placed in 3D, from its coordinates to its parent's: stretched, then rolled,
+    /// pitched and turned, then moved.
+    pub fn local_3d(&self) -> Option<Affine3> {
+        self.spatial.map(|spatial| spatial.local)
     }
 
     /// One of its numbers, as a clip's track changes it.
     fn number(&self, property: Property) -> f32 {
+        let placement = self.placement3().unwrap_or_default();
         match property {
             Property::X => self.position[0],
             Property::Y => self.position[1],
             Property::Rotation => self.rotation,
             Property::ScaleX => self.scale[0],
             Property::ScaleY => self.scale[1],
+            Property::Z => placement.z,
+            Property::Yaw => placement.yaw,
+            Property::Pitch => placement.pitch,
+            Property::Roll => placement.roll,
+            Property::ScaleZ => placement.scale_z,
         }
     }
 
     fn set_number(&mut self, property: Property, value: f32) {
+        let mut placement = self.placement3().unwrap_or_default();
         match property {
             Property::X => self.position[0] = value,
             Property::Y => self.position[1] = value,
             Property::Rotation => self.rotation = value,
             Property::ScaleX => self.scale[0] = value,
             Property::ScaleY => self.scale[1] = value,
+            Property::Z => placement.z = value,
+            Property::Yaw => placement.yaw = value,
+            Property::Pitch => placement.pitch = value,
+            Property::Roll => placement.roll = value,
+            Property::ScaleZ => placement.scale_z = value,
+        }
+        if let Some(spatial) = &mut self.spatial {
+            spatial.placement = placement;
         }
         self.update_local();
     }
@@ -776,11 +1003,11 @@ impl Node {
         &mut self.kind
     }
 
-    /// The width and height of a sprite, rect, text, area, tilemap or tile layer, before
-    /// stretching with its parent. A plain node has none.
+    /// The width and height of a sprite, rect, text, area, tilemap, tile layer or 3D view, before
+    /// stretching with its parent. A plain node has none, and nor do nodes in 3D views.
     pub fn size(&self) -> Option<[f32; 2]> {
         match &self.kind {
-            Kind::Node => None,
+            Kind::Node | Kind::Mesh(_) | Kind::Model(_) | Kind::Billboard(_) => None,
             Kind::Sprite(sprite) => Some(sprite.size),
             Kind::Rect(rect) => Some(rect.size),
             Kind::Text(text) => Some(text.layout.size()),
@@ -790,23 +1017,31 @@ impl Node {
                 Some([bounds.w, bounds.h])
             }
             Kind::TileLayer(layer) => Some(layer.size),
+            Kind::View3d(view) => Some(view.size),
         }
     }
 
     /// The rectangle the node covers in its own coordinates, its pivot at the origin, inside a
-    /// parent whose rectangle is `outer`, which it may stretch with. A plain node covers nothing.
+    /// parent whose rectangle is `outer`, which it may stretch with. A plain node covers nothing,
+    /// and nor do nodes in 3D views.
     fn rect_in(&self, outer: Rect) -> Option<Rect> {
         let size = self.size()?;
         let (stretch, [x, y]) = match &self.kind {
             Kind::Sprite(sprite) => (sprite.stretch, sprite.pivot),
             Kind::Rect(rect) => (rect.stretch, rect.pivot),
             Kind::Area(area) => (area.stretch, area.pivot),
+            Kind::View3d(view) => (view.stretch, view.pivot),
             Kind::Text(text) => {
                 let [x, y] = text.pivot;
                 let x = x + size[0] * text.align().fraction();
                 ([0.0, 0.0], [x, y])
             }
-            Kind::Node | Kind::Tilemap(_) | Kind::TileLayer(_) => ([0.0, 0.0], [0.0, 0.0]),
+            Kind::Node
+            | Kind::Tilemap(_)
+            | Kind::TileLayer(_)
+            | Kind::Mesh(_)
+            | Kind::Model(_)
+            | Kind::Billboard(_) => ([0.0, 0.0], [0.0, 0.0]),
         };
         let [width, height] = if stretch == [0.0, 0.0] {
             size
@@ -885,10 +1120,12 @@ impl Scene {
             sheet_defs: sheets,
             sheets: HashMap::new(),
             tilesets: HashMap::new(),
+            meshes: Vec::new(),
+            models: HashMap::new(),
         };
         let root = scene.root();
         for node in &nodes {
-            scene.build(&mut build, node, root, "")?;
+            scene.build(&mut build, node, root, "", false)?;
         }
         Ok(scene)
     }
@@ -922,19 +1159,22 @@ impl Scene {
         self.size = size;
     }
 
-    /// Adds the node `def` describes, and its children, at the end of `parent`'s children.
+    /// Adds the node `def` describes, and its children, at the end of `parent`'s children, which
+    /// is a 3D view or in one if `in_3d`.
     fn build(
         &mut self,
         build: &mut Build,
         def: &NodeDef,
         parent: NodeId,
         path: &str,
+        in_3d: bool,
     ) -> Result<()> {
         let path = if path.is_empty() {
             def.name.clone()
         } else {
             format!("{path}/{}", def.name)
         };
+        check_3d(def, in_3d).map_err(|err| build.error(&path, &err))?;
         let kind = match &def.kind {
             KindDef::TileLayer(layer) => {
                 let Some(Kind::Tilemap(map)) = self.get_mut(parent).map(|node| &mut node.kind)
@@ -950,13 +1190,19 @@ impl Scene {
         node.anchor = def.anchor;
         node.rotation = def.rotation;
         node.scale = [def.scale_x, def.scale_y];
+        // A plain node from a file of its own may be placed in a view without saying so.
+        node.spatial = in_3d.then(|| Spatial {
+            placement: def.placement3.unwrap_or_default(),
+            local: Affine3::IDENTITY,
+        });
         node.update_local();
         node.visible = def.visible;
         node.tags = def.tags.clone();
         node.props = def.props.clone();
+        let inside = in_3d || matches!(def.kind, KindDef::View3d(_));
         let id = self.attach(node, parent);
         for child in &def.children {
-            self.build(build, child, id, &path)?;
+            self.build(build, child, id, &path, inside)?;
         }
         Ok(())
     }
@@ -1132,8 +1378,10 @@ impl Scene {
                     )
                 })?
             };
-            if let Keys::Cell(keys) = &track.keys {
-                self.check_cells(target, keys)?;
+            match &track.keys {
+                Keys::Cell(keys) => self.check_cells(target, keys)?,
+                Keys::Number { property, .. } => self.check_property(target, *property)?,
+                Keys::Visible(_) => {}
             }
             targets.push(target);
         }
@@ -1167,11 +1415,8 @@ impl Scene {
                     }
                 }
                 Keys::Cell(keys) => {
-                    if steps
-                        && let Some(cell) = clip::step(keys, time)
-                        && let Kind::Sprite(sprite) = &mut node.kind
-                    {
-                        sprite.set_cell(cell)?;
+                    if steps && let Some(cell) = clip::step(keys, time) {
+                        node.kind.set_cell(cell).transpose()?;
                     }
                 }
             }
@@ -1179,19 +1424,36 @@ impl Scene {
         Ok(())
     }
 
-    /// Fails unless `id` is a sprite node from a sheet with every cell of `keys`.
+    /// Fails unless `id` has `property`: `rotation` only in the 2D scene, and `z`, `yaw`, `pitch`,
+    /// `roll` and `scale_z` only in 3D views.
+    fn check_property(&self, id: NodeId, property: Property) -> Result<(), String> {
+        let name = property.name();
+        match self.node(id).spatial {
+            Some(_) if !property.is_3d() => Err(format!(
+                "{} is placed in 3D, where it turns by yaw, pitch and roll, so it has no {name}",
+                self.describe(id)
+            )),
+            None if !property.is_2d() => Err(format!(
+                "{} isn't in a 3D view, so it has no {name}",
+                self.describe(id)
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// Fails unless `id` is a sprite, billboard or mesh node from a sheet with every cell of
+    /// `keys`.
     fn check_cells(&self, id: NodeId, keys: &[(f32, [u32; 2])]) -> Result<(), String> {
-        let sheet = match &self.node(id).kind {
-            Kind::Sprite(SpriteNode {
-                sheet: Some(sheet), ..
-            }) => sheet,
-            Kind::Sprite(_) => {
+        let kind = &self.node(id).kind;
+        let sheet = match kind.sheet() {
+            Some(sheet) => sheet,
+            None if matches!(kind, Kind::Sprite(_) | Kind::Billboard(_) | Kind::Mesh(_)) => {
                 return Err(format!(
                     "{}'s sprite isn't from a sheet, so it has no cells",
                     self.describe(id)
                 ));
             }
-            kind => {
+            None => {
                 return Err(format!(
                     "{} is {}, which has no cell",
                     self.describe(id),
@@ -1266,6 +1528,109 @@ impl Scene {
         rect.contains(inverse.apply(point))
     }
 
+    /// The 3D view a node placed in 3D is in, if it is.
+    pub fn view_of(&self, id: NodeId) -> Option<NodeId> {
+        let mut at = id;
+        while self.node(at).spatial.is_some() {
+            at = self.node(at).parent?;
+        }
+        (at != id && matches!(self.node(at).kind, Kind::View3d(_))).then_some(at)
+    }
+
+    /// For a node placed in 3D, from its coordinates to its view's world's: its own transform,
+    /// then its parent's, and so on up to its view. `None` for a node of the 2D scene.
+    pub fn transform_3d(&self, id: NodeId) -> Option<Affine3> {
+        let node = self.node(id);
+        let local = node.local_3d()?;
+        let parent = node.parent?;
+        match self.transform_3d(parent) {
+            Some(above) => Some(above * local),
+            None => Some(local),
+        }
+    }
+
+    /// The box in its view's world around what a node placed in 3D shows, if it shows anything:
+    /// a mesh's or a model's, moved as it's drawn, or the flat box a billboard stands in, facing
+    /// its view's camera. A plain node shows nothing, and nor does a node of the 2D scene.
+    pub fn bounds_3d(&self, id: NodeId) -> Option<Bounds3> {
+        let transform = self.transform_3d(id)?;
+        match &self.node(id).kind {
+            Kind::Mesh(mesh) => Some(mesh.mesh.bounds()?.transformed(&transform)),
+            Kind::Model(model) => Some(model.model.bounds()?.transformed(&transform)),
+            Kind::Billboard(billboard) => {
+                let Kind::View3d(view) = &self.node(self.view_of(id)?).kind else {
+                    return None;
+                };
+                let (right, _) = view.camera.billboard_axes();
+                let [width, height] = billboard.size;
+                let across = scale3(right, width / 2.0);
+                let foot = transform.translation;
+                let head = add3(foot, [0.0, height, 0.0]);
+                Bounds3::from_points([
+                    add3(foot, across),
+                    add3(foot, scale3(across, -1.0)),
+                    add3(head, across),
+                    add3(head, scale3(across, -1.0)),
+                ])
+            }
+            _ => None,
+        }
+    }
+
+    /// The ray from the camera of the 3D view `view` through `point`, in the scene's coordinates,
+    /// along which everything that shows there lies, if the point is in the view. `None` if it
+    /// isn't, or `view` isn't a 3D view.
+    pub fn ray(&self, view: NodeId, point: [f32; 2]) -> Option<Ray> {
+        let Kind::View3d(node) = &self.node(view).kind else {
+            return None;
+        };
+        let rect = self.bounds(view)?;
+        rect.contains(point).then(|| {
+            let [x, y] = [point[0] - rect.x, point[1] - rect.y];
+            node.camera.ray([x, y], [rect.w, rect.h])
+        })
+    }
+
+    /// The nodes of the 3D view `view` under `point`, in the scene's coordinates, nearest first:
+    /// those that show, whose boxes (see [`Scene::bounds_3d`]) the ray through the point enters.
+    /// Nothing is under a point outside the view, or if `view` isn't a view that shows.
+    pub fn pick(&self, view: NodeId, point: [f32; 2]) -> Vec<NodeId> {
+        if !self.is_shown(view) {
+            return Vec::new();
+        }
+        let Some(ray) = self.ray(view, point) else {
+            return Vec::new();
+        };
+        let mut hits = Vec::new();
+        let mut stack: Vec<NodeId> = self.node(view).children.iter().rev().copied().collect();
+        while let Some(id) = stack.pop() {
+            let node = self.node(id);
+            if !node.visible {
+                continue;
+            }
+            if let Some(distance) = self.bounds_3d(id).and_then(|bounds| ray.hit_box(&bounds)) {
+                hits.push((distance, id));
+            }
+            stack.extend(node.children.iter().rev());
+        }
+        // Stable, so nodes as near as each other are in the order they draw.
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        hits.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// Whether `id` and every node it's inside are visible.
+    fn is_shown(&self, id: NodeId) -> bool {
+        let mut at = Some(id);
+        while let Some(id) = at {
+            let node = self.node(id);
+            if !node.visible {
+                return false;
+            }
+            at = node.parent;
+        }
+        true
+    }
+
     /// The tilemap a tilemap node holds, or the one a tile layer node is a layer of, with the
     /// tilemap node's ID.
     pub fn tilemap(&self, id: NodeId) -> Option<(NodeId, &TilemapNode)> {
@@ -1338,7 +1703,8 @@ impl Scene {
     /// scene's root needs a name, since the root has none.
     ///
     /// Fails if the name isn't one a node can have or one of `parent`'s children has it already,
-    /// if `from` is a tile layer, which only its tilemap can hold, or if the copy would place a
+    /// if `from` is a tile layer, which only its tilemap can hold, if `from` is placed in 3D but
+    /// `parent` isn't a 3D view or in one, or the other way round, or if the copy would place a
     /// node deeper than scenes hold, 200 levels below their root.
     pub fn add(
         &mut self,
@@ -1350,6 +1716,15 @@ impl Scene {
         let copied = source.node(from);
         if let Kind::TileLayer(_) = copied.kind {
             return Err("a tile layer can only be copied with its tilemap".into());
+        }
+        let into_3d = self.holds_3d(parent);
+        if into_3d != copied.spatial.is_some() {
+            let what = a_node_of(copied.kind.name());
+            return Err(if into_3d {
+                format!("{what} of the 2D scene can't be copied into a 3D view")
+            } else {
+                format!("{what} placed in 3D can only be copied into a 3D view")
+            });
         }
         let name = name.unwrap_or(&copied.name);
         if name.is_empty() {
@@ -1373,6 +1748,12 @@ impl Scene {
         let id = self.copy(parent, source, from);
         self.node_mut(id).name = name.to_owned();
         Ok(id)
+    }
+
+    /// Whether the nodes inside `id` are placed in 3D: it's a 3D view, or it's in one.
+    fn holds_3d(&self, id: NodeId) -> bool {
+        let node = self.node(id);
+        node.spatial.is_some() || matches!(node.kind, Kind::View3d(_))
     }
 
     /// Adds a copy of `from` of `source`, and everything inside it, at the end of `parent`'s
@@ -1499,7 +1880,29 @@ impl Scene {
                             .draw_layer_at(canvas, layer.layer, transform.translation);
                     }
                 }
-                Kind::Node | Kind::Area(_) | Kind::Tilemap(_) => {}
+                Kind::View3d(view) => {
+                    // A view moves with its node, but doesn't turn or stretch, and its children
+                    // are its world's.
+                    let [x, y] = transform.translation;
+                    let shown = Rect::new(x + rect.x, y + rect.y, rect.w, rect.h);
+                    if shown.overlaps(&visible) {
+                        let mut world = canvas.begin_3d(View3d {
+                            camera: view.camera,
+                            rect: shown,
+                            lighting: view.lighting,
+                        });
+                        for &child in &node.children {
+                            self.draw_3d(&mut world, child, Affine3::IDENTITY);
+                        }
+                    }
+                    return;
+                }
+                Kind::Node
+                | Kind::Area(_)
+                | Kind::Tilemap(_)
+                | Kind::Mesh(_)
+                | Kind::Model(_)
+                | Kind::Billboard(_) => {}
             }
         }
         for &child in &node.children {
@@ -1507,6 +1910,67 @@ impl Scene {
             self.draw_tree(canvas, child, &child_placed, visible);
         }
     }
+
+    /// Draws `id`, a node placed in 3D in a view, and the nodes inside it, inside a node placed
+    /// by `parent`.
+    fn draw_3d(&self, world: &mut Canvas3d, id: NodeId, parent: Affine3) {
+        let node = self.node(id);
+        if !node.visible {
+            return;
+        }
+        let transform = parent * node.local_3d().unwrap_or(Affine3::IDENTITY);
+        match &node.kind {
+            Kind::Mesh(mesh) => {
+                world.draw_mesh(&mesh.mesh, transform, mesh.sprite.as_ref(), mesh.tint);
+            }
+            Kind::Model(model) => world.draw_model(&model.model, transform, model.tint),
+            Kind::Billboard(billboard) => world.draw_billboard(
+                &billboard.sprite,
+                transform.translation,
+                billboard.size,
+                billboard.tint,
+            ),
+            _ => {}
+        }
+        for &child in &node.children {
+            self.draw_3d(world, child, transform);
+        }
+    }
+}
+
+/// Fails unless the node `def` can be where it is, in a 3D view if `in_3d`, as its instances have
+/// put it: only views hold meshes, models and billboards, and views hold only them, plain nodes
+/// and the scenes instances place, which are placed in 3D, without a `rotation` or an `anchor`.
+fn check_3d(def: &NodeDef, in_3d: bool) -> Result<(), String> {
+    let kind = def.kind.name();
+    if in_3d {
+        if !file::can_be_3d(kind) {
+            return Err(format!(
+                "{} can't be in a 3D view, which holds only mesh, model, billboard and plain \
+                 nodes, and instances of scenes of them",
+                a_node_of(kind)
+            ));
+        }
+        if def.placement3.is_none() && (def.rotation != 0.0 || def.anchor.is_some()) {
+            return Err(
+                "a node in a 3D view turns by `yaw`, `pitch` and `roll`, and has no \
+                        `rotation` or `anchor`"
+                    .into(),
+            );
+        }
+    } else if def.kind.is_3d() {
+        return Err(format!(
+            "{} is only in a 3D view: put it inside a view3d node",
+            a_node_of(kind)
+        ));
+    } else if def.placement3.is_some() {
+        return Err(
+            "only nodes in 3D views are placed in 3D, with `z`, `yaw`, `pitch`, `roll` \
+                    and `scale_z`"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 /// Fills a new layer of `map` with the tiles `layer` describes, and returns the layer node.
@@ -1635,7 +2099,7 @@ impl Expand<'_> {
                         message: format!("node `{path}`: {message}"),
                     };
                     for (target, change) in &instance.overrides {
-                        self.change(&mut placed, target, change)
+                        self.change(&mut placed, target, change, &instance.scene)
                             .map_err(|err| error(format!("overriding `{target}`: {err}")))?;
                     }
                     for child in node.children {
@@ -1699,8 +2163,14 @@ impl Expand<'_> {
                 children: Vec::new(),
                 ..*def
             };
-            if let KindDef::Sprite(sprite) = &mut node.kind {
-                sprite.sheet = sheet_key(path, &sprite.sheet);
+            match &mut node.kind {
+                KindDef::Sprite(SpriteDef { sheet, .. })
+                | KindDef::Billboard(BillboardDef { sheet, .. })
+                | KindDef::Mesh(MeshDef {
+                    sprite: Some(CellDef { sheet, .. }),
+                    ..
+                }) => *sheet = sheet_key(path, sheet),
+                _ => {}
             }
             steps.push(ExpandStep::Node {
                 node,
@@ -1715,17 +2185,20 @@ impl Expand<'_> {
         }
     }
 
-    /// Changes the node at `target` among `nodes` by the fields `change` sets.
+    /// Changes the node at `target` among `nodes`, the nodes of the scene file `file` with any
+    /// of its instances expanded, by the fields `change` sets.
     fn change(
         &self,
         nodes: &mut [NodeDef],
         target: &str,
         change: &BTreeMap<String, Value>,
+        file: &str,
     ) -> Result<(), String> {
         let missing = || format!("there's no node `{target}` to override");
         let mut names = target.split('/').peekable();
         let mut list = nodes;
         let mut tilemap = None;
+        let mut in_3d = false;
         let mut parent = String::new();
         let node = loop {
             let name = names.next().ok_or_else(missing)?;
@@ -1740,6 +2213,7 @@ impl Expand<'_> {
                 KindDef::Tilemap(map) => Some([map.columns, map.rows]),
                 _ => None,
             };
+            in_3d = matches!(node.kind, KindDef::View3d(_)) || node.placement3.is_some();
             parent = if parent.is_empty() {
                 node.name.clone()
             } else {
@@ -1747,17 +2221,25 @@ impl Expand<'_> {
             };
             list = &mut node.children;
         };
-        // Sprites name their sheets with their files' paths here.
+        // Sprites name their sheets with their files' paths here: the file of the sheet the
+        // node shows, or a mesh showing none, the file the instance places.
         let mut change = change.clone();
-        if let (Some(Value::String(sheet)), KindDef::Sprite(sprite)) =
-            (change.get_mut("sheet"), &node.kind)
-        {
-            let (file, _) = sprite.sheet.rsplit_once('#').unwrap_or_default();
-            *sheet = sheet_key(file, sheet);
+        if let Some(Value::String(sheet)) = change.get_mut("sheet") {
+            let shown = match &node.kind {
+                KindDef::Sprite(sprite) => Some(&sprite.sheet),
+                KindDef::Billboard(billboard) => Some(&billboard.sheet),
+                KindDef::Mesh(mesh) => mesh.sprite.as_ref().map(|sprite| &sprite.sheet),
+                _ => None,
+            };
+            let from = shown
+                .and_then(|key| key.rsplit_once('#'))
+                .map_or(file, |(file, _)| file);
+            *sheet = sheet_key(from, sheet);
         }
         let inside = file::Parent {
             path: &parent,
             tilemap,
+            in_3d,
         };
         let mut changed = file::override_node(node, &change, &self.sheets, &inside)?;
         changed.children = std::mem::take(&mut node.children);
@@ -1776,6 +2258,9 @@ struct Build<'a> {
     sheet_defs: BTreeMap<String, SheetDef>,
     sheets: HashMap<String, SpriteSheet>,
     tilesets: HashMap<String, (Tileset, Rc<TileKinds>)>,
+    /// The meshes of the shapes made so far, so mesh nodes of the same shape share one.
+    meshes: Vec<(Shape, Mesh)>,
+    models: HashMap<String, Model>,
 }
 
 impl Build<'_> {
@@ -1897,7 +2382,72 @@ impl Build<'_> {
             KindDef::TileLayer(_) => {
                 return Err(self.error(node, "a tile layer must be the child of a tilemap"));
             }
+            KindDef::View3d(view) => Kind::View3d(View3dNode {
+                size: view.size,
+                stretch: view.stretch,
+                pivot: view.pivot,
+                camera: view.camera,
+                lighting: view.lighting,
+            }),
+            KindDef::Mesh(mesh) => {
+                let (sprite, sheet) = match &mesh.sprite {
+                    Some(sprite) => {
+                        let (image, sheet) = self.sprite(&sprite.sheet, sprite.cell, node)?;
+                        (Some(image), Some(sheet))
+                    }
+                    None => (None, None),
+                };
+                Kind::Mesh(MeshNode {
+                    mesh: self.mesh(&mesh.shape)?,
+                    sprite,
+                    sheet,
+                    tint: mesh.tint,
+                })
+            }
+            KindDef::Model(model) => Kind::Model(ModelNode {
+                model: self.model(&model.model)?,
+                tint: model.tint,
+            }),
+            KindDef::Billboard(billboard) => {
+                let (sprite, sheet) = self.sprite(&billboard.sheet, billboard.cell, node)?;
+                Kind::Billboard(BillboardNode {
+                    sprite,
+                    sheet: Some(sheet),
+                    size: billboard.size,
+                    tint: billboard.tint,
+                })
+            }
         };
         Ok(kind)
+    }
+
+    /// The sprite in `cell` of the sheet `key`, `file#sheet`, and the sheet.
+    fn sprite(&mut self, key: &str, cell: [u32; 2], node: &str) -> Result<(Sprite, SpriteSheet)> {
+        let [column, row] = cell;
+        let sheet = self.sheet(key, node)?.clone();
+        let sprite = sheet
+            .try_sprite(column, row)
+            .map_err(|err| self.error(node, &err))?;
+        Ok((sprite, sheet))
+    }
+
+    /// The mesh of `shape`, making it if it hasn't been.
+    fn mesh(&mut self, shape: &Shape) -> Result<Mesh> {
+        if let Some((_, mesh)) = self.meshes.iter().find(|(made, _)| made == shape) {
+            return Ok(mesh.clone());
+        }
+        let mesh = self.assets.mesh(&shape.mesh_data())?;
+        self.meshes.push((*shape, mesh.clone()));
+        Ok(mesh)
+    }
+
+    /// The model file at `path`, loading it if it hasn't been.
+    fn model(&mut self, path: &str) -> Result<Model> {
+        if let Some(model) = self.models.get(path) {
+            return Ok(model.clone());
+        }
+        let model = self.assets.model(path)?;
+        self.models.insert(path.to_owned(), model.clone());
+        Ok(model)
     }
 }

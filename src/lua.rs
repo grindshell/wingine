@@ -92,7 +92,8 @@
 //!   the mover too. `step` returns whether a step started.
 //! - A [`SceneNode`] is userdata for a node of a [`Scene`], which every node of the scene shares;
 //!   two of the same node are `==`. Finding nodes: `node:name()`, `node:kind()` (`"node"`,
-//!   `"sprite"`, `"rect"`, `"text"`, `"area"`, `"tilemap"` or `"tile_layer"`), `node:path()`
+//!   `"sprite"`, `"rect"`, `"text"`, `"area"`, `"tilemap"`, `"tile_layer"`, `"view3d"`, `"mesh"`,
+//!   `"model"` or `"billboard"`), `node:path()`
 //!   (the names from the root, joined by `/`), `node:find(path)` (the node `path` leads to from
 //!   this one, or `nil`), `node:tagged(tag)` (this node and those inside it with the tag, in draw
 //!   order), `node:parent()`, `node:children()`, `node:tags()`, `node:has_tag(tag)` and
@@ -101,16 +102,27 @@
 //!   `node:set_anchor(x, y)` (or `nil` to place it from its parent's origin), `node:rotation()`,
 //!   `node:set_rotation(angle)`, `node:scale()`, `node:set_scale(x, y)` (`y` is `x` if left
 //!   out), `node:world_position()` (its origin in the scene's coordinates),
-//!   `node:is_visible()` and `node:set_visible(visible)`; numbers must be finite. What they
-//!   cover: `node:size()` (before stretching with its parent), `node:set_size(width, height)`
-//!   (sprites, rects and areas), `node:bounds()` (a `Rect` in the scene's coordinates, or `nil`
-//!   for a plain node) and `node:contains(x, y)`. A scene is laid out on the canvas when it's
-//!   loaded and each time it's drawn, and one drawn without a camera is in canvas pixels, so
-//!   `contains` tests the mouse against a node. What they show: `node:set_sprite(sprite)`,
-//!   `node:set_cell(column, row)` (a cell of the sheet the scene file gave it),
-//!   `node:set_tint(tint)` (sprites), `node:set_color(color)` (rects and text), `node:text()` and
-//!   `node:set_text(text)` (text). Posing: `node:pose(clip, time, weight)` poses the node and
-//!   those inside it as `clip` has them `time` seconds after it started; `weight`, from 0 to 1
+//!   `node:is_visible()` and `node:set_visible(visible)`; numbers must be finite. Nodes in 3D
+//!   views have no rotation or anchor, but `node:position_3d()` and
+//!   `node:set_position_3d(position)` (a vector, of which `position` is `x` and `y`),
+//!   `node:orientation()` and `node:set_orientation(yaw, pitch, roll)` (`pitch` and `roll` 0 if
+//!   left out), `node:scale_3d()`, `node:set_scale_3d(scale)` (a vector or a number),
+//!   `node:world_position_3d()` (in the view's world) and `node:bounds_3d()` (the corners of the
+//!   box around what a mesh, model or billboard shows, or nothing). A view has `node:camera()`,
+//!   `node:set_camera(camera)`, `node:lighting()` (its colors numbers),
+//!   `node:set_lighting(lighting)`, `node:pick(x, y)` (its nodes under a point of the scene,
+//!   nearest first) and `node:project(point)` (where a point of its world shows in the scene, or
+//!   nothing). What they cover: `node:size()` (before stretching with its parent, or a
+//!   billboard's), `node:set_size(width, height)` (sprites, rects, areas, views and billboards),
+//!   `node:bounds()` (a `Rect` in the scene's coordinates, or `nil` for a plain node or one in a
+//!   view) and `node:contains(x, y)`. A scene is laid out on the canvas when it's loaded and each
+//!   time it's drawn, and one drawn without a camera is in canvas pixels, so `contains` tests the
+//!   mouse against a node. What they show: `node:set_sprite(sprite)`, `node:set_cell(column, row)`
+//!   (a cell of the sheet the scene file gave a sprite, billboard or mesh), `node:set_tint(tint)`
+//!   (sprites, meshes, models and billboards), `node:set_color(color)` (rects and text),
+//!   `node:text()` and `node:set_text(text)` (text). Posing: `node:pose(clip, time, weight)`
+//!   poses the node and those inside it as `clip` has them `time` seconds after it started;
+//!   `weight`, from 0 to 1
 //!   and 1 if left out, moves numbers only that fraction of the way there, and changes
 //!   visibility and cells only from a half, for crossfading from one clip to another. Tracks
 //!   whose nodes aren't there are an error, and nothing changes. Tilemaps, through a tilemap
@@ -153,8 +165,8 @@ use crate::{
     input::{Control, GamepadButton, Key, MouseButton},
     math::{Bounds3, Rect},
     scene::{
-        AreaNode, Clip, Kind, NodeId, Props, RectNode, Scene, SpriteNode, TextNode, TilemapNode,
-        Value, a_node_of,
+        AreaNode, BillboardNode, Clip, Kind, MeshNode, ModelNode, Node, NodeId, Placement3, Props,
+        RectNode, Scene, SpriteNode, TextNode, TilemapNode, Value, View3dNode, a_node_of,
     },
     tilemap::{Tile, TileId, Tilemap, Tileset},
 };
@@ -698,7 +710,6 @@ impl mlua::UserData for Model {
 
 /// A box's least and greatest corners, as vectors, or nothing for none.
 fn corners(bounds: Option<Bounds3>) -> (Option<mlua::Vector>, Option<mlua::Vector>) {
-    let vector = |[x, y, z]: [f32; 3]| mlua::Vector::new(x, y, z);
     match bounds {
         Some(bounds) => (Some(vector(bounds.min)), Some(vector(bounds.max))),
         None => (None, None),
@@ -769,6 +780,40 @@ impl FromLua for Lighting {
 /// A Luau vector's components.
 pub(crate) fn vector3(vector: mlua::Vector) -> [f32; 3] {
     [vector.x(), vector.y(), vector.z()]
+}
+
+/// A Luau vector of `x`, `y` and `z`.
+fn vector([x, y, z]: [f32; 3]) -> mlua::Vector {
+    mlua::Vector::new(x, y, z)
+}
+
+impl IntoLua for Camera3d {
+    /// A table `{ position, target, up, fov, near, far }`, with `height` for `fov` if it's
+    /// orthographic, as cameras are read.
+    fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
+        let table = lua.create_table_with_capacity(0, 6)?;
+        table.set("position", vector(self.position))?;
+        table.set("target", vector(self.target))?;
+        table.set("up", vector(self.up))?;
+        match self.projection {
+            Projection::Perspective { fov_y } => table.set("fov", fov_y)?,
+            Projection::Orthographic { height } => table.set("height", height)?,
+        }
+        table.set("near", self.near)?;
+        table.set("far", self.far)?;
+        Ok(mlua::Value::Table(table))
+    }
+}
+
+impl IntoLua for Lighting {
+    /// A table `{ direction, color, ambient }`, its colors numbers `0xRRGGBBAA`.
+    fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
+        let table = lua.create_table_with_capacity(0, 3)?;
+        table.set("direction", vector(self.direction))?;
+        table.set("color", packed_color(self.color))?;
+        table.set("ambient", packed_color(self.ambient))?;
+        Ok(mlua::Value::Table(table))
+    }
 }
 
 impl FromLua for Tile {
@@ -970,6 +1015,47 @@ impl SceneNode {
             matches!(kind, Kind::TileLayer(_)).then_some(())
         })
     }
+
+    /// Runs `f` with the node and where it's placed in 3D. Fails unless it's in a 3D view.
+    fn read_3d<R>(&self, f: impl FnOnce(&Node, Placement3) -> R) -> mlua::Result<R> {
+        self.read(|scene, id| {
+            let node = scene.node(id);
+            match node.placement3() {
+                Some(placement) => Ok(f(node, placement)),
+                None => Err(not_3d(&scene.describe(id))),
+            }
+        })?
+    }
+
+    /// Runs `f` with the node and where it's placed in 3D, to change them. Fails unless it's in
+    /// a 3D view.
+    fn write_3d(&self, f: impl FnOnce(&mut Node, &mut Placement3)) -> mlua::Result<()> {
+        self.write(|scene, id| {
+            let described = scene.describe(id);
+            let node = scene.node_mut(id);
+            let mut placement = node.placement3().ok_or_else(|| not_3d(&described))?;
+            f(node, &mut placement);
+            node.set_placement3(placement).map_err(mlua::Error::runtime)
+        })?
+    }
+
+    /// Fails if the node is placed in 3D, where `what` isn't: it turns by yaw, pitch and roll.
+    fn check_2d(&self, what: &str) -> mlua::Result<()> {
+        self.read(|scene, id| match scene.node(id).placement3() {
+            Some(_) => Err(mlua::Error::runtime(format!(
+                "{} is placed in 3D, in a 3D view, so it has no {what}: it turns by yaw, pitch \
+                 and roll",
+                scene.describe(id)
+            ))),
+            None => Ok(()),
+        })?
+    }
+}
+
+fn not_3d(described: &str) -> mlua::Error {
+    mlua::Error::runtime(format!(
+        "{described} isn't in a 3D view, so it isn't placed in 3D"
+    ))
 }
 
 fn removed() -> mlua::Error {
@@ -1028,10 +1114,12 @@ impl mlua::UserData for SceneNode {
             node.write(|scene, id| scene.node_mut(id).set_position([x, y]))
         });
         methods.add_method("rotation", |_, node, ()| {
+            node.check_2d("rotation")?;
             node.read(|scene, id| scene.node(id).rotation())
         });
         methods.add_method("set_rotation", |_, node, rotation: f32| {
             check_finite(&[rotation], "a rotation")?;
+            node.check_2d("rotation")?;
             node.write(|scene, id| scene.node_mut(id).set_rotation(rotation))
         });
         methods.add_method("scale", |_, node, ()| {
@@ -1064,9 +1152,125 @@ impl mlua::UserData for SceneNode {
                         return Err(mlua::Error::runtime(message));
                     }
                 };
+                if anchor.is_some() {
+                    node.check_2d("anchor")?;
+                }
                 node.write(|scene, id| scene.node_mut(id).set_anchor(anchor))
             },
         );
+        methods.add_method("position_3d", |_, node, ()| {
+            node.read_3d(|node, placement| {
+                let [x, y] = node.position();
+                vector([x, y, placement.z])
+            })
+        });
+        methods.add_method("set_position_3d", |_, node, position: mlua::Vector| {
+            let [x, y, z] = vector3(position);
+            check_finite(&[x, y, z], "a position")?;
+            node.write_3d(|node, placement| {
+                node.set_position([x, y]);
+                placement.z = z;
+            })
+        });
+        methods.add_method("orientation", |_, node, ()| {
+            node.read_3d(|_, placement| (placement.yaw, placement.pitch, placement.roll))
+        });
+        methods.add_method(
+            "set_orientation",
+            |_, node, (yaw, pitch, roll): (f32, Option<f32>, Option<f32>)| {
+                let [pitch, roll] = [pitch.unwrap_or(0.0), roll.unwrap_or(0.0)];
+                check_finite(&[yaw, pitch, roll], "an orientation")?;
+                node.write_3d(|_, placement| {
+                    placement.yaw = yaw;
+                    placement.pitch = pitch;
+                    placement.roll = roll;
+                })
+            },
+        );
+        methods.add_method("scale_3d", |_, node, ()| {
+            node.read_3d(|node, placement| {
+                let [x, y] = node.scale();
+                vector([x, y, placement.scale_z])
+            })
+        });
+        methods.add_method("set_scale_3d", |_, node, scale: mlua::Value| {
+            let [x, y, z] = match scale {
+                mlua::Value::Vector(scale) => vector3(scale),
+                mlua::Value::Number(scale) => [scale as f32; 3],
+                mlua::Value::Integer(scale) => [scale as f32; 3],
+                _ => {
+                    let message = "a scale is a number, or a vector to scale each axis";
+                    return Err(mlua::Error::runtime(message));
+                }
+            };
+            check_finite(&[x, y, z], "a scale")?;
+            node.write_3d(|node, placement| {
+                node.set_scale([x, y]);
+                placement.scale_z = z;
+            })
+        });
+        methods.add_method("world_position_3d", |_, node, ()| {
+            let transform = node.read(|scene, id| match scene.transform_3d(id) {
+                Some(transform) => Ok(transform),
+                None => Err(not_3d(&scene.describe(id))),
+            })??;
+            Ok(vector(transform.translation))
+        });
+        methods.add_method("bounds_3d", |_, node, ()| {
+            node.read(|scene, id| corners(scene.bounds_3d(id)))
+        });
+        methods.add_method("camera", |_, node, ()| {
+            node.read_kind("camera", |kind| match kind {
+                Kind::View3d(view) => Some(view.camera),
+                _ => None,
+            })
+        });
+        methods.add_method("set_camera", |_, node, camera: Camera3d| {
+            node.write_kind("camera", |kind| match kind {
+                Kind::View3d(view) => {
+                    view.camera = camera;
+                    Some(())
+                }
+                _ => None,
+            })
+        });
+        methods.add_method("lighting", |_, node, ()| {
+            node.read_kind("lighting", |kind| match kind {
+                Kind::View3d(view) => Some(view.lighting),
+                _ => None,
+            })
+        });
+        methods.add_method("set_lighting", |_, node, lighting: Lighting| {
+            node.write_kind("lighting", |kind| match kind {
+                Kind::View3d(view) => {
+                    view.lighting = lighting;
+                    Some(())
+                }
+                _ => None,
+            })
+        });
+        methods.add_method("pick", |_, node, (x, y): (f32, f32)| {
+            node.read_kind("nodes to pick", |kind| {
+                matches!(kind, Kind::View3d(_)).then_some(())
+            })?;
+            let picked = node.read(|scene, id| scene.pick(id, [x, y]))?;
+            Ok(picked.into_iter().map(|id| node.at(id)).collect::<Vec<_>>())
+        });
+        methods.add_method("project", |_, node, point: mlua::Vector| {
+            let camera = node.read_kind("camera", |kind| match kind {
+                Kind::View3d(view) => Some(view.camera),
+                _ => None,
+            })?;
+            let rect = node.read(|scene, id| scene.bounds(id))?;
+            let shown = rect.and_then(|rect| {
+                let [x, y] = camera.project(vector3(point), [rect.w, rect.h])?;
+                Some((rect.x + x, rect.y + y))
+            });
+            Ok(match shown {
+                Some((x, y)) => (Some(x), Some(y)),
+                None => (None, None),
+            })
+        });
         methods.add_method("world_position", |_, node, ()| {
             let [x, y] = node.read(|scene, id| scene.transform(id).apply([0.0, 0.0]))?;
             Ok((x, y))
@@ -1162,7 +1366,11 @@ impl mlua::UserData for SceneNode {
         );
         methods.add_method("size", |_, node, ()| {
             let [width, height] = node.read(|scene, id| {
-                scene.node(id).size().ok_or_else(|| {
+                let node = scene.node(id);
+                if let Kind::Billboard(billboard) = node.kind() {
+                    return Ok(billboard.size);
+                }
+                node.size().ok_or_else(|| {
                     let described = scene.describe(id);
                     let is = a_node_of(scene.node(id).kind().name());
                     mlua::Error::runtime(format!("{described} is {is}, which has no size"))
@@ -1176,7 +1384,9 @@ impl mlua::UserData for SceneNode {
                 match kind {
                     Kind::Sprite(SpriteNode { size, .. })
                     | Kind::Rect(RectNode { size, .. })
-                    | Kind::Area(AreaNode { size, .. }) => *size = [width, height],
+                    | Kind::Area(AreaNode { size, .. })
+                    | Kind::View3d(View3dNode { size, .. })
+                    | Kind::Billboard(BillboardNode { size, .. }) => *size = [width, height],
                     _ => return None,
                 }
                 Some(())
@@ -1195,11 +1405,8 @@ impl mlua::UserData for SceneNode {
             },
         );
         methods.add_method("set_cell", |_, node, (column, row): (u32, u32)| {
-            node.write_kind("cell", |kind| match kind {
-                Kind::Sprite(sprite) => Some(sprite.set_cell([column, row])),
-                _ => None,
-            })?
-            .map_err(mlua::Error::runtime)
+            node.write_kind("cell", |kind| kind.set_cell([column, row]))?
+                .map_err(mlua::Error::runtime)
         });
         methods.add_method(
             "pose",
@@ -1212,12 +1419,15 @@ impl mlua::UserData for SceneNode {
             },
         );
         methods.add_method("set_tint", |_, node, tint: Color| {
-            node.write_kind("tint", |kind| match kind {
-                Kind::Sprite(node) => {
-                    node.tint = tint;
-                    Some(())
+            node.write_kind("tint", |kind| {
+                match kind {
+                    Kind::Sprite(SpriteNode { tint: t, .. })
+                    | Kind::Mesh(MeshNode { tint: t, .. })
+                    | Kind::Model(ModelNode { tint: t, .. })
+                    | Kind::Billboard(BillboardNode { tint: t, .. }) => *t = tint,
+                    _ => return None,
                 }
-                _ => None,
+                Some(())
             })
         });
         methods.add_method("set_color", |_, node, color: Color| {

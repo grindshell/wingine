@@ -2195,6 +2195,166 @@ fn cameras_place_points_on_the_canvas_and_rays_into_the_world() {
     assert!(both.contains("not both"), "{both}");
 }
 
+/// A 3D view filling the canvas, seen from the front through an orthographic camera 2 units high,
+/// unlit, so a unit is 10 pixels with the world's origin in the middle: a red box to the left in
+/// front of a blue wall, and a red billboard to the right, inside a plain node.
+const STAGE: &str = r##"return {
+    format = 2,
+    sheets = { colors = { path = "sheet.png", tile_width = 1, tile_height = 1 } },
+    children = {
+        {
+            name = "view", kind = "view3d", width = 0, height = 0, stretch = { 1, 1 },
+            camera = { position = { 0, 0, 5 }, target = { 0, 0, 0 }, height = 2 },
+            lighting = { color = "#000000", ambient = "#ffffff" },
+            children = {
+                { name = "wall", kind = "mesh", shape = "cuboid", z = -1, size = { 2, 2, 0.1 }, tint = "#0000ff" },
+                { name = "box", kind = "mesh", shape = "cuboid", x = -0.5, z = 1, size = { 0.4, 0.4, 0.4 }, tint = "#ff0000" },
+                {
+                    name = "group", kind = "node", x = 0.5, z = 1,
+                    children = {
+                        { name = "hero", kind = "billboard", y = -0.2, sheet = "colors", cell = { 0, 0 }, width = 0.4, height = 0.4 },
+                    },
+                },
+            },
+        },
+        { name = "label", kind = "rect", width = 1, height = 1, color = "#00000000" },
+    },
+}"##;
+
+#[test]
+fn scene_views_work_from_luau() {
+    let folder = game(
+        "scene_views",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            ("stage.scene.luau", STAGE),
+            (
+                "main.luau",
+                "stage = scene.load('stage.scene.luau')
+                view = stage:find('view')
+                box = view:find('box')
+                hero = view:find('group/hero')
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.draw_scene(stage)
+                end",
+            ),
+        ],
+    );
+    write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    assert_eq!(simulation.game().error().map(ToString::to_string), None);
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(pixel(&image, 5, 10), RED, "the box");
+    assert_eq!(pixel(&image, 15, 10), RED, "the hero");
+    assert_eq!(pixel(&image, 10, 2), BLUE, "the wall");
+
+    assert_eq!(
+        eval::<(String, String, String)>(&simulation, "view:kind(), box:kind(), hero:kind()"),
+        ("view3d".into(), "mesh".into(), "billboard".into())
+    );
+    assert_eq!(
+        eval::<(f32, f32, f32)>(
+            &simulation,
+            "box:position_3d().x, box:position_3d().y, box:position_3d().z"
+        ),
+        (-0.5, 0.0, 1.0)
+    );
+    assert_eq!(
+        eval::<(f32, f32, f32)>(
+            &simulation,
+            "hero:world_position_3d().x, hero:world_position_3d().y, hero:world_position_3d().z"
+        ),
+        (0.5, -0.2, 1.0)
+    );
+    let bounds: [f32; 6] = eval::<(f32, f32, f32, f32, f32, f32)>(
+        &simulation,
+        "(function() local low, high = box:bounds_3d() return low.x, low.y, low.z, high.x, high.y, high.z end)()",
+    )
+    .into();
+    let expected = [-0.7, -0.2, 0.8, -0.3, 0.2, 1.2];
+    assert!(
+        bounds
+            .iter()
+            .zip(expected)
+            .all(|(a, b)| (a - b).abs() < 1e-6),
+        "{bounds:?}"
+    );
+    // Picked nearest first, and placed on the canvas.
+    let picked = |x: f32, y: f32| {
+        eval::<Vec<String>>(
+            &simulation,
+            &format!(
+                "(function() local names = {{}} for _, node in view:pick({x}, {y}) do \
+                 table.insert(names, node:name()) end return names end)()"
+            ),
+        )
+    };
+    assert_eq!(picked(5.0, 10.0), ["box", "wall"]);
+    assert_eq!(picked(15.0, 10.0), ["hero", "wall"]);
+    assert_eq!(picked(10.0, 2.0), ["wall"]);
+    assert_eq!(
+        eval::<(f32, f32)>(&simulation, "view:project(vector.create(-0.5, 0, 1))"),
+        (5.0, 10.0)
+    );
+    assert_eq!(
+        eval::<(f32, f32, String)>(
+            &simulation,
+            "view:camera().height, view:camera().target.z, string.format('%08x', view:lighting().ambient)"
+        ),
+        (2.0, 0.0, "ffffffff".into())
+    );
+
+    // Moved, turned, stretched and recolored, as the next frame shows.
+    let exec = |code: &str| {
+        simulation
+            .game()
+            .scripts()
+            .load_source("test", code)
+            .unwrap();
+    };
+    exec(
+        "box:set_position_3d(vector.create(0, 0.5, 1))
+         box:set_orientation(0.25)
+         box:set_scale_3d(0.5)
+         hero:set_tint('#0000ff')
+         hero:set_size(-0.4, 0.4)
+         view:set_lighting({ ambient = '#808080', color = '#000000' })
+         view:set_camera({ position = vector.create(0, 0, 5), target = vector.zero, height = 4 })",
+    );
+    assert_eq!(
+        eval::<(f32, f32, f32)>(&simulation, "box:orientation()"),
+        (0.25, 0.0, 0.0)
+    );
+    assert_eq!(
+        eval::<(f32, f32)>(&simulation, "box:scale_3d().x, box:scale_3d().z"),
+        (0.5, 0.5)
+    );
+    assert_eq!(eval::<(f32, f32)>(&simulation, "hero:size()"), (-0.4, 0.4));
+    assert_eq!(eval::<f32>(&simulation, "view:camera().height"), 4.0);
+
+    // What nodes in 3D views don't have, and what other nodes don't.
+    let error = |code: &str| {
+        eval::<String>(
+            &simulation,
+            &format!("tostring(select(2, pcall(function() return {code} end)))"),
+        )
+    };
+    assert!(
+        error("box:rotation()").contains("is placed in 3D, in a 3D view, so it has no rotation"),
+        "{}",
+        error("box:rotation()")
+    );
+    assert!(error("box:set_anchor(0, 0)").contains("has no anchor"));
+    assert!(
+        error("stage:find('label'):position_3d()")
+            .contains("node `label` isn't in a 3D view, so it isn't placed in 3D")
+    );
+    assert!(error("box:camera()").contains("node `view/box` is a mesh node, which has no camera"));
+    assert!(error("box:pick(1, 1)").contains("which has no nodes to pick"));
+}
+
 /// Copies the example props, `table.glb` and `crate.glb` and the crate's texture, into `models`
 /// in `folder`.
 #[cfg(feature = "models")]

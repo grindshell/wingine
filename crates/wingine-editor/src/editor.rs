@@ -15,7 +15,7 @@ use wingine::{
     graphics::Canvas,
     gui::egui::{self, Key, KeyboardShortcut, Modifiers},
     math::Affine,
-    scene::KindDef,
+    scene::{KindDef, NodeDef, Placement3},
 };
 
 use crate::{
@@ -407,6 +407,11 @@ impl Editor {
             .as_ref()
             .and_then(|project| project.files_ending(".tileset.luau").into_iter().next())
             .unwrap_or_default();
+        let model = self
+            .project
+            .as_ref()
+            .and_then(|project| project.model_files().into_iter().next())
+            .unwrap_or_default();
         let Some(document) = self.documents.get_mut(self.current) else {
             return;
         };
@@ -427,7 +432,13 @@ impl Editor {
                     .next()
                     .cloned()
                     .unwrap_or_default();
-                let node = edit::new_node(kind, &sheet, &tileset, "");
+                let showing = edit::Showing {
+                    sheet: &sheet,
+                    tileset: &tileset,
+                    model: &model,
+                    ..edit::Showing::default()
+                };
+                let node = edit::new_node(kind, showing);
                 edit::add(document.edit(), &parent, node).map(|path| {
                     document.select(Some(path));
                 })
@@ -864,10 +875,33 @@ fn add_instance(
     if scene == document.path {
         return Err("a scene can't be placed in itself".into());
     }
-    let mut node = edit::new_node("instance", "", "", scene);
+    let showing = edit::Showing {
+        scene,
+        ..edit::Showing::default()
+    };
+    let mut node = edit::new_node("instance", showing);
     node.x = x;
     node.y = y;
     let path = edit::add(document.edit(), parent, node)?;
+    document.select(Some(path));
+    Ok(())
+}
+
+/// Adds `node` to the 3D view at `view` in `document`, at `at` in its world, placed in 3D, and
+/// selects it.
+fn add_3d(
+    document: &mut Document,
+    view: &[usize],
+    mut node: NodeDef,
+    [x, y, z]: [f32; 3],
+) -> Result<(), String> {
+    node.x = x;
+    node.y = y;
+    node.placement3 = Some(Placement3 {
+        z,
+        ..Placement3::default()
+    });
+    let path = edit::add(document.edit(), view, node)?;
     document.select(Some(path));
     Ok(())
 }
@@ -1056,6 +1090,7 @@ impl Game for Editor {
                     let addable = Addable {
                         sheets: !document.file().sheets.is_empty(),
                         tilesets,
+                        models: !project.model_files().is_empty(),
                         scenes: &scenes,
                     };
                     tree_actions = self.tree.ui(ui, document, &addable);
@@ -1102,6 +1137,7 @@ impl Game for Editor {
                 let images = project.files_ending(".png");
                 let tilesets = project.files_ending(".tileset.luau");
                 let scenes = project.files_ending(".scene.luau");
+                let models = project.model_files();
                 let Some(document) = self.documents.get_mut(self.current) else {
                     ui.weak("Open a scene to see its nodes' fields.");
                     return;
@@ -1113,6 +1149,7 @@ impl Game for Editor {
                     images: &images,
                     tilesets: &tilesets,
                     scenes: &scenes,
+                    models: &models,
                 };
                 self.inspector.ui(ui, document, &mut services);
             });
@@ -1227,10 +1264,31 @@ impl Game for Editor {
             }
             None => {}
         }
-        if let Some(viewport::Action::Instance { scene, at }) = viewport_action
+        if let Some(action) = viewport_action
             && let Some(document) = self.documents.get_mut(self.current)
         {
-            let result = place_instance(document, &scene, at);
+            let result = match action {
+                viewport::Action::Instance { scene, at } => place_instance(document, &scene, at),
+                viewport::Action::Instance3d { scene, view, at } => {
+                    let showing = edit::Showing {
+                        scene: &scene,
+                        ..edit::Showing::default()
+                    };
+                    (scene != document.path)
+                        .then_some(())
+                        .ok_or_else(|| "a scene can't be placed in itself".to_owned())
+                        .and_then(|()| {
+                            add_3d(document, &view, edit::new_node("instance", showing), at)
+                        })
+                }
+                viewport::Action::Model { model, view, at } => {
+                    let showing = edit::Showing {
+                        model: &model,
+                        ..edit::Showing::default()
+                    };
+                    add_3d(document, &view, edit::new_node("model", showing), at)
+                }
+            };
             document.end_change();
             if let Err(err) = result {
                 self.output.push(Level::Error, err);

@@ -11,7 +11,7 @@ use wingine::{
 use crate::{
     docks::filesystem::ScenePath,
     document::Document,
-    edit::{self, KINDS, NodePath},
+    edit::{self, KINDS, KINDS_3D, NodePath},
     theme,
 };
 
@@ -24,7 +24,7 @@ pub enum Action {
         instance: NodePath,
         names: String,
     },
-    /// Add a node of this kind, one of [`KINDS`], as the last child of `parent`.
+    /// Add a node of this kind, one of [`KINDS`] or [`KINDS_3D`], as the last child of `parent`.
     Add {
         parent: NodePath,
         kind: &'static str,
@@ -49,6 +49,8 @@ pub enum Action {
 pub struct Addable<'a> {
     pub sheets: bool,
     pub tilesets: bool,
+    /// Whether the game has model files.
+    pub models: bool,
     /// The scene files that can be placed in this one.
     pub scenes: &'a [String],
 }
@@ -95,7 +97,8 @@ impl SceneTree {
         ui.horizontal(|ui| {
             ui.strong("Scene");
             ui.menu_button("➕", |ui| {
-                add_menu(ui, &target, addable, &mut actions);
+                let in_3d = edit::holds_3d(document.file(), &target);
+                add_menu(ui, &target, in_3d, addable, &mut actions);
             })
             .response
             .on_hover_text("Add a node to the selected one");
@@ -126,7 +129,7 @@ impl SceneTree {
             }
             response.context_menu(|ui| {
                 ui.menu_button("Add Child Node", |ui| {
-                    add_menu(ui, &[], addable, &mut actions);
+                    add_menu(ui, &[], false, addable, &mut actions);
                 });
                 ui.add_enabled_ui(!addable.scenes.is_empty(), |ui| {
                     ui.menu_button("Instance Child Scene", |ui| {
@@ -307,7 +310,10 @@ impl SceneTree {
             self.focus_rename = true;
         }
         dragged.context_menu(|ui| {
-            ui.menu_button("Add Child Node", |ui| add_menu(ui, path, addable, actions));
+            let in_3d = edit::holds_3d_node(node);
+            ui.menu_button("Add Child Node", |ui| {
+                add_menu(ui, path, in_3d, addable, actions);
+            });
             ui.add_enabled_ui(!addable.scenes.is_empty(), |ui| {
                 ui.menu_button("Instance Child Scene", |ui| {
                     instance_menu(ui, path, addable, actions);
@@ -471,19 +477,31 @@ fn inner_nodes(
     });
 }
 
-/// The kinds of node to add to the node at `parent`. Instances have a menu of their own.
-fn add_menu(ui: &mut egui::Ui, parent: &[usize], addable: &Addable, actions: &mut Vec<Action>) {
-    for kind in KINDS.into_iter().filter(|&kind| kind != "instance") {
+/// The kinds of node to add to the node at `parent`: those of the 2D scene, or in a 3D view or a
+/// node in one, if `in_3d`, those placed in 3D. Instances have a menu of their own.
+fn add_menu(
+    ui: &mut egui::Ui,
+    parent: &[usize],
+    in_3d: bool,
+    addable: &Addable,
+    actions: &mut Vec<Action>,
+) {
+    let kinds: &[&'static str] = if in_3d { &KINDS_3D } else { &KINDS };
+    for &kind in kinds.iter().filter(|&&kind| kind != "instance") {
         let enabled = match kind {
-            "sprite" => addable.sheets,
+            "sprite" | "billboard" => addable.sheets,
             "tilemap" => addable.tilesets,
+            "model" => addable.models,
             _ => true,
         };
         let text = format!("{} {kind}", theme::kind_icon(kind));
         let button = ui.add_enabled(enabled, egui::Button::new(text));
         let button = match kind {
-            "sprite" => button.on_disabled_hover_text("Add a sheet to the scene first"),
+            "sprite" | "billboard" => {
+                button.on_disabled_hover_text("Add a sheet to the scene first")
+            }
             "tilemap" => button.on_disabled_hover_text("The game has no tileset files"),
+            "model" => button.on_disabled_hover_text("The game has no model files, .glb or .gltf"),
             _ => button,
         };
         if button.clicked() {

@@ -285,7 +285,7 @@ pub use native::link_library;
 
 use crate::{
     Context, Error, Game, Result, WindowConfig,
-    graphics::{Canvas, Color, Font, Resolution, Texture},
+    graphics::{Canvas, Color, Font, Model, Resolution, Texture},
     lua::{Scripts, mlua},
 };
 
@@ -672,20 +672,36 @@ fn draw_error(canvas: &mut Canvas, font: &Font, err: &Error) {
     canvas.draw_text_layout(&layout, .., [MARGIN, MARGIN], Color::WHITE);
 }
 
-/// The images a game has loaded, by path, so each is read once however many sprite sheets and
-/// scenes use it.
+/// The images and model files a game has loaded, by path, so each is read once however many
+/// sprite sheets, scenes and scripts use it.
 #[derive(Clone, Default)]
-struct Textures(Rc<RefCell<HashMap<PathBuf, Texture>>>);
+struct Textures(Rc<Loaded>);
+
+#[derive(Default)]
+struct Loaded {
+    textures: RefCell<HashMap<PathBuf, Texture>>,
+    models: RefCell<HashMap<PathBuf, Model>>,
+}
 
 impl Textures {
     /// The image at `path`, loading it if it hasn't been.
     fn load(&self, ctx: &mut Context, path: PathBuf) -> Result<Texture> {
-        if let Some(texture) = self.0.borrow().get(&path) {
+        if let Some(texture) = self.0.textures.borrow().get(&path) {
             return Ok(texture.clone());
         }
         let texture = ctx.load_texture(&path)?;
-        self.0.borrow_mut().insert(path, texture.clone());
+        self.0.textures.borrow_mut().insert(path, texture.clone());
         Ok(texture)
+    }
+
+    /// The model file at `path`, loading it if it hasn't been.
+    fn model(&self, ctx: &mut Context, path: PathBuf) -> Result<Model> {
+        if let Some(model) = self.0.models.borrow().get(&path) {
+            return Ok(model.clone());
+        }
+        let model = crate::scene::load_model(ctx, &path)?;
+        self.0.models.borrow_mut().insert(path, model.clone());
+        Ok(model)
     }
 }
 

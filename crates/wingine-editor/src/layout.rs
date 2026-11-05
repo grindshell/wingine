@@ -54,15 +54,17 @@ pub const PRESETS: [Preset; 16] = [
     preset("Full Rect", Wide, Wide),
 ];
 
-/// Whether a node of `kind` can take `preset`: tile layers sit where their maps are, and only
-/// nodes with a `stretch` can stretch.
-pub fn fits(kind: &KindDef, preset: &Preset) -> bool {
+/// Whether `node` can take `preset`: tile layers sit where their maps are, nodes placed in 3D
+/// have no anchors, and only nodes with a `stretch` can stretch.
+pub fn fits(node: &NodeDef, preset: &Preset) -> bool {
+    let kind = &node.kind;
     let stretches = matches!(
         kind,
-        KindDef::Sprite(_) | KindDef::Rect(_) | KindDef::Area(_)
+        KindDef::Sprite(_) | KindDef::Rect(_) | KindDef::Area(_) | KindDef::View3d(_)
     );
     let wide = preset.places.contains(&Wide);
-    !matches!(kind, KindDef::TileLayer(_)) && (stretches || !wide)
+    let placed = matches!(kind, KindDef::TileLayer(_)) || node.placement3.is_some();
+    !placed && (stretches || !wide)
 }
 
 /// Lays `node` out by `preset`, `margin` in from its parent's edges, keeping its size, which is
@@ -102,6 +104,7 @@ pub fn apply(node: &mut NodeDef, preset: &Preset, size: [f32; 2], margin: f32) {
         }
         KindDef::Rect(rect) => (&mut rect.size, &mut rect.stretch, &mut rect.pivot),
         KindDef::Area(area) => (&mut area.size, &mut area.stretch, &mut area.pivot),
+        KindDef::View3d(view) => (&mut view.size, &mut view.stretch, &mut view.pivot),
         KindDef::Text(text) => {
             // Text lines up with the edge or middle it's placed at.
             let At(across) = preset.places[0] else {
@@ -121,7 +124,13 @@ pub fn apply(node: &mut NodeDef, preset: &Preset, size: [f32; 2], margin: f32) {
             text.pivot = [0.0, down * size[1]];
             return;
         }
-        KindDef::Node | KindDef::Tilemap(_) | KindDef::TileLayer(_) | KindDef::Instance(_) => {
+        KindDef::Node
+        | KindDef::Tilemap(_)
+        | KindDef::TileLayer(_)
+        | KindDef::Instance(_)
+        | KindDef::Mesh(_)
+        | KindDef::Model(_)
+        | KindDef::Billboard(_) => {
             return;
         }
     };
@@ -261,8 +270,8 @@ mod tests {
                 color: Color::WHITE,
             }),
         );
-        assert!(fits(&node.kind, named("Center Bottom")));
-        assert!(!fits(&node.kind, named("Top Wide")));
+        assert!(fits(&node, named("Center Bottom")));
+        assert!(!fits(&node, named("Top Wide")));
         apply(&mut node, named("Center Bottom"), [30.0, 8.0], 2.0);
         let KindDef::Text(def) = &node.kind else {
             unreachable!()

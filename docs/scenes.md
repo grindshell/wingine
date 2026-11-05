@@ -1,7 +1,7 @@
 # Scenes
 
-A scene is a tree of sprites, rectangles, text and areas, laid out in a file of its own rather
-than in code: a level, a screen, a character. The game loads it with
+A scene is a tree of sprites, rectangles, text and areas, and 3D views of meshes, models and
+billboards, laid out in a file of its own rather than in code: a level, a screen, a character. The game loads it with
 [`scene.load`](api/scene.md#sceneload), finds the nodes it cares about by name or tag, moves and
 changes them, and draws the whole tree with one call:
 
@@ -21,15 +21,15 @@ end
 Scene files are Luau, but only data: one table of tables, strings, numbers and booleans. That
 way a tool, such as [the editor](editor.md), can read a file, change it and write it back, and
 people can still write and read them by hand. [`examples/garden`](../examples/garden) is a game
-built around one, and [`examples/orchard`](../examples/orchard) one around a character animated by
-a scene's clips.
+built around one, [`examples/orchard`](../examples/orchard) one around a character animated by a
+scene's clips, and [`examples/cellar`](../examples/cellar) one whose level is a 3D view.
 
 ## A scene file
 
 ```lua
 -- garden.scene.luau
 return {
-    format = 1,
+    format = 2,
     sheets = {
         tiles = {
             path = "tiles.png",
@@ -84,7 +84,7 @@ At the top of the file:
 
 | Field | What it is |
 |---|---|
-| `format` | Required: the version of the format, `1`. The engine refuses files newer than it reads. |
+| `format` | Required: the version of the format, `2`, which added 3D views. The engine reads files of format 1 too, and refuses files newer than it reads. |
 | `sheets` | The sprite sheets the scene's sprites come from, by name: each an image's `path`, relative to the game's folder, divided into sprites `tile_width` by `tile_height` texels, as [`graphics.load_sprite_sheet`](api/graphics.md#graphicsload_sprite_sheet) divides one. |
 | `props` | Data for the game about the scene as a whole, such as its music. |
 | `children` | The nodes at the top of the scene's tree. |
@@ -97,7 +97,7 @@ Every node has a `name` and a `kind`, and may have any of the rest:
 | Field | What it is | Default |
 |---|---|---|
 | `name` | Required. Unique among the node's siblings, and without `/`. | |
-| `kind` | Required. `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"tilemap"`, `"tile_layer"` or `"instance"`. | |
+| `kind` | Required. `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"tilemap"`, `"tile_layer"`, `"instance"`, `"view3d"`, `"mesh"`, `"model"` or `"billboard"`. | |
 | `x`, `y` | Where the node's origin is within its parent. | `0` |
 | `anchor` | The point of the parent's rectangle that `x` and `y` are measured from, `{ x, y }`, as fractions of its width and height. See [Laying out screens](#laying-out-screens). | the parent's origin |
 | `rotation` | Radians, clockwise, about its origin. | `0` |
@@ -130,6 +130,8 @@ Each kind has fields of its own:
   click. Like a rect, it may `stretch`.
 - **`tilemap`** and **`tile_layer`**: a grid of tiles, and its layers. See [Tilemaps](#tilemaps).
 - **`instance`**: another scene file, placed here. See [Instances](#instances).
+- **`view3d`**, and **`mesh`**, **`model`** and **`billboard`** in it: a 3D world shown in a
+  rectangle of the scene, and what's in it. See [3D views](#3d-views).
 
 A sprite, rect, text or area has its top-left corner at the node's origin, unless it has a
 `pivot`: the point of it, from its top-left corner, `{ x, y }`, that's at the origin instead, and
@@ -271,7 +273,7 @@ data:
 ```lua
 -- world.tileset.luau
 return {
-    format = 1,
+    format = 2,
     tile_width = 16,
     tile_height = 16,
     sheets = {
@@ -343,6 +345,127 @@ Any field but `name`, `kind` and `children` can be overridden. `props` change on
 than being replaced, and a `sheet` is one of the sheets of the file the node comes from. A path
 can reach into an instance inside the placed scene, such as `["family/mother/body"]`. A scene that
 places itself, through its instances or theirs, is an error.
+
+## 3D views
+
+A `view3d` node is a rectangle of the scene showing a 3D world through a camera, as
+[`graphics.begin_3d`](api/graphics.md#graphicsbegin_3d) shows one, and its children are that
+world's nodes: meshes, models made in tools such as Blender, and sprites standing among them,
+billboards. A level of a 2.5D game is one; so is a 3D picture in a menu.
+
+```lua
+{
+    name = "view",
+    kind = "view3d",
+    width = 0,
+    height = 0,
+    stretch = { 1, 1 },
+    camera = {
+        position = { 5.5, 7, 9 },
+        target = { 5.5, 0, 5.5 },
+    },
+    lighting = {
+        color = "#b0a8a0",
+        ambient = "#505060",
+    },
+    children = {
+        {
+            name = "floor",
+            kind = "mesh",
+            x = 5.5,
+            z = 3.5,
+            shape = "plane",
+            size = { 11, 7 },
+            tint = "#4a4038",
+        },
+        {
+            name = "crate",
+            kind = "model",
+            x = 2.5,
+            z = 1.5,
+            model = "models/crate.glb",
+            tags = { "solid" },
+        },
+        {
+            name = "hero",
+            kind = "billboard",
+            x = 5.5,
+            z = 5.5,
+            sheet = "tiles",
+            cell = { 27, 0 },
+            height = 0.9,
+        },
+    },
+},
+```
+
+A view is laid out as an area is, `width` by `height` with a `stretch` and a `pivot`, so this one
+fills the canvas; it moves with its node, but doesn't turn or stretch. Its other fields:
+
+- `camera`, required: `position` and `target`, `{ x, y, z }`, where it is and the point it looks at,
+  in the middle of the view. Optionally `up`, which way is up the view (`{ 0, 1, 0 }`); `fov`, the
+  angle the view takes in from its bottom edge to its top, in radians (`0.8`), or instead `height`,
+  how many world units it shows from bottom to top, for an orthographic camera, under which things
+  look the same size however far away they are; and `near` and `far`, how near and far things show
+  (`0.1` and `1000`).
+- `lighting`: `direction`, the way the sun's light goes, `{ x, y, z }`; `color`, the sun's light;
+  and `ambient`, the light on every surface. Each is the default's if left out, and so is the
+  whole of it: a sun high above and in front.
+
+The world is right-handed with `y` up, as glTF's is. The kinds of node in it:
+
+- **`mesh`**: a built-in shape, `shape`, centered on its origin: `"cuboid"`, `size = { width,
+  height, depth }`; `"plane"`, flat and facing up, `size = { width, depth }`; or `"sphere"`, of a
+  `radius`. Sizes are 1, and a sphere's radius a half, if left out. Optionally a sprite, `sheet`
+  and `cell`, shown on each face, and a `tint`.
+- **`model`**: the parts of a model file, `model`, a `.glb` or `.gltf` file's path from the
+  game's folder, as [`graphics.load_model`](api/graphics.md#graphicsload_model) loads it, and a
+  `tint`.
+- **`billboard`**: a sprite, `sheet` and `cell`, standing upright with the middle of its bottom
+  edge at the node's origin, turned to face the camera across the ground, `width` by `height`
+  world units (1 by default; a negative width mirrors it), and a `tint`. It moves with its node,
+  but doesn't turn or stretch.
+- **`node`** and **`instance`**: a place, and a scene file placed here, as in the 2D scene. A
+  prop can be a scene of its own, of meshes or models, placed into levels by instances and changed
+  by overrides.
+
+Nodes in a view are placed in 3D, by `x`, `y` and `z`; `yaw`, `pitch` and `roll`, radians about
+`y`, `x` and `z`, counter-clockwise seen from each axis's end; and `scale_x`, `scale_y` and
+`scale_z`, 0 and 1 by default. A node is stretched, then rolled, pitched and turned, then moved,
+about its origin, as [`graphics.draw_mesh`](api/graphics.md#graphicsdraw_mesh) places a mesh, and
+its children with it. They have no `rotation` or `anchor`, which are the 2D scene's.
+
+Only views hold meshes, models and billboards, and views hold only them, plain nodes and
+instances: a sprite in a view, or a mesh outside one, is an error naming the node. That's checked
+once instances have placed their scenes, so a prop's own file can hold a model at its top, and be
+placed in a view. Plain nodes there are placed in 3D too, at the defaults if their file doesn't
+say.
+
+Meshes and models hide what's behind them, whatever order they're drawn in; the view draws over
+what was drawn before it, and nodes after it draw over it. Scripts move nodes in views with
+[`node:set_position_3d`](api/scene.md#nodeset_position_3d) and
+[`node:set_orientation`](api/scene.md#nodeset_orientation), follow things with
+[`view:set_camera`](api/scene.md#nodeset_camera), and find what's under the mouse with
+[`view:pick`](api/scene.md#nodepick), which gives the nodes whose boxes are under a point,
+nearest first:
+
+```lua
+local level = scene.load("cellar.scene.luau")
+local view = level:find("view")
+
+function update(dt: number)
+    local x, y = input.mouse_position()
+    if x and y then
+        local under = view:pick(x, y)[1]
+        if under and under:has_tag("solid") then
+            -- Point at it.
+        end
+    end
+end
+```
+
+[`examples/cellar`](../examples/cellar)'s level is a view like this, whose walls are tagged
+`solid` and candles `candle`, which [`main.luau`](../examples/cellar/main.luau) reads.
 
 ## Rigging characters
 
@@ -428,7 +551,7 @@ Each track changes one property of one node:
 | Field | What it is | Default |
 |---|---|---|
 | `node` | The node's path from the node the clip poses. | that node itself |
-| `property` | Required. `"x"`, `"y"`, `"rotation"`, `"scale_x"`, `"scale_y"`, `"visible"` or `"cell"` (a sprite's). | |
+| `property` | Required. `"x"`, `"y"`, `"rotation"`, `"scale_x"`, `"scale_y"`, `"visible"` or `"cell"` (a sprite's, a billboard's or a mesh's), and for nodes in 3D views, `"z"`, `"yaw"`, `"pitch"`, `"roll"` and `"scale_z"`, but not `"rotation"`. | |
 | `interpolation` | How a number gets from one key to the next: `"linear"`, in a straight line, or `"step"`, jumping at each key. `visible` and `cell` always step. | `"linear"` |
 | `keys` | Required. Pairs of a time, in seconds from 0 to the duration, and the value then, `{ time, value }`, in order of time. | |
 
@@ -482,10 +605,11 @@ same text, so a change to a scene changes few lines of its file, and version con
 changed. Reading what it writes gives back the same scene. It doesn't keep comments.
 
 The scene files of [`examples/garden`](../examples/garden), the
-[RPG's maps](../examples/rpg/maps), the [shmup's HUD](../examples/shmup/hud.scene.luau) and
-[`examples/orchard`](../examples/orchard) are in that layout, as [the editor](editor.md) leaves
-them, and tests check the garden's, the shmup's and the orchard's stay so. A clip's keys go one to
-a line.
+[RPG's maps](../examples/rpg/maps), the [shmup's HUD](../examples/shmup/hud.scene.luau),
+[`examples/orchard`](../examples/orchard) and the [cellar's level](../examples/cellar) are in that
+layout, as [the editor](editor.md) leaves them, and tests check the garden's, the shmup's, the
+orchard's and the cellar's stay so. A clip's keys go one to a line, and a camera's and lighting's
+fields too. Files are written at the newest format, 2.
 
 ## Using a scene
 

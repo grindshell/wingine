@@ -464,6 +464,17 @@ impl Document {
         self.stale = true;
     }
 
+    /// Whether the node at `names` inside the instance at `instance` is placed in 3D in the
+    /// preview: in a 3D view, as its own file may not say.
+    pub fn is_in_3d(&self, instance: &[usize], names: &str) -> bool {
+        let Some((scene, id)) = self.preview.as_ref().zip(self.live_node(instance)) else {
+            return false;
+        };
+        scene
+            .find(id, names)
+            .is_some_and(|inner| scene.node(inner).placement3().is_some())
+    }
+
     /// The node of the preview made from the node at `path`.
     pub fn live_node(&self, path: &[usize]) -> Option<NodeId> {
         let scene = self.preview.as_ref()?;

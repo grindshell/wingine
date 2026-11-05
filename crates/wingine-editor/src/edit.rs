@@ -5,10 +5,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use wingine::{
-    graphics::{Align, Color},
+    graphics::{Align, Camera3d, Color, Lighting},
     scene::{
-        AreaDef, InstanceDef, KindDef, NodeDef, RectDef, SceneFile, SpriteDef, TextDef,
-        TileLayerDef, TilemapDef,
+        AreaDef, BillboardDef, InstanceDef, KindDef, MeshDef, ModelDef, NodeDef, Placement3,
+        RectDef, SceneFile, Shape, SpriteDef, TextDef, TileLayerDef, TilemapDef, View3dDef,
     },
 };
 
@@ -17,10 +17,46 @@ use wingine::{
 /// root that holds the file's sheets and props.
 pub type NodePath = Vec<usize>;
 
-/// The kinds of node that can be added, as scene files name them.
-pub const KINDS: [&str; 7] = [
-    "node", "sprite", "rect", "text", "area", "tilemap", "instance",
+/// The kinds of node that can be added to the 2D scene, as scene files name them.
+pub const KINDS: [&str; 8] = [
+    "node", "sprite", "rect", "text", "area", "tilemap", "view3d", "instance",
 ];
+
+/// The kinds of node that can be added to a 3D view, placed in 3D.
+pub const KINDS_3D: [&str; 5] = ["node", "mesh", "model", "billboard", "instance"];
+
+/// Whether the nodes inside `node` are placed in 3D: it's a 3D view, or it's in one.
+pub fn holds_3d_node(node: &NodeDef) -> bool {
+    matches!(node.kind, KindDef::View3d(_)) || node.placement3.is_some()
+}
+
+/// Whether the nodes inside the node at `path` are placed in 3D. The scene's aren't.
+pub fn holds_3d(file: &SceneFile, path: &[usize]) -> bool {
+    node(file, path).is_some_and(holds_3d_node)
+}
+
+/// Fits `node` to where it's going: in a 3D view if `in_3d`, where plain nodes and instances are
+/// placed in 3D, or in the 2D scene. Fails for a node that can't go there.
+fn place_for(node: &mut NodeDef, in_3d: bool) -> Result<(), String> {
+    let kind = node.kind.name();
+    let either = matches!(node.kind, KindDef::Node | KindDef::Instance(_));
+    if in_3d {
+        if !(either || node.kind.is_3d()) {
+            return Err(format!(
+                "a 3D view holds only meshes, models, billboards, plain nodes and instances, not \
+                 a {kind}"
+            ));
+        }
+        if node.placement3.is_none() {
+            node.placement3 = Some(Placement3::default());
+            node.rotation = 0.0;
+            node.anchor = None;
+        }
+    } else if node.kind.is_3d() || node.placement3.is_some() {
+        return Err(format!("a {kind} placed in 3D goes in a 3D view"));
+    }
+    Ok(())
+}
 
 /// The node at `path`, if there's one. The empty path has none.
 pub fn node<'a>(file: &'a SceneFile, path: &[usize]) -> Option<&'a NodeDef> {
@@ -133,6 +169,7 @@ pub fn add(file: &mut SceneFile, parent: &[usize], mut node: NodeDef) -> Result<
     {
         return Err("a tile layer goes in a tilemap".into());
     }
+    place_for(&mut node, holds_3d(file, parent))?;
     let siblings = children_mut(file, parent).ok_or("there's no such node")?;
     node.name = unique_name(siblings, &node.name);
     siblings.push(node);
@@ -217,6 +254,9 @@ pub fn move_node(
     {
         return Err("a tile layer goes in a tilemap".into());
     }
+    if holds_3d(file, parent) != moved.placement3.is_some() {
+        return Err("a node can't move between the 2D scene and a 3D view".into());
+    }
     let (&from_index, from_parent) = from.split_last().expect("the path isn't empty");
     let siblings = children(file, parent).ok_or("there's no such node")?;
     let index = index.min(siblings.len());
@@ -260,9 +300,26 @@ fn retarget_clips(file: &mut SceneFile, old: &str, new: &str) {
     }
 }
 
-/// A new node of `kind`, one of [`KINDS`], with what it shows set to something visible: a sprite
-/// from `sheet`, a tilemap of `tileset` with a layer, an instance of `scene`.
-pub fn new_node(kind: &str, sheet: &str, tileset: &str, scene: &str) -> NodeDef {
+/// What a new node shows: a sprite from `sheet`, a tilemap of `tileset`, an instance of `scene`,
+/// or a model of `model`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Showing<'a> {
+    pub sheet: &'a str,
+    pub tileset: &'a str,
+    pub scene: &'a str,
+    pub model: &'a str,
+}
+
+/// A new node of `kind`, one of [`KINDS`] or [`KINDS_3D`], with what it shows set to something
+/// visible, from `showing`: a tilemap has a layer, and a 3D view looks at its world's origin
+/// from above and in front.
+pub fn new_node(kind: &str, showing: Showing) -> NodeDef {
+    let Showing {
+        sheet,
+        tileset,
+        scene,
+        model,
+    } = showing;
     let kind_def = match kind {
         "sprite" => KindDef::Sprite(SpriteDef {
             sheet: sheet.to_owned(),
@@ -300,6 +357,28 @@ pub fn new_node(kind: &str, sheet: &str, tileset: &str, scene: &str) -> NodeDef 
             scene: scene.to_owned(),
             overrides: Default::default(),
         }),
+        "view3d" => KindDef::View3d(View3dDef {
+            size: [160.0, 90.0],
+            stretch: [0.0, 0.0],
+            pivot: [0.0, 0.0],
+            camera: Camera3d::perspective([0.0, 3.0, 5.0], [0.0, 0.0, 0.0], 0.8),
+            lighting: Lighting::default(),
+        }),
+        "mesh" => KindDef::Mesh(MeshDef {
+            shape: Shape::Cuboid([1.0; 3]),
+            sprite: None,
+            tint: Color::WHITE,
+        }),
+        "model" => KindDef::Model(ModelDef {
+            model: model.to_owned(),
+            tint: Color::WHITE,
+        }),
+        "billboard" => KindDef::Billboard(BillboardDef {
+            sheet: sheet.to_owned(),
+            cell: [0, 0],
+            size: [1.0, 1.0],
+            tint: Color::WHITE,
+        }),
         _ => KindDef::Node,
     };
     let mut node = NodeDef::new(kind, kind_def);
@@ -307,13 +386,16 @@ pub fn new_node(kind: &str, sheet: &str, tileset: &str, scene: &str) -> NodeDef 
         node.children
             .push(tile_layer("ground", map.columns, map.rows));
     }
-    if kind == "instance" {
-        // Named for the scene it places, as `tree` for `tree.scene.luau`.
-        let file_name = scene.rsplit('/').next().unwrap_or(scene);
-        let name = file_name.split('.').next().unwrap_or(file_name);
-        if !name.is_empty() {
-            node.name = name.to_owned();
-        }
+    // Named for the file it shows, as `tree` for `tree.scene.luau`.
+    let file = match kind {
+        "instance" => scene,
+        "model" => model,
+        _ => "",
+    };
+    let file_name = file.rsplit('/').next().unwrap_or(file);
+    let name = file_name.split('.').next().unwrap_or(file_name);
+    if !name.is_empty() {
+        node.name = name.to_owned();
     }
     node
 }
@@ -684,22 +766,46 @@ mod tests {
 
     #[test]
     fn new_nodes_show_something() {
-        let sprite = new_node("sprite", "tiles", "", "");
+        let sprite = new_node(
+            "sprite",
+            Showing {
+                sheet: "tiles",
+                ..Showing::default()
+            },
+        );
         assert!(matches!(&sprite.kind, KindDef::Sprite(def) if def.sheet == "tiles"));
-        let map = new_node("tilemap", "", "world.tileset.luau", "");
+        let map = new_node(
+            "tilemap",
+            Showing {
+                tileset: "world.tileset.luau",
+                ..Showing::default()
+            },
+        );
         assert_eq!(map.children.len(), 1);
         let KindDef::TileLayer(layer) = &map.children[0].kind else {
             panic!("a tilemap starts with a layer");
         };
         assert_eq!(layer.tiles, vec!["        "; 8]);
-        let tree = new_node("instance", "", "", "props/tree.scene.luau");
+        let tree = new_node(
+            "instance",
+            Showing {
+                scene: "props/tree.scene.luau",
+                ..Showing::default()
+            },
+        );
         assert_eq!(tree.name, "tree");
     }
 
     #[test]
     fn resizing_a_tilemap_keeps_its_cells() {
         let mut file = SceneFile::default();
-        let mut map = new_node("tilemap", "", "world.tileset.luau", "");
+        let mut map = new_node(
+            "tilemap",
+            Showing {
+                tileset: "world.tileset.luau",
+                ..Showing::default()
+            },
+        );
         let KindDef::TileLayer(layer) = &mut map.children[0].kind else {
             unreachable!()
         };

@@ -1,13 +1,20 @@
 //! The FileSystem dock: the files in the game's folder. Double-clicking a scene opens it, and
-//! dragging one into the viewport or onto a node of the Scene dock places it there.
-//! Double-clicking any other Luau file opens it in the Script screen.
+//! dragging one into the viewport or onto a node of the Scene dock places it there. Dragging a
+//! model file into a 3D view in the viewport adds a model node showing it. Double-clicking any
+//! other Luau file opens it in the Script screen.
 
 use wingine::gui::egui;
 
-use crate::{project::Entry, theme};
+use crate::{
+    project::{Entry, is_model_file},
+    theme,
+};
 
 /// A scene file being dragged, by its path in the project.
 pub struct ScenePath(pub String);
+
+/// A model file being dragged, by its path in the project.
+pub struct ModelPath(pub String);
 
 /// What the dock asks of the editor.
 pub enum Action {
@@ -87,18 +94,23 @@ impl FileSystem {
             return;
         }
         let is_scene = entry.name.ends_with(".scene.luau");
+        let is_model = is_model_file(&entry.name);
         let selected = self.selected.as_deref() == Some(entry.path.as_str());
         let response = ui
             .horizontal(|ui| {
                 ui.label(theme::file_icon(&entry.name));
                 let label = ui.selectable_label(selected, &entry.name);
-                if is_scene {
+                if is_scene || is_model {
                     label.interact(egui::Sense::click_and_drag())
                 } else {
                     label
                 }
             })
             .inner;
+        if is_model {
+            response.dnd_set_drag_payload(ModelPath(entry.path.clone()));
+            dragged_name(ui, &response, &entry.name);
+        }
         if response.clicked() {
             self.selected = Some(entry.path.clone());
         }
@@ -109,17 +121,7 @@ impl FileSystem {
         }
         if is_scene {
             response.dnd_set_drag_payload(ScenePath(entry.path.clone()));
-            if response.dragged()
-                && let Some(pointer) = ui.ctx().pointer_interact_pos()
-            {
-                egui::Area::new(ui.make_persistent_id("dragged scene"))
-                    .order(egui::Order::Tooltip)
-                    .fixed_pos(pointer + egui::vec2(12.0, 4.0))
-                    .interactable(false)
-                    .show(ui.ctx(), |ui| {
-                        egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(&entry.name));
-                    });
-            }
+            dragged_name(ui, &response, &entry.name);
             response.context_menu(|ui| {
                 if ui.button("Open").clicked() {
                     *action = Some(Action::Open(entry.path.clone()));
@@ -129,6 +131,21 @@ impl FileSystem {
                 }
             });
         }
+    }
+}
+
+/// The name of the file being dragged, by the pointer, while `response`'s drags it.
+fn dragged_name(ui: &egui::Ui, response: &egui::Response, name: &str) {
+    if response.dragged()
+        && let Some(pointer) = ui.ctx().pointer_interact_pos()
+    {
+        egui::Area::new(ui.make_persistent_id("dragged file"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(pointer + egui::vec2(12.0, 4.0))
+            .interactable(false)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(name));
+            });
     }
 }
 

@@ -15,7 +15,7 @@ use image::{Rgba, RgbaImage, imageops};
 use wingine::{
     Context,
     graphics::{
-        Camera, Camera3d, Canvas, Color, Lighting, Mesh, MeshData, MeshVertex, Resolution,
+        Camera, Camera3d, Canvas, Color, Lighting, Mesh, MeshData, MeshVertex, Model, Resolution,
         SpriteSheet, Texture, View3d,
     },
     headless::{Headless, Image},
@@ -32,6 +32,9 @@ const TILESET: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/examples/kenney_1-bit-pack_transparent-packed.png"
 );
+
+/// The examples' folder, which scenes' model files are in.
+const EXAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
 
 #[test]
 fn clear() {
@@ -527,6 +530,55 @@ fn scene_clips() {
     assert_screenshot(&headless.adapter_name(), "scene_clips", frame);
 }
 
+/// A scene with a 3D view between a rect under it and a bar over it: a floor, a box turned in a
+/// stack, a ball on it, and a prop placed by an instance, a post with a lamp, lit by a sun from
+/// the left. Nothing is textured, and nothing flat overlaps, so GPUs agree.
+#[test]
+fn scene_views() {
+    let lamp = r##"return {
+        format = 2,
+        children = {
+            { name = "post", kind = "mesh", shape = "cuboid", y = 0.75, size = { 0.2, 1.5, 0.2 }, tint = "#6b5844" },
+            { name = "light", kind = "mesh", shape = "sphere", y = 1.6, radius = 0.25, tint = "#f2d06b" },
+        },
+    }"##;
+    let room = r##"return {
+        format = 2,
+        children = {
+            { name = "back", kind = "rect", x = 8, y = 4, width = 112, height = 40, color = "#30304a" },
+            {
+                name = "view", kind = "view3d", x = 16, y = 8, width = 96, height = 32,
+                camera = { position = { 0, 3, 5 }, target = { 0, 0.5, 0 }, fov = 0.7 },
+                lighting = { direction = { 1, -1, -0.5 }, color = "#e0e0e0", ambient = "#404040" },
+                children = {
+                    { name = "floor", kind = "mesh", shape = "plane", size = { 6, 3 }, tint = "#5a7a4a" },
+                    {
+                        name = "stack", kind = "node", x = -1, yaw = 0.5,
+                        children = {
+                            { name = "box", kind = "mesh", shape = "cuboid", y = 0.5, tint = "#c08040" },
+                            { name = "ball", kind = "mesh", shape = "sphere", y = 1.4, radius = 0.4, tint = "#4f8fd0" },
+                        },
+                    },
+                    { name = "lamp", kind = "instance", scene = "lamp.scene.luau", x = 1.5, z = -0.5, scale_y = 0.8 },
+                },
+            },
+            { name = "bar", kind = "rect", x = 16, y = 30, width = 40, height = 6, color = "#c04040" },
+        },
+    }"##;
+    let mut headless = headless();
+    let mut scene = load_scene(
+        &mut headless,
+        &[("lamp.scene.luau", lamp), ("room.scene.luau", room)],
+    );
+    let frame = headless
+        .render(128, 48, |canvas| {
+            canvas.clear(Color::rgb8(0x1b, 0x26, 0x1e));
+            scene.draw(canvas);
+        })
+        .unwrap();
+    assert_screenshot(&headless.adapter_name(), "scene_views", frame);
+}
+
 /// The scene at the end of `files`, a path and the file's contents for each scene and tileset
 /// file, with every image the tileset's.
 fn load_scene(headless: &mut Headless, files: &[(&'static str, &'static str)]) -> Scene {
@@ -549,6 +601,12 @@ fn load_scene(headless: &mut Headless, files: &[(&'static str, &'static str)]) -
         }
         fn tileset(&mut self, path: &str) -> wingine::Result<Rc<TilesetFile>> {
             TilesetFile::parse(self.source(path), path).map(Rc::new)
+        }
+        fn model(&mut self, path: &str) -> wingine::Result<Model> {
+            wingine::scene::load_model(self.ctx, &Path::new(EXAMPLES).join(path))
+        }
+        fn mesh(&mut self, data: &MeshData) -> wingine::Result<Mesh> {
+            self.ctx.create_mesh(data)
         }
     }
     let ctx = headless.context();

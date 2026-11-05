@@ -12,16 +12,17 @@ use super::{
 };
 use crate::{
     Error, Result,
-    graphics::{Align, Color},
+    graphics::{Align, Camera3d, Color, Lighting, MeshData, Projection},
     lua::{
-        is_identifier,
+        DEFAULT_FOV, is_identifier,
         mlua::{self, chunk::ChunkMode},
         parse_hex, unpacked_color,
     },
 };
 
-/// The version of the scene and tileset formats this engine reads and writes, their `format`.
-pub const FORMAT: u32 = 1;
+/// The version of the scene and tileset formats this engine writes, their `format`. It reads
+/// files of this format and every one before it: format 2 added 3D views and their nodes.
+pub const FORMAT: u32 = 2;
 
 /// How deeply tables may nest. Files written by hand or by an editor come nowhere near, but one
 /// that builds a table holding itself would otherwise never finish being read.
@@ -77,6 +78,10 @@ pub struct NodeDef {
     /// scales mirror.
     pub scale_x: f32,
     pub scale_y: f32,
+    /// For a node placed in 3D, in a 3D view, the rest of where it is: `x`, `y`, `scale_x` and
+    /// `scale_y` are along the view's world's axes, with `y` up, and this has the rest. Such a
+    /// node has no `rotation` or `anchor`. `None` for a node of the 2D scene.
+    pub placement3: Option<Placement3>,
     /// Whether it and its children draw.
     pub visible: bool,
     /// Names for finding it and nodes like it, such as `"solid"`.
@@ -87,12 +92,42 @@ pub struct NodeDef {
     pub children: Vec<NodeDef>,
 }
 
+/// Where a node placed in 3D is, besides its `x`, `y`, `scale_x` and `scale_y`: how far it is
+/// along `z`, how it's turned, and how much it's stretched along `z`. It's stretched, then
+/// rolled about `z`, pitched about `x` and turned about `y`, then moved, all about its origin, as
+/// `graphics.draw_mesh` places a mesh.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placement3 {
+    pub z: f32,
+    /// Radians about `y`, counter-clockwise seen from above.
+    pub yaw: f32,
+    /// Radians about `x`, counter-clockwise seen from `+x`.
+    pub pitch: f32,
+    /// Radians about `z`, counter-clockwise seen from `+z`.
+    pub roll: f32,
+    pub scale_z: f32,
+}
+
+impl Default for Placement3 {
+    /// At its parent's origin, unturned and unstretched.
+    fn default() -> Self {
+        Self {
+            z: 0.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            roll: 0.0,
+            scale_z: 1.0,
+        }
+    }
+}
+
 impl NodeDef {
     /// A node of `kind` named `name` at its parent's origin, unturned and unstretched, visible,
-    /// with no tags, props or children.
+    /// with no tags, props or children. A mesh, model or billboard is placed in 3D.
     pub fn new(name: impl Into<String>, kind: KindDef) -> Self {
         Self {
             name: name.into(),
+            placement3: kind.is_3d().then(Placement3::default),
             kind,
             x: 0.0,
             y: 0.0,
@@ -123,7 +158,11 @@ impl NodeDef {
         sheets: &BTreeMap<String, SheetDef>,
         tilemap: Option<[u32; 2]>,
     ) -> Result<NodeDef, String> {
-        let parent = Parent { path: "", tilemap };
+        let parent = Parent {
+            path: "",
+            tilemap,
+            in_3d: false,
+        };
         let mut node = override_node(self, change, sheets, &parent)?;
         node.children = self.children.clone();
         Ok(node)
@@ -171,6 +210,15 @@ pub enum KindDef {
     TileLayer(TileLayerDef),
     /// Another scene, placed here.
     Instance(InstanceDef),
+    /// A rectangle of the 2D scene showing a 3D world through a camera, whose nodes are its
+    /// children.
+    View3d(View3dDef),
+    /// A built-in shape, in a 3D view.
+    Mesh(MeshDef),
+    /// The parts of a model file, in a 3D view.
+    Model(ModelDef),
+    /// A sprite standing upright in a 3D view, turned to face the camera.
+    Billboard(BillboardDef),
 }
 
 impl KindDef {
@@ -185,8 +233,28 @@ impl KindDef {
             Self::Tilemap(_) => "tilemap",
             Self::TileLayer(_) => "tile_layer",
             Self::Instance(_) => "instance",
+            Self::View3d(_) => "view3d",
+            Self::Mesh(_) => "mesh",
+            Self::Model(_) => "model",
+            Self::Billboard(_) => "billboard",
         }
     }
+
+    /// Whether it's a kind only 3D views hold: a mesh, model or billboard.
+    pub fn is_3d(&self) -> bool {
+        is_3d_kind(self.name())
+    }
+}
+
+/// Whether the kind named `kind` is one only 3D views hold.
+pub(crate) fn is_3d_kind(kind: &str) -> bool {
+    matches!(kind, "mesh" | "model" | "billboard")
+}
+
+/// Whether nodes of the kind named `kind` may be placed in 3D: those only views hold, and plain
+/// nodes and instances, which views hold too.
+pub(super) fn can_be_3d(kind: &str) -> bool {
+    is_3d_kind(kind) || matches!(kind, "node" | "instance")
 }
 
 /// A sprite from one of the scene's sheets.
@@ -276,6 +344,90 @@ pub struct InstanceDef {
     /// Changes to the scene's nodes, by their paths from its top: the fields to set, as a scene
     /// file would hold them. Props are changed one by one rather than replaced.
     pub overrides: BTreeMap<String, BTreeMap<String, Value>>,
+}
+
+/// A rectangle of the 2D scene showing a 3D world, laid out as an area is, which moves with its
+/// node but doesn't turn or stretch. Its children are the world's nodes, placed in 3D.
+#[derive(Clone, Debug, PartialEq)]
+pub struct View3dDef {
+    pub size: [f32; 2],
+    /// As a rect's.
+    pub stretch: [f32; 2],
+    /// As a sprite's.
+    pub pivot: [f32; 2],
+    pub camera: Camera3d,
+    pub lighting: Lighting,
+}
+
+/// A sprite of one of a scene's sheets: the sheet's name and the sprite's column and row in it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CellDef {
+    pub sheet: String,
+    pub cell: [u32; 2],
+}
+
+/// A built-in shape in a 3D view, showing a sprite or white, times its tint.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshDef {
+    pub shape: Shape,
+    pub sprite: Option<CellDef>,
+    pub tint: Color,
+}
+
+/// A built-in shape, centered on its node's origin: see [`MeshData`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Shape {
+    /// A box, its width, height and depth along `x`, `y` and `z`.
+    Cuboid([f32; 3]),
+    /// A flat rectangle facing up, its width along `x` and depth along `z`.
+    Plane([f32; 2]),
+    /// A ball of a radius.
+    Sphere(f32),
+}
+
+impl Shape {
+    /// Its name in scene files: `"cuboid"`, `"plane"` or `"sphere"`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Cuboid(_) => "cuboid",
+            Self::Plane(_) => "plane",
+            Self::Sphere(_) => "sphere",
+        }
+    }
+
+    /// Its triangles.
+    pub fn mesh_data(&self) -> MeshData {
+        match *self {
+            Self::Cuboid(size) => MeshData::cuboid(size),
+            Self::Plane(size) => MeshData::plane(size),
+            Self::Sphere(radius) => MeshData::sphere(radius, SPHERE_SEGMENTS, SPHERE_RINGS),
+        }
+    }
+}
+
+/// How many slices round and rings from top to bottom spheres of scenes are made of, as
+/// `graphics.new_sphere` makes them by default.
+const SPHERE_SEGMENTS: u32 = 16;
+const SPHERE_RINGS: u32 = 8;
+
+/// A model file in a 3D view, times its tint.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelDef {
+    /// The model file's path, relative to the game's folder.
+    pub model: String,
+    pub tint: Color,
+}
+
+/// A sprite standing upright in a 3D view with the middle of its bottom edge at the node's origin,
+/// turned to face the camera across the ground. It moves with its node but doesn't turn or
+/// stretch.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BillboardDef {
+    pub sheet: String,
+    pub cell: [u32; 2],
+    /// Its width and height in world units. A negative width mirrors it.
+    pub size: [f32; 2],
+    pub tint: Color,
 }
 
 /// What a tileset file holds: the kinds of tile tilemaps are made of, by name, all the same size.
@@ -516,6 +668,7 @@ fn read_scene(scene: Value) -> Result<SceneFile, String> {
     let top = Parent {
         path: "",
         tilemap: None,
+        in_3d: false,
     };
     let children = read_children(fields.take("children"), &top, &sheets, 0)?;
     let clips = read_clips(fields.take("clips"))?;
@@ -644,7 +797,8 @@ fn read_track(track: Value, duration: f32) -> Result<Track, String> {
             other => {
                 return Err(format!(
                     "there's no property `{other}` for a track: it's x, y, rotation, scale_x, \
-                     scale_y, visible or cell"
+                     scale_y, visible or cell, or for nodes in 3D views, z, yaw, pitch, roll and \
+                     scale_z"
                 ));
             }
         }
@@ -738,11 +892,11 @@ fn read_tile(def: Value, sheets: &BTreeMap<String, SheetDef>) -> Result<TileDef,
 fn check_format(format: Option<Value>, what: &str) -> Result<(), String> {
     let Some(format) = format else {
         return Err(format!(
-            "the {what} has no `format`; this engine reads {FORMAT}"
+            "the {what} has no `format`; this engine reads formats 1 to {FORMAT}"
         ));
     };
     match whole(format, "format").map_err(|err| format!("the {what}: {err}"))? {
-        FORMAT => Ok(()),
+        1..=FORMAT => Ok(()),
         newer if newer > FORMAT => Err(format!(
             "the {what} is format {newer}, newer than this engine reads ({FORMAT})"
         )),
@@ -780,12 +934,14 @@ fn read_sheets(sheets: Option<Value>) -> Result<BTreeMap<String, SheetDef>, Stri
         .collect()
 }
 
-/// What the nodes being read are inside: the path of the node, or `""` for the scene, and the
-/// columns and rows of the map if it's a tilemap, whose layers they may be.
+/// What the nodes being read are inside: the path of the node, or `""` for the scene, the
+/// columns and rows of the map if it's a tilemap, whose layers they may be, and whether it's a 3D
+/// view or a node placed in 3D, so they're placed in 3D too.
 #[derive(Clone, Copy)]
 pub(super) struct Parent<'a> {
     pub path: &'a str,
     pub tilemap: Option<[u32; 2]>,
+    pub in_3d: bool,
 }
 
 impl Parent<'_> {
@@ -861,6 +1017,7 @@ pub(super) fn read_node(
         .ok_or_else(|| at("a node has a `kind`".into()))?;
     let kind_name = string(kind, "kind").map_err(at)?;
     let mut node = NodeDef::new(name, KindDef::Node);
+    node.placement3 = read_placement3(&mut fields, &kind_name, parent).map_err(at)?;
     let mut number = |field: &str, default: f32| match fields.take(field) {
         Some(value) => finite(value, field),
         None => Ok(default),
@@ -891,10 +1048,71 @@ pub(super) fn read_node(
     let inside = Parent {
         path: &path,
         tilemap,
+        in_3d: matches!(node.kind, KindDef::View3d(_)) || node.placement3.is_some(),
     };
     node.children = read_children(fields.take("children"), &inside, sheets, depth + 1)?;
     fields.finish(&super::a_node_of(&kind_name)).map_err(at)?;
     Ok(node)
+}
+
+/// Where a node of the kind `kind`, inside `parent`, is placed in 3D, if it is: if it's of a kind
+/// only views hold, if its parent is placed in 3D or is a view, or if it has a field only nodes
+/// placed in 3D have. Such a node has no `rotation` or `anchor`.
+fn read_placement3(
+    fields: &mut Fields,
+    kind: &str,
+    parent: &Parent,
+) -> Result<Option<Placement3>, String> {
+    const FIELDS: [&str; 5] = ["z", "yaw", "pitch", "roll", "scale_z"];
+    if !can_be_3d(kind) {
+        return Ok(None);
+    }
+    let given = FIELDS.map(|field| fields.take(field));
+    if !(is_3d_kind(kind) || parent.in_3d || given.iter().any(Option::is_some)) {
+        return Ok(None);
+    }
+    // A rotation of 0 is no rotation, as a plain node's fields have it before an override places
+    // it in 3D.
+    if fields.fields.get("rotation") == Some(&Value::Number(0.0)) {
+        fields.take("rotation");
+    }
+    for (field, says) in [
+        (
+            "rotation",
+            "turns by `yaw`, `pitch` and `roll`, and has no `rotation`",
+        ),
+        (
+            "anchor",
+            "has no `anchor`, which places nodes in the 2D scene",
+        ),
+    ] {
+        if fields.has(field) {
+            return Err(format!("a node placed in 3D, in a 3D view, {says}"));
+        }
+    }
+    let default = Placement3::default();
+    let defaults = [
+        default.z,
+        default.yaw,
+        default.pitch,
+        default.roll,
+        default.scale_z,
+    ];
+    let mut numbers = [0.0; 5];
+    for (i, value) in given.into_iter().enumerate() {
+        numbers[i] = match value {
+            Some(value) => finite(value, FIELDS[i])?,
+            None => defaults[i],
+        };
+    }
+    let [z, yaw, pitch, roll, scale_z] = numbers;
+    Ok(Some(Placement3 {
+        z,
+        yaw,
+        pitch,
+        roll,
+        scale_z,
+    }))
 }
 
 fn check_name(name: &str) -> Result<(), String> {
@@ -918,6 +1136,11 @@ fn check_placement(node: &NodeDef) -> Result<(), String> {
         KindDef::Tilemap(_) if turned => Err(
             "a tilemap moves, but doesn't turn or stretch: it has no `rotation`, `scale_x` \
                  or `scale_y`"
+                .into(),
+        ),
+        KindDef::View3d(_) if turned => Err(
+            "a 3D view moves, but doesn't turn or stretch: it has no `rotation`, `scale_x` or \
+             `scale_y`"
                 .into(),
         ),
         KindDef::TileLayer(_) if turned || moved => Err(
@@ -1043,14 +1266,167 @@ fn read_kind(
                 overrides,
             })
         }
+        "view3d" => {
+            let size = read_size(fields, "a view3d node")?;
+            let stretch = read_stretch(fields)?;
+            let pivot = read_pivot(fields)?;
+            let camera = fields
+                .take("camera")
+                .ok_or("a view3d node has a `camera`, { position, target }")?;
+            let lighting = match fields.take("lighting") {
+                Some(lighting) => read_lighting(lighting)?,
+                None => Lighting::default(),
+            };
+            KindDef::View3d(View3dDef {
+                size,
+                stretch,
+                pivot,
+                camera: read_camera(camera)?,
+                lighting,
+            })
+        }
+        "mesh" => {
+            let shape = fields
+                .take("shape")
+                .ok_or(r#"a mesh node has a `shape`: "cuboid", "plane" or "sphere""#)?;
+            let shape = match string(shape, "shape")?.as_str() {
+                "cuboid" => Shape::Cuboid(match fields.take("size") {
+                    Some(size) => positive_triple(size, "size")?,
+                    None => [1.0; 3],
+                }),
+                "plane" => Shape::Plane(match fields.take("size") {
+                    Some(size) => {
+                        let [width, depth] = pair(size, "size")?;
+                        [positive(width, "size")?, positive(depth, "size")?]
+                    }
+                    None => [1.0; 2],
+                }),
+                "sphere" => Shape::Sphere(match fields.take("radius") {
+                    Some(radius) => positive(finite(radius, "radius")?, "radius")?,
+                    None => 0.5,
+                }),
+                other => {
+                    return Err(format!(
+                        r#"`shape` must be "cuboid", "plane" or "sphere", not "{other}""#
+                    ));
+                }
+            };
+            let sprite = if fields.has("sheet") || fields.has("cell") {
+                let (sheet, cell) = read_sheet_cell(fields, sheets, "a mesh node with a sprite")?;
+                Some(CellDef { sheet, cell })
+            } else {
+                None
+            };
+            KindDef::Mesh(MeshDef {
+                shape,
+                sprite,
+                tint: optional_color(fields, "tint")?,
+            })
+        }
+        "model" => {
+            let model = fields
+                .take("model")
+                .ok_or("a model node has a `model`, the path of a model file")?;
+            KindDef::Model(ModelDef {
+                model: string(model, "model")?,
+                tint: optional_color(fields, "tint")?,
+            })
+        }
+        "billboard" => {
+            let (sheet, cell) = read_sheet_cell(fields, sheets, "a billboard node")?;
+            let mut number = |field: &str| match fields.take(field) {
+                Some(value) => finite(value, field),
+                None => Ok(1.0),
+            };
+            let size = [number("width")?, number("height")?];
+            KindDef::Billboard(BillboardDef {
+                sheet,
+                cell,
+                size,
+                tint: optional_color(fields, "tint")?,
+            })
+        }
         other => {
             return Err(format!(
                 "there's no kind of node `{other}`: a node is a node, sprite, rect, text, area, \
-                 tilemap, tile_layer or instance"
+                 tilemap, tile_layer, instance, view3d, mesh, model or billboard"
             ));
         }
     };
     Ok(kind)
+}
+
+/// A view's camera, `{ position, target }` with `up`, `fov` or `height`, `near` and `far` if
+/// they aren't the defaults.
+fn read_camera(camera: Value) -> Result<Camera3d, String> {
+    let mut fields = Fields::new(camera, "`camera`")?;
+    let mut take = |field: &str| {
+        fields
+            .take(field)
+            .ok_or_else(|| format!("a camera has a `{field}`"))
+    };
+    let position = triple(take("position")?, "camera.position")?;
+    let target = triple(take("target")?, "camera.target")?;
+    let mut camera = Camera3d::perspective(position, target, DEFAULT_FOV);
+    if let Some(up) = fields.take("up") {
+        camera.up = triple(up, "camera.up")?;
+    }
+    camera.projection = match (fields.take("fov"), fields.take("height")) {
+        (Some(_), Some(_)) => {
+            return Err(
+                "a camera has a `fov`, for perspective, or a `height`, for none, not both".into(),
+            );
+        }
+        (Some(fov), None) => Projection::Perspective {
+            fov_y: finite(fov, "camera.fov")?,
+        },
+        (None, Some(height)) => Projection::Orthographic {
+            height: finite(height, "camera.height")?,
+        },
+        (None, None) => camera.projection,
+    };
+    if let Some(near) = fields.take("near") {
+        camera.near = finite(near, "camera.near")?;
+    }
+    if let Some(far) = fields.take("far") {
+        camera.far = finite(far, "camera.far")?;
+    }
+    fields.finish("a camera")?;
+    match camera.problem() {
+        Some(problem) => Err(problem),
+        None => Ok(camera),
+    }
+}
+
+/// A view's lighting, `{ direction, color, ambient }`, each the default's if left out.
+fn read_lighting(lighting: Value) -> Result<Lighting, String> {
+    let mut fields = Fields::new(lighting, "`lighting`")?;
+    let default = Lighting::default();
+    let direction = match fields.take("direction") {
+        Some(direction) => triple(direction, "lighting.direction")?,
+        None => default.direction,
+    };
+    // A color the same as the default's, to the byte, is the default's, so it writes and reads
+    // back the same.
+    let mut light = |field: &str, default: Color| -> Result<Color, String> {
+        let Some(value) = fields.take(field) else {
+            return Ok(default);
+        };
+        let read = color(value, &format!("lighting.{field}"))?;
+        Ok(if read.to_rgba8() == default.to_rgba8() {
+            default
+        } else {
+            read
+        })
+    };
+    let color = light("color", default.color)?;
+    let ambient = light("ambient", default.ambient)?;
+    fields.finish("`lighting`")?;
+    Ok(Lighting {
+        direction,
+        color,
+        ambient,
+    })
 }
 
 /// A sprite's `sheet` and `cell`, which the sprite of a node or a tile must have.
@@ -1228,6 +1604,10 @@ impl Fields {
         self.fields.remove(name)
     }
 
+    fn has(&self, name: &str) -> bool {
+        self.fields.contains_key(name)
+    }
+
     /// Fails if any field hasn't been taken, as one `what`, such as `"a sheet"`, doesn't have.
     fn finish(self, what: &str) -> Result<(), String> {
         match self.fields.keys().next() {
@@ -1291,6 +1671,33 @@ fn pair(value: Value, field: &str) -> Result<[f32; 2], String> {
     match <[Value; 2]>::try_from(list(value, field)?) {
         Ok([x, y]) => Ok([finite(x, field)?, finite(y, field)?]),
         Err(_) => Err(format!("`{field}` must be two numbers, {{ x, y }}")),
+    }
+}
+
+/// Three finite numbers, `{ x, y, z }`.
+fn triple(value: Value, field: &str) -> Result<[f32; 3], String> {
+    match <[Value; 3]>::try_from(list(value, field)?) {
+        Ok([x, y, z]) => Ok([finite(x, field)?, finite(y, field)?, finite(z, field)?]),
+        Err(_) => Err(format!("`{field}` must be three numbers, {{ x, y, z }}")),
+    }
+}
+
+/// Three numbers above 0, such as a box's width, height and depth.
+fn positive_triple(value: Value, field: &str) -> Result<[f32; 3], String> {
+    let [x, y, z] = triple(value, field)?;
+    Ok([
+        positive(x, field)?,
+        positive(y, field)?,
+        positive(z, field)?,
+    ])
+}
+
+/// `number`, a size, which must be above 0.
+fn positive(number: f32, field: &str) -> Result<f32, String> {
+    if number > 0.0 {
+        Ok(number)
+    } else {
+        Err(format!("`{field}` must be above 0, not {number}"))
     }
 }
 
@@ -1361,7 +1768,18 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
     if let Some(anchor) = node.anchor {
         set("anchor", pair(anchor));
     }
-    set("rotation", number(node.rotation));
+    // A node placed in 3D has no rotation, and its 3D fields, all of them, say it's placed in 3D
+    // when it's read again.
+    match node.placement3 {
+        Some(placement) => {
+            set("z", number(placement.z));
+            set("yaw", number(placement.yaw));
+            set("pitch", number(placement.pitch));
+            set("roll", number(placement.roll));
+            set("scale_z", number(placement.scale_z));
+        }
+        None => set("rotation", number(node.rotation)),
+    }
     set("scale_x", number(node.scale_x));
     set("scale_y", number(node.scale_y));
     set("visible", Value::Bool(node.visible));
@@ -1439,8 +1857,84 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
                 .collect();
             set("overrides", Value::Map(overrides));
         }
+        KindDef::View3d(view) => {
+            set("width", number(view.size[0]));
+            set("height", number(view.size[1]));
+            set("stretch", pair(view.stretch));
+            set("pivot", pair(view.pivot));
+            set("camera", camera_value(&view.camera));
+            set("lighting", lighting_value(&view.lighting));
+        }
+        KindDef::Mesh(mesh) => {
+            set("shape", string(mesh.shape.name()));
+            match mesh.shape {
+                Shape::Cuboid(size) => set("size", triple_value(size)),
+                Shape::Plane(size) => set("size", pair(size)),
+                Shape::Sphere(radius) => set("radius", number(radius)),
+            }
+            if let Some(sprite) = &mesh.sprite {
+                set("sheet", string(&sprite.sheet));
+                set("cell", cell_value(sprite.cell));
+            }
+            set("tint", hex(mesh.tint));
+        }
+        KindDef::Model(model) => {
+            set("model", string(&model.model));
+            set("tint", hex(model.tint));
+        }
+        KindDef::Billboard(billboard) => {
+            set("sheet", string(&billboard.sheet));
+            set("cell", cell_value(billboard.cell));
+            set("width", number(billboard.size[0]));
+            set("height", number(billboard.size[1]));
+            set("tint", hex(billboard.tint));
+        }
     }
     fields
+}
+
+fn triple_value(numbers: [f32; 3]) -> Value {
+    Value::List(numbers.map(|n| Value::Number(n.into())).into())
+}
+
+fn cell_value([column, row]: [u32; 2]) -> Value {
+    Value::List(vec![
+        Value::Number(column.into()),
+        Value::Number(row.into()),
+    ])
+}
+
+fn hex_value(color: Color) -> Value {
+    let [r, g, b, a] = color.to_rgba8();
+    Value::String(format!("#{r:02x}{g:02x}{b:02x}{a:02x}"))
+}
+
+/// A camera as a scene file holds it, with every field.
+fn camera_value(camera: &Camera3d) -> Value {
+    let number = |n: f32| Value::Number(n.into());
+    let mut fields = BTreeMap::new();
+    fields.insert("position".to_owned(), triple_value(camera.position));
+    fields.insert("target".to_owned(), triple_value(camera.target));
+    fields.insert("up".to_owned(), triple_value(camera.up));
+    match camera.projection {
+        Projection::Perspective { fov_y } => fields.insert("fov".to_owned(), number(fov_y)),
+        Projection::Orthographic { height } => fields.insert("height".to_owned(), number(height)),
+    };
+    fields.insert("near".to_owned(), number(camera.near));
+    fields.insert("far".to_owned(), number(camera.far));
+    Value::Map(fields)
+}
+
+/// Lighting as a scene file holds it, with every field.
+fn lighting_value(lighting: &Lighting) -> Value {
+    Value::Map(
+        [
+            ("direction".to_owned(), triple_value(lighting.direction)),
+            ("color".to_owned(), hex_value(lighting.color)),
+            ("ambient".to_owned(), hex_value(lighting.ambient)),
+        ]
+        .into(),
+    )
 }
 
 #[cfg(test)]
@@ -1825,12 +2319,330 @@ mod tests {
     fn the_format_is_required_and_checked() {
         let err = error("return {}");
         assert!(err.contains("has no `format`"), "{err}");
-        let err = error("return { format = 2 }");
+        let err = error("return { format = 3 }");
         assert!(
-            err.contains("format 2, newer than this engine reads (1)"),
+            err.contains("format 3, newer than this engine reads (2)"),
             "{err}"
         );
-        assert!(parse("return { format = 1 }").is_ok());
+        let err = error("return { format = 0 }");
+        assert!(err.contains("there's no scene format 0"), "{err}");
+        assert!(
+            parse("return { format = 1 }").is_ok(),
+            "older files still read"
+        );
+        assert!(parse("return { format = 2 }").is_ok());
+    }
+
+    /// A level with a 3D view: a crate on a floor, a prop placed in it, and a billboard.
+    const CELLAR: &str = r##"return {
+        format = 2,
+        sheets = { tiles = { path = "tiles.png", tile_width = 16, tile_height = 16 } },
+        children = {
+            {
+                name = "view", kind = "view3d", anchor = { 0.5, 0.5 }, width = 160, height = 90,
+                pivot = { 80, 45 },
+                camera = { position = { 0, 5, 4 }, target = { 0, 0, 0 }, fov = 0.6, far = 50 },
+                lighting = { color = "#ffeedd" },
+                children = {
+                    { name = "floor", kind = "mesh", shape = "plane", size = { 8, 6 }, tint = "#404040" },
+                    {
+                        name = "stack", kind = "node", x = 1, z = -2, yaw = 0.5,
+                        children = {
+                            { name = "crate", kind = "mesh", shape = "cuboid", y = 0.5, sheet = "tiles", cell = { 2, 3 } },
+                            { name = "ball", kind = "mesh", shape = "sphere", radius = 0.25, y = 1.25 },
+                        },
+                    },
+                    { name = "barrel", kind = "model", model = "models/barrel.glb", x = -2, scale_z = 2 },
+                    { name = "hero", kind = "billboard", sheet = "tiles", cell = { 27, 0 }, width = -1, height = 1.5, tags = { "hero" } },
+                    { name = "prop", kind = "instance", scene = "prop.scene.luau", pitch = 0.25 },
+                },
+            },
+        },
+    }"##;
+
+    #[test]
+    fn reads_3d_views_and_their_nodes() {
+        let scene = parse(CELLAR).unwrap();
+        let view = &scene.children[0];
+        assert_eq!(view.placement3, None, "a view is in the 2D scene");
+        let KindDef::View3d(def) = &view.kind else {
+            panic!("{:?}", view.kind);
+        };
+        assert_eq!(def.size, [160.0, 90.0]);
+        assert_eq!(def.pivot, [80.0, 45.0]);
+        assert_eq!(def.camera.position, [0.0, 5.0, 4.0]);
+        assert_eq!(def.camera.up, [0.0, 1.0, 0.0]);
+        assert_eq!(
+            def.camera.projection,
+            Projection::Perspective { fov_y: 0.6 }
+        );
+        assert_eq!([def.camera.near, def.camera.far], [0.1, 50.0]);
+        assert_eq!(def.lighting.color, Color::rgb8(0xff, 0xee, 0xdd));
+        assert_eq!(def.lighting.ambient, Lighting::default().ambient);
+
+        let [floor, stack, barrel, hero, prop] = &view.children[..] else {
+            panic!("{:?}", view.children);
+        };
+        assert_eq!(
+            floor.kind,
+            KindDef::Mesh(MeshDef {
+                shape: Shape::Plane([8.0, 6.0]),
+                sprite: None,
+                tint: Color::rgb8(0x40, 0x40, 0x40),
+            })
+        );
+        assert_eq!(floor.placement3, Some(Placement3::default()));
+        // A plain node in a view is placed in 3D, and so is everything inside it.
+        assert_eq!(
+            stack.placement3,
+            Some(Placement3 {
+                z: -2.0,
+                yaw: 0.5,
+                ..Placement3::default()
+            })
+        );
+        assert_eq!([stack.x, stack.y], [1.0, 0.0]);
+        let [crate_, ball] = &stack.children[..] else {
+            panic!("{:?}", stack.children);
+        };
+        assert_eq!(
+            crate_.kind,
+            KindDef::Mesh(MeshDef {
+                shape: Shape::Cuboid([1.0; 3]),
+                sprite: Some(CellDef {
+                    sheet: "tiles".into(),
+                    cell: [2, 3],
+                }),
+                tint: Color::WHITE,
+            })
+        );
+        assert_eq!(crate_.y, 0.5);
+        assert!(
+            matches!(ball.kind, KindDef::Mesh(MeshDef { shape: Shape::Sphere(r), .. }) if r == 0.25)
+        );
+        assert_eq!(
+            barrel.kind,
+            KindDef::Model(ModelDef {
+                model: "models/barrel.glb".into(),
+                tint: Color::WHITE,
+            })
+        );
+        assert_eq!(barrel.placement3.unwrap().scale_z, 2.0);
+        assert_eq!(
+            hero.kind,
+            KindDef::Billboard(BillboardDef {
+                sheet: "tiles".into(),
+                cell: [27, 0],
+                size: [-1.0, 1.5],
+                tint: Color::WHITE,
+            })
+        );
+        assert!(matches!(prop.kind, KindDef::Instance(_)));
+        assert_eq!(prop.placement3.unwrap().pitch, 0.25);
+    }
+
+    #[test]
+    fn files_of_props_place_their_nodes_in_3d() {
+        // A file of its own, for an instance to place in a view: its meshes are placed in 3D, and
+        // so is a plain node with a field only nodes in 3D have, but not one without.
+        let scene = parse(
+            "return { format = 2, children = {
+                { name = 'box', kind = 'mesh', shape = 'cuboid', yaw = 1 },
+                { name = 'turned', kind = 'node', yaw = 1, children = { { name = 'in', kind = 'node' } } },
+                { name = 'group', kind = 'node', children = { { name = 'in', kind = 'node' } } },
+            } }",
+        )
+        .unwrap();
+        let [mesh, turned, group] = &scene.children[..] else {
+            panic!("{:?}", scene.children);
+        };
+        assert_eq!(mesh.placement3.unwrap().yaw, 1.0);
+        assert_eq!(turned.placement3.unwrap().yaw, 1.0);
+        assert!(
+            turned.children[0].placement3.is_some(),
+            "inside a node in 3D"
+        );
+        assert_eq!(group.placement3, None);
+        assert_eq!(group.children[0].placement3, None);
+    }
+
+    #[test]
+    fn nodes_in_3d_are_checked() {
+        let view = |children: &str, fields: &str| {
+            with_children(&format!(
+                "{{ name = 'view', kind = 'view3d', width = 10, height = 10, {fields} \
+                 children = {{ {children} }} }}"
+            ))
+        };
+        let camera = "camera = { position = { 0, 1, 2 }, target = { 0, 0, 0 } },";
+        let cases = [
+            (
+                view("", ""),
+                "node `view`: a view3d node has a `camera`, { position, target }",
+            ),
+            (
+                view(
+                    "",
+                    "camera = { position = { 0, 1 }, target = { 0, 0, 0 } },",
+                ),
+                "`camera.position` must be three numbers",
+            ),
+            (
+                view("", "camera = { position = { 0, 1, 2 } },"),
+                "a camera has a `target`",
+            ),
+            (
+                view(
+                    "",
+                    "camera = { position = { 0, 1, 2 }, target = { 0, 0, 0 }, fov = 1, \
+                     height = 2 },",
+                ),
+                "a camera has a `fov`, for perspective, or a `height`, for none, not both",
+            ),
+            (
+                view(
+                    "",
+                    "camera = { position = { 0, 1, 2 }, target = { 0, 0, 0 }, fov = 4 },",
+                ),
+                "a camera's fov must be between 0 and pi, not 4",
+            ),
+            (
+                view(
+                    "",
+                    "camera = { position = { 0, 1, 2 }, target = { 0, 0, 0 }, zoom = 2 },",
+                ),
+                "a camera has no field `zoom`",
+            ),
+            (
+                view("", &format!("{camera} lighting = {{ colour = 1 }},")),
+                "`lighting` has no field `colour`",
+            ),
+            (
+                view("", &format!("{camera} rotation = 1,")),
+                "node `view`: a 3D view moves, but doesn't turn or stretch",
+            ),
+            (
+                view(
+                    "{ name = 'box', kind = 'mesh', rotation = 1, shape = 'cuboid' }",
+                    camera,
+                ),
+                "node `view/box`: a node placed in 3D, in a 3D view, turns by `yaw`, `pitch` and \
+                 `roll`, and has no `rotation`",
+            ),
+            (
+                view("{ name = 'box', kind = 'node', anchor = { 0, 0 } }", camera),
+                "node `view/box`: a node placed in 3D, in a 3D view, has no `anchor`",
+            ),
+            (
+                view("{ name = 'box', kind = 'mesh' }", camera),
+                r#"a mesh node has a `shape`: "cuboid", "plane" or "sphere""#,
+            ),
+            (
+                view("{ name = 'box', kind = 'mesh', shape = 'cone' }", camera),
+                r#"`shape` must be "cuboid", "plane" or "sphere", not "cone""#,
+            ),
+            (
+                view(
+                    "{ name = 'box', kind = 'mesh', shape = 'cuboid', size = { 1, 0, 1 } }",
+                    camera,
+                ),
+                "`size` must be above 0, not 0",
+            ),
+            (
+                view(
+                    "{ name = 'box', kind = 'mesh', shape = 'sphere', size = { 1, 1, 1 } }",
+                    camera,
+                ),
+                "a mesh node has no field `size`",
+            ),
+            (
+                view(
+                    "{ name = 'box', kind = 'mesh', shape = 'plane', cell = { 0, 0 } }",
+                    camera,
+                ),
+                "a mesh node with a sprite has a `sheet`",
+            ),
+            (
+                view("{ name = 'barrel', kind = 'model' }", camera),
+                "a model node has a `model`, the path of a model file",
+            ),
+            (
+                view(
+                    "{ name = 'hero', kind = 'billboard', sheet = 'tiles' }",
+                    camera,
+                ),
+                "a billboard node has a `cell`",
+            ),
+            (
+                view(
+                    "{ name = 'hero', kind = 'sprite', sheet = 'tiles', cell = { 0, 0 }, z = 1 }",
+                    camera,
+                ),
+                "a sprite node has no field `z`",
+            ),
+        ];
+        for (source, expected) in cases {
+            let err = error(&source);
+            assert!(err.contains(expected), "{source}\n{err}");
+        }
+    }
+
+    #[test]
+    fn overriding_nodes_in_3d_keeps_them_in_3d() {
+        let scene = parse(&with_children(
+            "{ name = 'view', kind = 'view3d', width = 10, height = 10, \
+               camera = { position = { 0, 1, 2 }, target = { 0, 0, 0 } }, children = {
+                 { name = 'box', kind = 'mesh', shape = 'cuboid', x = 1, yaw = 0.5 },
+                 { name = 'group', kind = 'node' } } }",
+        ))
+        .unwrap();
+        let view = &scene.children[0];
+        let change = |field: &str, value: f64| [(field.to_owned(), Value::Number(value))].into();
+        let box_ = &view.children[0];
+        let moved = box_
+            .overridden(&change("z", 3.0), &scene.sheets, None)
+            .unwrap();
+        assert_eq!(
+            moved.placement3,
+            Some(Placement3 {
+                z: 3.0,
+                yaw: 0.5,
+                ..Placement3::default()
+            })
+        );
+        assert_eq!(moved.x, 1.0);
+        assert_eq!(
+            box_.overridden(&BTreeMap::new(), &scene.sheets, None)
+                .unwrap(),
+            *box_
+        );
+        let err = box_
+            .overridden(&change("rotation", 1.0), &scene.sheets, None)
+            .unwrap_err();
+        assert!(err.contains("has no `rotation`"), "{err}");
+        // A plain node a file places in 2D takes a 3D field.
+        let group = NodeDef::new("group", KindDef::Node);
+        let turned = group
+            .overridden(&change("yaw", 1.0), &scene.sheets, None)
+            .unwrap();
+        assert_eq!(turned.placement3.unwrap().yaw, 1.0);
+    }
+
+    #[test]
+    fn clips_have_tracks_of_3d_properties() {
+        let scene = parse(
+            "return { format = 2, clips = { spin = { duration = 1, tracks = {
+                { property = 'yaw', keys = { { 0, 0 }, { 1, 6.28 } } },
+                { property = 'scale_z', keys = { { 0, 1 } } },
+            } } } }",
+        )
+        .unwrap();
+        let properties: Vec<_> = scene.clips["spin"]
+            .tracks
+            .iter()
+            .map(|track| track.keys.property_name())
+            .collect();
+        assert_eq!(properties, ["yaw", "scale_z"]);
     }
 
     #[test]
