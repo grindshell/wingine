@@ -528,6 +528,37 @@ fn scripts_require_modules_relative_to_themselves() {
 }
 
 #[test]
+fn held_keys_repeat_for_scripts() {
+    let folder = game(
+        "key_repeat",
+        &[(
+            "main.luau",
+            "input.bind('east', { 'L', 'DPadRight' })
+            steps = 0
+            repeats = 0
+            function update()
+                if input.pressed('east') or input.repeated('east') then
+                    steps += 1
+                end
+                if input.key_repeated('L') then
+                    repeats += 1
+                end
+            end",
+        )],
+    );
+    let mut simulation = simulation(&folder);
+    // Pressed, then repeated after half a second, 30 times a second.
+    simulation.hold(Key::L, 1.0);
+    assert_eq!(eval::<u32>(&simulation, "steps"), 16);
+    assert_eq!(eval::<u32>(&simulation, "repeats"), 15);
+
+    // The D-pad doesn't repeat.
+    simulation.connect_gamepad("Pad");
+    simulation.hold_button(1, GamepadButton::DPadRight, 1.0);
+    assert_eq!(eval::<u32>(&simulation, "steps"), 17);
+}
+
+#[test]
 fn gamepads_are_read_by_number_and_through_actions() {
     let folder = game(
         "gamepads",

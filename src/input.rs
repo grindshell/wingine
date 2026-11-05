@@ -31,6 +31,11 @@ const STICK_FULL: f32 = 0.95;
 /// A key or button is *pressed* or *released* on the frame its state changed, and *held* while it
 /// is down. One tapped between two frames counts as both pressed and released on the next frame,
 /// so quick taps are never lost.
+///
+/// A key held down isn't pressed again, but it *repeats* as the system repeats keys: after a
+/// delay, then at a steady rate, both as the player's settings say. [`Input::key_repeated`] and
+/// [`Input::repeated`] tell of repeats, so a game that takes a step for each press and each
+/// repeat walks while a key is held.
 #[derive(Debug, Default)]
 pub struct Input {
     keys: Buttons<Key>,
@@ -116,6 +121,14 @@ impl Input {
         self.keys.released.contains(&key)
     }
 
+    /// Whether the system repeated `key` this frame, as it does while a key is held: after a
+    /// delay, then at a steady rate. The press that started it isn't a repeat, so a game that
+    /// acts when `key_pressed(key) || key_repeated(key)` acts once as the key goes down, then
+    /// again for each repeat.
+    pub fn key_repeated(&self, key: Key) -> bool {
+        self.keys.repeated.contains(&key)
+    }
+
     /// Whether anything bound to `action` is down. Unbound actions are never held.
     pub fn held(&self, action: &str) -> bool {
         self.any_bound(action, Self::key_held, Gamepad::held)
@@ -129,6 +142,12 @@ impl Input {
     /// Whether anything bound to `action` went up this frame.
     pub fn released(&self, action: &str) -> bool {
         self.any_bound(action, Self::key_released, Gamepad::released)
+    }
+
+    /// Whether a key bound to `action` repeated this frame, as [`Input::key_repeated`] tells.
+    /// Gamepad buttons don't repeat, since the system repeats only keys.
+    pub fn repeated(&self, action: &str) -> bool {
+        self.any_bound(action, Self::key_repeated, |_, _| false)
     }
 
     /// How far `action` is pushed, from 0 to 1: 1 while one of its keys is held, and otherwise
@@ -220,6 +239,12 @@ impl Input {
 
     pub(crate) fn key_down(&mut self, key: Key) {
         self.keys.down(key);
+    }
+
+    /// Repeats `key`, as the system does while a key is held. A repeat of a key that isn't held,
+    /// as when the window gains focus while it's down, presses it.
+    pub(crate) fn key_repeat(&mut self, key: Key) {
+        self.keys.repeat(key);
     }
 
     pub(crate) fn key_up(&mut self, key: Key) {
@@ -414,12 +439,13 @@ fn dead_zoned([x, y]: [f32; 2]) -> [f32; 2] {
     [x * scale, y * scale]
 }
 
-/// Held, pressed and released state for a set of keys or buttons.
+/// Held, pressed, released and repeated state for a set of keys or buttons. Only keys repeat.
 #[derive(Debug)]
 struct Buttons<T> {
     held: HashSet<T>,
     pressed: HashSet<T>,
     released: HashSet<T>,
+    repeated: HashSet<T>,
 }
 
 impl<T> Default for Buttons<T> {
@@ -428,15 +454,23 @@ impl<T> Default for Buttons<T> {
             held: HashSet::new(),
             pressed: HashSet::new(),
             released: HashSet::new(),
+            repeated: HashSet::new(),
         }
     }
 }
 
 impl<T: Copy + Eq + Hash> Buttons<T> {
     fn down(&mut self, button: T) {
-        // Key repeat sends more presses while a key is held; only the first counts.
         if self.held.insert(button) {
             self.pressed.insert(button);
+        }
+    }
+
+    fn repeat(&mut self, button: T) {
+        if self.held.contains(&button) {
+            self.repeated.insert(button);
+        } else {
+            self.down(button);
         }
     }
 
@@ -453,6 +487,7 @@ impl<T: Copy + Eq + Hash> Buttons<T> {
     fn end_frame(&mut self) {
         self.pressed.clear();
         self.released.clear();
+        self.repeated.clear();
     }
 }
 
@@ -785,13 +820,43 @@ mod tests {
     }
 
     #[test]
-    fn key_repeat_does_not_press_again() {
+    fn key_repeat_repeats_without_pressing_again() {
         let mut input = Input::new();
-        input.key_down(Key::Space);
+        input.bind("step", [Key::L]);
+        input.key_down(Key::L);
+        assert!(input.key_pressed(Key::L) && !input.key_repeated(Key::L));
+        assert!(input.pressed("step") && !input.repeated("step"));
+
         input.end_frame();
-        input.key_down(Key::Space);
-        assert!(!input.key_pressed(Key::Space));
-        assert!(input.key_held(Key::Space));
+        input.key_repeat(Key::L);
+        assert!(!input.key_pressed(Key::L) && input.key_held(Key::L));
+        assert!(input.key_repeated(Key::L) && input.repeated("step"));
+        assert!(!input.pressed("step"));
+
+        input.end_frame();
+        assert!(!input.key_repeated(Key::L), "a repeat lasts one frame");
+        // A second press of a held key is no press at all.
+        input.key_down(Key::L);
+        assert!(!input.key_pressed(Key::L) && !input.key_repeated(Key::L));
+    }
+
+    #[test]
+    fn repeat_of_a_key_not_held_presses_it() {
+        let mut input = Input::new();
+        input.key_repeat(Key::W);
+        assert!(input.key_pressed(Key::W) && input.key_held(Key::W));
+        assert!(!input.key_repeated(Key::W));
+    }
+
+    #[test]
+    fn gamepad_buttons_never_repeat() {
+        let mut input = Input::new();
+        input.connect_gamepad(1, "Pad".into());
+        input.bind("left", [GamepadButton::DPadLeft]);
+        input.set_gamepad_button(1, GamepadButton::DPadLeft, 1.0);
+        input.end_frame();
+        input.set_gamepad_button(1, GamepadButton::DPadLeft, 1.0);
+        assert!(input.held("left") && !input.repeated("left"));
     }
 
     #[test]

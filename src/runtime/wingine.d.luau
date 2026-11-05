@@ -624,6 +624,8 @@ declare input: {
     pressed: (action: string) -> boolean,
     --- Returns whether anything bound to `action` was released for this update.
     released: (action: string) -> boolean,
+    --- Returns whether a key bound to `action` repeated for this update, as `key_repeated` says.
+    repeated: (action: string) -> boolean,
     --- Returns how far `action` is pushed, from 0 to 1: 1 while a key bound to it is down, and
     --- otherwise as far as the furthest of its buttons, such as a trigger or a stick's direction.
     strength: (action: string) -> number,
@@ -635,6 +637,9 @@ declare input: {
     key_pressed: (key: Key) -> boolean,
     --- Returns whether `key` was released for this update.
     key_released: (key: Key) -> boolean,
+    --- Returns whether the system repeated `key`, held down, for this update, as it does after a
+    --- delay and then at a steady rate. The press that started it isn't a repeat.
+    key_repeated: (key: Key) -> boolean,
     --- Returns the cursor's position in canvas pixels, or `nil, nil` outside the window.
     mouse_position: () -> (number?, number?),
     --- Returns whether `button` is down.

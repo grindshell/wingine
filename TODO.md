@@ -45,7 +45,7 @@ Gaps that [Paradise Lost](../paradise-lost)'s port to Luau met and deliberately 
 not work around (its `AGENTS.md`, *Engine gaps*). The game is waiting on each one.
 The suggested shapes are only suggestions; the design is the engine's to make.
 
-- [ ] **Key repeat for scripts.**
+- [x] **Key repeat for scripts.**
   Source: [Buttons::down](src/input.rs), currently lines 436–441, and
   [key_event](src/app.rs), currently line 567.
   The window's repeated presses are dropped, so a held key is exactly one press. Paradise

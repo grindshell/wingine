@@ -537,7 +537,8 @@ pub(crate) struct SimulatedInput {
 }
 
 impl SimulatedInput {
-    pub fn key(&mut self, key: Key, pressed: bool) {
+    /// Presses or releases `key`, or with `repeat`, repeats it.
+    pub fn key(&mut self, key: Key, pressed: bool, repeat: bool) {
         let modifiers = &mut self.modifiers;
         match key {
             Key::LeftShift | Key::RightShift => modifiers.shift = pressed,
@@ -554,7 +555,7 @@ impl SimulatedInput {
                 key: egui_key,
                 physical_key: Some(egui_key),
                 pressed,
-                repeat: false,
+                repeat,
                 modifiers: self.modifiers,
             }),
             None => self

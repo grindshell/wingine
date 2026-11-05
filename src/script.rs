@@ -24,6 +24,8 @@
 //! pad-tap 2 Start        # press gamepad 2's button, run one frame, release
 //! pad-hold 1 DPadLeft 1s # press, run for 1 second (or a number of frames), release
 //! stick 1 Left 0.5 -1    # move gamepad 1's left stick to x, y, each from -1 to 1 (y down)
+//! key-repeat 0.25s 20    # repeat held keys after 0.25 seconds (or frames), 20 times a second
+//! key-repeat off         # don't repeat held keys
 //! resize 640 360         # resize the virtual window, in physical pixels
 //! screenshot walk.png    # save the latest frame, relative to the script's directory
 //! benchmark 10s          # run 10 seconds, rendering every frame, and report how long they took
@@ -33,12 +35,16 @@
 //! Gamepads are numbered from 1, and connect when a command first names them, along with any
 //! numbered before them.
 //!
+//! A key held down repeats as a window's system would repeat it, the last key pressed only: by
+//! default, after half a second, 30 times a second (see [`KeyRepeat`]).
+//!
 //! Each saved screenshot is reported on standard output, as is each benchmark: the mean, median,
 //! 99th percentile and longest of each [`FrameStats`] time, as a window would see them (with
 //! vsync off), except that each frame waits for the GPU to finish it before the next starts.
 //! Benchmark a release build: `cargo run --release`.
 //!
 //! [`Simulation`]: crate::headless::Simulation
+//! [`KeyRepeat`]: crate::headless::KeyRepeat
 //! [`WindowConfig`]: crate::WindowConfig
 
 use std::{
@@ -51,7 +57,7 @@ use std::{
 
 use crate::{
     Context, Error, FrameStats, Game, Result, WindowConfig,
-    headless::Simulation,
+    headless::{KeyRepeat, Simulation},
     input::{GamepadButton, Key, MouseButton, Stick},
 };
 
@@ -76,6 +82,7 @@ enum Command {
     PadTap(u32, GamepadButton),
     PadHold(u32, GamepadButton, u32),
     Stick(u32, Stick, [f32; 2]),
+    KeyRepeat(Option<KeyRepeat>),
     Resize(u32, u32),
     Screenshot(PathBuf),
     Benchmark(u32, Option<PathBuf>),
@@ -133,6 +140,7 @@ pub fn run<G: Game>(
                 simulation.hold_button_frames(gamepad, button, frames);
             }
             Command::Stick(gamepad, stick, [x, y]) => simulation.move_stick(gamepad, stick, x, y),
+            Command::KeyRepeat(repeat) => simulation.set_key_repeat(repeat),
             Command::Resize(width, height) => simulation.resize(width, height),
             Command::Screenshot(file) => {
                 let file = output_file(directory, &file).map_err(fail)?;
@@ -288,6 +296,11 @@ fn parse_command(name: &str, args: &[&str]) -> Result<Command, String> {
         ("stick", [gamepad, stick, x, y]) => {
             Command::Stick(size(gamepad)?, by_name(stick)?, [number(x)?, number(y)?])
         }
+        ("key-repeat", ["off"]) => Command::KeyRepeat(None),
+        ("key-repeat", [delay, rate]) => Command::KeyRepeat(Some(KeyRepeat {
+            delay: frames(delay)? as f32 / 60.0,
+            rate: repeat_rate(rate)?,
+        })),
         ("resize", [width, height]) => Command::Resize(size(width)?, size(height)?),
         ("screenshot", [file]) => Command::Screenshot(PathBuf::from(file)),
         ("benchmark", [duration]) => Command::Benchmark(some_frames(duration)?, None),
@@ -296,8 +309,8 @@ fn parse_command(name: &str, args: &[&str]) -> Result<Command, String> {
         }
         (
             "wait" | "press" | "release" | "tap" | "hold" | "mouse" | "mouse-down" | "mouse-up"
-            | "click" | "pad-down" | "pad-up" | "pad-tap" | "pad-hold" | "stick" | "resize"
-            | "screenshot" | "benchmark",
+            | "click" | "pad-down" | "pad-up" | "pad-tap" | "pad-hold" | "stick" | "key-repeat"
+            | "resize" | "screenshot" | "benchmark",
             _,
         ) => return Err(format!("wrong arguments for `{name}`")),
         _ => return Err(format!("unknown command `{name}`")),
@@ -343,6 +356,14 @@ fn number(text: &str) -> Result<f32, String> {
         .map_err(|_| format!("`{text}` is not a number"))
 }
 
+/// Parses how many times a second keys repeat.
+fn repeat_rate(text: &str) -> Result<f32, String> {
+    match text.parse::<f32>() {
+        Ok(rate) if rate > 0.0 && rate.is_finite() => Ok(rate),
+        _ => Err(format!("`{text}` is not a number of repeats a second")),
+    }
+}
+
 fn size(text: &str) -> Result<u32, String> {
     match text.parse() {
         Ok(size) if size > 0 => Ok(size),
@@ -376,6 +397,9 @@ mod tests {
             pad-tap 2 Start
             pad-hold 1 DPadLeft 0.5s
             stick 1 left 0.5 -1
+            key-repeat 0.25s 20
+            key-repeat 15 2.5
+            key-repeat off
             resize 640 360
             screenshot shots/a.png
             benchmark 2s
@@ -402,6 +426,15 @@ mod tests {
                 Command::PadTap(2, GamepadButton::Start),
                 Command::PadHold(1, GamepadButton::DPadLeft, 30),
                 Command::Stick(1, Stick::Left, [0.5, -1.0]),
+                Command::KeyRepeat(Some(KeyRepeat {
+                    delay: 0.25,
+                    rate: 20.0
+                })),
+                Command::KeyRepeat(Some(KeyRepeat {
+                    delay: 0.25,
+                    rate: 2.5
+                })),
+                Command::KeyRepeat(None),
                 Command::Resize(640, 360),
                 Command::Screenshot(PathBuf::from("shots/a.png")),
                 Command::Benchmark(120, None),
@@ -439,6 +472,12 @@ mod tests {
         assert!(parse("benchmark 0").is_err());
         assert!(parse("resize 0 10").is_err());
         assert!(parse("pad-down 0 South").is_err());
+        assert_eq!(
+            parse("key-repeat 0.5s 0"),
+            Err("line 1: `0` is not a number of repeats a second".into())
+        );
+        assert!(parse("key-repeat on").is_err());
+        assert!(parse("key-repeat -1 30").is_err());
         assert_eq!(
             parse("pad-tap 1 A"),
             Err("line 1: unknown gamepad button `A`".into())

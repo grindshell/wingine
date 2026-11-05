@@ -6,7 +6,21 @@ The keyboard, mouse and gamepads. Everything in `input` works while the game loa
 A key or button is **pressed** in the update after it goes down, **released** in the update after
 it goes up, and **held** while it's down. Each press and release is seen by exactly one update, so
 none is lost when frames come faster or slower than updates, and a key tapped between two updates
-counts as both pressed and released. Keys held down don't repeat their presses.
+counts as both pressed and released.
+
+A key held down isn't pressed again, but it **repeats**, as the system repeats keys: after a delay,
+then at a steady rate, both as the player's settings say. Only the last key pressed repeats, as in
+a text field. A game that takes a step for each press and each repeat walks while a key is held:
+
+```lua
+for direction, key in { left = "H", down = "J", up = "K", right = "L" } do
+    if input.key_pressed(key) or input.key_repeated(key) then
+        player.step(direction)
+    end
+end
+```
+
+Gamepad buttons don't repeat, since the system repeats only keys.
 
 ## Actions
 
@@ -80,6 +94,15 @@ input.released(action: string): boolean
 
 Returns whether anything bound to `action` was released for this update.
 
+### `input.repeated`
+
+```lua
+input.repeated(action: string): boolean
+```
+
+Returns whether a key bound to `action` [repeated](#inputkey_repeated) for this update. Its
+gamepad buttons don't repeat.
+
 ### `input.strength`
 
 ```lua
@@ -124,6 +147,15 @@ input.key_released(key: Key): boolean
 ```
 
 Returns whether `key` was released for this update.
+
+### `input.key_repeated`
+
+```lua
+input.key_repeated(key: Key): boolean
+```
+
+Returns whether the system repeated `key` for this update, as it does while the key is held. The
+press that started it isn't a repeat: `key_pressed` tells of that.
 
 ### Key names
 

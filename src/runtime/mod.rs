@@ -193,6 +193,11 @@
 //!   `positive` is pushed less how far `negative` is, from -1 to 1.
 //! - `input.key_held(key)`, `input.key_pressed(key)` and `input.key_released(key)` do the same for
 //!   a key.
+//! - `input.key_repeated(key)` tells whether the system repeated a key held down this frame, as
+//!   it does after a delay and then at a steady rate, by the player's settings. The press that
+//!   started it isn't a repeat, so `input.key_pressed(key) or input.key_repeated(key)` acts once
+//!   as the key goes down, then again each repeat. `input.repeated(action)` does the same for an
+//!   action's keys; gamepad buttons don't repeat.
 //! - `input.mouse_position()` returns the cursor's position in canvas pixels, or `nil` when the
 //!   cursor is outside the window.
 //! - `input.mouse_held(button)`, `input.mouse_pressed(button)` and

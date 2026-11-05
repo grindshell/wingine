@@ -182,6 +182,39 @@ fn create_frame(gpu: &Gpu, [width, height]: [u32; 2]) -> wgpu::Texture {
     })
 }
 
+/// How a [`Simulation`] repeats a key held down, as a window's system repeats keys by the player's
+/// settings: [`Simulation::set_key_repeat`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KeyRepeat {
+    /// Seconds of game time from a key's press to its first repeat.
+    pub delay: f32,
+    /// Repeats a second after the first.
+    pub rate: f32,
+}
+
+impl KeyRepeat {
+    /// The delay in frames, which run 60 a second, so it needn't be whole.
+    fn delay_frames(self) -> f64 {
+        f64::from(self.delay) * 60.0
+    }
+
+    /// The frames from one repeat to the next, which needn't be whole.
+    fn interval_frames(self) -> f64 {
+        60.0 / f64::from(self.rate)
+    }
+}
+
+impl Default for KeyRepeat {
+    /// Half a second's delay, then 30 repeats a second, about as Windows and GNOME repeat keys
+    /// unless told otherwise.
+    fn default() -> Self {
+        Self {
+            delay: 0.5,
+            rate: 30.0,
+        }
+    }
+}
+
 /// Runs a [`Game`] without a window, driven by simulated input: for tests of game behavior, and
 /// for scripted runs (see the `WINGINE_SCRIPT` variable in [`run`](crate::run)).
 ///
@@ -189,7 +222,8 @@ fn create_frame(gpu: &Gpu, [width, height]: [u32; 2]) -> wgpu::Texture {
 /// deterministic. With an [update rate](WindowConfig::update_rate), each frame runs the updates
 /// that time holds, as a window would. Input takes effect on the next frame, as events from a
 /// window would: for example, a key held down is pressed on the next frame and held until
-/// released.
+/// released. Keys held down repeat as a window's system would repeat them, at the delay and rate
+/// [`Simulation::set_key_repeat`] sets.
 ///
 /// Frames are drawn but not rendered, unless [`Simulation::set_render_every_frame`] says to:
 /// only screenshots render.
@@ -206,6 +240,12 @@ pub struct Simulation<G> {
     drawn: bool,
     render_every_frame: bool,
     frames: u64,
+    /// How keys held down repeat, if they do.
+    key_repeat: Option<KeyRepeat>,
+    /// The key that repeats, the last pressed, while it's held, and the frame it repeats next,
+    /// counted as `frames` counts them: infinite while keys don't repeat. A repeat due between two
+    /// frames comes in the later.
+    repeating: Option<(Key, f64)>,
     /// Input for the game's interface, gathered until the next frame.
     #[cfg(feature = "egui")]
     gui_input: crate::gui::SimulatedInput,
@@ -268,6 +308,8 @@ impl<G: Game> Simulation<G> {
             drawn: false,
             render_every_frame: false,
             frames: 0,
+            key_repeat: Some(KeyRepeat::default()),
+            repeating: None,
             #[cfg(feature = "egui")]
             gui_input: Default::default(),
             _saves: temporary,
@@ -339,10 +381,64 @@ impl<G: Game> Simulation<G> {
         self.headless.ctx.waker().wake();
     }
 
+    /// How keys held down repeat from now on, or with `None`, that they don't. As a window's
+    /// system does, only the last key pressed repeats, and only until it's released, even if
+    /// others are still held. A key held now waits the delay from now. By default, keys repeat as
+    /// [`KeyRepeat::default`] says.
+    ///
+    /// # Panics
+    ///
+    /// If the delay is below 0, or the rate isn't a finite number above 0.
+    pub fn set_key_repeat(&mut self, repeat: Option<KeyRepeat>) {
+        if let Some(KeyRepeat { delay, rate }) = repeat {
+            assert!(
+                delay >= 0.0,
+                "keys can't repeat {delay} seconds after they're pressed"
+            );
+            assert!(
+                rate > 0.0 && rate.is_finite(),
+                "keys can't repeat {rate} times a second"
+            );
+        }
+        self.key_repeat = repeat;
+        let first = self.first_repeat();
+        if let Some((_, next)) = &mut self.repeating {
+            *next = first;
+        }
+    }
+
+    /// The frame a key pressed now first repeats in, counted as `frames` counts them.
+    fn first_repeat(&self) -> f64 {
+        self.key_repeat.map_or(f64::INFINITY, |repeat| {
+            self.frames as f64 + repeat.delay_frames()
+        })
+    }
+
+    /// Repeats the key that repeats as many times as it's due to by this frame.
+    fn repeat_key(&mut self) {
+        let (Some(repeat), Some((key, next))) = (self.key_repeat, &mut self.repeating) else {
+            return;
+        };
+        let key = *key;
+        let interval = repeat.interval_frames();
+        // A repeat due this little after a frame comes in it, so that rounding doesn't put
+        // repeats at rates that divide 60 a frame late.
+        let now = self.frames as f64 + 1e-3;
+        let mut repeats = 0;
+        while *next <= now {
+            *next += interval;
+            repeats += 1;
+        }
+        for _ in 0..repeats {
+            self.send_key_down(key, true);
+        }
+    }
+
     /// Runs one frame: updates the game, runs its interface, then draws it.
     pub fn step(&mut self) {
         let start = Instant::now();
         self.headless.ctx.redraws.begin_frame();
+        self.repeat_key();
         #[cfg(feature = "egui")]
         self.set_gui_input(true);
         let Self {
@@ -381,26 +477,56 @@ impl<G: Game> Simulation<G> {
         self.run_frames(Self::frames_in(seconds));
     }
 
-    /// Presses `key`. The game sees it unless the interface wants it, as a text field with focus
-    /// does, or it's the [debug key](WindowConfig::debug_key), which, as in a window, does nothing
-    /// while the interface wants it.
+    /// Presses `key`, which then [repeats](Simulation::set_key_repeat) until it's released or
+    /// another key is pressed. The game sees it unless the interface wants it, as a text field
+    /// with focus does, or it's the [debug key](WindowConfig::debug_key), which, as in a window,
+    /// does nothing while the interface wants it.
     pub fn key_down(&mut self, key: Key) {
         self.wake();
+        if self.repeating.is_none_or(|(repeating, _)| repeating != key) {
+            self.repeating = Some((key, self.first_repeat()));
+        }
+        self.send_key_down(key, false);
+    }
+
+    /// Passes a press of `key`, or a repeat, to the interface, and to the game unless the
+    /// interface wants it or it's the debug key.
+    fn send_key_down(&mut self, key: Key, repeat: bool) {
         #[cfg(feature = "egui")]
         {
             let gui = &mut self.headless.ctx.gui;
-            self.gui_input.key(key, true);
-            if gui.wants_keyboard() || gui.debug_key_down(key) {
+            self.gui_input.key(key, true, repeat);
+            if gui.wants_keyboard() {
+                return;
+            }
+            // Repeats of the debug key do nothing, as in a window.
+            let debug_key = if repeat {
+                gui.debug_key == Some(key)
+            } else {
+                gui.debug_key_down(key)
+            };
+            if debug_key {
                 return;
             }
         }
-        self.headless.ctx.input.key_down(key);
+        let input = &mut self.headless.ctx.input;
+        if repeat {
+            input.key_repeat(key);
+        } else {
+            input.key_down(key);
+        }
     }
 
     pub fn key_up(&mut self, key: Key) {
         self.wake();
+        if self
+            .repeating
+            .is_some_and(|(repeating, _)| repeating == key)
+        {
+            self.repeating = None;
+        }
         #[cfg(feature = "egui")]
-        self.gui_input.key(key, false);
+        self.gui_input.key(key, false, false);
         self.headless.ctx.input.key_up(key);
     }
 

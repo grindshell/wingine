@@ -142,6 +142,8 @@ The script has one command per line. `#` starts a comment.
 | `pad-tap 2 Start` | Presses gamepad 2's button, runs one frame, and lets it go. |
 | `pad-hold 1 DPadLeft 1s` | Presses a gamepad's button, runs for a second (or a number of frames), and lets it go. |
 | `stick 1 Left 0.5 -1` | Moves gamepad 1's left stick to `x`, `y`, each from -1 to 1, with `y` down: here, up and a little right. |
+| `key-repeat 0.25s 20` | Repeats keys held down after a quarter of a second (or a number of frames), 20 times a second. |
+| `key-repeat off` | Stops repeating keys held down. |
 | `resize 640 360` | Resizes the virtual window, in physical pixels. |
 | `screenshot shots/walk.png` | Saves the latest frame as a PNG. |
 | `benchmark 10s` | Runs for 10 seconds (or a number of frames), rendering every frame, and reports how long they took. See below. |
@@ -149,6 +151,10 @@ The script has one command per line. `#` starts a comment.
 
 Gamepads are numbered from 1, and connect when a command first names them, with any numbered
 before them, since a scripted run has no real gamepads.
+
+A key held down [repeats](api/input.md#inputkey_repeated) as a window's system would repeat it:
+by default, after half a second, 30 times a second, until it's let go or another key is pressed.
+So `hold L 1s` presses `L`, then repeats it 15 times.
 
 Mouse positions are canvas pixels, but screenshots are the size of the window. With a fixed
 resolution, divide a position in a screenshot by the scale, after taking away the black bars, to

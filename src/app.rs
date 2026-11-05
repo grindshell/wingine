@@ -581,7 +581,11 @@ impl<G: Game> State<G> {
                 {
                     return;
                 }
-                self.ctx.input.key_down(key);
+                if event.repeat {
+                    self.ctx.input.key_repeat(key);
+                } else {
+                    self.ctx.input.key_down(key);
+                }
             }
             ElementState::Pressed => {}
             ElementState::Released => self.ctx.input.key_up(key),

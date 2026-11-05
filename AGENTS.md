@@ -120,7 +120,10 @@ networking or 3D pipelines.
   finish on schedule and tests can check them (`sounds_playing`, `music_playing`).
 - `src/input.rs`: `Input` (keyboard, mouse and gamepad state per frame), `Key`, `MouseButton`,
   `Gamepad`, `GamepadButton` and `Stick`. The event loop feeds it winit events, maps the cursor to
-  canvas pixels, and clears per-frame presses and releases after each `update`. Actions bind to
+  canvas pixels, and clears per-frame presses and releases after each `update`. The system's
+  repeats of a held key aren't presses but repeats (`key_repeated`, and `repeated` for actions,
+  whose gamepad buttons never repeat); a repeat of a key not held, as after gaining focus, presses
+  it. A `Simulation` repeats the last key pressed itself, by a `KeyRepeat`. Actions bind to
   `Control`s, keys and gamepad buttons, of any gamepad or one, and have a strength from 0 to 1,
   which `axis` makes an axis of two. Gamepads are numbered from 1, keeping their number while
   disconnected. Their buttons include the sticks' directions (`LeftStickLeft`), pushed as far as
@@ -216,7 +219,9 @@ networking or 3D pipelines.
   one before, so continuous walking keeps an even pace.
 - `src/headless.rs`: `Headless`, which renders a `Canvas` to an in-memory image without a window,
   and `Simulation`, which runs a whole `Game` without a window: fixed 60 fps frames, simulated
-  keys, mouse and gamepads, and screenshots on demand. Its frames render only for screenshots, unless
+  keys, mouse and gamepads, and screenshots on demand. Held keys repeat as a system repeats them,
+  only the last pressed, after a delay and at a rate in game time (`set_key_repeat`, by default
+  half a second, then 30 a second), so repeats land on the same frames every run. Its frames render only for screenshots, unless
   `set_render_every_frame` asks for every frame to render and wait for the GPU, as benchmarks
   want. All of them in a process share one GPU device, and
   only one thread at a time may hold any (a reentrant lease): lavapipe crashes with a device per

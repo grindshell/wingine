@@ -16,6 +16,7 @@ struct Panel {
     game_clicks: u32,
     space_presses: u32,
     f3_presses: u32,
+    f3_repeats: u32,
     /// egui's context, which other threads can ask to repaint.
     egui: Option<egui::Context>,
 }
@@ -26,6 +27,7 @@ impl Game for Panel {
         self.game_clicks += u32::from(input.mouse_pressed(MouseButton::Left));
         self.space_presses += u32::from(input.key_pressed(Key::Space));
         self.f3_presses += u32::from(input.key_pressed(Key::F3));
+        self.f3_repeats += u32::from(input.key_repeated(Key::F3));
     }
 
     fn gui(&mut self, _ctx: &mut Context, ui: &mut egui::Ui) {
@@ -100,6 +102,18 @@ fn typing_goes_to_the_focused_field_and_its_keys_not_to_the_game() {
 }
 
 #[test]
+fn held_keys_repeat_in_a_focused_field() {
+    let mut simulation = simulation(config());
+    simulation.click_gui("Your name");
+    simulation.type_text("Ada Lovelace");
+    simulation.step();
+    // Pressed, then repeated twice: half a second later, and two frames after that.
+    simulation.hold_frames(Key::Backspace, 33);
+    simulation.step();
+    assert_eq!(simulation.game().name, "Ada Lovel");
+}
+
+#[test]
 fn widgets_are_found_where_they_are_in_canvas_pixels() {
     let window = simulation(config());
     let button = window.gui_rect("Press me").unwrap();
@@ -138,6 +152,11 @@ fn the_debug_key_shows_frame_stats_and_never_reaches_the_game() {
     simulation.step();
     assert!(simulation.gui_rect("Wingine").is_none());
     assert_eq!(simulation.game().f3_presses, 0);
+
+    // Held, it shows the window once, and its repeats don't reach the game either.
+    simulation.hold(Key::F3, 1.0);
+    assert!(simulation.gui_rect("Wingine").is_some());
+    assert_eq!(simulation.game().f3_repeats, 0);
 }
 
 #[test]

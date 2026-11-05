@@ -5,7 +5,7 @@ use std::{cell::RefCell, fs, path::Path, rc::Rc};
 use wingine::{
     Context, Error, FrameStats, Game, Redraw, WindowConfig,
     graphics::{Canvas, Color, Resolution},
-    headless::Simulation,
+    headless::{KeyRepeat, Simulation},
     input::{GamepadButton, Key, MouseButton},
     math::Rect,
 };
@@ -16,14 +16,21 @@ struct Probe {
     updates: u32,
     space_presses: u32,
     space_held_frames: u32,
+    /// The updates, counting from 0, in which Space or L repeated, and which.
+    repeats: Vec<(u32, Key)>,
     clicks: Vec<[f32; 2]>,
     canvas_size: [f32; 2],
 }
 
 impl Game for Probe {
     fn update(&mut self, ctx: &mut Context, _dt: f32) {
-        self.updates += 1;
         let input = ctx.input();
+        for key in [Key::Space, Key::L] {
+            if input.key_repeated(key) {
+                self.repeats.push((self.updates, key));
+            }
+        }
+        self.updates += 1;
         self.space_presses += u32::from(input.key_pressed(Key::Space));
         self.space_held_frames += u32::from(input.key_held(Key::Space));
         if input.mouse_pressed(MouseButton::Left) {
@@ -142,6 +149,103 @@ fn a_hold_lasts_its_duration() {
     simulation.run_frames(2);
     assert_eq!(simulation.game().space_presses, 1);
     assert_eq!(simulation.game().space_held_frames, 30);
+}
+
+/// The updates from `first` to `last` that come `every` updates apart, each with `key`.
+fn every(first: u32, last: u32, every: usize, key: Key) -> Vec<(u32, Key)> {
+    (first..=last).step_by(every).map(|n| (n, key)).collect()
+}
+
+#[test]
+fn held_keys_repeat_after_a_delay_then_at_a_rate() {
+    let mut simulation = simulation();
+    simulation.hold(Key::Space, 1.0);
+    simulation.run_frames(30);
+    let probe = simulation.game();
+    assert_eq!(probe.space_presses, 1, "repeats aren't presses");
+    // Half a second after the press, then every other frame.
+    assert_eq!(probe.repeats, every(30, 58, 2, Key::Space));
+}
+
+#[test]
+fn only_the_last_key_pressed_repeats() {
+    let mut simulation = simulation();
+    simulation.key_down(Key::Space);
+    simulation.run_frames(40);
+    simulation.key_down(Key::L);
+    simulation.run_frames(40);
+    // Letting go of L doesn't start Space repeating again.
+    simulation.key_up(Key::L);
+    simulation.run_frames(40);
+    simulation.key_up(Key::Space);
+    let mut expected = every(30, 38, 2, Key::Space);
+    expected.extend(every(70, 78, 2, Key::L));
+    assert_eq!(simulation.game().repeats, expected);
+}
+
+#[test]
+fn key_repeat_can_be_set_or_turned_off() {
+    let mut simulation = simulation();
+    simulation.set_key_repeat(Some(KeyRepeat {
+        delay: 0.25,
+        rate: 20.0,
+    }));
+    simulation.hold(Key::Space, 0.5);
+    assert_eq!(simulation.game().repeats, every(15, 27, 3, Key::Space));
+
+    // A key held when repeats change waits the new delay from then.
+    simulation.key_down(Key::L);
+    simulation.run_frames(10);
+    simulation.set_key_repeat(Some(KeyRepeat {
+        delay: 0.1,
+        rate: 60.0,
+    }));
+    simulation.run_frames(8);
+    simulation.set_key_repeat(None);
+    simulation.run_frames(60);
+    simulation.key_up(Key::L);
+    let mut expected = every(15, 27, 3, Key::Space);
+    expected.extend(every(46, 47, 1, Key::L));
+    assert_eq!(simulation.game().repeats, expected);
+}
+
+#[test]
+fn a_script_sets_key_repeat() {
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("simulation-key-repeat");
+    fs::create_dir_all(&directory).unwrap();
+    let script = directory.join("repeat.txt");
+    fs::write(
+        &script,
+        "key-repeat 10 15\nhold L 20\nkey-repeat off\nhold L 20\n",
+    )
+    .unwrap();
+
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let probe = RepeatProbe {
+        updates: 0,
+        seen: seen.clone(),
+    };
+    wingine::script::run(&config(), |_| Ok(probe), &script).unwrap();
+    // Ten frames after the press, then every four, and then not at all.
+    assert_eq!(*seen.borrow(), [10, 14, 18]);
+}
+
+/// Records the updates, counting from 0, in which L repeated, where a test can read them after a
+/// scripted run has ended the game.
+struct RepeatProbe {
+    updates: u32,
+    seen: Rc<RefCell<Vec<u32>>>,
+}
+
+impl Game for RepeatProbe {
+    fn update(&mut self, ctx: &mut Context, _dt: f32) {
+        if ctx.input().key_repeated(Key::L) {
+            self.seen.borrow_mut().push(self.updates);
+        }
+        self.updates += 1;
+    }
+
+    fn draw(&mut self, _canvas: &mut Canvas) {}
 }
 
 #[test]

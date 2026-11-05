@@ -18,6 +18,7 @@ pub(super) fn module(lua: &Lua, lent: &Lent) -> mlua::Result<Table> {
     input.set("held", action_query(lua, lent, Input::held)?)?;
     input.set("pressed", action_query(lua, lent, Input::pressed)?)?;
     input.set("released", action_query(lua, lent, Input::released)?)?;
+    input.set("repeated", action_query(lua, lent, Input::repeated)?)?;
     input.set("strength", action_query(lua, lent, Input::strength)?)?;
     input.set("axis", {
         let lent = lent.clone();
@@ -33,6 +34,10 @@ pub(super) fn module(lua: &Lua, lent: &Lent) -> mlua::Result<Table> {
     input.set(
         "key_released",
         query::<Key>(lua, lent, Input::key_released)?,
+    )?;
+    input.set(
+        "key_repeated",
+        query::<Key>(lua, lent, Input::key_repeated)?,
     )?;
     input.set(
         "mouse_held",
