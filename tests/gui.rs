@@ -17,6 +17,8 @@ struct Panel {
     space_presses: u32,
     f3_presses: u32,
     f3_repeats: u32,
+    /// What the game was typed.
+    typed: String,
     /// egui's context, which other threads can ask to repaint.
     egui: Option<egui::Context>,
 }
@@ -28,6 +30,7 @@ impl Game for Panel {
         self.space_presses += u32::from(input.key_pressed(Key::Space));
         self.f3_presses += u32::from(input.key_pressed(Key::F3));
         self.f3_repeats += u32::from(input.key_repeated(Key::F3));
+        self.typed.push_str(input.text());
     }
 
     fn gui(&mut self, _ctx: &mut Context, ui: &mut egui::Ui) {
@@ -89,16 +92,22 @@ fn typing_goes_to_the_focused_field_and_its_keys_not_to_the_game() {
     simulation.click_gui("Your name");
     simulation.type_text("Ada");
     simulation.tap(Key::Space);
-    simulation.type_text(" L");
+    simulation.key_down(Key::LeftShift);
+    simulation.tap(Key::L);
+    simulation.key_up(Key::LeftShift);
     simulation.step();
     let panel = simulation.game();
     assert_eq!(panel.name, "Ada L");
     assert_eq!(panel.space_presses, 0);
+    assert_eq!(panel.typed, "");
 
     // Escape lets go of the field, and the game has the keyboard again.
     simulation.tap(Key::Escape);
     simulation.tap(Key::Space);
+    simulation.type_text("?");
+    simulation.step();
     assert_eq!(simulation.game().space_presses, 1);
+    assert_eq!(simulation.game().typed, " ?");
 }
 
 #[test]

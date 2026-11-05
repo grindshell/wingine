@@ -183,6 +183,72 @@ input.bind("focus", { "LeftShift", "RightShift" })
 
 An unknown name, such as `"Shift"`, is an error.
 
+## Text
+
+Keys are physical, but what they type is the player's layout's: Shift and the key a US keyboard
+has `.` on types `>` there, but `:` on a German one, where `>` is Shift and the key beside the left
+Shift. So a game whose commands are characters reads what's typed rather than which keys are
+pressed:
+
+```lua
+function update(dt: number)
+    for _, character in utf8.codes(input.text()) do
+        local command = COMMANDS[utf8.char(character)]
+        if command then
+            command()
+        end
+    end
+end
+```
+
+A key held down types again each time it [repeats](#inputkey_repeated).
+
+### `input.text`
+
+```lua
+input.text(): string
+```
+
+Returns what was typed for this update, in order, as the player's layout made it, with what dead
+keys compose (`´` then `e` types `é`) and an [input method](#inputset_input_method) chooses. It
+isn't the keys: Enter, Tab, Backspace and the like type no text, so read them as keys, and neither
+does a key pressed with Control (but not Alt, since Control and Alt together are AltGr on Windows)
+or with Command or the Windows key, which make shortcuts. Text that a focused field of the game's
+[interface](gui.md) takes isn't the game's.
+
+On macOS, dead keys compose only while the game [takes an input method](#inputset_input_method);
+otherwise each types on its own.
+
+### `input.set_input_method`
+
+```lua
+input.set_input_method(area: Rect?)
+```
+
+Takes the system's input method while `area` is given, and with `nil`, lets it go. Players of
+Chinese, Japanese and Korean, among others, type with one, composing each character from several
+keys and choosing it from what the method offers, which it shows beside `area`: a rect in canvas
+pixels, `{ x = ..., y = ..., width = ..., height = ... }`, around where the text goes. Take one
+only while the game asks for text, such as a name:
+
+```lua
+input.set_input_method({ x = 40, y = 80, width = 160, height = 12 })
+```
+
+While the method composes, the keys the player types reach it rather than the game, so they're not
+pressed, and what it composes is [`input.composition`](#inputcomposition) until the player chooses
+what it becomes, which `input.text` then returns. Games take none by default, so every key reaches
+them.
+
+### `input.composition`
+
+```lua
+input.composition(): string
+```
+
+Returns what the input method is composing, for the game to show where the text goes, or `""`
+while it isn't composing or the game takes none.
+
 ## Gamepads
 
 Gamepads are numbered from 1, in the order they're first connected. A gamepad that's disconnected

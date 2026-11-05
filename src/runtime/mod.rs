@@ -198,6 +198,15 @@
 //!   started it isn't a repeat, so `input.key_pressed(key) or input.key_repeated(key)` acts once
 //!   as the key goes down, then again each repeat. `input.repeated(action)` does the same for an
 //!   action's keys; gamepad buttons don't repeat.
+//! - `input.text()` returns what was typed for this update, as the player's keyboard layout, dead
+//!   keys and any input method made it, such as `">"`, without control characters or what's
+//!   typed with Control or Command for shortcuts. Text a focused interface field takes isn't the
+//!   game's.
+//! - `input.set_input_method(area)` takes the system's input method, by which players of Chinese,
+//!   Japanese and Korean compose characters, while `area`, a rect in canvas pixels around where
+//!   the text goes, is given, and `input.set_input_method(nil)` lets it go. While it composes,
+//!   keys reach it, not the game, and `input.composition()` returns what it's composing, for the
+//!   game to show; it's `""` otherwise.
 //! - `input.mouse_position()` returns the cursor's position in canvas pixels, or `nil` when the
 //!   cursor is outside the window.
 //! - `input.mouse_held(button)`, `input.mouse_pressed(button)` and

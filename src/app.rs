@@ -8,9 +8,9 @@ use std::{
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
-    event::{ElementState, KeyEvent, WindowEvent},
+    event::{ElementState, Ime, KeyEvent, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
-    keyboard::PhysicalKey,
+    keyboard::{self, ModifiersState, NamedKey, PhysicalKey},
     window::{Window, WindowId},
 };
 
@@ -394,6 +394,13 @@ where
                 is_synthetic,
                 ..
             } => state.key_event(&event, is_synthetic, to_gui),
+            WindowEvent::ModifiersChanged(modifiers) => state.modifiers = modifiers.state(),
+            WindowEvent::Ime(ime) if !to_gui => match ime {
+                Ime::Commit(text) => state.ctx.input.type_text(&text),
+                Ime::Preedit(text, _) => state.ctx.input.compose(&text),
+                Ime::Disabled => state.ctx.input.compose(""),
+                Ime::Enabled => {}
+            },
             WindowEvent::CursorMoved { position, .. } => {
                 state.cursor = Some([position.x, position.y])
             }
@@ -484,6 +491,12 @@ struct State<G> {
     gamepads: Option<Gamepads>,
     /// Whether the window has the keyboard's focus, and so the gamepads'.
     focused: bool,
+    /// The modifier keys held, which decide whether a key types text or makes a shortcut.
+    modifiers: ModifiersState,
+    /// Where the window last told the system's input method the game shows text, while it lets
+    /// the game take one.
+    #[cfg(not(feature = "egui"))]
+    input_method: Option<crate::math::Rect>,
     /// Turns window events into egui's input, and acts on what egui asks of the window.
     #[cfg(feature = "egui")]
     gui_window: egui_winit::State,
@@ -558,37 +571,115 @@ impl<G: Game> State<G> {
             stats: FrameStats::default(),
             cursor: None,
             gamepads,
+            modifiers: ModifiersState::empty(),
+            #[cfg(not(feature = "egui"))]
+            input_method: None,
             #[cfg(feature = "egui")]
             gui_window,
         })
     }
 
-    /// Passes a key event to the game, unless egui wanted it (`to_gui`) or it's the debug key.
+    /// Passes a key event to the game, and what it types, unless egui wanted it (`to_gui`) or
+    /// it's the debug key.
     fn key_event(&mut self, event: &KeyEvent, is_synthetic: bool, to_gui: bool) {
-        let PhysicalKey::Code(code) = event.physical_key else {
-            return;
-        };
-        let Some(key) = Key::from_winit(code) else {
-            return;
+        let key = match event.physical_key {
+            PhysicalKey::Code(code) => Key::from_winit(code),
+            PhysicalKey::Unidentified(_) => None,
         };
         match event.state {
             // Synthetic presses report keys already held when the window gains focus, such as
             // the Alt of an Alt+Tab. They weren't pressed for this game, so they're ignored.
             ElementState::Pressed if !is_synthetic && !to_gui => {
-                #[cfg(feature = "egui")]
-                if (event.repeat && self.ctx.gui.debug_key == Some(key))
-                    || (!event.repeat && self.ctx.gui.debug_key_down(key))
-                {
+                // On Windows, the keys an input method takes still come, as `Process`.
+                if event.logical_key == keyboard::Key::Named(NamedKey::Process) {
                     return;
                 }
-                if event.repeat {
-                    self.ctx.input.key_repeat(key);
-                } else {
-                    self.ctx.input.key_down(key);
+                if let Some(key) = key {
+                    #[cfg(feature = "egui")]
+                    if (event.repeat && self.ctx.gui.debug_key == Some(key))
+                        || (!event.repeat && self.ctx.gui.debug_key_down(key))
+                    {
+                        return;
+                    }
+                    if event.repeat {
+                        self.ctx.input.key_repeat(key);
+                    } else {
+                        self.ctx.input.key_down(key);
+                    }
+                }
+                // Keys with Control (but not Alt, as AltGr is on Windows) or Command make
+                // shortcuts, which on some systems type their letter too.
+                let modifiers = self.modifiers;
+                let shortcut =
+                    modifiers.super_key() || (modifiers.control_key() && !modifiers.alt_key());
+                let text = event
+                    .text
+                    .as_deref()
+                    .or_else(|| event.logical_key.to_text());
+                if let Some(text) = text
+                    && !shortcut
+                {
+                    self.ctx.input.type_text(text);
                 }
             }
             ElementState::Pressed => {}
-            ElementState::Released => self.ctx.input.key_up(key),
+            ElementState::Released => {
+                if let Some(key) = key {
+                    self.ctx.input.key_up(key);
+                }
+            }
+        }
+    }
+
+    /// Lets the system's input method compose text for the game while it takes one, unless egui
+    /// is using it, for a text field of its own.
+    #[cfg(feature = "egui")]
+    fn take_input_method(&self, output: &mut egui::PlatformOutput, size: [u32; 2]) {
+        let Some(area) = self.ctx.input.input_method() else {
+            return;
+        };
+        if output.ime.is_some() {
+            return;
+        }
+        let scale_factor = self.window.scale_factor();
+        let pixels_per_point = self.ctx.gui.egui.pixels_per_point();
+        let to_points = |point: [f32; 2]| {
+            let [x, y] = self.screen.to_output(point, size, scale_factor);
+            egui::pos2(x as f32, y as f32) / pixels_per_point
+        };
+        let rect = egui::Rect::from_two_pos(
+            to_points([area.x, area.y]),
+            to_points([area.x + area.w, area.y + area.h]),
+        );
+        output.ime = Some(egui::output::IMEOutput {
+            purpose: egui::IMEPurpose::Normal,
+            rect,
+            cursor_rect: rect,
+            should_interrupt_composition: false,
+        });
+    }
+
+    /// Lets the system's input method compose text for the game while it takes one.
+    #[cfg(not(feature = "egui"))]
+    fn take_input_method(&mut self, size: [u32; 2]) {
+        let area = self.ctx.input.input_method();
+        if area == self.input_method {
+            return;
+        }
+        if area.is_some() != self.input_method.is_some() {
+            self.window.set_ime_allowed(area.is_some());
+        }
+        self.input_method = area;
+        if let Some(area) = area {
+            let scale_factor = self.window.scale_factor();
+            let [x, y] = self.screen.to_output([area.x, area.y], size, scale_factor);
+            let [right, bottom] =
+                self.screen
+                    .to_output([area.x + area.w, area.y + area.h], size, scale_factor);
+            self.window.set_ime_cursor_area(
+                winit::dpi::PhysicalPosition::new(x, y),
+                winit::dpi::PhysicalSize::new(right - x, bottom - y),
+            );
         }
     }
 
@@ -632,10 +723,14 @@ impl<G: Game> State<G> {
             elapsed,
         );
         #[cfg(feature = "egui")]
-        self.gui_window.handle_platform_output(
-            &self.window,
-            std::mem::take(&mut self.ctx.gui.platform_output),
-        );
+        {
+            let mut platform_output = std::mem::take(&mut self.ctx.gui.platform_output);
+            self.take_input_method(&mut platform_output, output);
+            self.gui_window
+                .handle_platform_output(&self.window, platform_output);
+        }
+        #[cfg(not(feature = "egui"))]
+        self.take_input_method(output);
 
         let Context {
             gpu,

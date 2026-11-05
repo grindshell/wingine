@@ -559,6 +559,41 @@ fn held_keys_repeat_for_scripts() {
 }
 
 #[test]
+fn scripts_read_what_is_typed() {
+    let folder = game(
+        "typed",
+        &[(
+            "main.luau",
+            "typed = ''
+            composing = ''
+            function update()
+                typed ..= input.text()
+                composing = input.composition()
+                if input.key_pressed('Tab') then
+                    input.set_input_method({ x = 2, y = 2, width = 40, height = 10 })
+                end
+            end",
+        )],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.key_down(Key::LeftShift);
+    simulation.tap(Key::Period);
+    simulation.key_up(Key::LeftShift);
+    simulation.type_text("ß");
+    simulation.step();
+    assert_eq!(eval::<String>(&simulation, "typed"), ">ß");
+
+    simulation.tap(Key::Tab);
+    simulation.compose("にほ");
+    simulation.step();
+    assert_eq!(eval::<String>(&simulation, "composing"), "にほ");
+    simulation.type_text("日本");
+    simulation.step();
+    assert_eq!(eval::<String>(&simulation, "typed"), ">ß日本");
+    assert_eq!(eval::<String>(&simulation, "composing"), "");
+}
+
+#[test]
 fn gamepads_are_read_by_number_and_through_actions() {
     let folder = game(
         "gamepads",

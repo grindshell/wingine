@@ -9,6 +9,8 @@ use std::{
 
 use winit::keyboard::KeyCode;
 
+use crate::math::Rect;
+
 /// How far a button or a stick's direction must be pushed, from 0 to 1, to be held.
 const PRESS: f32 = 0.5;
 /// How far a held button or stick's direction must fall back, from 0 to 1, to be released: below
@@ -36,6 +38,10 @@ const STICK_FULL: f32 = 0.95;
 /// delay, then at a steady rate, both as the player's settings say. [`Input::key_repeated`] and
 /// [`Input::repeated`] tell of repeats, so a game that takes a step for each press and each
 /// repeat walks while a key is held.
+///
+/// Keys are physical, the same wherever the player's layout puts their letters. What they type
+/// is [`Input::text`], the characters the player's layout made of them: Shift and the key a US
+/// layout has `.` on type `>`, but on a German one, `:`.
 #[derive(Debug, Default)]
 pub struct Input {
     keys: Buttons<Key>,
@@ -45,6 +51,12 @@ pub struct Input {
     /// disconnected keep their number, for when they come back.
     gamepads: Vec<Gamepad>,
     actions: HashMap<String, Binding>,
+    /// What was typed since the last update.
+    text: String,
+    /// What the input method is composing.
+    composition: String,
+    /// Where the game shows what's typed with an input method, while it takes one.
+    input_method: Option<Rect>,
 }
 
 /// What an action is bound to.
@@ -150,6 +162,46 @@ impl Input {
         self.any_bound(action, Self::key_repeated, |_, _| false)
     }
 
+    /// What was typed for this update, in order: the characters the player's keyboard layout
+    /// made of the keys pressed and repeated, with what dead keys and an
+    /// [input method](Input::set_input_method) compose. Control characters, such as Enter's and
+    /// Backspace's, aren't text, and neither is what's typed with Control (but not Alt, since
+    /// Control and Alt together are AltGr on Windows) or the Command or Windows key, which make
+    /// shortcuts. Text the interface takes, as a focused text field does, isn't the game's.
+    ///
+    /// On macOS, dead keys compose only while the game takes an input method; otherwise they and
+    /// the keys after them type each on their own.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The text the input method is composing, while it is, to show where it will go: until the
+    /// player chooses what it becomes, which [`Input::text`] then has. Empty while it isn't, and
+    /// while the game takes no input method.
+    pub fn composition(&self) -> &str {
+        &self.composition
+    }
+
+    /// Takes the system's input method while `area` is `Some`, as games that ask for a name do:
+    /// the method players of Chinese, Japanese or Korean type with, among others, which composes
+    /// characters from several keys. It shows what it offers beside `area`, a rectangle in canvas
+    /// pixels around where the text goes, while [`Input::composition`] holds what it's composing,
+    /// for the game to show there.
+    ///
+    /// While it composes, the keys the player types reach it rather than the game. Games take
+    /// none by default, so every key reaches them.
+    pub fn set_input_method(&mut self, area: Option<Rect>) {
+        self.input_method = area;
+        if area.is_none() {
+            self.composition.clear();
+        }
+    }
+
+    /// Where the game shows what's typed with an input method, while it takes one.
+    pub fn input_method(&self) -> Option<Rect> {
+        self.input_method
+    }
+
     /// How far `action` is pushed, from 0 to 1: 1 while one of its keys is held, and otherwise
     /// the furthest of its buttons is pushed, which for a trigger or a stick's direction can be
     /// anywhere between. Unbound actions are never pushed.
@@ -251,6 +303,20 @@ impl Input {
         self.keys.up(key);
     }
 
+    /// Adds `text` to what was typed, without its control characters, nor those in the private
+    /// use areas, which macOS types for keys such as Delete. An input method's composing ends.
+    pub(crate) fn type_text(&mut self, text: &str) {
+        self.text.extend(text.chars().filter(|&c| is_text(c)));
+        self.composition.clear();
+    }
+
+    /// Sets what the input method is composing, while the game takes one.
+    pub(crate) fn compose(&mut self, text: &str) {
+        if self.input_method.is_some() {
+            text.clone_into(&mut self.composition);
+        }
+    }
+
     pub(crate) fn mouse_down(&mut self, button: MouseButton) {
         self.mouse_buttons.down(button);
     }
@@ -315,8 +381,9 @@ impl Input {
         }
     }
 
-    /// Clears this frame's presses and releases. Call after the game has updated.
+    /// Clears this frame's presses, releases and text. Call after the game has updated.
     pub(crate) fn end_frame(&mut self) {
+        self.text.clear();
         self.keys.end_frame();
         self.mouse_buttons.end_frame();
         for gamepad in &mut self.gamepads {
@@ -437,6 +504,13 @@ fn dead_zoned([x, y]: [f32; 2]) -> [f32; 2] {
     let pushed = ((distance - STICK_DEAD_ZONE) / (STICK_FULL - STICK_DEAD_ZONE)).min(1.0);
     let scale = pushed / distance;
     [x * scale, y * scale]
+}
+
+/// Whether `c` is text that's typed: not a control character, as Enter, Tab and Backspace type,
+/// nor in a private use area, where macOS puts keys such as the arrows and Delete.
+fn is_text(c: char) -> bool {
+    let private = matches!(c, '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}');
+    !c.is_control() && !private
 }
 
 /// Held, pressed, released and repeated state for a set of keys or buttons. Only keys repeat.
@@ -799,6 +873,38 @@ keys! {
     Numpad8 => Numpad8, Numpad9 => Numpad9, NumpadEnter => NumpadEnter,
 }
 
+impl Key {
+    /// What the key types on a US keyboard, with Shift held or not, if it types text.
+    #[rustfmt::skip]
+    pub(crate) fn us_text(self, shift: bool) -> Option<char> {
+        use Key as K;
+        let (plain, shifted) = match self {
+            K::A => ('a', 'A'), K::B => ('b', 'B'), K::C => ('c', 'C'), K::D => ('d', 'D'),
+            K::E => ('e', 'E'), K::F => ('f', 'F'), K::G => ('g', 'G'), K::H => ('h', 'H'),
+            K::I => ('i', 'I'), K::J => ('j', 'J'), K::K => ('k', 'K'), K::L => ('l', 'L'),
+            K::M => ('m', 'M'), K::N => ('n', 'N'), K::O => ('o', 'O'), K::P => ('p', 'P'),
+            K::Q => ('q', 'Q'), K::R => ('r', 'R'), K::S => ('s', 'S'), K::T => ('t', 'T'),
+            K::U => ('u', 'U'), K::V => ('v', 'V'), K::W => ('w', 'W'), K::X => ('x', 'X'),
+            K::Y => ('y', 'Y'), K::Z => ('z', 'Z'),
+            K::Digit0 => ('0', ')'), K::Digit1 => ('1', '!'), K::Digit2 => ('2', '@'),
+            K::Digit3 => ('3', '#'), K::Digit4 => ('4', '$'), K::Digit5 => ('5', '%'),
+            K::Digit6 => ('6', '^'), K::Digit7 => ('7', '&'), K::Digit8 => ('8', '*'),
+            K::Digit9 => ('9', '('),
+            K::Space => (' ', ' '),
+            K::Minus => ('-', '_'), K::Equal => ('=', '+'), K::Comma => (',', '<'),
+            K::Period => ('.', '>'), K::Slash => ('/', '?'), K::Semicolon => (';', ':'),
+            K::Quote => ('\'', '"'), K::Backquote => ('`', '~'), K::Backslash => ('\\', '|'),
+            K::LeftBracket => ('[', '{'), K::RightBracket => (']', '}'),
+            K::Numpad0 => ('0', '0'), K::Numpad1 => ('1', '1'), K::Numpad2 => ('2', '2'),
+            K::Numpad3 => ('3', '3'), K::Numpad4 => ('4', '4'), K::Numpad5 => ('5', '5'),
+            K::Numpad6 => ('6', '6'), K::Numpad7 => ('7', '7'), K::Numpad8 => ('8', '8'),
+            K::Numpad9 => ('9', '9'),
+            _ => return None,
+        };
+        Some(if shift { shifted } else { plain })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -846,6 +952,45 @@ mod tests {
         input.key_repeat(Key::W);
         assert!(input.key_pressed(Key::W) && input.key_held(Key::W));
         assert!(!input.key_repeated(Key::W));
+    }
+
+    #[test]
+    fn typed_text_lasts_until_an_update_has_seen_it() {
+        let mut input = Input::new();
+        input.type_text(">");
+        input.type_text("é\r\u{8}\u{f728}?");
+        assert_eq!(
+            input.text(),
+            ">é?",
+            "control and private characters aren't text"
+        );
+        input.end_frame();
+        assert_eq!(input.text(), "");
+    }
+
+    #[test]
+    fn compositions_last_while_the_game_takes_an_input_method() {
+        let mut input = Input::new();
+        input.compose("に");
+        assert_eq!(input.composition(), "", "the game takes no input method");
+        input.set_input_method(Some(Rect::new(0.0, 0.0, 10.0, 10.0)));
+        input.compose("に");
+        input.end_frame();
+        assert_eq!(input.composition(), "に", "it lasts until it's done");
+        input.type_text("日本");
+        assert_eq!((input.text(), input.composition()), ("日本", ""));
+        input.compose("ご");
+        input.set_input_method(None);
+        assert_eq!(input.composition(), "");
+    }
+
+    #[test]
+    fn keys_type_as_on_a_us_keyboard() {
+        assert_eq!(Key::L.us_text(false), Some('l'));
+        assert_eq!(Key::Period.us_text(true), Some('>'));
+        assert_eq!(Key::Slash.us_text(true), Some('?'));
+        assert_eq!(Key::Enter.us_text(false), None);
+        assert_eq!(Key::LeftShift.us_text(true), None);
     }
 
     #[test]

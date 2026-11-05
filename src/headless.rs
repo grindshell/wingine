@@ -2,6 +2,7 @@
 //! with simulated input, and for offline rendering.
 
 use std::{
+    collections::HashSet,
     path::Path,
     sync::{Condvar, Mutex, PoisonError, mpsc},
     thread::{self, ThreadId},
@@ -246,6 +247,8 @@ pub struct Simulation<G> {
     /// counted as `frames` counts them: infinite while keys don't repeat. A repeat due between two
     /// frames comes in the later.
     repeating: Option<(Key, f64)>,
+    /// The keys held down, whether the game or the interface has them.
+    keys_held: HashSet<Key>,
     /// Input for the game's interface, gathered until the next frame.
     #[cfg(feature = "egui")]
     gui_input: crate::gui::SimulatedInput,
@@ -310,6 +313,7 @@ impl<G: Game> Simulation<G> {
             frames: 0,
             key_repeat: Some(KeyRepeat::default()),
             repeating: None,
+            keys_held: HashSet::new(),
             #[cfg(feature = "egui")]
             gui_input: Default::default(),
             _saves: temporary,
@@ -481,21 +485,35 @@ impl<G: Game> Simulation<G> {
     /// another key is pressed. The game sees it unless the interface wants it, as a text field
     /// with focus does, or it's the [debug key](WindowConfig::debug_key), which, as in a window,
     /// does nothing while the interface wants it.
+    ///
+    /// The key, and each repeat, types what it would on a US keyboard, with Shift if it's held,
+    /// unless Control or Alt is: [`Simulation::type_text`] types other layouts' characters.
     pub fn key_down(&mut self, key: Key) {
         self.wake();
+        self.keys_held.insert(key);
         if self.repeating.is_none_or(|(repeating, _)| repeating != key) {
             self.repeating = Some((key, self.first_repeat()));
         }
         self.send_key_down(key, false);
     }
 
-    /// Passes a press of `key`, or a repeat, to the interface, and to the game unless the
-    /// interface wants it or it's the debug key.
+    /// Passes a press of `key`, or a repeat, and what it types, to the interface, and to the
+    /// game unless the interface wants it or it's the debug key.
     fn send_key_down(&mut self, key: Key, repeat: bool) {
+        let held = |keys: [Key; 2]| keys.iter().any(|key| self.keys_held.contains(key));
+        let shift = held([Key::LeftShift, Key::RightShift]);
+        let shortcut =
+            held([Key::LeftControl, Key::RightControl]) || held([Key::LeftAlt, Key::RightAlt]);
+        let text = key.us_text(shift).filter(|_| !shortcut);
+        let mut buffer = [0; 4];
+        let text = text.map(|c| &*c.encode_utf8(&mut buffer));
         #[cfg(feature = "egui")]
         {
             let gui = &mut self.headless.ctx.gui;
             self.gui_input.key(key, true, repeat);
+            if let Some(text) = text {
+                self.gui_input.text(text);
+            }
             if gui.wants_keyboard() {
                 return;
             }
@@ -515,10 +533,14 @@ impl<G: Game> Simulation<G> {
         } else {
             input.key_down(key);
         }
+        if let Some(text) = text {
+            input.type_text(text);
+        }
     }
 
     pub fn key_up(&mut self, key: Key) {
         self.wake();
+        self.keys_held.remove(&key);
         if self
             .repeating
             .is_some_and(|(repeating, _)| repeating == key)
@@ -657,12 +679,34 @@ impl<G: Game> Simulation<G> {
         input.set_gamepad_axis(gamepad, stick, Axis::Y, y);
     }
 
-    /// Types `text` into the interface, as into whichever text field has focus. The game's own
-    /// input doesn't see typing.
-    #[cfg(feature = "egui")]
+    /// Types `text`, as a keyboard of any layout or an input method would, without pressing any
+    /// keys: into the interface if it wants the keyboard, as a text field with focus does, and
+    /// otherwise for the game, as [`Input::text`](crate::input::Input::text) tells. Its control
+    /// characters aren't text the game sees.
     pub fn type_text(&mut self, text: &str) {
         self.wake();
-        self.gui_input.text(text);
+        #[cfg(feature = "egui")]
+        {
+            self.gui_input.text(text);
+            if self.headless.ctx.gui.wants_keyboard() {
+                return;
+            }
+        }
+        self.headless.ctx.input.type_text(text);
+    }
+
+    /// Has the input method compose `text`, as [`Input::composition`] tells, while the game takes
+    /// one and the interface doesn't want the keyboard. [`Simulation::type_text`] then types what
+    /// it becomes, and `compose("")` stops it, as when the player deletes it all.
+    ///
+    /// [`Input::composition`]: crate::input::Input::composition
+    pub fn compose(&mut self, text: &str) {
+        self.wake();
+        #[cfg(feature = "egui")]
+        if self.headless.ctx.gui.wants_keyboard() {
+            return;
+        }
+        self.headless.ctx.input.compose(text);
     }
 
     /// Turns the mouse wheel by `x`, `y` points of the interface, where it scrolls whatever is

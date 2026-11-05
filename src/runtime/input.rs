@@ -3,7 +3,10 @@
 use mlua::{FromLua, Function, Lua, Table};
 
 use super::Lent;
-use crate::input::{Control, Gamepad, GamepadButton, Input, Key, MouseButton};
+use crate::{
+    input::{Control, Gamepad, GamepadButton, Input, Key, MouseButton},
+    math::Rect,
+};
 
 pub(super) fn module(lua: &Lua, lent: &Lent) -> mlua::Result<Table> {
     let input = lua.create_table()?;
@@ -51,6 +54,24 @@ pub(super) fn module(lua: &Lua, lent: &Lent) -> mlua::Result<Table> {
         "mouse_released",
         query::<MouseButton>(lua, lent, Input::mouse_released)?,
     )?;
+    input.set("text", {
+        let lent = lent.clone();
+        lua.create_function(move |lua, ()| {
+            lent.context(|ctx| lua.create_string(ctx.input().text()))?
+        })?
+    })?;
+    input.set("composition", {
+        let lent = lent.clone();
+        lua.create_function(move |lua, ()| {
+            lent.context(|ctx| lua.create_string(ctx.input().composition()))?
+        })?
+    })?;
+    input.set("set_input_method", {
+        let lent = lent.clone();
+        lua.create_function(move |_, area: Option<Rect>| {
+            lent.context(|ctx| ctx.input_mut().set_input_method(area))
+        })?
+    })?;
     input.set("mouse_position", {
         let lent = lent.clone();
         lua.create_function(move |_, ()| {

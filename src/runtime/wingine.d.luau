@@ -640,6 +640,14 @@ declare input: {
     --- Returns whether the system repeated `key`, held down, for this update, as it does after a
     --- delay and then at a steady rate. The press that started it isn't a repeat.
     key_repeated: (key: Key) -> boolean,
+    --- Returns what was typed for this update, as the player's keyboard layout made it, without
+    --- control characters or shortcuts' letters.
+    text: () -> string,
+    --- Returns what the input method is composing, or `""`.
+    composition: () -> string,
+    --- Takes the system's input method while `area`, around where text goes, is given, or with
+    --- `nil`, lets it go. While it composes, keys reach it rather than the game.
+    set_input_method: (area: Rect?) -> (),
     --- Returns the cursor's position in canvas pixels, or `nil, nil` outside the window.
     mouse_position: () -> (number?, number?),
     --- Returns whether `button` is down.

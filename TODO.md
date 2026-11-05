@@ -59,7 +59,7 @@ The suggested shapes are only suggestions; the design is the engine's to make.
   delay and rate. `key_pressed` and `pressed` still mean the first press only, so no
   existing game changes.
 
-- [ ] **Typed characters for the game, not only for egui.**
+- [x] **Typed characters for the game, not only for egui.**
   Source: [key_event](src/app.rs), currently line 567, reads `event.physical_key` only.
   The window's typed text reaches egui alone, and
   [Simulation::type_text](src/headless.rs), currently line 537, says so: "The game's own

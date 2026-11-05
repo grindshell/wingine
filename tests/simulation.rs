@@ -18,6 +18,8 @@ struct Probe {
     space_held_frames: u32,
     /// The updates, counting from 0, in which Space or L repeated, and which.
     repeats: Vec<(u32, Key)>,
+    /// What was typed, each update's apart.
+    typed: Vec<String>,
     clicks: Vec<[f32; 2]>,
     canvas_size: [f32; 2],
 }
@@ -25,6 +27,9 @@ struct Probe {
 impl Game for Probe {
     fn update(&mut self, ctx: &mut Context, _dt: f32) {
         let input = ctx.input();
+        if !input.text().is_empty() {
+            self.typed.push(input.text().to_owned());
+        }
         for key in [Key::Space, Key::L] {
             if input.key_repeated(key) {
                 self.repeats.push((self.updates, key));
@@ -207,6 +212,78 @@ fn key_repeat_can_be_set_or_turned_off() {
     let mut expected = every(15, 27, 3, Key::Space);
     expected.extend(every(46, 47, 1, Key::L));
     assert_eq!(simulation.game().repeats, expected);
+}
+
+#[test]
+fn keys_type_as_on_a_us_keyboard_and_text_types_as_any() {
+    let mut simulation = simulation();
+    simulation.tap(Key::L);
+    simulation.key_down(Key::RightShift);
+    simulation.tap(Key::Period);
+    simulation.key_up(Key::RightShift);
+    // Shortcuts and keys that type control characters aren't text.
+    simulation.key_down(Key::LeftControl);
+    simulation.tap(Key::S);
+    simulation.key_up(Key::LeftControl);
+    simulation.tap(Key::Enter);
+    simulation.tap(Key::Backspace);
+    // Text from other layouts or an input method, in order within an update.
+    simulation.type_text("é");
+    simulation.type_text("日本\r");
+    simulation.step();
+    assert_eq!(simulation.game().typed, ["l", ">", "é日本"]);
+}
+
+#[test]
+fn held_keys_type_again_as_they_repeat() {
+    let mut simulation = simulation();
+    simulation.hold(Key::L, 1.0);
+    assert_eq!(simulation.game().typed, ["l"; 16]);
+}
+
+#[test]
+fn compositions_reach_a_game_that_takes_an_input_method() {
+    let mut simulation = simulation();
+    simulation.compose("に");
+    simulation.step();
+    assert_eq!(simulation.context().input().composition(), "");
+
+    let area = Rect::new(4.0, 4.0, 20.0, 8.0);
+    simulation
+        .context()
+        .input_mut()
+        .set_input_method(Some(area));
+    simulation.compose("にほ");
+    simulation.run_frames(2);
+    assert_eq!(simulation.context().input().composition(), "にほ");
+    simulation.type_text("日本");
+    simulation.step();
+    assert_eq!(simulation.context().input().composition(), "");
+    assert_eq!(simulation.game().typed, ["日本"]);
+}
+
+#[test]
+fn a_script_types() {
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("simulation-type");
+    fs::create_dir_all(&directory).unwrap();
+    let script = directory.join("type.txt");
+    fs::write(&script, "type > ?  # the stairs\ntap Q\nwait 1\n").unwrap();
+
+    let typed = Rc::new(RefCell::new(String::new()));
+    let probe = TextProbe(typed.clone());
+    wingine::script::run(&config(), |_| Ok(probe), &script).unwrap();
+    assert_eq!(*typed.borrow(), "> ?q");
+}
+
+/// Records what was typed, where a test can read it after a scripted run has ended the game.
+struct TextProbe(Rc<RefCell<String>>);
+
+impl Game for TextProbe {
+    fn update(&mut self, ctx: &mut Context, _dt: f32) {
+        self.0.borrow_mut().push_str(ctx.input().text());
+    }
+
+    fn draw(&mut self, _canvas: &mut Canvas) {}
 }
 
 #[test]

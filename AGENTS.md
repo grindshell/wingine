@@ -123,7 +123,13 @@ networking or 3D pipelines.
   canvas pixels, and clears per-frame presses and releases after each `update`. The system's
   repeats of a held key aren't presses but repeats (`key_repeated`, and `repeated` for actions,
   whose gamepad buttons never repeat); a repeat of a key not held, as after gaining focus, presses
-  it. A `Simulation` repeats the last key pressed itself, by a `KeyRepeat`. Actions bind to
+  it. A `Simulation` repeats the last key pressed itself, by a `KeyRepeat`. What keys type is
+  `text`, kept until an update has seen it: the window's `KeyEvent::text` (which composes dead
+  keys) and input methods' commits, without control characters or the letters of shortcuts
+  (Control without Alt, which is AltGr on Windows, or Super). Input methods are off unless the
+  game takes one (`set_input_method`, an area of the canvas, which egui's own platform output
+  carries to `egui_winit` when egui isn't using one), since they change which key events arrive;
+  `composition` is what one is composing. Actions bind to
   `Control`s, keys and gamepad buttons, of any gamepad or one, and have a strength from 0 to 1,
   which `axis` makes an axis of two. Gamepads are numbered from 1, keeping their number while
   disconnected. Their buttons include the sticks' directions (`LeftStickLeft`), pushed as far as
@@ -221,12 +227,14 @@ networking or 3D pipelines.
   and `Simulation`, which runs a whole `Game` without a window: fixed 60 fps frames, simulated
   keys, mouse and gamepads, and screenshots on demand. Held keys repeat as a system repeats them,
   only the last pressed, after a delay and at a rate in game time (`set_key_repeat`, by default
-  half a second, then 30 a second), so repeats land on the same frames every run. Its frames render only for screenshots, unless
+  half a second, then 30 a second), so repeats land on the same frames every run, and keys type
+  as on a US keyboard (`Key::us_text`); `type_text` types any text, and `compose` composes as an
+  input method would. Its frames render only for screenshots, unless
   `set_render_every_frame` asks for every frame to render and wait for the GPU, as benchmarks
   want. All of them in a process share one GPU device, and
   only one thread at a time may hold any (a reentrant lease): lavapipe crashes with a device per
   thread and WARP renders wrongly with a shared one, so parallel GPU tests take turns. Simulated
-  input reaches egui too, with `type_text` and `scroll` for it alone; screenshots show the
+  input reaches egui too, typing as well, with `scroll` for it alone; screenshots show the
   interface; `request_close` presses the window's close button and `has_quit` tells whether the
   game called `Context::quit`. Each keeps its game's saves in a temporary folder of its own,
   unless its config gives one. Simulations run every frame they're asked to, but

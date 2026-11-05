@@ -14,6 +14,7 @@
 //! release Right          # let it go
 //! tap Space              # press, run one frame, release
 //! hold W 1s              # press, run for 1 second (or a number of frames), release
+//! type Ada > ?           # type the rest of the line, without pressing keys
 //! mouse 120 64           # move the cursor to canvas pixel (120, 64)
 //! mouse-down Left        # hold a mouse button down (Left, Right, Middle, Back, Forward)
 //! mouse-up Left
@@ -36,7 +37,9 @@
 //! numbered before them.
 //!
 //! A key held down repeats as a window's system would repeat it, the last key pressed only: by
-//! default, after half a second, 30 times a second (see [`KeyRepeat`]).
+//! default, after half a second, 30 times a second (see [`KeyRepeat`]). Keys pressed, and their
+//! repeats, type what they would on a US keyboard, with Shift if it's held; `type` types any
+//! text, as other layouts and input methods do, but not `#`, which starts a comment.
 //!
 //! Each saved screenshot is reported on standard output, as is each benchmark: the mean, median,
 //! 99th percentile and longest of each [`FrameStats`] time, as a window would see them (with
@@ -73,6 +76,7 @@ enum Command {
     Release(Key),
     Tap(Key),
     Hold(Key, u32),
+    Type(String),
     Mouse([f32; 2]),
     MouseDown(MouseButton),
     MouseUp(MouseButton),
@@ -124,6 +128,7 @@ pub fn run<G: Game>(
             Command::Release(key) => simulation.key_up(key),
             Command::Tap(key) => simulation.tap(key),
             Command::Hold(key, frames) => simulation.hold_frames(key, frames),
+            Command::Type(text) => simulation.type_text(&text),
             Command::Mouse([x, y]) => simulation.move_mouse(x, y),
             Command::MouseDown(button) => simulation.mouse_down(button),
             Command::MouseUp(button) => simulation.mouse_up(button),
@@ -264,8 +269,14 @@ fn parse(source: &str) -> Result<Vec<Command>, String> {
         let Some((&name, args)) = words.split_first() else {
             continue;
         };
-        let command =
-            parse_command(name, args).map_err(|err| format!("line {}: {err}", index + 1))?;
+        // What `type` types is the rest of the line, spaces and all.
+        let rest = line.trim().strip_prefix(name).unwrap_or_default().trim();
+        let command = match (name, rest) {
+            ("type", "") => Err(format!("wrong arguments for `{name}`")),
+            ("type", text) => Ok(Command::Type(text.to_owned())),
+            _ => parse_command(name, args),
+        }
+        .map_err(|err| format!("line {}: {err}", index + 1))?;
         commands.push(command);
     }
     Ok(commands)
@@ -385,6 +396,8 @@ mod tests {
             release Right
             tap Space
             hold W 1s
+            type >
+            type Ada  Lovelace? # a comment
             mouse 12.5 40
             mouse-down left
             mouse-up Left
@@ -414,6 +427,8 @@ mod tests {
                 Command::Release(Key::Right),
                 Command::Tap(Key::Space),
                 Command::Hold(Key::W, 60),
+                Command::Type(">".into()),
+                Command::Type("Ada  Lovelace?".into()),
                 Command::Mouse([12.5, 40.0]),
                 Command::MouseDown(MouseButton::Left),
                 Command::MouseUp(MouseButton::Left),
@@ -477,6 +492,10 @@ mod tests {
             Err("line 1: `0` is not a number of repeats a second".into())
         );
         assert!(parse("key-repeat on").is_err());
+        assert_eq!(
+            parse("type # nothing"),
+            Err("line 1: wrong arguments for `type`".into())
+        );
         assert!(parse("key-repeat -1 30").is_err());
         assert_eq!(
             parse("pad-tap 1 A"),

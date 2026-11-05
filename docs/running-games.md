@@ -132,6 +132,7 @@ The script has one command per line. `#` starts a comment.
 | `release Right` | Lets a key go. |
 | `tap Space` | Presses a key, runs one frame, and lets it go. |
 | `hold W 1s` | Presses a key, runs for a second (or a number of frames, as `hold W 60`), and lets it go. |
+| `type Ada > ?` | Types the rest of the line, [as the game reads it](api/input.md#inputtext), without pressing any keys: anything but `#`, which starts a comment. |
 | `mouse 120 64` | Moves the cursor to canvas pixel (120, 64). |
 | `mouse-down Left` | Holds a mouse button down: `Left`, `Right`, `Middle`, `Back` or `Forward`. |
 | `mouse-up Left` | Lets a mouse button go. |
@@ -154,7 +155,10 @@ before them, since a scripted run has no real gamepads.
 
 A key held down [repeats](api/input.md#inputkey_repeated) as a window's system would repeat it:
 by default, after half a second, 30 times a second, until it's let go or another key is pressed.
-So `hold L 1s` presses `L`, then repeats it 15 times.
+So `hold L 1s` presses `L`, then repeats it 15 times. Keys type what they would on a US keyboard,
+each time they're pressed and repeated, with Shift if it's held, so `hold L 1s` types `l` 16
+times, and `press LeftShift` then `tap Period` types `>`. Other layouts' characters, and what input
+methods compose, are for `type`.
 
 Mouse positions are canvas pixels, but screenshots are the size of the window. With a fixed
 resolution, divide a position in a screenshot by the scale, after taking away the black bars, to

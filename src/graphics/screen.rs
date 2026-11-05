@@ -65,7 +65,6 @@ impl Screen {
 
     /// Converts a point in canvas pixels to a point on an output of `output` physical pixels at
     /// `scale_factor`: the inverse of [`Screen::to_canvas`].
-    #[cfg_attr(not(any(feature = "egui", test)), expect(dead_code))]
     pub fn to_output(&self, point: [f32; 2], output: [u32; 2], scale_factor: f64) -> [f64; 2] {
         match self.resolution {
             Resolution::Window => point.map(|v| f64::from(v) * scale_factor),
