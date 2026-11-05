@@ -3,7 +3,8 @@
 use std::ptr;
 
 use crate::{
-    Canvas, Class, Classes, Color, Context, Error, Rect, Result, Sprite, abi, check, host,
+    Canvas, Class, Classes, Color, Context, Error, Mesh, Rect, Result, Sprite, Vec3, abi, check,
+    host,
 };
 
 /// A call from a script to one of the library's functions or methods: its arguments, and the
@@ -186,6 +187,23 @@ impl FromArg for Sprite {
     }
 }
 
+impl FromArg for Mesh {
+    fn from_arg(call: &Call, index: usize) -> Result<Self> {
+        let mut mesh = ptr::null();
+        // SAFETY: valid for as long as `call` is.
+        let status = unsafe { (host().arg_mesh)(call.raw, index, &mut mesh) };
+        check(status)?;
+        Ok(Mesh::copy(mesh))
+    }
+}
+
+impl FromArg for Vec3 {
+    /// The argument, a Luau vector such as `vector.create(1, 2, 3)`.
+    fn from_arg(call: &Call, index: usize) -> Result<Self> {
+        read(call, index, host().arg_vector)
+    }
+}
+
 impl<T: FromArg> FromArg for Option<T> {
     /// `None` for `nil`, or a missing argument.
     fn from_arg(call: &Call, index: usize) -> Result<Self> {
@@ -299,6 +317,23 @@ impl IntoResult for Sprite {
     fn push(self, call: &Call) -> Result<()> {
         // SAFETY: valid for as long as `call` is, and the engine copies the sprite.
         unsafe { (host().push_sprite)(call.raw, self.as_ptr()) };
+        Ok(())
+    }
+}
+
+impl IntoResult for Mesh {
+    fn push(self, call: &Call) -> Result<()> {
+        // SAFETY: valid for as long as `call` is, and the engine copies the handle.
+        unsafe { (host().push_mesh)(call.raw, self.as_ptr()) };
+        Ok(())
+    }
+}
+
+impl IntoResult for Vec3 {
+    /// A Luau vector.
+    fn push(self, call: &Call) -> Result<()> {
+        // SAFETY: valid for as long as `call` is.
+        unsafe { (host().push_vector)(call.raw, self) };
         Ok(())
     }
 }

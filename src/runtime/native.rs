@@ -23,9 +23,11 @@ use wingine_abi as abi;
 use super::{Lent, LibraryConfig};
 use crate::{
     Context, Error, Result,
-    graphics::{Canvas, Color, Sprite},
+    graphics::{
+        Camera3d, Canvas, Color, Lighting, Mesh, MeshData, MeshVertex, Projection, Sprite, View3d,
+    },
     lua::is_identifier,
-    math::Rect,
+    math::{Affine3, Rect},
 };
 
 /// Libraries linked into this program, by the name games list them by.
@@ -509,6 +511,7 @@ struct Call<'a> {
 enum Borrowed {
     String(mlua::BorrowedStr),
     Sprite(mlua::UserDataRef<Sprite>),
+    Mesh(mlua::UserDataRef<Mesh>),
     Object(mlua::UserDataRef<NativeObject>),
     ObjectMut(mlua::UserDataRefMut<NativeObject>),
 }
@@ -659,6 +662,16 @@ static HOST: abi::Host = abi::Host {
     free_sprite: host::free_sprite,
     sprite_size: host::sprite_size,
     draw_sprites: host::draw_sprites,
+    create_mesh: host::create_mesh,
+    clone_mesh: host::clone_mesh,
+    free_mesh: host::free_mesh,
+    arg_mesh: host::arg_mesh,
+    push_mesh: host::push_mesh,
+    arg_vector: host::arg_vector,
+    push_vector: host::push_vector,
+    begin_3d: host::begin_3d,
+    draw_meshes: host::draw_meshes,
+    draw_billboards: host::draw_billboards,
 };
 
 /// The functions in [`HOST`]. Each trusts the library to pass what the ABI says: pointers the
@@ -1264,5 +1277,221 @@ mod host {
         for draw in draws {
             canvas.draw_sprite_rotated(sprite, rect(draw.dest), draw.angle, color(draw.tint));
         }
+    }
+
+    /// The `count` values at `values`, which may be dangling when there are none.
+    unsafe fn slice<'a, T>(values: *const T, count: usize) -> &'a [T] {
+        if count == 0 {
+            &[]
+        } else {
+            // SAFETY: the caller's promise.
+            unsafe { std::slice::from_raw_parts(values, count) }
+        }
+    }
+
+    unsafe fn mesh_ref<'a>(mesh: *const abi::Mesh) -> &'a Mesh {
+        // SAFETY: the caller's promise.
+        unsafe { &*mesh.cast() }
+    }
+
+    fn vec3(vector: abi::Vec3) -> [f32; 3] {
+        [vector.x, vector.y, vector.z]
+    }
+
+    fn affine3(transform: abi::Affine3) -> Affine3 {
+        Affine3 {
+            x_axis: vec3(transform.x_axis),
+            y_axis: vec3(transform.y_axis),
+            z_axis: vec3(transform.z_axis),
+            translation: vec3(transform.translation),
+        }
+    }
+
+    pub(super) unsafe extern "C" fn create_mesh(
+        ctx: *mut abi::Context,
+        vertices: *const abi::MeshVertex,
+        vertex_count: usize,
+        indices: *const u32,
+        index_count: usize,
+    ) -> *mut abi::Mesh {
+        // SAFETY: the library's promise.
+        let ctx = unsafe { context_mut(ctx) };
+        // SAFETY: the library's promise.
+        let (vertices, indices) =
+            unsafe { (slice(vertices, vertex_count), slice(indices, index_count)) };
+        let data = MeshData {
+            vertices: vertices
+                .iter()
+                .map(|vertex| MeshVertex {
+                    position: vec3(vertex.position),
+                    normal: vec3(vertex.normal),
+                    uv: [vertex.u, vertex.v],
+                    color: color(vertex.color),
+                })
+                .collect(),
+            indices: indices.to_vec(),
+        };
+        match ctx.create_mesh(&data) {
+            Ok(mesh) => Box::into_raw(Box::new(mesh)).cast(),
+            Err(err) => {
+                super::set_error(err.to_string());
+                ptr::null_mut()
+            }
+        }
+    }
+
+    pub(super) unsafe extern "C" fn clone_mesh(mesh: *const abi::Mesh) -> *mut abi::Mesh {
+        // SAFETY: the library's promise.
+        let mesh = unsafe { mesh_ref(mesh) }.clone();
+        Box::into_raw(Box::new(mesh)).cast()
+    }
+
+    pub(super) unsafe extern "C" fn free_mesh(mesh: *mut abi::Mesh) {
+        // SAFETY: the library's promise: a mesh the engine boxed, freed once.
+        drop(unsafe { Box::from_raw(mesh.cast::<Mesh>()) });
+    }
+
+    pub(super) unsafe extern "C" fn arg_mesh(
+        call: *mut abi::Call,
+        index: usize,
+        out: *mut *const abi::Mesh,
+    ) -> abi::Status {
+        // SAFETY: the library's promise.
+        let call = unsafe { call_mut(call) };
+        let mesh = call.convert::<mlua::UserDataRef<Mesh>>(index).map(|mesh| {
+            let pointer = ptr::from_ref::<Mesh>(&mesh).cast();
+            call.borrowed.push(Borrowed::Mesh(mesh));
+            pointer
+        });
+        // SAFETY: the library's promise.
+        unsafe { output(mesh, out) }
+    }
+
+    pub(super) unsafe extern "C" fn push_mesh(call: *mut abi::Call, mesh: *const abi::Mesh) {
+        // SAFETY: the library's promise.
+        let call = unsafe { call_mut(call) };
+        // SAFETY: the library's promise.
+        let mesh = unsafe { mesh_ref(mesh) }.clone();
+        call.push(mesh.into_lua(call.lua));
+    }
+
+    pub(super) unsafe extern "C" fn arg_vector(
+        call: *mut abi::Call,
+        index: usize,
+        out: *mut abi::Vec3,
+    ) -> abi::Status {
+        // SAFETY: the library's promise.
+        let vector = unsafe { call_mut(call) }.convert::<mlua::Vector>(index);
+        let vector = vector.map(|vector| abi::Vec3::new(vector.x(), vector.y(), vector.z()));
+        // SAFETY: the library's promise.
+        unsafe { output(vector, out) }
+    }
+
+    pub(super) unsafe extern "C" fn push_vector(call: *mut abi::Call, value: abi::Vec3) {
+        // SAFETY: the library's promise.
+        let call = unsafe { call_mut(call) };
+        let vector = mlua::Vector::new(value.x, value.y, value.z);
+        call.results.push(mlua::Value::Vector(vector));
+    }
+
+    /// The engine's camera for a library's, or the error saying why it isn't one.
+    fn camera(camera: &abi::Camera3d) -> std::result::Result<Camera3d, String> {
+        let projection = match camera.projection {
+            abi::Projection::PERSPECTIVE => Projection::Perspective {
+                fov_y: camera.fov_y,
+            },
+            abi::Projection::ORTHOGRAPHIC => Projection::Orthographic {
+                height: camera.height,
+            },
+            other => return Err(format!("there's no projection {}", other.0)),
+        };
+        let camera = Camera3d {
+            position: vec3(camera.position),
+            target: vec3(camera.target),
+            up: vec3(camera.up),
+            projection,
+            near: camera.near,
+            far: camera.far,
+        };
+        match camera.problem() {
+            Some(problem) => Err(problem),
+            None => Ok(camera),
+        }
+    }
+
+    pub(super) unsafe extern "C" fn begin_3d(
+        canvas: *mut abi::Canvas,
+        view: *const abi::View3d,
+    ) -> abi::Status {
+        // SAFETY: the library's promise.
+        let (canvas, view) = unsafe { (canvas_mut(canvas), &*view) };
+        match camera(&view.camera) {
+            Ok(camera) => {
+                let lighting = &view.lighting;
+                canvas.begin_3d(View3d {
+                    camera,
+                    rect: rect(view.rect),
+                    lighting: Lighting {
+                        direction: vec3(lighting.direction),
+                        color: color(lighting.color),
+                        ambient: color(lighting.ambient),
+                    },
+                });
+                abi::Status::OK
+            }
+            Err(err) => {
+                super::set_error(err);
+                abi::Status::ERROR
+            }
+        }
+    }
+
+    /// Sets the error for drawing in a 3D view with none open.
+    fn no_view(function: &str) -> abi::Status {
+        super::set_error(format!(
+            "{function} draws in a 3D view: begin one first, then draw what's in the view before \
+             anything else, which ends it"
+        ));
+        abi::Status::ERROR
+    }
+
+    pub(super) unsafe extern "C" fn draw_meshes(
+        canvas: *mut abi::Canvas,
+        mesh: *const abi::Mesh,
+        sprite: *const abi::Sprite,
+        draws: *const abi::MeshDraw,
+        count: usize,
+    ) -> abi::Status {
+        // SAFETY: the library's promise.
+        let (canvas, mesh, draws) =
+            unsafe { (canvas_mut(canvas), mesh_ref(mesh), slice(draws, count)) };
+        // SAFETY: the library's promise.
+        let sprite = (!sprite.is_null()).then(|| unsafe { sprite_ref(sprite) });
+        let Some(mut view) = canvas.open_view() else {
+            return no_view("draw_meshes");
+        };
+        for draw in draws {
+            view.draw_mesh(mesh, affine3(draw.transform), sprite, color(draw.tint));
+        }
+        abi::Status::OK
+    }
+
+    pub(super) unsafe extern "C" fn draw_billboards(
+        canvas: *mut abi::Canvas,
+        sprite: *const abi::Sprite,
+        draws: *const abi::BillboardDraw,
+        count: usize,
+    ) -> abi::Status {
+        // SAFETY: the library's promise.
+        let (canvas, sprite, draws) =
+            unsafe { (canvas_mut(canvas), sprite_ref(sprite), slice(draws, count)) };
+        let Some(mut view) = canvas.open_view() else {
+            return no_view("draw_billboards");
+        };
+        for draw in draws {
+            let size = [draw.size.width, draw.size.height];
+            view.draw_billboard(sprite, vec3(draw.position), size, color(draw.tint));
+        }
+        abi::Status::OK
     }
 }

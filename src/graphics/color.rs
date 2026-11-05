@@ -55,6 +55,12 @@ impl Color {
             self.a,
         ]
     }
+
+    /// The color of linear-space components, as model files give them. Alpha is already linear.
+    #[cfg(feature = "models")]
+    pub(crate) fn from_linear([r, g, b, a]: [f32; 4]) -> Self {
+        Self::rgba(linear_to_srgb(r), linear_to_srgb(g), linear_to_srgb(b), a)
+    }
 }
 
 fn srgb_to_linear(c: f32) -> f32 {
@@ -62,6 +68,15 @@ fn srgb_to_linear(c: f32) -> f32 {
         c / 12.92
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+#[cfg(feature = "models")]
+fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
     }
 }
 
@@ -93,5 +108,20 @@ mod tests {
     fn linear_conversion_darkens_midtones() {
         let [r, ..] = Color::rgb(0.5, 0.0, 0.0).to_linear();
         assert!((r - 0.214).abs() < 0.001);
+    }
+
+    #[cfg(feature = "models")]
+    #[test]
+    fn linear_conversion_goes_both_ways() {
+        for c in [0.0, 0.002, 0.04, 0.25, 0.5, 0.8, 1.0] {
+            let color = Color::rgba(c, c / 2.0, 1.0 - c, c);
+            let back = Color::from_linear(color.to_linear());
+            let [r, g, b, a] = [back.r, back.g, back.b, back.a];
+            assert!(
+                (r - c).abs() < 1e-5 && (g - c / 2.0).abs() < 1e-5,
+                "{back:?}"
+            );
+            assert!((b - (1.0 - c)).abs() < 1e-5 && a == c, "{back:?}");
+        }
     }
 }

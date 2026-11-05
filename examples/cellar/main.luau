@@ -1,8 +1,9 @@
 -- A cellar in 2.5D, written entirely in Luau: the hero walks a dark cellar tile by tile and lights
 -- its candles by standing on them. The cellar is meshes in a 3D view, walls of cubes on a floor
--- built as a mesh of its own, and the hero and the candles are sprites standing among them,
--- billboards that turn to face the camera, which follows the hero from above and behind. Walk
--- with the arrow keys or WASD.
+-- built as a mesh of its own, with barrels, crates and a table in the way, models made in Blender,
+-- and the hero and the candles are sprites standing among them, billboards that turn to face the
+-- camera, which follows the hero from above and behind. Walk with the arrow keys or WASD, and
+-- point at a prop with the mouse to name it.
 --
 -- The game's state is the global `cellar`, for tests.
 --
@@ -14,18 +15,26 @@ local HERO = tiles:sprite(27, 0)
 local CANDLE = tiles:sprite(3, 15)
 local font = graphics.default_font()
 
--- The cellar, a row of tiles to a string: `#` is a wall, `c` a candle, and `@` where the hero
--- starts. A tile is a world unit, with columns along `x` and rows along `z`, so up the map is away
--- from the camera.
+-- The cellar, a row of tiles to a string: `#` is a wall, `c` a candle, `b` a barrel, `x` a crate,
+-- `t` a table, and `@` where the hero starts. A tile is a world unit, with columns along `x` and
+-- rows along `z`, so up the map is away from the camera.
 local MAP = {
     "###########",
-    "#c...#...c#",
-    "#.#.##.#..#",
-    "#...c..#..#",
-    "#.#####c#.#",
+    "#cx.b#...c#",
+    "#.#.##.#t.#",
+    "#...c..#x.#",
+    "#b#####c#.#",
     "#....@....#",
     "###########",
 }
+
+-- The props, by the characters that place them, and their models, made in Blender, each standing
+-- on its origin.
+local PROPS = { b = "barrel", x = "crate", t = "table" }
+local models: { [string]: Model } = {}
+for _, kind in PROPS do
+    models[kind] = graphics.load_model(`models/{kind}.glb`)
+end
 
 -- Seconds a step takes.
 local STEP_TIME = 0.18
@@ -55,8 +64,11 @@ for _, direction in DIRECTIONS do
     input.bind(direction, keys[direction])
 end
 
+type Prop = { kind: string, column: number, row: number }
+
 local walls = {}
 local candles = {}
+local props: { Prop } = {}
 local start_column, start_row = 0, 0
 for row, line in MAP do
     for column = 1, #line do
@@ -67,19 +79,32 @@ for row, line in MAP do
             table.insert(walls, at)
         elseif cell == "c" then
             table.insert(candles, { column = at.column, row = at.row, lit = false })
+        elseif PROPS[cell] then
+            table.insert(props, { kind = PROPS[cell], column = at.column, row = at.row })
         elseif cell == "@" then
             start_column, start_row = at.column, at.row
         end
     end
 end
 
--- Whether the tile at `column`, `row` is a wall, or off the map.
-local function is_wall(column: number, row: number): boolean
+-- The character of the tile at `column`, `row`, or `#` off the map.
+local function cell_at(column: number, row: number): string
     local line = MAP[row + 1]
     if line == nil or column < 0 or column >= #line then
-        return true
+        return "#"
     end
-    return string.sub(line, column + 1, column + 1) == "#"
+    return string.sub(line, column + 1, column + 1)
+end
+
+-- Whether the tile at `column`, `row` is a wall, or off the map.
+local function is_wall(column: number, row: number): boolean
+    return cell_at(column, row) == "#"
+end
+
+-- Whether the hero can't walk onto the tile: a wall, a prop, or off the map.
+local function is_blocked(column: number, row: number): boolean
+    local cell = cell_at(column, row)
+    return cell == "#" or PROPS[cell] ~= nil
 end
 
 -- The floor: a quad facing up for every tile that isn't a wall, alternately a little lighter and
@@ -118,6 +143,11 @@ end
 cellar = {
     mover = grid.new_mover(start_column, start_row, STEP_TIME),
     candles = candles,
+    -- Each prop's kind, column and row, and the models by kind.
+    props = props,
+    models = models,
+    -- The prop the mouse points at, if any.
+    pointed = nil :: Prop?,
     -- How many candles are lit, and whether they all are.
     lit = 0,
     done = false,
@@ -140,8 +170,28 @@ function cellar.view()
     }
 end
 
+-- The prop the mouse points at, the nearest whose box the ray under it goes through, or nil.
+function cellar.pointed_prop(): Prop?
+    local x, y = input.mouse_position()
+    if x == nil or y == nil then
+        return nil
+    end
+    local origin, direction = graphics.ray(cellar.view(), x, y)
+    local nearest: Prop?, nearest_distance = nil, math.huge
+    for _, prop in cellar.props do
+        local low, high = models[prop.kind]:bounds()
+        local at = tile_middle(prop.column, prop.row)
+        local distance = graphics.hit_box(origin, direction, low + at, high + at)
+        if distance and distance < nearest_distance then
+            nearest, nearest_distance = prop, distance
+        end
+    end
+    return nearest
+end
+
 function update(dt: number)
     cellar.time += dt
+    cellar.pointed = cellar.pointed_prop()
     local mover = cellar.mover
     mover:update(dt)
     if mover:is_moving() then
@@ -160,7 +210,7 @@ function update(dt: number)
             if direction == "left" or direction == "right" then
                 cellar.facing_left = direction == "left"
             end
-            mover:step(direction, is_wall)
+            mover:step(direction, is_blocked)
             break
         end
     end
@@ -174,6 +224,9 @@ function draw()
     for _, wall in walls do
         local middle = tile_middle(wall.column, wall.row) + vector.create(0, WALL_HEIGHT / 2, 0)
         graphics.draw_mesh(wall_mesh, middle, { tint = WALL })
+    end
+    for _, prop in cellar.props do
+        graphics.draw_model(models[prop.kind], tile_middle(prop.column, prop.row))
     end
     for i, candle in cellar.candles do
         local tint = UNLIT
@@ -194,6 +247,17 @@ function draw()
     local width = graphics.size()
     graphics.fill_rect(0, 0, width, 14, "#00000080")
     graphics.draw_text(font, `Candles lit: {cellar.lit}/{#cellar.candles}`, 4, 3, "#ffffff")
+    local pointed = cellar.pointed
+    if pointed then
+        -- Its name, just over its top.
+        local _, high = models[pointed.kind]:bounds()
+        local top = tile_middle(pointed.column, pointed.row) + vector.create(0, high.y + 0.15, 0)
+        local x, y = graphics.project(view, top)
+        if x and y then
+            local name_width = font:measure(pointed.kind)
+            graphics.draw_text(font, pointed.kind, x - name_width / 2, y - 10, "#e0d8c8")
+        end
+    end
     if cellar.done then
         -- Over the hero's head, wherever they are on the screen.
         local x, y = graphics.project(view, cellar.hero_position() + vector.create(0, HERO_HEIGHT + 0.2, 0))

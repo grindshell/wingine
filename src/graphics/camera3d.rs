@@ -1,4 +1,4 @@
-use crate::math::{Affine3, add3, cross3, dot3, normalize3, scale3, sub3};
+use crate::math::{Affine3, Bounds3, add3, cross3, dot3, normalize3, scale3, sub3};
 
 /// A 4x4 matrix, as columns.
 pub(crate) type Mat4 = [[f32; 4]; 4];
@@ -64,6 +64,29 @@ impl Camera3d {
             near: 0.1,
             far: 1000.0,
         }
+    }
+
+    /// What makes the camera one that can't see, if anything: a field of view not between 0 and
+    /// pi, a height not above 0, or `near` not above 0 or `far` not above it.
+    pub(crate) fn problem(&self) -> Option<String> {
+        match self.projection {
+            Projection::Perspective { fov_y } if !(fov_y > 0.0 && fov_y < std::f32::consts::PI) => {
+                return Some(format!(
+                    "a camera's fov must be between 0 and pi, not {fov_y}"
+                ));
+            }
+            Projection::Orthographic { height } if !(height > 0.0 && height.is_finite()) => {
+                return Some(format!("a camera's height must be above 0, not {height}"));
+            }
+            _ => {}
+        }
+        if !(self.near > 0.0 && self.far > self.near && self.far.is_finite()) {
+            return Some(format!(
+                "a camera's near must be above 0 and its far above that, not {} and {}",
+                self.near, self.far
+            ));
+        }
+        None
     }
 
     /// Where `point` in the world shows on a view `size` pixels in size, from the view's top-left
@@ -244,6 +267,32 @@ impl Ray {
         let distance = dot3(sub3(point, self.origin), normal) / toward;
         (distance >= 0.0 && distance.is_finite()).then(|| self.at(distance))
     }
+
+    /// How far along the ray it enters `bounds`: 0 if it starts in them, or `None` if it misses
+    /// them or they're behind its origin. Picking what's under the cursor in a 3D view tries each
+    /// thing's bounds and takes the nearest hit.
+    pub fn hit_box(&self, bounds: &Bounds3) -> Option<f32> {
+        let mut near = 0.0f32;
+        let mut far = f32::INFINITY;
+        for axis in 0..3 {
+            let [origin, direction] = [self.origin[axis], self.direction[axis]];
+            let [min, max] = [bounds.min[axis], bounds.max[axis]];
+            if direction == 0.0 {
+                // Going along these sides, it's between them throughout, or never.
+                if origin < min || origin > max {
+                    return None;
+                }
+                continue;
+            }
+            let [a, b] = [(min - origin) / direction, (max - origin) / direction];
+            near = near.max(a.min(b));
+            far = far.min(a.max(b));
+            if near > far {
+                return None;
+            }
+        }
+        Some(near)
+    }
 }
 
 /// `a` times `b`: `b`, then `a`.
@@ -365,6 +414,44 @@ mod tests {
             direction: [0.0, 1.0, 0.0],
         };
         assert_eq!(up.hit_plane([0.0; 3], [0.0, 1.0, 0.0]), None);
+    }
+
+    #[test]
+    fn rays_hit_boxes_where_they_enter() {
+        let crate_ = Bounds3 {
+            min: [-1.0, 0.0, -1.0],
+            max: [1.0, 2.0, 1.0],
+        };
+        let ray = |origin: [f32; 3], direction: [f32; 3]| Ray {
+            origin,
+            direction: normalize3(direction).unwrap(),
+        };
+        let toward = ray([0.0, 1.0, 10.0], [0.0, 0.0, -1.0]);
+        assert_eq!(toward.hit_box(&crate_), Some(9.0));
+        assert_eq!(
+            ray([0.0, 1.0, 10.0], [0.0, 0.0, 1.0]).hit_box(&crate_),
+            None,
+            "away"
+        );
+        assert_eq!(
+            ray([3.0, 1.0, 10.0], [0.0, 0.0, -1.0]).hit_box(&crate_),
+            None,
+            "beside"
+        );
+        assert_eq!(
+            ray([0.0, 1.0, 0.0], [1.0, 0.0, 0.0]).hit_box(&crate_),
+            Some(0.0),
+            "inside"
+        );
+        // From above at a slant, through the top.
+        let slant = ray([0.0, 4.0, 2.0], [0.0, -1.0, -1.0]);
+        let distance = slant.hit_box(&crate_).unwrap();
+        assert_near(slant.at(distance), [0.0, 2.0, 0.0]);
+        // Grazing past a corner.
+        assert_eq!(
+            ray([0.0, 5.0, 0.0], [1.0, -1.0, 0.0]).hit_box(&crate_),
+            None
+        );
     }
 
     #[test]

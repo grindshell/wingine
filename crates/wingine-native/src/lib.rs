@@ -68,6 +68,12 @@
 //! Each call from Luau into a library costs far more than drawing a sprite, so a library that
 //! draws many sprites draws them with one function call and one [`Canvas::draw_sprites`], rather
 //! than a call from Luau for each.
+//!
+//! Libraries draw in 3D views as scripts do: [`Canvas::begin_3d`] begins one, and
+//! [`Canvas::draw_meshes`] and [`Canvas::draw_billboards`] draw batches of a mesh or a sprite in
+//! the view begun last, whether the library or the script began it. Meshes come from
+//! [`Context::create_mesh`] or from scripts, and pass to and from them as [`Mesh`]es; Luau's
+//! vectors pass as [`Vec3`]s.
 
 mod call;
 mod services;
@@ -84,10 +90,13 @@ use std::{
 
 #[doc(hidden)]
 pub use wingine_abi as abi;
-pub use wingine_abi::{Color, Rect, SpriteDraw};
+pub use wingine_abi::{
+    Affine3, BillboardDraw, Camera3d, Color, Lighting, MeshDraw, MeshVertex, Projection, Rect,
+    Size, SpriteDraw, Vec3, View3d,
+};
 
 pub use call::{Call, FromArg, FromArgs, IntoResult, IntoResults};
-pub use services::{Canvas, Context, Sprite};
+pub use services::{Canvas, Context, Mesh, Sprite};
 
 /// A native library: its state for one game, and how it registers its functions, classes and
 /// hooks.

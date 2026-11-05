@@ -99,9 +99,11 @@ A library reaches the engine only through the services the engine lends it, at t
 lends them to scripts:
 
 - **The context**, while the game loads and in `update`: the canvas's size, whether actions are
-  held, pressed or released, the mouse's position, and creating sprites from pixels.
-- **The canvas**, in `draw`: its size, filling rectangles, and drawing sprites, one at a time or
-  many in one call.
+  held, pressed or released, the mouse's position, and creating sprites from pixels and meshes
+  from triangles.
+- **The canvas**, in `draw`: its size, filling rectangles, drawing sprites, one at a time or many
+  in one call, and [3D views](api/native.md#3d): beginning one, and drawing batches of a mesh or
+  of billboards in the view begun last, whether the library or the script began it.
 
 Update hooks receive the context, and draw hooks the canvas. A function or method asks for
 whichever the script that called it could use: a function called from `draw` gets the canvas,

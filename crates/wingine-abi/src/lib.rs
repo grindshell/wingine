@@ -35,8 +35,9 @@ use core::{
 };
 
 pub const ABI_MAJOR: u16 = 0;
-/// 1: the first version. 2: [`Host::draw_sprites`].
-pub const ABI_MINOR: u16 = 2;
+/// 1: the first version. 2: [`Host::draw_sprites`]. 3: 3D: meshes, vectors, and views drawn
+/// in, from [`Host::create_mesh`] on.
+pub const ABI_MINOR: u16 = 3;
 
 /// The name of the function a library exports, an [`Entry`].
 pub const ENTRY_SYMBOL: &[u8] = b"wingine_library\0";
@@ -212,11 +213,272 @@ pub struct Size {
     pub height: f32,
 }
 
+impl Size {
+    pub const fn new(width: f32, height: f32) -> Self {
+        Self { width, height }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {
     pub x: f32,
     pub y: f32,
+}
+
+/// A point or a direction in 3D, as Luau's vectors and Wingine's `[f32; 3]`. World coordinates
+/// are right-handed with `y` up.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Vec3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+impl Vec3 {
+    pub const ZERO: Self = Self::new(0.0, 0.0, 0.0);
+    pub const ONE: Self = Self::new(1.0, 1.0, 1.0);
+    pub const Y: Self = Self::new(0.0, 1.0, 0.0);
+
+    pub const fn new(x: f32, y: f32, z: f32) -> Self {
+        Self { x, y, z }
+    }
+}
+
+/// A 3D transform, as Wingine's `Affine3`: where it takes each unit axis, then the origin. A
+/// point `p` goes to `x_axis * p.x + y_axis * p.y + z_axis * p.z + translation`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Affine3 {
+    pub x_axis: Vec3,
+    pub y_axis: Vec3,
+    pub z_axis: Vec3,
+    pub translation: Vec3,
+}
+
+impl Affine3 {
+    pub const IDENTITY: Self = Self::from_scale(Vec3::ONE);
+
+    /// Moves things by `translation`.
+    pub const fn from_translation(translation: Vec3) -> Self {
+        Self {
+            translation,
+            ..Self::IDENTITY
+        }
+    }
+
+    /// Scales things along each axis about the origin.
+    pub const fn from_scale(scale: Vec3) -> Self {
+        Self {
+            x_axis: Vec3::new(scale.x, 0.0, 0.0),
+            y_axis: Vec3::new(0.0, scale.y, 0.0),
+            z_axis: Vec3::new(0.0, 0.0, scale.z),
+            translation: Vec3::ZERO,
+        }
+    }
+
+    /// Scales things by `scale` along every axis, then moves them by `translation`.
+    pub const fn from_scale_translation(scale: f32, translation: Vec3) -> Self {
+        Self {
+            translation,
+            ..Self::from_scale(Vec3::new(scale, scale, scale))
+        }
+    }
+}
+
+impl Default for Affine3 {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+/// A corner of a mesh's triangles, as Wingine's `MeshVertex`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeshVertex {
+    pub position: Vec3,
+    /// Which way the surface faces here, for lighting. Its length doesn't matter.
+    pub normal: Vec3,
+    /// Where on the sprite the mesh shows this corner, from 0 at the sprite's left and top to 1
+    /// at its right and bottom.
+    pub u: f32,
+    pub v: f32,
+    /// Multiplies the sprite's colors here, as a tint does.
+    pub color: Color,
+}
+
+impl MeshVertex {
+    /// A white corner at `position` facing `normal`, showing the sprite's top-left.
+    pub const fn new(position: Vec3, normal: Vec3) -> Self {
+        Self {
+            position,
+            normal,
+            u: 0.0,
+            v: 0.0,
+            color: Color::WHITE,
+        }
+    }
+}
+
+/// How a [`Camera3d`] projects what it sees.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Projection(pub u32);
+
+impl Projection {
+    /// Things farther away look smaller, as to an eye.
+    pub const PERSPECTIVE: Self = Self(0);
+    /// Things look the same size however far away they are.
+    pub const ORTHOGRAPHIC: Self = Self(1);
+}
+
+/// A camera looking into a 3D world, as Wingine's `Camera3d`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Camera3d {
+    pub position: Vec3,
+    /// The point it looks at, which shows at the middle of the view.
+    pub target: Vec3,
+    /// Which way is up, which points up the view as near as it can.
+    pub up: Vec3,
+    pub projection: Projection,
+    /// With [`Projection::PERSPECTIVE`], the angle the view takes in from its bottom edge to its
+    /// top, in radians, between 0 and pi.
+    pub fov_y: f32,
+    /// With [`Projection::ORTHOGRAPHIC`], how many world units the view shows from its bottom
+    /// edge to its top.
+    pub height: f32,
+    /// How near and how far from the camera things can be and still show: `near` above 0, and
+    /// `far` above it.
+    pub near: f32,
+    pub far: f32,
+}
+
+impl Camera3d {
+    /// A camera at `position` looking at `target` in perspective, `fov_y` radians of the world
+    /// showing from the view's bottom edge to its top. Up is `+y`, and it sees from 0.1 to 1000
+    /// world units away.
+    pub const fn perspective(position: Vec3, target: Vec3, fov_y: f32) -> Self {
+        Self {
+            position,
+            target,
+            up: Vec3::Y,
+            projection: Projection::PERSPECTIVE,
+            fov_y,
+            height: 0.0,
+            near: 0.1,
+            far: 1000.0,
+        }
+    }
+
+    /// A camera at `position` looking at `target` without perspective, `height` world units
+    /// showing from the view's bottom edge to its top. Up is `+y`, and it sees from 0.1 to 1000
+    /// world units away.
+    pub const fn orthographic(position: Vec3, target: Vec3, height: f32) -> Self {
+        Self {
+            projection: Projection::ORTHOGRAPHIC,
+            fov_y: 0.0,
+            height,
+            ..Self::perspective(position, target, 0.0)
+        }
+    }
+}
+
+/// How a 3D view is lit, as Wingine's `Lighting`: by a sun whose light goes one way, and by light
+/// from all around.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Lighting {
+    /// The way the sun's light goes. Its length doesn't matter.
+    pub direction: Vec3,
+    /// The sun's light on surfaces facing it.
+    pub color: Color,
+    /// Light on every surface.
+    pub ambient: Color,
+}
+
+impl Lighting {
+    /// A sun high above and a little in front, to the right, as Wingine's default.
+    pub const DEFAULT: Self = Self {
+        direction: Vec3::new(-0.3, -1.0, -0.5),
+        color: Color::rgb(0.8, 0.8, 0.8),
+        ambient: Color::rgb(0.5, 0.5, 0.5),
+    };
+    /// No shading: every surface shows as it is.
+    pub const UNLIT: Self = Self {
+        direction: Vec3::new(0.0, -1.0, 0.0),
+        color: Color::BLACK,
+        ambient: Color::WHITE,
+    };
+}
+
+impl Default for Lighting {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// A 3D view: what it shows, where on the canvas, and how it's lit, as Wingine's `View3d`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct View3d {
+    pub camera: Camera3d,
+    /// Where on the canvas it shows, in the coordinates drawing uses when it begins.
+    pub rect: Rect,
+    pub lighting: Lighting,
+}
+
+impl View3d {
+    /// A view through `camera` filling `rect`, lit by [`Lighting::DEFAULT`].
+    pub const fn new(camera: Camera3d, rect: Rect) -> Self {
+        Self {
+            camera,
+            rect,
+            lighting: Lighting::DEFAULT,
+        }
+    }
+}
+
+/// A mesh as [`Host::draw_meshes`] draws it: placed by `transform`, its colors multiplied by
+/// `tint`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeshDraw {
+    pub transform: Affine3,
+    pub tint: Color,
+}
+
+impl MeshDraw {
+    /// A mesh placed by `transform`, untinted.
+    pub const fn new(transform: Affine3) -> Self {
+        Self {
+            transform,
+            tint: Color::WHITE,
+        }
+    }
+}
+
+/// A sprite as [`Host::draw_billboards`] draws it: standing upright with the middle of its bottom
+/// edge at `position`, `size` world units wide and tall, turned to face the camera across the
+/// ground, its colors multiplied by `tint`. A negative width mirrors it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BillboardDraw {
+    pub position: Vec3,
+    pub size: Size,
+    pub tint: Color,
+}
+
+impl BillboardDraw {
+    /// A sprite standing at `position`, `size` world units in size, untinted.
+    pub const fn new(position: Vec3, size: Size) -> Self {
+        Self {
+            position,
+            size,
+            tint: Color::WHITE,
+        }
+    }
 }
 
 macro_rules! opaque {
@@ -245,6 +507,8 @@ opaque! {
     Class;
     /// An image or part of one to draw, as Wingine's `Sprite`.
     Sprite;
+    /// Triangles on the GPU, to draw in 3D views, as Wingine's `Mesh`.
+    Mesh;
 }
 
 /// Creates a library's state for a game, before its `main.luau` runs, storing it in `instance`.
@@ -406,4 +670,53 @@ pub struct Host {
         draws: *const SpriteDraw,
         count: usize,
     ),
+
+    /// Creates a mesh of `vertex_count` vertices and `index_count` indices into them, three for
+    /// each triangle, counter-clockwise seen from the side it faces, which is the only side that
+    /// shows. Returns null if the indices aren't three for each triangle or reach past the
+    /// vertices. Since 0.3.
+    pub create_mesh: unsafe extern "C" fn(
+        ctx: *mut Context,
+        vertices: *const MeshVertex,
+        vertex_count: usize,
+        indices: *const u32,
+        index_count: usize,
+    ) -> *mut Mesh,
+    /// A handle to `mesh` the library owns, until it frees it with `free_mesh`. Since 0.3.
+    pub clone_mesh: unsafe extern "C" fn(mesh: *const Mesh) -> *mut Mesh,
+    /// Since 0.3.
+    pub free_mesh: unsafe extern "C" fn(mesh: *mut Mesh),
+    /// Reads a mesh, borrowed until the call returns. Since 0.3.
+    pub arg_mesh:
+        unsafe extern "C" fn(call: *mut Call, index: usize, out: *mut *const Mesh) -> Status,
+    /// Returns a mesh to scripts, which hold a handle of their own. Since 0.3.
+    pub push_mesh: unsafe extern "C" fn(call: *mut Call, mesh: *const Mesh),
+    /// Reads a Luau vector. Since 0.3.
+    pub arg_vector: unsafe extern "C" fn(call: *mut Call, index: usize, out: *mut Vec3) -> Status,
+    /// Since 0.3.
+    pub push_vector: unsafe extern "C" fn(call: *mut Call, value: Vec3),
+    /// Begins a 3D view over what's been drawn, as `graphics.begin_3d` does: the meshes and
+    /// billboards drawn after it go in it, until anything else is drawn, which goes over it.
+    /// Fails if its camera's projection, `near` or `far` aren't ones [`Camera3d`] allows. Since
+    /// 0.3.
+    pub begin_3d: unsafe extern "C" fn(canvas: *mut Canvas, view: *const View3d) -> Status,
+    /// Draws `mesh` as each of the `count` draws at `draws` says, showing `sprite`, or white if
+    /// it's null, in the view begun last, whoever began it. Fails if no view is open: if none
+    /// was begun this frame, or anything else was drawn since. Since 0.3.
+    pub draw_meshes: unsafe extern "C" fn(
+        canvas: *mut Canvas,
+        mesh: *const Mesh,
+        sprite: *const Sprite,
+        draws: *const MeshDraw,
+        count: usize,
+    ) -> Status,
+    /// Draws `sprite` as a billboard for each of the `count` draws at `draws`, in the view begun
+    /// last, as `draw_meshes` does. Pixels of the sprite less than half opaque aren't drawn; the
+    /// rest are drawn opaque. Since 0.3.
+    pub draw_billboards: unsafe extern "C" fn(
+        canvas: *mut Canvas,
+        sprite: *const Sprite,
+        draws: *const BillboardDraw,
+        count: usize,
+    ) -> Status,
 }

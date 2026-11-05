@@ -1,6 +1,10 @@
 //! The `graphics` table, for drawing.
 
-use std::path::Path;
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use mlua::{ErrorContext, Lua, Table, UserDataRef, Vector};
 
@@ -9,10 +13,10 @@ use crate::{
     Context,
     graphics::{
         Animation, Camera, Camera3d, Canvas, Color, Font, Lighting, Mesh, MeshData, MeshVertex,
-        Sprite, SpriteSheet, TextLayout, View3d,
+        Model, Ray, Sprite, SpriteSheet, TextLayout, View3d,
     },
     lua::{SceneNode, check_layer, packed_color, vector3},
-    math::{Affine3, Rect},
+    math::{Affine3, Bounds3, Rect},
     tilemap::Tilemap,
 };
 
@@ -245,6 +249,12 @@ pub(super) fn module(
         })?
     })?;
     add_3d(lua, &graphics, lent)?;
+    graphics.set("load_model", {
+        let lent = lent.clone();
+        let root = folder.to_owned();
+        let models = RefCell::new(HashMap::new());
+        lua.create_function(move |_, path: String| load_model(&lent, &models, root.join(path)))?
+    })?;
     graphics.set(
         "new_animation",
         lua.create_function(|_, (frames, frame_time): (Vec<UserDataRef<Sprite>>, f32)| {
@@ -303,6 +313,25 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
             },
         )?
     })?;
+    graphics.set("draw_model", {
+        let lent = lent.clone();
+        lua.create_function(
+            move |_, (model, position, options): (UserDataRef<Model>, Vector, Option<Table>)| {
+                let options = MeshOptions::read(options)?;
+                if options.sprite.is_some() {
+                    let message = "draw_model takes no sprite: a model's parts show their own";
+                    return Err(mlua::Error::runtime(message));
+                }
+                let transform = options.transform(vector3(position));
+                lent.canvas(|canvas| {
+                    let mut view = canvas.open_view()?;
+                    view.draw_model(&model, transform, options.tint);
+                    Some(())
+                })?
+                .ok_or_else(|| no_view("draw_model"))
+            },
+        )?
+    })?;
     graphics.set("draw_billboard", {
         let lent = lent.clone();
         lua.create_function(
@@ -354,6 +383,20 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
             Ok((origin, direction))
         })?
     })?;
+    graphics.set(
+        "hit_box",
+        lua.create_function(
+            |_, (origin, direction, min, max): (Vector, Vector, Vector, Vector)| {
+                let ray = Ray {
+                    origin: vector3(origin),
+                    direction: vector3(direction),
+                };
+                // The box between the corners, whichever way round they're given.
+                let bounds = Bounds3::from_points([vector3(min), vector3(max)]);
+                Ok(bounds.and_then(|bounds| ray.hit_box(&bounds)))
+            },
+        )?,
+    )?;
 
     graphics.set("new_mesh", {
         let lent = lent.clone();
@@ -524,6 +567,33 @@ fn mesh_data(data: &Table) -> mlua::Result<MeshData> {
         })
         .collect::<mlua::Result<Vec<_>>>()?;
     Ok(MeshData { vertices, indices })
+}
+
+/// The model file at `path`, loading it unless `models` has it already.
+fn load_model(
+    lent: &Lent,
+    models: &RefCell<HashMap<PathBuf, Model>>,
+    path: PathBuf,
+) -> mlua::Result<Model> {
+    // Through the context even when loaded already, so this works at the same times either way.
+    lent.context(|ctx| {
+        if let Some(model) = models.borrow().get(&path) {
+            return Ok(model.clone());
+        }
+        #[cfg(feature = "models")]
+        {
+            let model = ctx.load_model(&path).map_err(mlua::Error::external)?;
+            models.borrow_mut().insert(path, model.clone());
+            Ok(model)
+        }
+        #[cfg(not(feature = "models"))]
+        {
+            let _ = ctx;
+            Err(mlua::Error::runtime(
+                "graphics.load_model needs the engine built with its `models` feature",
+            ))
+        }
+    })?
 }
 
 fn create_mesh(lent: &Lent, data: &MeshData) -> mlua::Result<Mesh> {

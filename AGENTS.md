@@ -7,10 +7,11 @@ systems, and don't build more 3D features unless asked.
 
 ## Scope
 
-Wingine has what its examples need: tilemaps and batched sprites, meshes in 3D views, sprite
-animation, a camera, keyboard, mouse and gamepad input bound to actions, grid movement, text,
-audio, saves, Luau scripting with tasks, native libraries written in Rust, scenes (levels,
-screens and rigged characters), egui interfaces, and an editor built on the engine. Each feature is finished with a game or example that uses it, with tests.
+Wingine has what its examples need: tilemaps and batched sprites, meshes and glTF models in 3D
+views picked by boxes, sprite animation, a camera, keyboard, mouse and gamepad input bound to
+actions, grid movement, text, audio, saves, Luau scripting with tasks, native libraries written
+in Rust, scenes (levels, screens and rigged characters), egui interfaces, and an editor built on
+the engine. Each feature is finished with a game or example that uses it, with tests.
 
 - Scenes are data: files of plain Luau values, with no calls or expressions, so tools write back
   what they read. Behavior stays in games, which find nodes by path, tag or kind and read their
@@ -33,6 +34,7 @@ networking or 3D pipelines.
 | Native libraries | `libloading` | Loads them, and never unloads them |
 | Interfaces | `egui` | With `egui-winit` and `egui-wgpu`, behind the default `egui` feature |
 | Gamepads | `gilrs` | Read by the window; simulated without one |
+| Models | `gltf` | glTF 2.0 files, behind the default `models` feature |
 
 - Rust edition 2024.
 - Licensed under MIT or Apache 2.0, at the user's option (`LICENSE-MIT`, `LICENSE-APACHE`), which
@@ -46,6 +48,10 @@ networking or 3D pipelines.
 - The `egui` feature, on by default, brings egui in; `default-features = false` builds the engine
   without it, which CI lints. egui's own icon fonts are left out unless its
   `monochrome_emoji_fonts` feature is on, as the editor turns it on.
+- The `models` feature, on by default, reads model files with `gltf`, built without its default
+  features (whose `import` would bring a JPEG decoder): the engine reads buffers, data URIs and
+  PNG textures itself. Without it, `Context::load_model` doesn't exist and Luau's
+  `graphics.load_model` fails; the `meshes` example requires it.
 - `kira` is built with only the WAV and OGG Vorbis decoders. Its output, `cpal`, links against
   ALSA on Linux, so building there needs `libasound2-dev` (CI installs it).
 - `gilrs` reads gamepads through Windows Gaming Input on Windows, which hears them only while the
@@ -167,6 +173,20 @@ networking or 3D pipelines.
   `draw_billboard` add to the last one while nothing else has been drawn since
   (`Canvas::open_view`), and fail otherwise. Luau's 3D points are its native `vector`s
   (`mlua::Vector`), and views, cameras and lighting are plain tables read each call.
+- Models (`model.rs`, `model_file.rs`): a `Model` is `ModelPart`s, each a `Mesh`, a sprite or
+  none, and an `Affine3`, flattened from a glTF file's default scene by `Context::load_model`
+  and drawn with `Canvas3d::draw_model`, a draw call a part. `model_file::read` reads the file
+  without a GPU into `ModelData` (unit-tested with glTF the tests write, as JSON with base64
+  buffers, and the example props): primitives that the file's nodes share stay one mesh, a
+  material's base color factor and the vertex colors are multiplied and made sRGB into the
+  vertices' colors, missing normals are made flat, strips and fans become triangles, opaque
+  materials drop their textures' alpha, and points, lines, JPEG textures and required extensions
+  are errors saying what to export instead. Picking is by boxes, not triangles, since meshes keep
+  no vertices on the CPU: `Bounds3` (`math.rs`) from `MeshData::bounds`, kept by `Mesh` and
+  `Model`, `transformed` by an `Affine3`, and `Ray::hit_box`, the distance to where a ray enters
+  one. Luau has `graphics.load_model` (cached by path in `runtime/graphics.rs`, as textures are),
+  `graphics.draw_model` (`draw_mesh`'s options but `sprite`), `mesh:bounds()` and
+  `model:bounds()`, two vectors, and `graphics.hit_box`.
 - `src/graphics/font.rs` and `default_font.rs`: `Font` (glyphs packed into one texture, with
   their metrics) and `TextLayout`. `Font::layout` wraps text between words to a width
   (`layout_aligned` also lines its lines up by an `Align`, moving each by whole pixels), and
@@ -264,10 +284,14 @@ networking or 3D pipelines.
   with `runtime::link_library`. The engine's side of the ABI is the `HOST` table of functions.
 - `crates/wingine-abi/`: the C ABI between the engine and native libraries: `#[repr(C)]` types,
   the library's descriptor and the engine's `Host` table, versioned by `ABI_MAJOR` and
-  `ABI_MINOR`. Its crate docs give the rules both sides follow.
+  `ABI_MINOR` (0.3, which added 3D: meshes, vectors, `begin_3d`, and batched `draw_meshes` and
+  `draw_billboards` into the view begun last, whoever began it). Its crate docs give the rules
+  both sides follow.
 - `crates/wingine-native/`: the crate native libraries are written with, which wraps the ABI:
   the `Library` and `Class` traits, a `Registry` for functions, methods and hooks, argument and
-  result conversions, and `export!`. Libraries depend on it alone, never on `wingine`.
+  result conversions (`Mesh` and `Vec3` among them), the 3D calls on `Canvas` and
+  `Context::create_mesh`, and `export!`. Libraries depend on it alone, never on `wingine`.
+  Models stay out of the ABI.
 - `src/main.rs`: the `wingine` executable, which runs a Luau game: `cargo run -- examples/pong`.
 - `crates/wingine-editor/`: the editor, a library and the `wingine-editor` executable
   (`cargo run -p wingine-editor -- examples/garden`). `Editor` is a `Game` whose `gui` is the whole
@@ -414,11 +438,14 @@ networking or 3D pipelines.
   `GridMover` and lights its candles by standing on them. The map is rows of characters in
   `main.luau`; its walls are low cuboids, so the hero shows over them, on a floor built with
   `graphics.new_mesh`, and the hero and candles are billboards, the candles toward the back of
-  their tiles so the hero standing on one isn't in the same place. The camera follows the hero
-  from above and behind (`cellar.view()`), and `graphics.project` places the message over their
-  head once every candle is lit. The game's state is the global `cellar`.
-- `src/math.rs`: geometry types: `Rect`, and `Affine` and `Affine3`, 2D and 3D transforms that
-  compose with `*`.
+  their tiles so the hero standing on one isn't in the same place. Barrels, crates and a table
+  (`b`, `x` and `t` in the map) are models from its `models` folder, copies of
+  `examples/models`, which stop the hero, and the mouse names the one it points at, the nearest
+  whose box the ray under it enters (`cellar.pointed`). The camera follows the hero from above
+  and behind (`cellar.view()`), and `graphics.project` places the message over their head once
+  every candle is lit. The game's state is the global `cellar`.
+- `src/math.rs`: geometry types: `Rect`, `Affine` and `Affine3`, 2D and 3D transforms that
+  compose with `*`, and `Bounds3`, a box in 3D.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
   `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
   `Simulation`, and its events and NPC are scripted in `sprites.luau`. `pong/` is a game written
@@ -434,12 +461,21 @@ networking or 3D pipelines.
   faces and their basket in 16x16 cells, apples, and clumps of leaves, a cloud and a bush in 32x32
   cells below them, which the scenes divide with two sheets of the one image. `rpg/strides.png` is
   another copy with its people and creatures mid-stride (raised a pixel on stretched legs), the
-  frame characters show for the first half of each step. `native-particles/` is a native library,
-  a `cdylib` built as `particles`, which `tests/native.rs` builds and loads. `gui.rs` shows egui
+  frame characters show for the first half of each step. `models/` holds props made in Blender for
+  the examples, under the project's licenses: a barrel colored by its vertices, a crate showing
+  `crate.png`, and a table whose legs share a mesh, each standing on its origin, a tile being a
+  metre. `props.blend` is their source, each prop a collection whose exporter writes its `.glb`
+  beside it (File > Export All Collections); after changing it, export them again and copy them
+  to `cellar/models`. Keep the live Blender session's work safe: build or save props in a Blender
+  of their own (`blender --background --factory-startup --python ...`), and never write a
+  `.blend` from a session holding someone's unsaved work. `native-particles/` is a native library,
+  a `cdylib` built as `particles`, which `tests/native.rs` builds and loads; its sparks are
+  billboards in 3D views. `gui.rs` shows egui
   over a game: sprites bouncing about, tuned from a panel that shows a `GuiCanvas` map of them,
   and the debug window on F3. `shapes.rs` draws each kind of shape: fills, outlines, a line and
   circles. `meshes.rs` draws meshes in a 3D view at a fixed resolution, with a HUD over it: crates,
-  a post and a bouncing ball on a field it builds as a mesh of its own, and it has tests too.
+  a post and a bouncing ball on a field it builds as a mesh of its own, and the table and two
+  barrels from `models/`, and it has tests too.
 - `README.md`: the project's overview, with a screenshot of each example in `docs/screenshots/`.
   They were taken headlessly at 640x360 (768x432 for `sprites`, so its 256x144 canvas scales
   without bars, 960x720 for `shmup`, twice its canvas, and 1280x720 for the editor, with the
@@ -462,15 +498,16 @@ networking or 3D pipelines.
 - `tests/gui.rs`: tests for egui over games, through `Simulation`: clicking widgets by label,
   typing into a focused field, input egui takes not reaching the game, and the debug key.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders,
-  their saves, their 3D views, and in its `gui` module (with the `egui` feature), their interfaces, clicked by
-  label. A hash of what `exact` gives for spreads of arguments is pinned, so CI checks it's the
+  their saves, their 3D views, models and picking, and in its `gui` module (with the `egui`
+  feature), their interfaces, clicked by label. A hash of what `exact` gives for spreads of arguments is pinned, so CI checks it's the
   same on Windows and Linux.
 - `tests/scene.rs`: tests for scenes loaded to play: finding nodes, transforms, hit testing,
   anchors and stretching, tilemaps, instances and overrides, adding and removing nodes, and
   posing with clips, with files held in memory.
-- `tests/native.rs`: tests for native libraries, most of them linked into the test. One builds
-  `native-particles` with a nested `cargo build` into a target folder of its own and loads it
-  from a file.
+- `tests/native.rs`: tests for native libraries, most of them linked into the test, its probe
+  library making meshes and drawing them and billboards in views of its own and the script's. One
+  builds `native-particles` with a nested `cargo build` into a target folder of its own and loads
+  it from a file.
 - `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
   expressions such as `pong.ball.vx`, and play it with simulated keys, mouse and gamepad. One
   plays a whole match and checks a hash of it, pinned, so CI checks it's the same to the bit on
@@ -483,9 +520,9 @@ networking or 3D pipelines.
 - `tests/orchard.rs`: tests for the `orchard` example, the same way: its clips, the picker's walk
   easing in and out, catching and missing apples, the reactions, the end of the day and the
   camera's close-up, and that its scene files are in the canonical layout.
-- `tests/cellar.rs`: tests for the `cellar` example, the same way: walls stopping the hero,
-  walking through the cellar lighting every candle, what each frame draws, from its frame stats,
-  and the camera following the hero.
+- `tests/cellar.rs`: tests for the `cellar` example, the same way: walls and props stopping the
+  hero, walking through the cellar lighting every candle, what each frame draws, from its frame
+  stats, the mouse pointing at props, and the camera following the hero.
 - `tests/shmup.rs`: tests for the `shmup` example, the same way: the title menu by key and by
   mouse, its HUD's scene, the player, the bullet systems
   through `shmup.bullets`, spell cards, clearing the stage with cheats, the same seed firing the

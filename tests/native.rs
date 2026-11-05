@@ -18,7 +18,8 @@ use wingine::{
     runtime::{self, LibraryConfig, LuauGame},
 };
 use wingine_native::{
-    Call, Class, Color, Context, Library, Rect, Registry, Result, Sprite, SpriteDraw, abi,
+    Affine3, BillboardDraw, Call, Camera3d, Class, Color, Context, Library, Lighting, Mesh,
+    MeshDraw, MeshVertex, Rect, Registry, Result, Size, Sprite, SpriteDraw, Vec3, View3d, abi,
 };
 
 /// Writes a game made of `files`, each a path in the game's folder and its contents, to a fresh
@@ -162,6 +163,65 @@ impl Library for Probe {
                 ];
                 call.canvas()?.draw_sprites(&probe.white, &draws);
                 Ok(())
+            })
+            // A square a unit across facing +z, centered on its origin, colored `color`.
+            .function("square", |_, call, color: Color| {
+                let normal = Vec3::new(0.0, 0.0, 1.0);
+                let vertices = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]].map(|[x, y]| {
+                    MeshVertex {
+                        color,
+                        ..MeshVertex::new(Vec3::new(x, y, 0.0), normal)
+                    }
+                });
+                call.context()?
+                    .create_mesh(&vertices, &[0, 1, 2, 0, 2, 3])
+            })
+            .function("bad_mesh", |_, call, ()| {
+                let vertex = MeshVertex::new(Vec3::ZERO, Vec3::Y);
+                call.context()?.create_mesh(&[vertex], &[0, 1, 2])
+            })
+            .function("midpoint", |_, _, (a, b): (Vec3, Vec3)| {
+                Ok(Vec3::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0, (a.z + b.z) / 2.0))
+            })
+            // A view of the middle of the world, 2 units across, as `FLAT_VIEW` in the runtime's
+            // tests, over the whole 20x20 canvas.
+            .function("view", |_, call, ()| {
+                let camera = Camera3d::orthographic(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, 2.0);
+                let view = View3d {
+                    lighting: Lighting::UNLIT,
+                    ..View3d::new(camera, Rect::new(0.0, 0.0, 20.0, 20.0))
+                };
+                call.canvas()?.begin_3d(&view)
+            })
+            .function("bad_view", |_, call, ()| {
+                let camera = Camera3d {
+                    near: 0.0,
+                    ..Camera3d::perspective(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, 0.8)
+                };
+                let view = View3d::new(camera, Rect::new(0.0, 0.0, 20.0, 20.0));
+                call.canvas()?.begin_3d(&view)
+            })
+            // In the view begun last: `mesh` red on the left and green on the right, and a blue
+            // billboard below them, in front.
+            .function("scene", |probe, call, mesh: Mesh| {
+                let at = |x| Affine3::from_translation(Vec3::new(x, 0.0, 0.0));
+                let meshes = [
+                    MeshDraw {
+                        tint: Color::rgb(1.0, 0.0, 0.0),
+                        ..MeshDraw::new(at(-0.5))
+                    },
+                    MeshDraw {
+                        tint: Color::rgb(0.0, 1.0, 0.0),
+                        ..MeshDraw::new(at(0.5))
+                    },
+                ];
+                let billboard = BillboardDraw {
+                    tint: Color::rgb(0.0, 0.0, 1.0),
+                    ..BillboardDraw::new(Vec3::new(0.0, -1.0, 1.0), Size::new(0.4, 0.4))
+                };
+                let canvas = call.canvas()?;
+                canvas.draw_meshes(&mesh, None, &meshes)?;
+                canvas.draw_billboards(&probe.white, &[billboard])
             })
             .function("new_counter", |_, _, start: i64| Ok(Counter(start)))
             .function("total", |_, call, ()| {
@@ -377,6 +437,80 @@ fn one_call_draws_many_sprites() {
     assert_eq!(pixel(&image, 14, 8), [255, 255, 255, 255]);
     assert_eq!(pixel(&image, 10, 4), [0, 0, 0, 255]);
     assert_eq!(pixel(&image, 15, 5), [0, 0, 0, 255]);
+}
+
+#[test]
+fn libraries_make_meshes_and_draw_in_3d_views() {
+    let mut simulation = probe_game(
+        "three_d",
+        "square = probe.square('#ffffff')
+        middle = probe.midpoint(vector.zero, vector.create(2, 4, 6))
+        _, bad_mesh = pcall(probe.bad_mesh)
+        _, not_drawing = pcall(probe.scene, square)
+        mode = 'library'
+        function draw()
+            graphics.clear('#000000')
+            if mode == 'library' then
+                probe.view()
+                _, bad_view = pcall(probe.bad_view)
+                -- The bad view began nothing, so the good one is still open.
+                probe.scene(square)
+            elseif mode == 'script' then
+                graphics.begin_3d({
+                    camera = { position = vector.create(0, 0, 5), target = vector.zero, height = 2 },
+                    lighting = { color = '#000000', ambient = '#ffffff' },
+                })
+                probe.scene(square)
+            else
+                probe.scene(square)
+            end
+        end",
+    );
+    assert_eq!(eval::<u32>(&simulation, "square:triangle_count()"), 2);
+    assert_eq!(
+        eval::<(f32, f32, f32)>(&simulation, "middle.x, middle.y, middle.z"),
+        (1.0, 2.0, 3.0)
+    );
+    let bad_mesh: String = eval(&simulation, "tostring(bad_mesh)");
+    assert!(bad_mesh.contains("past the last"), "{bad_mesh}");
+    let not_drawing: String = eval(&simulation, "tostring(not_drawing)");
+    assert!(
+        not_drawing.contains("only works in `draw`"),
+        "{not_drawing}"
+    );
+
+    let picture = |simulation: &mut Simulation<LuauGame>| {
+        simulation.step();
+        assert_eq!(simulation.game().error().map(ToString::to_string), None);
+        let stats = simulation.context().frame_stats();
+        // Two squares and a billboard, each a draw call, then the pixel the hook after `draw`
+        // fills.
+        assert_eq!((stats.triangles, stats.draw_calls), (6, 4));
+        let image = simulation.screenshot().unwrap();
+        assert_eq!(pixel(&image, 5, 10), [255, 0, 0, 255], "the left square");
+        assert_eq!(pixel(&image, 15, 10), [0, 255, 0, 255], "the right square");
+        assert_eq!(pixel(&image, 10, 18), [0, 0, 255, 255], "the billboard");
+        assert_eq!(pixel(&image, 10, 2), [0, 0, 0, 255], "above them");
+    };
+    picture(&mut simulation);
+    let bad_view: String = eval(&simulation, "tostring(bad_view)");
+    assert!(bad_view.contains("near"), "{bad_view}");
+
+    // In a view the script began.
+    let scripts = simulation.game().scripts();
+    scripts.load_source("test", "mode = 'script'").unwrap();
+    picture(&mut simulation);
+
+    // With no view open.
+    let scripts = simulation.game().scripts();
+    scripts.load_source("test", "mode = 'none'").unwrap();
+    simulation.step();
+    let err = simulation
+        .game()
+        .error()
+        .expect("the game stopped")
+        .to_string();
+    assert!(err.contains("begin one first"), "{err}");
 }
 
 #[test]
@@ -757,6 +891,7 @@ fn libraries_load_from_the_games_native_folder() {
                 "main.luau",
                 "sparks = particles.new_emitter('#ffffff')
                 sparks:burst(10, 10, 12)
+                sparks:burst_3d(vector.zero, 5)
                 gone = false
                 spawn(function()
                     particles.wait_until_gone()
@@ -765,6 +900,10 @@ fn libraries_load_from_the_games_native_folder() {
                 function draw()
                     graphics.clear('#000000')
                     particles.draw()
+                    graphics.begin_3d({
+                        camera = { position = vector.create(0, 1, 5), target = vector.create(0, 1, 0) },
+                    })
+                    particles.draw_3d()
                 end",
             ),
         ],
@@ -775,12 +914,15 @@ fn libraries_load_from_the_games_native_folder() {
     fs::copy(&file, native.join(file.file_name().unwrap())).unwrap();
 
     let mut simulation = simulation(&folder);
-    assert_eq!(eval::<u32>(&simulation, "sparks:bursts()"), 1);
-    assert_eq!(eval::<usize>(&simulation, "particles.count()"), 12);
+    assert_eq!(eval::<u32>(&simulation, "sparks:bursts()"), 2);
+    assert_eq!(eval::<usize>(&simulation, "particles.count()"), 17);
     simulation.step();
     let image = simulation.screenshot().unwrap();
     let lit = image.pixels().chunks(4).filter(|p| p[0] > 0).count();
     assert!(lit > 0, "particles drawn");
+    // The sparks, a billboard and a draw call each, after the particles' quads.
+    let stats = simulation.context().frame_stats();
+    assert_eq!((stats.triangles, stats.draw_calls), (10, 1 + 5));
 
     simulation.run_for(1.0);
     assert_eq!(eval::<usize>(&simulation, "particles.count()"), 0);

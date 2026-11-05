@@ -20,6 +20,9 @@ Everything below is in the crate's root, `wingine_native`. For its full Rust doc
 - [Calls](#calls): [`Call`](#call), [converting arguments and results](#converting-arguments-and-results)
 - [The engine's services](#the-engines-services): [`Context`](#context), [`Canvas`](#canvas),
   [`Sprite`](#sprite), [`SpriteDraw`](#spritedraw), [`Color`](#color), [`Rect`](#rect)
+- [3D](#3d): [`Mesh`](#mesh), [`Vec3`](#vec3), [`Affine3`](#affine3),
+  [`MeshVertex`](#meshvertex), [`View3d`, `Camera3d` and `Lighting`](#view3d-camera3d-and-lighting),
+  [`MeshDraw`](#meshdraw), [`BillboardDraw`](#billboarddraw)
 - [Errors and logging](#errors-and-logging): [`Error`](#error-and-result), [`log`](#log)
 - [Linking a library in](#linking-a-library-in): [`library`](#library-1)
 
@@ -304,6 +307,8 @@ it, from 1.
 | `Color` | A color in any form the engine takes: a hex string, a table, or a number `0xRRGGBBAA`. |
 | `Rect` | A table `{ x, y, width, height }`. |
 | `Sprite` | A sprite, such as from `sheet:sprite`. The library gets a copy of its own. |
+| `Mesh` | A mesh, such as from `graphics.new_cube`. The library gets a handle of its own. |
+| `Vec3` | A vector, `vector.create(x, y, z)`. |
 | `Option<T>` | `nil` or a missing argument as `None`, anything else as `T`. |
 
 Objects of the library's classes are read with [`call.object`](#callobject-and-callobject_mut).
@@ -318,6 +323,8 @@ many results, or `()` for none.
 | Integers | A number. Luau numbers are 64-bit floats, so integers beyond 2^53 lose precision. |
 | `&str`, `String` | A string. |
 | `Sprite` | A sprite scripts can draw. |
+| `Mesh` | A mesh scripts can draw. |
+| `Vec3` | A vector. |
 | `Option<T>` | `nil` for `None`. |
 | A type implementing `Class` | A new object, which scripts own. |
 
@@ -368,6 +375,7 @@ functions get it from [`call.context`](#callcontext).
 | `fn released(&self, action: &str) -> bool` | Whether anything bound to `action` was released for this update. |
 | `fn mouse_position(&self) -> Option<[f32; 2]>` | The cursor's position in canvas pixels, or `None` when it's outside the window. |
 | `fn create_sprite(&mut self, width: u32, height: u32, rgba: &[u8]) -> Result<Sprite>` | Creates a sprite from `width` by `height` pixels: sRGB RGBA bytes, row by row from the top. Fails if `rgba` isn't `width * height * 4` bytes, or the size is empty or too large. |
+| `fn create_mesh(&mut self, vertices: &[MeshVertex], indices: &[u32]) -> Result<Mesh>` | Creates a [mesh](#mesh) of `vertices`, and `indices` into them counting from 0, three for each triangle, counter-clockwise seen from the side it faces, the only side that shows. Fails if the indices aren't three for each triangle or reach past the vertices. |
 
 ### `Canvas`
 
@@ -381,6 +389,9 @@ set, or canvas pixels without one.
 | `fn fill_rect(&mut self, rect: Rect, color: Color)` | Fills `rect` with `color`. |
 | `fn draw_sprite(&mut self, sprite: &Sprite, dest: Rect, tint: Color)` | Draws `sprite` stretched over `dest`, its colors multiplied by `tint`. |
 | `fn draw_sprites(&mut self, sprite: &Sprite, draws: &[SpriteDraw])` | Draws `sprite` as each of `draws` says, in order. |
+| `fn begin_3d(&mut self, view: &View3d) -> Result<()>` | Begins a [3D view](#view3d-camera3d-and-lighting) over what's been drawn, as `graphics.begin_3d` does. Fails if its camera's projection, `near` or `far` aren't ones it allows. |
+| `fn draw_meshes(&mut self, mesh: &Mesh, sprite: Option<&Sprite>, draws: &[MeshDraw]) -> Result<()>` | Draws `mesh` as each of [`draws`](#meshdraw) says, showing `sprite`, or white without one, in the 3D view begun last. |
+| `fn draw_billboards(&mut self, sprite: &Sprite, draws: &[BillboardDraw]) -> Result<()>` | Draws `sprite` standing upright as each of [`draws`](#billboarddraw) says, facing the camera, in the 3D view begun last. |
 
 `draw_sprites` draws any number of sprites for the cost of one call into the engine, so it's how
 to draw many. Keep a `Vec<SpriteDraw>` in the library's state, fill it each frame, and pass it,
@@ -452,6 +463,161 @@ pub struct Rect {
 
 A rectangle whose top-left corner is `x`, `y`, made with `Rect::new(x, y, w, h)`. In Luau, it's a
 table `{ x, y, width, height }`.
+
+## 3D
+
+Libraries draw in [3D views](graphics.md#3d-views) as scripts do. `Canvas::begin_3d` begins one,
+and `Canvas::draw_meshes` and `Canvas::draw_billboards` draw in the view begun last, whether the
+library or the script began it, so a library's function can draw into a script's view:
+
+```lua
+graphics.begin_3d(view)
+graphics.draw_mesh(floor, vector.zero)
+particles.draw_3d() -- billboards, from the library, in the same view
+```
+
+Drawing in a view when none is open, because none was begun this frame or something else has been
+drawn since, is an error. Each draw is one mesh or billboard and a draw call of its own, but a
+batch of them is one call into the engine, which is why these take slices. 3D positions are
+right-handed with `y` up, as for scripts.
+
+### `Mesh`
+
+Triangles on the GPU: the same meshes scripts hold. A library gets them as arguments from scripts,
+or creates them with [`Context::create_mesh`](#context), and returns them as results. `clone()` is
+another handle to the same triangles, and cheap.
+
+### `Vec3`
+
+```rust
+pub struct Vec3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+```
+
+A point or a direction, made with `Vec3::new(x, y, z)`, with constants `Vec3::ZERO`, `Vec3::ONE`
+and `Vec3::Y`. In Luau, it's a vector.
+
+### `Affine3`
+
+```rust
+pub struct Affine3 {
+    pub x_axis: Vec3,
+    pub y_axis: Vec3,
+    pub z_axis: Vec3,
+    pub translation: Vec3,
+}
+```
+
+A 3D transform: where it takes each unit axis, then the origin, so a point `p` goes to
+`x_axis * p.x + y_axis * p.y + z_axis * p.z + translation`. `Affine3::IDENTITY` leaves things where
+they are, `Affine3::from_translation(v)` moves them, `Affine3::from_scale(v)` scales them along
+each axis, and `Affine3::from_scale_translation(s, v)` scales them by `s`, then moves them. For a
+turn, set the axes: turning by `angle` about `y` takes `x` to `(cos, 0, -sin)` and `z` to
+`(sin, 0, cos)`.
+
+### `MeshVertex`
+
+```rust
+pub struct MeshVertex {
+    pub position: Vec3,
+    pub normal: Vec3,
+    pub u: f32,
+    pub v: f32,
+    pub color: Color,
+}
+```
+
+A corner of a mesh's triangles: where it is, which way the surface faces there for lighting (of any
+length), where on the sprite it shows (from 0 at its left and top to 1 at its right and bottom),
+and a color the sprite's colors are multiplied by there. `MeshVertex::new(position, normal)` is a
+white corner showing the sprite's top-left.
+
+### `View3d`, `Camera3d` and `Lighting`
+
+```rust
+pub struct View3d {
+    pub camera: Camera3d,
+    pub rect: Rect,
+    pub lighting: Lighting,
+}
+
+pub struct Camera3d {
+    pub position: Vec3,
+    pub target: Vec3,
+    pub up: Vec3,
+    pub projection: Projection,
+    pub fov_y: f32,
+    pub height: f32,
+    pub near: f32,
+    pub far: f32,
+}
+
+pub struct Lighting {
+    pub direction: Vec3,
+    pub color: Color,
+    pub ambient: Color,
+}
+```
+
+A view, its camera and its lighting, as the table [`graphics.begin_3d`](graphics.md#graphicsbegin_3d)
+takes. The view's `rect` is where it shows, in the coordinates drawing uses when it begins: canvas
+pixels in a hook after `draw`. `View3d::new(camera, rect)` is lit by `Lighting::DEFAULT`, the
+engine's default sun and ambient light; `Lighting::UNLIT` shows every surface as it is.
+
+A camera's `projection` is `Projection::PERSPECTIVE`, which uses `fov_y`, the angle the view takes
+in from its bottom edge to its top in radians, or `Projection::ORTHOGRAPHIC`, which uses `height`,
+how many world units the view shows from its bottom edge to its top.
+`Camera3d::perspective(position, target, fov_y)` and `Camera3d::orthographic(position, target,
+height)` make one looking from `position` at `target`, with `+y` up, seeing from 0.1 to 1000 world
+units away.
+
+### `MeshDraw`
+
+```rust
+pub struct MeshDraw {
+    pub transform: Affine3,
+    pub tint: Color,
+}
+```
+
+How [`Canvas::draw_meshes`](#canvas) draws a mesh: placed by `transform`, its colors multiplied by
+`tint`. `MeshDraw::new(transform)` is untinted.
+
+### `BillboardDraw`
+
+```rust
+pub struct BillboardDraw {
+    pub position: Vec3,
+    pub size: Size,
+    pub tint: Color,
+}
+```
+
+How [`Canvas::draw_billboards`](#canvas) draws a sprite: standing upright with the middle of its
+bottom edge at `position`, `size` world units wide and tall (`Size::new(width, height)`, a negative
+width mirroring it), turned to face the camera across the ground, its colors multiplied by `tint`.
+`BillboardDraw::new(position, size)` is untinted.
+
+```rust
+// particles.draw_3d(): each spark a small square, shrinking as it ages.
+registry.function("draw_3d", |particles, call, ()| {
+    let draws: Vec<BillboardDraw> = particles
+        .sparks
+        .iter()
+        .map(|spark| {
+            let size = 0.08 * (1.0 - spark.age / LIFETIME);
+            BillboardDraw {
+                tint: spark.color,
+                ..BillboardDraw::new(spark.position, Size::new(size, size))
+            }
+        })
+        .collect();
+    call.canvas()?.draw_billboards(&particles.white, &draws)
+});
+```
 
 ## Errors and logging
 

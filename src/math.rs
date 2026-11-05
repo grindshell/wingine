@@ -316,6 +316,73 @@ impl Mul for Affine3 {
     }
 }
 
+/// A box with its sides along the axes, from its corner `min` to its corner `max`, such as what a
+/// mesh takes up: see [`MeshData::bounds`](crate::graphics::MeshData::bounds).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bounds3 {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+
+impl Bounds3 {
+    /// The smallest box holding every one of `points`, or `None` if there are none.
+    pub fn from_points(points: impl IntoIterator<Item = [f32; 3]>) -> Option<Self> {
+        let mut points = points.into_iter();
+        let first = points.next()?;
+        Some(points.fold(Self::point(first), |bounds, point| {
+            bounds.union(Self::point(point))
+        }))
+    }
+
+    /// The box holding just `point`.
+    const fn point(point: [f32; 3]) -> Self {
+        Self {
+            min: point,
+            max: point,
+        }
+    }
+
+    /// The smallest box holding both boxes.
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            min: [0, 1, 2].map(|i| self.min[i].min(other.min[i])),
+            max: [0, 1, 2].map(|i| self.max[i].max(other.max[i])),
+        }
+    }
+
+    /// The smallest box holding this one moved by `transform`, which is larger than the box
+    /// moved when the transform turns it.
+    pub fn transformed(&self, transform: &Affine3) -> Self {
+        let [min, max] = [self.min, self.max];
+        let corners = (0..8).map(|corner| {
+            let pick = |axis: usize| {
+                if corner & (1 << axis) == 0 {
+                    min[axis]
+                } else {
+                    max[axis]
+                }
+            };
+            transform.apply([pick(0), pick(1), pick(2)])
+        });
+        Self::from_points(corners).expect("a box has corners")
+    }
+
+    /// The point halfway between its corners.
+    pub fn center(&self) -> [f32; 3] {
+        [0, 1, 2].map(|i| (self.min[i] + self.max[i]) / 2.0)
+    }
+
+    /// How wide, tall and deep it is.
+    pub fn size(&self) -> [f32; 3] {
+        sub3(self.max, self.min)
+    }
+
+    /// Whether `point` is in it, or on its surface.
+    pub fn contains(&self, point: [f32; 3]) -> bool {
+        (0..3).all(|i| self.min[i] <= point[i] && point[i] <= self.max[i])
+    }
+}
+
 /// The sine and cosine of `angle`, without calling into the math library for an angle of 0.
 fn sin_cos(angle: f32) -> (f32, f32) {
     if angle == 0.0 {
@@ -497,5 +564,38 @@ mod tests {
         assert!(rect.overlaps(&Rect::new(1.0, 1.0, 1.0, 1.0)), "inside");
         assert!(!rect.overlaps(&Rect::new(4.0, 0.0, 4.0, 4.0)), "touching");
         assert!(!rect.overlaps(&Rect::new(0.0, 5.0, 4.0, 4.0)));
+    }
+
+    #[test]
+    fn bounds_hold_every_point() {
+        let points = [[1.0, -2.0, 3.0], [-1.0, 4.0, 0.0], [0.0, 0.0, 5.0]];
+        let bounds = Bounds3::from_points(points).unwrap();
+        assert_eq!(bounds.min, [-1.0, -2.0, 0.0]);
+        assert_eq!(bounds.max, [1.0, 4.0, 5.0]);
+        assert_eq!(bounds.center(), [0.0, 1.0, 2.5]);
+        assert_eq!(bounds.size(), [2.0, 6.0, 5.0]);
+        assert!(points.iter().all(|&point| bounds.contains(point)));
+        assert!(!bounds.contains([0.0, 0.0, -0.1]));
+        assert_eq!(Bounds3::from_points([]), None);
+    }
+
+    #[test]
+    fn transformed_bounds_hold_the_moved_box() {
+        let unit = Bounds3 {
+            min: [-1.0; 3],
+            max: [1.0; 3],
+        };
+        let moved = unit.transformed(&Affine3::from_translation([10.0, 0.0, 0.0]));
+        assert_eq!(moved.min, [9.0, -1.0, -1.0]);
+        assert_eq!(moved.max, [11.0, 1.0, 1.0]);
+        // Turned an eighth of a turn about y, its corners reach out to the square root of 2.
+        let turned = unit.transformed(&Affine3::from_rotation_y(FRAC_PI_2 / 2.0));
+        let reach = 2.0f32.sqrt();
+        assert_near3(turned.min, [-reach, -1.0, -reach]);
+        assert_near3(turned.max, [reach, 1.0, reach]);
+        // Mirrored, it's the same box.
+        let mirrored = unit.transformed(&Affine3::from_scale([-2.0, 1.0, 1.0]));
+        assert_eq!(mirrored.min, [-2.0, -1.0, -1.0]);
+        assert_eq!(mirrored.max, [2.0, 1.0, 1.0]);
     }
 }

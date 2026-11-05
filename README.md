@@ -21,7 +21,8 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **3D views** among 2D drawing, from Rust or Luau: meshes lit by a sun, textured with sprites,
   and sprites standing among them as billboards, for 2.5D games, seen through a perspective or
   orthographic camera and rendered at the canvas's resolution, so they keep a pixel-art look.
-  Cubes, planes and spheres are built in, and games build their own meshes.
+  Cubes, planes and spheres are built in, games build their own meshes, models load from glTF
+  files made in tools such as Blender, and the mouse picks what it points at by boxes.
 - **Tilemaps** with layers and tilesets, culled to the view, and a **camera** that follows the
   player and stays inside the map.
 - **Scenes**: trees of sprites, rectangles, text, areas and tilemaps laid out in files of plain
@@ -245,13 +246,14 @@ that file, and their clips pose it there. When the day is over, the camera zooms
 
 [`examples/cellar`](examples/cellar) is a dark cellar in 2.5D, written entirely in Luau. The hero
 walks it tile by tile, lighting its candles by standing on them. Its walls are meshes in a
-[3D view](docs/api/graphics.md#3d-views), on a floor the game builds as a mesh of its own, and the
+[3D view](docs/api/graphics.md#3d-views), on a floor the game builds as a mesh of its own, among
+barrels, crates and a table, models made in Blender ([`examples/models`](examples/models)), and the
 hero and the candles are sprites standing among them, billboards that turn to face the camera as
 it follows the hero.
 
-![The hero after lighting every candle in the cellar](docs/screenshots/cellar.png)
+![The hero after lighting every candle in the cellar, with the mouse naming a barrel](docs/screenshots/cellar.png)
 
-Walk with the arrow keys or WASD.
+Walk with the arrow keys or WASD, and point at a prop with the mouse to name it.
 
 ### Sprites
 
@@ -276,12 +278,17 @@ drawn over them.
 ### Meshes
 
 [`examples/meshes.rs`](examples/meshes.rs) draws meshes in a 3D view: crates, a post and a
-bouncing ball on a field of grass, lit by the sun and seen through a camera circling them. The view
-renders at the canvas's 320x180 pixels, with a HUD over it and a label that follows the ball. The
-field is a mesh the example builds itself, a quad for each tile. Left and Right turn the camera
-round faster.
+bouncing ball on a field of grass, with a table and barrels loaded from model files, lit by the sun
+and seen through a camera circling them. The view renders at the canvas's 320x180 pixels, with a
+HUD over it and a label that follows the ball. The field is a mesh the example builds itself, a quad
+for each tile. Left and Right turn the camera round faster.
 
-![Crates, a post and a ball on a field of grass](docs/screenshots/meshes.png)
+![Crates, a table, barrels, a post and a ball on a field of grass](docs/screenshots/meshes.png)
+
+The models in [`examples/models`](examples/models) were made in Blender for the examples: a barrel
+colored by its vertices, a crate with a pixel-art texture, and a table whose four legs share one
+mesh. [`props.blend`](examples/models/props.blend) holds them, each a collection with an exporter
+that writes its `.glb` beside it (File > Export All Collections).
 
 ### egui
 
@@ -376,7 +383,8 @@ sparks:burst(160, 90, 24)
 A library listed as `{ name = "particles", optional = true }` loads only if it's there, so one
 game can run with it or without it.
 
-[`examples/native-particles`](examples/native-particles/src/lib.rs) is that library, and
+[`examples/native-particles`](examples/native-particles/src/lib.rs) is that library, which bursts
+sparks in 3D views too, and
 [`examples/native-danmaku`](examples/native-danmaku/src/lib.rs) runs the shmup's bullets. Unlike
 scripts, native libraries aren't sandboxed: a game that loads one runs it with the player's full
 permissions.

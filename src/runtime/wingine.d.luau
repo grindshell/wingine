@@ -203,6 +203,18 @@ end
 declare extern type Mesh with
     --- Returns how many triangles it has.
     function triangle_count(self): number
+    --- Returns the least and greatest corners of the box its vertices take up, or nothing if it
+    --- has none.
+    function bounds(self): (vector?, vector?)
+end
+
+--- Meshes placed together, each showing a sprite or none, loaded from a model file.
+declare extern type Model with
+    --- Returns how many triangles its parts have together.
+    function triangle_count(self): number
+    --- Returns the least and greatest corners of the box its parts take up, placed in it, or
+    --- nothing if they have no vertices.
+    function bounds(self): (vector?, vector?)
 end
 
 --- Sprites shown one after another at a steady pace. It doesn't keep time: games keep how long
@@ -530,6 +542,9 @@ declare graphics: {
     begin_3d: (view: View3d) -> (),
     --- Draws `mesh` in the 3D view begun last, its origin at `position`.
     draw_mesh: (mesh: Mesh, position: vector, options: MeshOptions?) -> (),
+    --- Draws `model`'s parts in the 3D view begun last, its origin at `position`, placed by
+    --- `options` as a mesh is. Its parts show their own sprites, so `options.sprite` is an error.
+    draw_model: (model: Model, position: vector, options: MeshOptions?) -> (),
     --- Draws `sprite` standing upright in the 3D view begun last, facing the camera, with the
     --- middle of its bottom edge at `position`: `height` world units tall (1 by default), and
     --- `width` wide (by default, as its shape makes it). A negative `width` mirrors it.
@@ -540,6 +555,12 @@ declare graphics: {
     --- Returns the ray into `view` through `x`, `y` on the canvas: where it starts, on the near
     --- plane, and the way it goes, of length 1.
     ray: (view: View3d, x: number, y: number) -> (vector, vector),
+    --- Returns how far along the ray from `origin` going `direction` it enters the box between
+    --- corners `min` and `max`, in lengths of `direction`: 0 if it starts inside, or nothing if
+    --- it misses.
+    hit_box: (origin: vector, direction: vector, min: vector, max: vector) -> number?,
+    --- Loads the model file at `path`, glTF 2.0 as `.glb` or `.gltf`. Each file is read once.
+    load_model: (path: string) -> Model,
     --- Returns a mesh of `data`'s triangles.
     new_mesh: (data: MeshData) -> Mesh,
     --- Returns a cube `size` along each side, centered on its origin, showing the whole sprite on

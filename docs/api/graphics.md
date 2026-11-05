@@ -21,11 +21,12 @@ functions work only in `draw`.
 - [Text](#text): [`default_font`](#graphicsdefault_font), [`Font`](#font),
   [`TextLayout`](#textlayout)
 - [3D views](#3d-views): [`begin_3d`](#graphicsbegin_3d), [`draw_mesh`](#graphicsdraw_mesh),
-  [`draw_billboard`](#graphicsdraw_billboard), [`project`](#graphicsproject),
-  [`ray`](#graphicsray)
+  [`draw_model`](#graphicsdraw_model), [`draw_billboard`](#graphicsdraw_billboard),
+  [`project`](#graphicsproject), [`ray`](#graphicsray), [`hit_box`](#graphicshit_box)
 - [Meshes](#meshes): [`new_cube`](#graphicsnew_cube), [`new_cuboid`](#graphicsnew_cuboid),
   [`new_plane`](#graphicsnew_plane), [`new_sphere`](#graphicsnew_sphere),
   [`new_mesh`](#graphicsnew_mesh), [`Mesh`](#mesh)
+- [Models](#models): [`load_model`](#graphicsload_model), [`Model`](#model)
 
 ## Drawing
 
@@ -724,6 +725,25 @@ graphics.draw_mesh(ball, vector.create(0, 1, 0), { scale = vector.create(1, 2, 1
 
 Each mesh is a draw call of its own.
 
+### `graphics.draw_model`
+
+```lua
+graphics.draw_model(model: Model, position: vector, options: MeshOptions?)
+```
+
+Draws each part of a [model](#models) in the 3D view begun last, as
+[`draw_mesh`](#graphicsdraw_mesh) would, each placed where the model file puts it, and the whole
+model placed by `position` and `options` as a mesh is. Its parts show their own sprites, so
+`options.sprite` is an error, and `options.tint` multiplies all their colors. Each part is a draw
+call of its own.
+
+```lua
+local barrel = graphics.load_model("models/barrel.glb")
+
+-- In draw, in a view: a barrel standing on the tile at column, row, turned a little.
+graphics.draw_model(barrel, vector.create(column + 0.5, 0, row + 0.5), { yaw = 0.3 })
+```
+
 ### `graphics.draw_billboard`
 
 ```lua
@@ -789,6 +809,44 @@ end
 ```
 
 Works when [`project`](#graphicsproject) does.
+
+### `graphics.hit_box`
+
+```lua
+graphics.hit_box(origin: vector, direction: vector, min: vector, max: vector): number?
+```
+
+Returns how far along the ray from `origin` going `direction` it enters the box between the
+corners `min` and `max`, in lengths of `direction`, so in world units for a ray from
+[`ray`](#graphicsray). It's 0 if the ray starts inside the box, and nothing if it misses. The
+corners can be given either way round.
+
+Picking what's under the mouse is by boxes: [`mesh:bounds`](#meshbounds) and
+[`model:bounds`](#modelbounds) give a box around what's drawn, which moves with it, and the nearest
+box the ray enters is what the mouse points at:
+
+```lua
+-- The prop under the mouse, the nearest one first, or nil.
+local function pointed_prop()
+    local x, y = input.mouse_position()
+    if x == nil or y == nil then
+        return nil
+    end
+    local origin, direction = graphics.ray(view, x, y)
+    local nearest, nearest_distance = nil, math.huge
+    for _, prop in props do
+        local low, high = prop.model:bounds()
+        local distance = graphics.hit_box(origin, direction, low + prop.position, high + prop.position)
+        if distance and distance < nearest_distance then
+            nearest, nearest_distance = prop, distance
+        end
+    end
+    return nearest
+end
+```
+
+A box only moves with what's drawn: one turned or scaled needs a box turned or scaled to match, or
+one big enough to hold it however it's turned. Works anywhere.
 
 ## Meshes
 
@@ -883,3 +941,66 @@ mesh:triangle_count(): number
 ```
 
 Returns how many triangles the mesh has.
+
+#### `mesh:bounds`
+
+```lua
+mesh:bounds(): (vector?, vector?)
+```
+
+Returns the least and greatest corners of the box the mesh's vertices take up, around its origin,
+or nothing if it has none. Add where it's drawn to place the box there, for
+[`hit_box`](#graphicshit_box).
+
+## Models
+
+A model is meshes placed together, each showing a sprite or none, loaded from a model file made in
+a 3D modelling program such as Blender. Models are drawn with [`draw_model`](#graphicsdraw_model).
+
+### `graphics.load_model`
+
+```lua
+graphics.load_model(path: string): Model
+```
+
+Loads the model file at `path`, relative to the game's folder: glTF 2.0, as a binary `.glb` or as a
+`.gltf` with the files it names beside it. Each file is read once; loading it again returns the
+same model. Works while the game loads and in `update`.
+
+The engine draws what a model looks like, not how it moves. It reads the file's default scene: its
+nodes, each placing a mesh by its transform, and their meshes' triangles, with their normals (flat
+where the file has none), first texture coordinates and first vertex colors. Of each material, it
+reads the base color and its texture, which must be a PNG; pixels of it less than half opaque
+aren't drawn, unless the material is opaque. Parts that share a mesh in the file share it on the
+GPU.
+
+What it leaves out: skins and morph targets (parts are drawn as modelled), animations, cameras,
+lights, the rest of materials, and texture transforms. A file whose meshes are points or lines, one
+with a JPEG texture, and one that needs an extension, such as Draco or meshopt compression, are
+errors, saying what to export differently.
+
+From Blender, export glTF 2.0 as a `.glb`, with the scene's units in metres, so a metre is a world
+unit, and its axes converted, as they are by default, so Blender's up is `+y`. Put each model's
+origin where it stands, such as the middle of its base. glTF's axes are the engine's: a model's
+front, toward Blender's `-y`, faces `+z`.
+
+An engine built without its `models` feature fails to load any.
+
+### `Model`
+
+#### `model:triangle_count`
+
+```lua
+model:triangle_count(): number
+```
+
+Returns how many triangles its parts have together.
+
+#### `model:bounds`
+
+```lua
+model:bounds(): (vector?, vector?)
+```
+
+Returns the least and greatest corners of the box its parts take up, placed in the model, or
+nothing if they have no vertices. A model made to stand on its origin has its box's least `y` at 0.

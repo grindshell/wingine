@@ -2195,6 +2195,131 @@ fn cameras_place_points_on_the_canvas_and_rays_into_the_world() {
     assert!(both.contains("not both"), "{both}");
 }
 
+/// Copies the example props, `table.glb` and `crate.glb` and the crate's texture, into `models`
+/// in `folder`.
+#[cfg(feature = "models")]
+fn copy_props(folder: &Path) {
+    let models = folder.join("models");
+    fs::create_dir_all(&models).unwrap();
+    for file in ["table.glb", "crate.glb", "crate.png"] {
+        let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/models");
+        fs::copy(from.join(file), models.join(file)).unwrap();
+    }
+}
+
+#[test]
+#[cfg(feature = "models")]
+fn luau_games_load_and_draw_models() {
+    let folder = game(
+        "models",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                &format!(
+                    "{FLAT_VIEW}
+                    desk = graphics.load_model('models/table.glb')
+                    box = graphics.load_model('models/crate.glb')
+                    low, high = desk:bounds()
+                    _, missing = pcall(graphics.load_model, 'models/none.glb')
+                    local texture = graphics.load_sprite_sheet('models/crate.png', 12, 12):sprite(0, 0)
+                    _, with_sprite = pcall(graphics.draw_model, box, vector.zero, {{ sprite = texture }})
+                    seen = {{}}
+                    function update()
+                        table.insert(seen, graphics.frame_stats())
+                        if reload then
+                            reload = false
+                            again = graphics.load_model('models/crate.glb')
+                        end
+                    end
+                    function draw()
+                        graphics.begin_3d(view)
+                        graphics.draw_model(desk, vector.zero, {{ tint = '#ff0000' }})
+                        graphics.draw_model(box, vector.create(0, -1, -2), {{ yaw = 0.5, scale = 0.5 }})
+                    end"
+                ),
+            ),
+        ],
+    );
+    copy_props(&folder);
+    let mut simulation = simulation(&folder);
+    simulation.run_frames(2);
+    assert_eq!(simulation.game().error().map(ToString::to_string), None);
+
+    // A top and four legs, each a box.
+    assert_eq!(eval::<u32>(&simulation, "desk:triangle_count()"), 60);
+    let bounds: [f32; 6] = eval::<(f32, f32, f32, f32, f32, f32)>(
+        &simulation,
+        "low.x, low.y, low.z, high.x, high.y, high.z",
+    )
+    .into();
+    let expected = [-0.5, 0.0, -0.3, 0.5, 0.5, 0.3];
+    assert!(
+        bounds
+            .iter()
+            .zip(expected)
+            .all(|(a, b)| (a - b).abs() < 1e-6),
+        "{bounds:?}"
+    );
+    let stats = "seen[2].triangles, seen[2].draw_calls";
+    // The table's five parts and the crate's one.
+    assert_eq!(eval::<(u32, u32)>(&simulation, stats), (72, 6));
+    let frame = simulation.screenshot().unwrap();
+    // Seen from the front, the table's top is a row of pixels from 0.4 to 0.5 up, tinted red.
+    let [r, g, b, _] = pixel(&frame, 10, 5);
+    assert!(r > 100 && g < 20 && b < 20, "{:?}", [r, g, b]);
+
+    let missing: String = eval(&simulation, "tostring(missing)");
+    assert!(missing.contains("none.glb"), "{missing}");
+    let with_sprite: String = eval(&simulation, "tostring(with_sprite)");
+    assert!(with_sprite.contains("no sprite"), "{with_sprite}");
+
+    // Gone from disk, it loads all the same.
+    fs::remove_file(folder.join("models/crate.glb")).unwrap();
+    simulation
+        .game()
+        .scripts()
+        .load_source("test", "reload = true")
+        .unwrap();
+    simulation.step();
+    assert!(simulation.game().error().is_none());
+    assert_eq!(eval::<u32>(&simulation, "again:triangle_count()"), 12);
+}
+
+#[test]
+fn rays_hit_boxes_from_luau() {
+    let folder = game(
+        "hitting_boxes",
+        &[(
+            "main.luau",
+            "local from, ahead = vector.create(0, 0, 5), vector.create(0, 0, -1)
+            low, high = graphics.new_cuboid(2, 4, 2):bounds()
+            hits = {
+                graphics.hit_box(from, ahead, low, high),
+                -- The corners either way round.
+                graphics.hit_box(from, ahead, high, low),
+                -- From inside.
+                graphics.hit_box(vector.zero, ahead, low, high),
+                -- Twice as far, in lengths of a direction half as long.
+                graphics.hit_box(from, ahead / 2, low, high),
+            }
+            miss = graphics.hit_box(vector.create(3, 0, 5), ahead, low, high)
+            empty = { graphics.new_mesh({ vertices = {}, indices = {} }):bounds() }",
+        )],
+    );
+    let simulation = simulation(&folder);
+    assert_eq!(
+        eval::<(f32, f32, f32, f32, f32, f32)>(
+            &simulation,
+            "low.x, low.y, low.z, high.x, high.y, high.z"
+        ),
+        (-1.0, -2.0, -1.0, 1.0, 2.0, 1.0)
+    );
+    assert_eq!(eval::<Vec<f32>>(&simulation, "hits"), [4.0, 4.0, 0.0, 8.0]);
+    assert!(eval::<bool>(&simulation, "miss == nil"));
+    assert_eq!(eval::<usize>(&simulation, "#empty"), 0);
+}
+
 /// Interfaces Luau games lay out in `gui(ui)`, driven by clicking their widgets by label.
 #[cfg(feature = "egui")]
 mod gui {

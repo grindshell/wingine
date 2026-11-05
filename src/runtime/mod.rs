@@ -56,9 +56,9 @@
 //! The engine's API is in eight global tables:
 //!
 //! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.color`, `graphics.default_font`,
-//! `graphics.frame_stats` and `graphics.new_animation` work anywhere, `graphics.load_sprite_sheet`
-//! and the functions that make meshes while the game loads and in `update`, and
-//! `graphics.project` and `graphics.ray` then and in `draw`.
+//! `graphics.frame_stats`, `graphics.new_animation` and `graphics.hit_box` work anywhere,
+//! `graphics.load_sprite_sheet`, `graphics.load_model` and the functions that make meshes while
+//! the game loads and in `update`, and `graphics.project` and `graphics.ray` then and in `draw`.
 //!
 //! - `graphics.clear(color)` fills the canvas with `color`, discarding anything drawn so far.
 //! - `graphics.fill_rect(x, y, width, height, color)`
@@ -122,6 +122,10 @@
 //!   at `position`, a vector, scaled by `options.scale` (a number, or a vector for each axis),
 //!   turned by `roll` about `z`, `pitch` about `x` and `yaw` about `y`, in that order, showing
 //!   `sprite` multiplied by `tint`. Drawing one with no view open is an error.
+//! - `graphics.draw_model(model, position, options)` draws each part of a model as `draw_mesh`
+//!   would, placed in the model, and the model placed by `position` and `options` as a mesh is,
+//!   all multiplied by `options.tint`. Its parts show their own sprites, so `options.sprite` is
+//!   an error.
 //! - `graphics.draw_billboard(sprite, position, tint, width, height)` draws a sprite standing
 //!   upright in the view begun last, the middle of its bottom edge at `position`, turned to face
 //!   the camera across the ground: `height` tall (1 by default) and `width` wide (by default, as
@@ -130,11 +134,21 @@
 //!   nothing if it's nearer than the near plane or beyond the far one. `graphics.ray(view, x, y)`
 //!   returns the ray through `x`, `y` into the view: its origin, on the near plane, and its
 //!   direction, of length 1.
+//! - `graphics.hit_box(origin, direction, min, max)` returns how far along the ray from `origin`
+//!   going `direction` it enters the box between the corners `min` and `max`, in lengths of
+//!   `direction` (so world units, for a ray from `graphics.ray`), 0 if it starts inside, or
+//!   nothing if it misses. With `mesh:bounds()` or `model:bounds()`, moved to where it's drawn,
+//!   it tells what's under the mouse.
 //! - `graphics.new_cube(size)`, `graphics.new_cuboid(width, height, depth)`,
 //!   `graphics.new_plane(width, depth)` and `graphics.new_sphere(radius, segments, rings)` make
 //!   meshes, and `graphics.new_mesh(data)` one of `data.vertices`, each a table of `position`
 //!   and optionally `normal`, `u`, `v` and `color`, and `data.indices`, three vertices for each
 //!   triangle, counting from 1.
+//! - `graphics.load_model(path)` loads a model file, glTF 2.0 as `.glb` or `.gltf` (with the
+//!   files it names beside it), and returns a `Model` of its default scene's meshes, with their
+//!   vertex colors, materials' base colors and PNG textures. Each file is read once; loading it
+//!   again returns the same model. See `Context::load_model` for what's read. An engine built
+//!   without its `models` feature fails to load any.
 //!
 //! `tilemap`, for building maps of tiles, anywhere:
 //!

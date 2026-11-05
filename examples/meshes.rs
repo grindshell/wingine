@@ -1,10 +1,12 @@
-//! Meshes in a 3D view: crates, a post and a bouncing ball on a field of grass, lit by the sun
-//! and seen through a camera circling them. The view renders at the canvas's 320x180 pixels, so
-//! it keeps the pixel art's look, and a 2D HUD goes over it, with a label that follows the ball.
+//! Meshes in a 3D view: crates, a post and a bouncing ball on a field of grass, with a table and
+//! barrels loaded from model files, lit by the sun and seen through a camera circling them. The
+//! view renders at the canvas's 320x180 pixels, so it keeps the pixel art's look, and a 2D HUD
+//! goes over it, with a label that follows the ball.
 //!
 //! The field is a mesh built by hand, a quad for each tile, shaded a little lighter or darker by
 //! its corners' colors. It's drawn twice: plain, as the ground, then a little above it showing the
-//! grass sprite, whose transparent background shows the ground through.
+//! grass sprite, whose transparent background shows the ground through. The table and the barrels
+//! are models made in Blender (`examples/models`), drawn a draw call for each of their parts.
 //!
 //! Left and Right (or A and D) turn the camera round faster either way. Run with
 //! `cargo run --example meshes`.
@@ -12,8 +14,8 @@
 use wingine::{
     Context, FrameStats, Game, WindowConfig,
     graphics::{
-        Camera3d, Canvas, Canvas3d, Color, Font, Mesh, MeshData, MeshVertex, Resolution, Sprite,
-        SpriteSheet, View3d,
+        Camera3d, Canvas, Canvas3d, Color, Font, Mesh, MeshData, MeshVertex, Model, Resolution,
+        Sprite, SpriteSheet, View3d,
     },
     input::Key,
     math::{Affine3, Rect},
@@ -27,6 +29,10 @@ const TILESET: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/examples/kenney_1-bit-pack_transparent-packed.png"
 );
+const TABLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/models/table.glb");
+const BARREL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/models/barrel.glb");
+/// Where the barrels stand, and how far each is turned.
+const BARRELS: [([f32; 3], f32); 2] = [([-2.6, 0.0, 0.2], 0.0), ([-3.0, 0.0, -0.6], 0.7)];
 /// How many tiles the field is across, each 1 world unit.
 const FIELD: u32 = 8;
 /// How fast the camera circles, in radians a second, and how much faster it goes turning.
@@ -45,6 +51,8 @@ struct Meshes {
     cube: Mesh,
     post: Mesh,
     ball: Mesh,
+    table: Model,
+    barrel: Model,
     grass: Sprite,
     font: Font,
     /// The camera's angle round the middle, in radians.
@@ -66,6 +74,8 @@ impl Meshes {
             cube: ctx.create_mesh(&MeshData::cube(1.0))?,
             post: ctx.create_mesh(&MeshData::cuboid([0.25, 2.0, 0.25]))?,
             ball: ctx.create_mesh(&MeshData::sphere(BALL_RADIUS, 16, 8))?,
+            table: ctx.load_model(TABLE)?,
+            barrel: ctx.load_model(BARREL)?,
             grass: sheet.sprite(5, 0),
             font: ctx.default_font().clone(),
             angle: 0.6,
@@ -98,6 +108,14 @@ impl Meshes {
         }
         let post = Affine3::from_translation([-2.0, 1.0, 1.5]);
         view.draw_mesh(&self.post, post, None, Color::rgb8(0xe0, 0xe0, 0xd8));
+
+        // The models, as they were made: a table across from the crates, and barrels by the post.
+        let table = Affine3::from_translation([2.0, 0.0, -1.6]) * Affine3::from_rotation_y(-0.4);
+        view.draw_model(&self.table, table, Color::WHITE);
+        for (position, turn) in BARRELS {
+            let barrel = Affine3::from_translation(position) * Affine3::from_rotation_y(turn);
+            view.draw_model(&self.barrel, barrel, Color::WHITE);
+        }
 
         let ball = Affine3::from_translation(self.ball_position());
         view.draw_mesh(&self.ball, ball, None, Color::rgb8(0xe0, 0x50, 0x40));
@@ -214,13 +232,29 @@ mod tests {
         let mut simulation = simulation();
         simulation.run_frames(2);
         let stats = simulation.game().stats;
+        let game = simulation.game();
         let triangles = 2 * field().triangle_count()
             + 3 * MeshData::cube(1.0).triangle_count()
             + MeshData::cuboid([0.25, 2.0, 0.25]).triangle_count()
-            + MeshData::sphere(BALL_RADIUS, 16, 8).triangle_count();
+            + MeshData::sphere(BALL_RADIUS, 16, 8).triangle_count()
+            + game.table.triangle_count() as usize
+            + BARRELS.len() * game.barrel.triangle_count() as usize;
         assert_eq!(stats.triangles as usize, triangles);
-        // Seven meshes, then the HUD: its shade, then its text.
-        assert_eq!(stats.draw_calls, 7 + 2);
+        // Seven meshes, the table's top and four legs, the two barrels, then the HUD: its shade,
+        // then its text.
+        assert_eq!(stats.draw_calls, 7 + 5 + 2 + 2);
+    }
+
+    #[test]
+    fn the_models_are_the_props_made_for_them() {
+        let simulation = simulation();
+        let game = simulation.game();
+        // A top and four legs that share a mesh, each a box.
+        assert_eq!(game.table.parts().len(), 5);
+        assert_eq!(game.table.triangle_count(), 5 * 12);
+        let bounds = game.barrel.bounds().unwrap();
+        assert_eq!(bounds.min[1], 0.0, "standing on its origin");
+        assert!((bounds.max[1] - 0.7).abs() < 1e-6);
     }
 
     #[test]

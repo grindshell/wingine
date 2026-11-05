@@ -53,12 +53,66 @@ fn the_cellar_starts_dark_with_the_hero_at_the_start() {
     assert_eq!(tile(&simulation), (5, 5));
     assert_eq!(eval::<u32>(&simulation, "#cellar.candles"), 4);
     assert_eq!(eval::<u32>(&simulation, "cellar.lit"), 0);
-    // The floor, a quad for each tile that isn't a wall, the walls and 5 billboards, then the
-    // HUD: its shade, then its text.
+    // The floor, a quad for each tile that isn't a wall, the walls, the props, and 5 billboards,
+    // then the HUD: its shade, then its text. The props are two barrels and two crates, a draw
+    // call each, and a table's top and four legs.
     let stats = simulation.context().frame_stats();
     let floor_tiles = 7 * 11 - WALLS;
-    assert_eq!(stats.draw_calls, 1 + WALLS + 5 + 2);
-    assert_eq!(stats.triangles, floor_tiles * 2 + WALLS * 12 + 5 * 2);
+    assert_eq!(eval::<u32>(&simulation, "#cellar.props"), 5);
+    let prop_triangles: u32 = eval(
+        &simulation,
+        "(function()
+            local triangles = 0
+            for _, prop in cellar.props do
+                triangles += cellar.models[prop.kind]:triangle_count()
+            end
+            return triangles
+        end)()",
+    );
+    assert_eq!(stats.draw_calls, 1 + WALLS + 4 + 5 + 5 + 2);
+    assert_eq!(
+        stats.triangles,
+        floor_tiles * 2 + WALLS * 12 + prop_triangles + 5 * 2
+    );
+}
+
+#[test]
+fn props_stop_the_hero() {
+    let mut simulation = simulation();
+    // Up the right-hand side to the crate's row, then left into it.
+    walk(&mut simulation, &[Key::Right; 4]);
+    walk(&mut simulation, &[Key::Up, Key::Up, Key::Left]);
+    assert_eq!(tile(&simulation), (9, 3), "the crate");
+    walk(&mut simulation, &[Key::Up, Key::Left]);
+    assert_eq!(tile(&simulation), (9, 2), "the table");
+}
+
+#[test]
+fn the_mouse_points_at_props() {
+    let mut simulation = simulation();
+    simulation.run_frames(1);
+    assert!(eval::<bool>(&simulation, "cellar.pointed == nil"));
+    // Where the middle of the crate east of the start shows.
+    let (x, y): (f32, f32) = eval(
+        &simulation,
+        "graphics.project(
+            { camera = cellar.view().camera, rect = { x = 0, y = 0, width = 320, height = 180 } },
+            vector.create(8.5, 0.375, 3.5)
+        )",
+    );
+    simulation.move_mouse(x, y);
+    simulation.run_frames(2);
+    assert_eq!(eval::<String>(&simulation, "cellar.pointed.kind"), "crate");
+    // Its name is drawn over it: a quad for each letter, after the HUD's.
+    let glyphs = |text: &str| text.chars().filter(|c| *c != ' ').count() as u32;
+    let hud = 1 + glyphs("Candles lit: 0/4");
+    let quads = simulation.context().frame_stats().quads;
+    assert_eq!(quads, hud + glyphs("crate"));
+
+    // Off every prop, it points at none.
+    simulation.move_mouse(160.0, 90.0);
+    simulation.run_frames(1);
+    assert!(eval::<bool>(&simulation, "cellar.pointed == nil"));
 }
 
 #[test]

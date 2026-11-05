@@ -61,6 +61,9 @@ pub enum Error {
     /// A mesh's data couldn't be drawn.
     #[error("invalid mesh: {0}")]
     Mesh(String),
+    /// A model file couldn't be read, or what it holds couldn't be drawn.
+    #[error("model {}: {message}", .path.display())]
+    Model { path: PathBuf, message: String },
     #[error("failed to read a rendered frame back from the GPU: {0}")]
     ReadFrame(#[source] BoxedError),
     /// A Luau script failed to compile or raised an error.

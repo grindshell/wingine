@@ -9,6 +9,9 @@ mod default_font;
 mod font;
 pub(crate) mod gpu;
 mod mesh;
+mod model;
+#[cfg(feature = "models")]
+pub(crate) mod model_file;
 pub(crate) mod renderer;
 pub(crate) mod screen;
 mod sprite;
@@ -23,6 +26,7 @@ pub use canvas::Canvas;
 pub use color::Color;
 pub use font::{Align, Font, TextLayout};
 pub use mesh::{Mesh, MeshData, MeshVertex};
+pub use model::{Model, ModelPart};
 pub use screen::Resolution;
 pub use sprite::{Sprite, SpriteSheet};
 pub use texture::Texture;

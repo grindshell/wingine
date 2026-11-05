@@ -69,7 +69,9 @@
 //!   vectors, and the rest optional, `fov` (radians, for perspective, 0.8 by default) and
 //!   `height` (world units, for none) being the projection, one or the other. [`Lighting`] is a
 //!   table `{ direction, color, ambient }`, any of them left out keeping its default. A [`Mesh`]
-//!   is userdata with `mesh:triangle_count()`.
+//!   is userdata with `mesh:triangle_count()` and `mesh:bounds()`, the least and greatest
+//!   corners of the box its vertices take up, as vectors, or nothing if it has none. A [`Model`]
+//!   is userdata with the same methods, its box holding its parts placed in it.
 //! - A [`Tileset`] is userdata with `tileset:add(tile)`, which adds a kind of tile and returns
 //!   its ID, a number. A [`Tile`] is a table `{ sprite, tint, solid }`, where `tint` defaults to
 //!   white and `solid` to false.
@@ -144,12 +146,12 @@ use crate::{
     Error, Result,
     audio::{PlaySettings, Sound},
     graphics::{
-        Animation, Camera3d, Color, Font, Lighting, Mesh, Projection, Sprite, SpriteSheet,
+        Animation, Camera3d, Color, Font, Lighting, Mesh, Model, Projection, Sprite, SpriteSheet,
         TextLayout,
     },
     grid::{Direction, GridMover},
     input::{Control, GamepadButton, Key, MouseButton},
-    math::Rect,
+    math::{Bounds3, Rect},
     scene::{
         AreaNode, Clip, Kind, NodeId, Props, RectNode, Scene, SpriteNode, TextNode, TilemapNode,
         Value, a_node_of,
@@ -683,6 +685,23 @@ impl mlua::UserData for Animation {
 impl mlua::UserData for Mesh {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("triangle_count", |_, mesh, ()| Ok(mesh.triangle_count()));
+        methods.add_method("bounds", |_, mesh, ()| Ok(corners(mesh.bounds())));
+    }
+}
+
+impl mlua::UserData for Model {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("triangle_count", |_, model, ()| Ok(model.triangle_count()));
+        methods.add_method("bounds", |_, model, ()| Ok(corners(model.bounds())));
+    }
+}
+
+/// A box's least and greatest corners, as vectors, or nothing for none.
+fn corners(bounds: Option<Bounds3>) -> (Option<mlua::Vector>, Option<mlua::Vector>) {
+    let vector = |[x, y, z]: [f32; 3]| mlua::Vector::new(x, y, z);
+    match bounds {
+        Some(bounds) => (Some(vector(bounds.min)), Some(vector(bounds.max))),
+        None => (None, None),
     }
 }
 
@@ -705,21 +724,10 @@ impl FromLua for Camera3d {
                 let message = "a camera has a fov, for perspective, or a height, not both";
                 return Err(mlua::Error::runtime(message));
             }
-            (_, Some(height)) => {
-                if !(height > 0.0 && height.is_finite()) {
-                    let message = format!("a camera's height must be above 0, not {height}");
-                    return Err(mlua::Error::runtime(message));
-                }
-                Projection::Orthographic { height }
-            }
-            (fov, None) => {
-                let fov_y = fov.unwrap_or(DEFAULT_FOV);
-                if !(fov_y > 0.0 && fov_y < std::f32::consts::PI) {
-                    let message = format!("a camera's fov must be between 0 and pi, not {fov_y}");
-                    return Err(mlua::Error::runtime(message));
-                }
-                Projection::Perspective { fov_y }
-            }
+            (_, Some(height)) => Projection::Orthographic { height },
+            (fov, None) => Projection::Perspective {
+                fov_y: fov.unwrap_or(DEFAULT_FOV),
+            },
         };
         let mut camera = Camera3d {
             projection,
@@ -730,14 +738,10 @@ impl FromLua for Camera3d {
         }
         camera.near = table.get::<Option<f32>>("near")?.unwrap_or(camera.near);
         camera.far = table.get::<Option<f32>>("far")?.unwrap_or(camera.far);
-        if !(camera.near > 0.0 && camera.far > camera.near && camera.far.is_finite()) {
-            let message = format!(
-                "a camera's near must be above 0 and its far above that, not {} and {}",
-                camera.near, camera.far
-            );
-            return Err(mlua::Error::runtime(message));
+        match camera.problem() {
+            Some(problem) => Err(mlua::Error::runtime(problem)),
+            None => Ok(camera),
         }
-        Ok(camera)
     }
 }
 

@@ -8,6 +8,11 @@ use crate::{
     input::Input,
     save::Saves,
 };
+#[cfg(feature = "models")]
+use crate::{
+    graphics::{Model, ModelPart, Sprite, model_file},
+    math::Rect,
+};
 
 /// Engine services available to a game: input, audio, saves, the canvas size, the built-in font,
 /// asset loading, and how long frames take.
@@ -171,5 +176,60 @@ impl Context {
             image.height(),
             image.as_raw(),
         ))
+    }
+
+    /// Loads a model file, glTF 2.0 as `.glb` or `.gltf`, with the files it names beside it, for
+    /// drawing with [`Canvas3d::draw_model`](crate::graphics::Canvas3d::draw_model).
+    ///
+    /// It's what the default scene's nodes place: their meshes' triangles, with their normals
+    /// (flat where the file has none), first texture coordinates and vertex colors, and each
+    /// material's base color and its texture, which must be a PNG. A material's alpha cuts out
+    /// what's less than half opaque, as meshes do, unless it's opaque, when its alpha is ignored.
+    /// Skins, morph targets, animations, cameras, lights and the rest of materials are left out,
+    /// and files that need an extension are refused.
+    #[cfg(feature = "models")]
+    pub fn load_model(&mut self, path: impl AsRef<Path>) -> Result<Model> {
+        let path = path.as_ref();
+        let bytes = std::fs::read(path).map_err(|source| Error::ReadFile {
+            path: path.to_owned(),
+            source,
+        })?;
+        let error = |message: String| Error::Model {
+            path: path.to_owned(),
+            message,
+        };
+        let folder = path.parent().unwrap_or(Path::new(""));
+        let data = model_file::read(&bytes, folder).map_err(error)?;
+        let meshes = data
+            .meshes
+            .iter()
+            .map(|mesh| Mesh::new(&self.gpu.device, mesh))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(error)?;
+        let sprites: Vec<Sprite> = data
+            .images
+            .iter()
+            .map(|image| {
+                let [width, height] = [image.width(), image.height()];
+                let texture = self.renderer.create_texture(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    width,
+                    height,
+                    image.as_raw(),
+                );
+                Sprite::new(texture, Rect::new(0.0, 0.0, width as f32, height as f32))
+            })
+            .collect();
+        let parts = data
+            .parts
+            .iter()
+            .map(|part| ModelPart {
+                mesh: meshes[part.mesh].clone(),
+                sprite: part.image.map(|image| sprites[image].clone()),
+                transform: part.transform,
+            })
+            .collect();
+        Ok(Model::new(parts))
     }
 }

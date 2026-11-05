@@ -8,7 +8,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use super::Color;
-use crate::math::{add3, scale3};
+use crate::math::{Bounds3, add3, scale3};
 
 /// A corner of a mesh's triangles.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -141,6 +141,11 @@ impl MeshData {
         self.indices.len() / 3
     }
 
+    /// The box its vertices take up, or `None` if it has none.
+    pub fn bounds(&self) -> Option<Bounds3> {
+        Bounds3::from_points(self.vertices.iter().map(|vertex| vertex.position))
+    }
+
     /// The quad billboards are drawn as: 1 wide and 1 tall, facing `+z`, with the middle of its
     /// bottom edge at the origin.
     pub(crate) fn billboard() -> Self {
@@ -215,6 +220,7 @@ struct MeshInner {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+    bounds: Option<Bounds3>,
 }
 
 impl Mesh {
@@ -252,6 +258,7 @@ impl Mesh {
                     wgpu::BufferUsages::INDEX,
                 ),
                 index_count: data.indices.len() as u32,
+                bounds: data.bounds(),
             }),
         })
     }
@@ -259,6 +266,12 @@ impl Mesh {
     /// How many triangles there are.
     pub fn triangle_count(&self) -> u32 {
         self.inner.index_count / 3
+    }
+
+    /// The box its vertices take up, kept from the data it was made from, or `None` if it has
+    /// none.
+    pub fn bounds(&self) -> Option<Bounds3> {
+        self.inner.bounds
     }
 
     pub(crate) fn index_count(&self) -> u32 {
@@ -390,5 +403,15 @@ mod tests {
         mesh.indices[5] = 24;
         assert!(mesh.problem().unwrap().contains("index 24"));
         assert_eq!(MeshData::default().problem(), None);
+    }
+
+    #[test]
+    fn bounds_hold_the_vertices() {
+        let bounds = MeshData::cuboid([2.0, 4.0, 6.0]).bounds().unwrap();
+        assert_eq!(bounds.min, [-1.0, -2.0, -3.0]);
+        assert_eq!(bounds.max, [1.0, 2.0, 3.0]);
+        let flat = MeshData::plane([4.0, 2.0]).bounds().unwrap();
+        assert_eq!(flat.size(), [4.0, 0.0, 2.0]);
+        assert_eq!(MeshData::default().bounds(), None);
     }
 }

@@ -968,6 +968,48 @@ fn meshes_textured() {
     assert_screenshot_allowing(&headless.adapter_name(), "meshes_textured", frame, 16);
 }
 
+/// The example props, models made in Blender: a barrel colored by its vertices, a crate showing
+/// its texture, and a table whose legs, one mesh placed four times by the file's nodes, hold up
+/// its top, turned and tinted as a whole. A few pixels may differ, as for `meshes_textured`.
+#[test]
+#[cfg(feature = "models")]
+fn models_draw_their_parts() {
+    let models = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/models");
+    let mut headless = headless();
+    let ctx = headless.context();
+    let barrel = ctx.load_model(format!("{models}/barrel.glb")).unwrap();
+    let crate_ = ctx.load_model(format!("{models}/crate.glb")).unwrap();
+    let table = ctx.load_model(format!("{models}/table.glb")).unwrap();
+    let ground = ctx.create_mesh(&MeshData::plane([5.0, 3.0])).unwrap();
+    let frame = headless
+        .render(128, 96, |canvas| {
+            canvas.clear(Color::rgb8(0x10, 0x10, 0x18));
+            let camera = Camera3d::perspective([0.52, 2.13, 3.07], [0.0, 0.3, 0.0], 0.8);
+            let rect = Rect::new(0.0, 0.0, 128.0, 96.0);
+            let mut view = canvas.begin_3d(View3d::new(camera, rect));
+            view.draw_mesh(
+                &ground,
+                Affine3::IDENTITY,
+                None,
+                Color::rgb8(0x4a, 0x40, 0x38),
+            );
+            let at = |x, z, turn| {
+                Affine3::from_translation([x, 0.0, z]) * Affine3::from_rotation_y(turn)
+            };
+            view.draw_model(&barrel, at(-1.2, 0.1, 0.3), Color::WHITE);
+            view.draw_model(&crate_, at(-0.1, -0.3, 0.2), Color::WHITE);
+            let pale = Color::rgb8(0xe0, 0xd0, 0xc0);
+            view.draw_model(&table, at(1.15, 0.2, -0.5), pale);
+        })
+        .unwrap();
+    assert_screenshot_allowing(
+        &headless.adapter_name(),
+        "models_draw_their_parts",
+        frame,
+        16,
+    );
+}
+
 /// Sprites standing upright on the ground of a 3D view seen from above at an angle, each facing
 /// the camera: a hero in front of a crate, a tree behind it and partly hidden, and the hero
 /// mirrored by a negative width. They're lit as the ground is, so the white hero shows as bright

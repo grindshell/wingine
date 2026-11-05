@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use bytemuck::{Pod, Zeroable};
 
-use super::{Camera3d, Canvas, Color, Mesh, Sprite, Texture};
+use super::{Camera3d, Canvas, Color, Mesh, Model, Sprite, Texture};
 use crate::math::{Affine3, Rect, scale3};
 
 /// What a 3D view shows, where on the canvas, and how it's lit: see [`Canvas::begin_3d`].
@@ -82,6 +82,15 @@ impl Canvas3d<'_> {
         if mesh.index_count() > 0 {
             let normal = transform.normal_matrix();
             self.push(Some(mesh), transform, normal, sprite, tint);
+        }
+    }
+
+    /// Draws each part of `model` as [`draw_mesh`](Self::draw_mesh) would, placed in the model,
+    /// and the model placed by `transform`, all multiplied by `tint`: a draw call for each part.
+    pub fn draw_model(&mut self, model: &Model, transform: Affine3, tint: Color) {
+        for part in model.parts() {
+            let placed = transform * part.transform;
+            self.draw_mesh(&part.mesh, placed, part.sprite.as_ref(), tint);
         }
     }
 
