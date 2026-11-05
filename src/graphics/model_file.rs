@@ -276,8 +276,8 @@ fn mesh_data(primitive: &::gltf::Primitive, buffers: &[Vec<u8>]) -> Result<MeshD
         // their own, facing as it does.
         None => {
             let mut data = MeshData::default();
-            for triangle in triangles.chunks_exact(3) {
-                let [a, b, c] = [0, 1, 2].map(|k| positions[triangle[k] as usize]);
+            for triangle in triangles.as_chunks::<3>().0 {
+                let [a, b, c] = triangle.map(|index| positions[index as usize]);
                 let normal = normalize3(cross3(sub3(b, a), sub3(c, a))).unwrap_or([0.0; 3]);
                 for &index in triangle {
                     data.indices.push(data.vertices.len() as u32);
