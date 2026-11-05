@@ -15,7 +15,7 @@ use wingine::{
     headless::{Headless, Simulation},
     input::{Key, MouseButton},
     scene::{
-        Assets, Clip, Interpolation, KeyValue, Keys, Kind, KindDef, MeshDef, Placement3, Property,
+        Assets, Clip, Interpolation, KeyValue, Keys, KindDef, MeshDef, Placement3, Property,
         SceneFile, Shape, TileLayerDef, Value,
     },
 };
@@ -683,15 +683,10 @@ fn world_to_window(simulation: &Simulation<Editor>, view: &str, point: [f32; 3])
     let id = document
         .live_node(&edit::path_of(document.file(), view))
         .unwrap();
-    let Kind::View3d(shown) = scene.node(id).kind() else {
-        panic!("`{view}` is a 3D view");
-    };
-    let rect = scene.bounds(id).unwrap();
-    let [x, y] = shown.camera.project(point, [rect.w, rect.h]).unwrap();
-    simulation
-        .game()
-        .scene_to_window([rect.x + x, rect.y + y])
-        .unwrap()
+    let at = scene
+        .project(id, point)
+        .expect("the point shows in the view");
+    simulation.game().scene_to_window(at).unwrap()
 }
 
 /// Types `text` into the number field named `name` in the Inspector, the one after its label.

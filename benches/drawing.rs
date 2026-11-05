@@ -2,16 +2,16 @@
 //! `cargo bench`.
 //!
 //! Each case draws [`SPRITES`] sprites a frame in a [`Simulation`], and reports the median time
-//! `draw` took over [`FRAMES`] frames, per sprite, from the frame stats. A last case renders the
-//! frames too, for what rendering that many quads costs.
+//! `draw` took over [`FRAMES`] frames, per sprite, from the frame stats. The last cases render the
+//! frames too, for what rendering that many quads, billboards and meshes costs.
 
 use std::{fs, path::PathBuf};
 
 use wingine::{
     Context, FrameStats, Game, WindowConfig,
-    graphics::{Canvas, Color, Sprite},
+    graphics::{Camera3d, Canvas, Color, Mesh, MeshData, Sprite, View3d},
     headless::Simulation,
-    math::Rect,
+    math::{Affine3, Rect},
     runtime::{self, LuauGame},
 };
 use wingine_native as native;
@@ -137,17 +137,25 @@ fn main() {
         luau("luau-bullets", MOVE_BULLETS.into()),
     );
 
-    let mut simulation =
-        Simulation::new(&config(), |ctx| RustGame::load(ctx, &image, Shape::Sprite)).unwrap();
-    simulation.set_render_every_frame(true);
-    let render = median(&mut simulation, |stats| stats.render);
-    let frame = median(&mut simulation, |stats| stats.frame);
-    println!(
-        "Rendering {SPRITES} sprites: {:.3} ms on the CPU, {:.3} ms for the whole frame waiting \
-         for the GPU",
-        render * 1000.0,
-        frame * 1000.0
-    );
+    for (what, shape) in [
+        ("sprites", Shape::Sprite),
+        ("billboards in a 3D view", Shape::Billboard),
+        ("cubes in a 3D view", Shape::Cube),
+    ] {
+        let mut simulation =
+            Simulation::new(&config(), |ctx| RustGame::load(ctx, &image, shape)).unwrap();
+        simulation.set_render_every_frame(true);
+        let draw = draw_time(&mut simulation);
+        let render = median(&mut simulation, |stats| stats.render);
+        let frame = median(&mut simulation, |stats| stats.frame);
+        println!(
+            "Rendering {SPRITES} {what}: {:.3} ms drawing, {:.3} ms rendering on the CPU, \
+             {:.3} ms for the whole frame waiting for the GPU",
+            draw * 1000.0,
+            render * 1000.0,
+            frame * 1000.0
+        );
+    }
     if cfg!(debug_assertions) {
         println!("(a debug build: run `cargo bench` for one built for speed)");
     }
@@ -240,24 +248,53 @@ enum Shape {
     Rotated,
     /// A rectangle the sprite's size.
     Rect,
+    /// The sprite standing in a 3D view, as particles do.
+    Billboard,
+    /// A cube showing the sprite in a 3D view.
+    Cube,
 }
 
 /// Draws [`SPRITES`] shapes.
 struct RustGame {
     sprite: Sprite,
+    cube: Mesh,
     shape: Shape,
 }
 
 impl RustGame {
     fn load(ctx: &mut Context, image: &std::path::Path, shape: Shape) -> wingine::Result<Self> {
         let sprite = ctx.load_texture(image)?.sprite();
-        Ok(Self { sprite, shape })
+        let cube = ctx.create_mesh(&MeshData::cube(0.5))?;
+        Ok(Self {
+            sprite,
+            cube,
+            shape,
+        })
     }
 }
 
 impl Game for RustGame {
     fn draw(&mut self, canvas: &mut Canvas) {
         let tint = Color::rgb8(0xff, 0x80, 0x40);
+        if let Shape::Billboard | Shape::Cube = self.shape {
+            // A grid on the ground, 100 by 100, seen from above at an angle.
+            let camera = Camera3d::perspective([50.0, 60.0, 130.0], [50.0, 0.0, 50.0], 0.8);
+            let view = View3d::new(camera, Rect::new(0.0, 0.0, 320.0, 180.0));
+            let mut world = canvas.begin_3d(view);
+            for i in 0..SPRITES {
+                let at = [(i % 100) as f32, 0.0, (i / 100) as f32];
+                match self.shape {
+                    Shape::Billboard => {
+                        world.draw_billboard(&self.sprite, at, [0.8, 0.8], Color::WHITE);
+                    }
+                    _ => {
+                        let placed = Affine3::from_translation(at);
+                        world.draw_mesh(&self.cube, placed, Some(&self.sprite), tint);
+                    }
+                }
+            }
+            return;
+        }
         for i in 0..SPRITES {
             let [x, y] = position(i);
             let dest = Rect::new(x, y, SIZE as f32, SIZE as f32);
@@ -267,6 +304,7 @@ impl Game for RustGame {
                     canvas.draw_sprite_rotated(&self.sprite, dest, ANGLE, Color::WHITE)
                 }
                 Shape::Rect => canvas.fill_rect(dest, tint),
+                Shape::Billboard | Shape::Cube => unreachable!("drawn in a view above"),
             }
         }
     }

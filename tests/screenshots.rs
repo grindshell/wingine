@@ -20,7 +20,7 @@ use wingine::{
     },
     headless::{Headless, Image},
     math::{Affine, Affine3, Rect},
-    scene::{Assets, Scene, SceneFile, TilesetFile},
+    scene::{Assets, Scene, SceneFile, Shape, TilesetFile},
     tilemap::{Tile, Tilemap, Tileset},
 };
 
@@ -605,8 +605,8 @@ fn load_scene(headless: &mut Headless, files: &[(&'static str, &'static str)]) -
         fn model(&mut self, path: &str) -> wingine::Result<Model> {
             wingine::scene::load_model(self.ctx, &Path::new(EXAMPLES).join(path))
         }
-        fn mesh(&mut self, data: &MeshData) -> wingine::Result<Mesh> {
-            self.ctx.create_mesh(data)
+        fn mesh(&mut self, shape: &Shape) -> wingine::Result<Mesh> {
+            self.ctx.create_mesh(&shape.mesh_data())
         }
     }
     let ctx = headless.context();

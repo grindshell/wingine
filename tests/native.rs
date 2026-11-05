@@ -483,9 +483,9 @@ fn libraries_make_meshes_and_draw_in_3d_views() {
         simulation.step();
         assert_eq!(simulation.game().error().map(ToString::to_string), None);
         let stats = simulation.context().frame_stats();
-        // Two squares and a billboard, each a draw call, then the pixel the hook after `draw`
-        // fills.
-        assert_eq!((stats.triangles, stats.draw_calls), (6, 4));
+        // Two squares, of one mesh, in a draw call, and a billboard, then the pixel the hook
+        // after `draw` fills.
+        assert_eq!((stats.triangles, stats.draw_calls), (6, 3));
         let image = simulation.screenshot().unwrap();
         assert_eq!(pixel(&image, 5, 10), [255, 0, 0, 255], "the left square");
         assert_eq!(pixel(&image, 15, 10), [0, 255, 0, 255], "the right square");
@@ -920,9 +920,9 @@ fn libraries_load_from_the_games_native_folder() {
     let image = simulation.screenshot().unwrap();
     let lit = image.pixels().chunks(4).filter(|p| p[0] > 0).count();
     assert!(lit > 0, "particles drawn");
-    // The sparks, a billboard and a draw call each, after the particles' quads.
+    // The sparks, a billboard each, all in one draw call, after the particles' quads.
     let stats = simulation.context().frame_stats();
-    assert_eq!((stats.triangles, stats.draw_calls), (10, 1 + 5));
+    assert_eq!((stats.triangles, stats.draw_calls), (10, 1 + 1));
 
     simulation.run_for(1.0);
     assert_eq!(eval::<usize>(&simulation, "particles.count()"), 0);

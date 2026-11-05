@@ -19,7 +19,7 @@ use std::f32::consts::PI;
 
 use wingine::{
     Context,
-    graphics::{Camera, Camera3d, Canvas, Ray},
+    graphics::{Camera, Canvas, View3d},
     gui::{GuiCanvas, egui},
     math::{Affine, Affine3, Rect},
     scene::{Kind, KindDef, NodeDef, NodeId, Scene},
@@ -237,9 +237,8 @@ struct Drag {
 
 /// Moving a node placed in 3D: across the ground at its height, or up and down.
 struct Drag3d {
-    /// Its view's camera, and where the view is in the scene.
-    camera: Camera3d,
-    view: Rect,
+    /// Its view, where it is in the scene.
+    view: View3d,
     /// Its origin in the view's world.
     origin: [f32; 3],
     /// Which way the plane it moves up and down in faces: toward the camera, across the ground.
@@ -253,16 +252,10 @@ struct Drag3d {
 }
 
 impl Drag3d {
-    /// The ray through `point` of the scene, in the view's world.
-    fn ray(&self, [x, y]: [f32; 2]) -> Ray {
-        let rect = self.view;
-        self.camera.ray([x - rect.x, y - rect.y], [rect.w, rect.h])
-    }
-
     /// How far the node moves in the world, in its parent's directions, for the pointer at `now`:
-    /// across the ground, or if `upright`, up and down.
+    /// across the ground, or if `upright`, up and down. The pointer may leave the view.
     fn moved(&self, now: [f32; 2], upright: bool) -> Option<[f32; 3]> {
-        let ray = self.ray(now);
+        let ray = self.view.ray(now);
         let world = if upright {
             let hit = ray.hit_plane(self.origin, self.facing)?;
             [0.0, hit[1] - self.upright?[1], 0.0]
@@ -1253,7 +1246,7 @@ impl Viewport {
             return;
         }
         let transform = scene.transform(id);
-        if let Some((placement, rect)) = placement(scene, id) {
+        if let Some((placement, rect)) = scene.placement(id) {
             let corners = placement
                 .corners(rect)
                 .map(|corner| map.to_screen(corner))
@@ -1330,7 +1323,7 @@ impl Viewport {
         id: NodeId,
     ) {
         let stroke = egui::Stroke::new(1.5, theme::ACCENT);
-        let shown = |point: [f32; 3]| project(scene, view, point).map(|at| map.to_screen(at));
+        let shown = |point: [f32; 3]| scene.project(view, point).map(|at| map.to_screen(at));
         if let Some(bounds) = scene.bounds_3d(id) {
             let corner = |i: usize| {
                 [0, 1, 2].map(|axis| {
@@ -1431,23 +1424,6 @@ fn draw(
     if let Some(scene) = &mut document.preview {
         scene.draw_with_size(canvas, canvas_size);
     }
-}
-
-/// Where the node shows what it shows, and the rectangle it covers in its own coordinates.
-/// Text and tilemaps only move with their node.
-fn placement(scene: &Scene, id: NodeId) -> Option<(Affine, Rect)> {
-    let rect = scene.rect(id)?;
-    let transform = scene.transform(id);
-    let only_moves = matches!(
-        scene.node(id).kind(),
-        Kind::Text(_) | Kind::Tilemap(_) | Kind::TileLayer(_) | Kind::View3d(_)
-    );
-    let transform = if only_moves {
-        Affine::from_translation(transform.translation)
-    } else {
-        transform
-    };
-    Some((transform, rect))
 }
 
 /// Whether `id` and every node it's inside are visible.
@@ -1777,10 +1753,7 @@ fn start_drag(document: &Document, tool: Tool, path: NodePath, from: [f32; 2]) -
 
 /// Moving `id`, a node in the 3D view `view`, with the pointer at `from` in the scene.
 fn start_drag_3d(scene: &Scene, view: NodeId, id: NodeId, from: [f32; 2]) -> Option<Drag3d> {
-    let Kind::View3d(shown) = scene.node(view).kind() else {
-        return None;
-    };
-    let rect = scene.bounds(view)?;
+    let view = scene.view(view)?;
     let origin = scene.transform_3d(id)?.translation;
     let parent = scene
         .node(id)
@@ -1788,8 +1761,7 @@ fn start_drag_3d(scene: &Scene, view: NodeId, id: NodeId, from: [f32; 2]) -> Opt
         .and_then(|parent| scene.transform_3d(parent))
         .unwrap_or(Affine3::IDENTITY);
     let mut drag = Drag3d {
-        camera: shown.camera,
-        view: rect,
+        view,
         origin,
         facing: [0.0, 0.0, 1.0],
         across: None,
@@ -1801,7 +1773,7 @@ fn start_drag_3d(scene: &Scene, view: NodeId, id: NodeId, from: [f32; 2]) -> Opt
         .inverse()
         .unwrap_or(Affine3::IDENTITY),
     };
-    let ray = drag.ray(from);
+    let ray = drag.view.ray(from);
     // Upright, facing back along the ray, across the ground.
     let [x, _, z] = ray.direction;
     let length = x.hypot(z);
@@ -1855,22 +1827,8 @@ fn ground_under(document: &Document, point: [f32; 2]) -> Option<(NodePath, [f32;
 /// Where the origin of `id`, a node in a 3D view, shows in the scene, if it's in front of the
 /// view's camera.
 fn origin_3d(scene: &Scene, id: NodeId) -> Option<[f32; 2]> {
-    project(
-        scene,
-        scene.view_of(id)?,
-        scene.transform_3d(id)?.translation,
-    )
-}
-
-/// Where `point` in the world of the 3D view `view` shows in the scene, if it's in front of the
-/// camera.
-fn project(scene: &Scene, view: NodeId, point: [f32; 3]) -> Option<[f32; 2]> {
-    let Kind::View3d(shown) = scene.node(view).kind() else {
-        return None;
-    };
-    let rect = scene.bounds(view)?;
-    let [x, y] = shown.camera.project(point, [rect.w, rect.h])?;
-    Some([rect.x + x, rect.y + y])
+    let origin = scene.transform_3d(id)?.translation;
+    scene.project(scene.view_of(id)?, origin)
 }
 
 #[cfg(test)]

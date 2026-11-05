@@ -284,6 +284,11 @@ impl Mesh {
         self.inner.index_count
     }
 
+    /// Whether both handles refer to the same mesh on the GPU.
+    pub(crate) fn same_as(&self, other: &Mesh) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     pub(crate) fn vertex_buffer(&self) -> &wgpu::Buffer {
         &self.inner.vertices
     }

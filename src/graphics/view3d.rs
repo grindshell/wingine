@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use bytemuck::{Pod, Zeroable};
 
-use super::{Camera3d, Canvas, Color, Mesh, Model, Sprite, Texture};
+use super::{Camera3d, Canvas, Color, Mesh, Model, Ray, Sprite, Texture};
 use crate::math::{Affine3, Rect, scale3};
 
 /// What a 3D view shows, where on the canvas, and how it's lit: see [`Canvas::begin_3d`].
@@ -23,6 +23,22 @@ impl View3d {
             rect,
             lighting: Lighting::default(),
         }
+    }
+
+    /// Where `point` in the view's world shows, in the coordinates its `rect` is in, as
+    /// [`Camera3d::project`] places it on the rect. `None` if it's nearer than the near plane or
+    /// farther than the far one.
+    pub fn project(&self, point: [f32; 3]) -> Option<[f32; 2]> {
+        let rect = self.rect;
+        let [x, y] = self.camera.project(point, [rect.w, rect.h])?;
+        Some([rect.x + x, rect.y + y])
+    }
+
+    /// The ray through `point`, in the coordinates its `rect` is in, into the view's world, as
+    /// [`Camera3d::ray`] gives it. Points outside the rect have rays too, as though it went on.
+    pub fn ray(&self, [x, y]: [f32; 2]) -> Ray {
+        let rect = self.rect;
+        self.camera.ray([x - rect.x, y - rect.y], [rect.w, rect.h])
     }
 }
 
@@ -123,7 +139,8 @@ impl Canvas3d<'_> {
         if size[0] == 0.0 || size[1] == 0.0 {
             return;
         }
-        let (right, facing) = self.view().camera.billboard_axes();
+        let segment = self.canvas.segments.last().expect("begin_3d adds one");
+        let (right, facing) = segment.billboard_axes;
         let transform = Affine3 {
             x_axis: scale3(right, size[0]),
             y_axis: [0.0, size[1], 0.0],
@@ -187,6 +204,9 @@ pub(crate) struct Segment3d {
     pub before_batch: u32,
     /// Its meshes, in the canvas's `mesh_draws`.
     pub draws: Range<u32>,
+    /// The ways its billboards' right and front point ([`Camera3d::billboard_axes`]), the same
+    /// for all of them.
+    pub billboard_axes: ([f32; 3], [f32; 3]),
 }
 
 /// A mesh recorded in a 3D view. Its transform and colors are its [`Instance`].
@@ -201,6 +221,25 @@ pub(crate) struct MeshDraw {
     pub double_sided: bool,
 }
 
+impl MeshDraw {
+    /// Whether `next`, drawn right after this, is drawn in the same draw call, as instances of
+    /// one mesh: it's the same mesh, showing the same texture, drawn the same way round.
+    pub fn joins(&self, next: &MeshDraw) -> bool {
+        let same_mesh = match (&self.mesh, &next.mesh) {
+            (Some(mesh), Some(next)) => mesh.same_as(next),
+            (mesh, next) => mesh.is_none() && next.is_none(),
+        };
+        let same_texture = match (&self.texture, &next.texture) {
+            (Some(texture), Some(next)) => texture.same_as(next),
+            (texture, next) => texture.is_none() && next.is_none(),
+        };
+        same_mesh
+            && same_texture
+            && self.mirrored == next.mirrored
+            && self.double_sided == next.double_sided
+    }
+}
+
 /// How a mesh drawn is placed and colored, as the GPU reads it: 104 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -213,4 +252,32 @@ pub(crate) struct Instance {
     pub uv: [f32; 4],
     /// sRGB RGBA.
     pub tint: [u8; 4],
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_near<const N: usize>(actual: [f32; N], expected: [f32; N]) {
+        assert!(
+            (0..N).all(|i| (actual[i] - expected[i]).abs() < 1e-4),
+            "{actual:?} is not {expected:?}"
+        );
+    }
+
+    #[test]
+    fn views_place_points_and_rays_where_their_rects_are() {
+        // Twice as wide as it's tall, so it shows 4 units across, 10 pixels each.
+        let camera = Camera3d::orthographic([0.0, 0.0, 5.0], [0.0; 3], 2.0);
+        let view = View3d::new(camera, Rect::new(10.0, 20.0, 40.0, 20.0));
+        assert_near(view.project([0.0; 3]).unwrap(), [30.0, 30.0]);
+        assert_near(view.project([2.0, 1.0, 0.0]).unwrap(), [50.0, 20.0]);
+        assert_eq!(view.project([0.0, 0.0, 10.0]), None, "behind the camera");
+
+        let middle = view.ray([30.0, 30.0]);
+        assert_near(middle.origin, [0.0, 0.0, 4.9]);
+        assert_near(middle.direction, [0.0, 0.0, -1.0]);
+        // Past the rect's right edge, as though the view went on.
+        assert_near(view.ray([70.0, 30.0]).origin, [4.0, 0.0, 4.9]);
+    }
 }

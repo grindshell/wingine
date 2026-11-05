@@ -17,9 +17,9 @@ use std::{
 
 use wingine::{
     Context, Waker,
-    graphics::{Mesh, MeshData, Model, Resolution, Texture},
+    graphics::{Mesh, Model, Resolution, Texture},
     runtime::{self, Config},
-    scene::{self, Assets, SceneFile, TilesetFile},
+    scene::{self, Assets, SceneFile, Shape, TilesetFile},
 };
 
 /// How deep into the folder's folders the file tree looks.
@@ -245,8 +245,8 @@ pub struct AssetCache {
     tilesets: HashMap<PathBuf, (Option<SystemTime>, Rc<TilesetFile>)>,
     /// With when the model file and each of the files beside it that it read last changed.
     models: HashMap<PathBuf, (Vec<Option<SystemTime>>, Model)>,
-    /// Meshes by their data, so a preview built again doesn't make its shapes' meshes again.
-    meshes: Vec<(MeshData, Mesh)>,
+    /// Meshes by their shapes, so a preview built again doesn't make its shapes' meshes again.
+    meshes: Vec<(Shape, Mesh)>,
 }
 
 impl AssetCache {
@@ -338,16 +338,16 @@ impl Assets for Loader<'_> {
         Ok(model)
     }
 
-    fn mesh(&mut self, data: &MeshData) -> wingine::Result<Mesh> {
-        if let Some((_, mesh)) = self.cache.meshes.iter().find(|(made, _)| made == data) {
+    fn mesh(&mut self, shape: &Shape) -> wingine::Result<Mesh> {
+        if let Some((_, mesh)) = self.cache.meshes.iter().find(|(made, _)| made == shape) {
             return Ok(mesh.clone());
         }
-        let mesh = self.ctx.create_mesh(data)?;
+        let mesh = self.ctx.create_mesh(&shape.mesh_data())?;
         // Dragging a shape's size through many makes a mesh of each, so only the latest are kept.
         if self.cache.meshes.len() >= MAX_MESHES {
             self.cache.meshes.remove(0);
         }
-        self.cache.meshes.push((data.clone(), mesh.clone()));
+        self.cache.meshes.push((*shape, mesh.clone()));
         Ok(mesh)
     }
 }

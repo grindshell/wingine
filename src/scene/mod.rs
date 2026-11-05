@@ -336,8 +336,8 @@ pub(crate) use writer::write_value;
 use crate::{
     Context, Error, Result,
     graphics::{
-        Align, Camera3d, Canvas, Canvas3d, Color, Font, Lighting, Mesh, MeshData, Model, Ray,
-        Sprite, SpriteSheet, TextLayout, Texture, View3d,
+        Align, Camera3d, Canvas, Canvas3d, Color, Font, Lighting, Mesh, Model, Ray, Sprite,
+        SpriteSheet, TextLayout, Texture, View3d,
     },
     lua::check_tilemap_size,
     math::{Affine, Affine3, Bounds3, Rect, add3, scale3},
@@ -393,8 +393,8 @@ pub trait Assets {
     fn scene(&mut self, path: &str) -> Result<Rc<SceneFile>>;
     fn tileset(&mut self, path: &str) -> Result<Rc<TilesetFile>>;
     fn model(&mut self, path: &str) -> Result<Model>;
-    /// A mesh of `data`'s triangles, as [`Context::create_mesh`] makes one.
-    fn mesh(&mut self, data: &MeshData) -> Result<Mesh>;
+    /// The mesh of `shape`, as [`Context::create_mesh`] makes one of [`Shape::mesh_data`].
+    fn mesh(&mut self, shape: &Shape) -> Result<Mesh>;
 }
 
 /// [`Assets`] read from the files in a folder, each time they're asked for.
@@ -420,8 +420,8 @@ impl Assets for FolderAssets<'_> {
         load_model(self.ctx, &self.folder.join(path))
     }
 
-    fn mesh(&mut self, data: &MeshData) -> Result<Mesh> {
-        self.ctx.create_mesh(data)
+    fn mesh(&mut self, shape: &Shape) -> Result<Mesh> {
+        self.ctx.create_mesh(&shape.mesh_data())
     }
 }
 
@@ -1494,10 +1494,10 @@ impl Scene {
         self.placed(id).rect
     }
 
-    /// Where what the node shows is placed in the scene, and what it covers: by
-    /// [`Scene::transform`], or only moved by it, for text and tilemaps, which don't turn or
-    /// stretch.
-    fn placement(&self, id: NodeId) -> Option<(Affine, Rect)> {
+    /// Where what the node shows is placed in the scene, and the rectangle it covers in its own
+    /// coordinates (see [`Scene::rect`]): by [`Scene::transform`], or only moved by it, for text,
+    /// tilemaps and 3D views, which don't turn or stretch. `None` for a node that covers nothing.
+    pub fn placement(&self, id: NodeId) -> Option<(Affine, Rect)> {
         let placed = self.placed(id);
         let rect = placed.rect?;
         let transform = if self.node(id).kind.only_moves() {
@@ -1577,18 +1577,32 @@ impl Scene {
         }
     }
 
+    /// The 3D view `id` as it's drawn: its camera and lighting, and where it is in the scene's
+    /// coordinates. `None` if `id` isn't a 3D view.
+    pub fn view(&self, id: NodeId) -> Option<View3d> {
+        let Kind::View3d(view) = &self.node(id).kind else {
+            return None;
+        };
+        Some(View3d {
+            camera: view.camera,
+            rect: self.bounds(id)?,
+            lighting: view.lighting,
+        })
+    }
+
     /// The ray from the camera of the 3D view `view` through `point`, in the scene's coordinates,
     /// along which everything that shows there lies, if the point is in the view. `None` if it
     /// isn't, or `view` isn't a 3D view.
     pub fn ray(&self, view: NodeId, point: [f32; 2]) -> Option<Ray> {
-        let Kind::View3d(node) = &self.node(view).kind else {
-            return None;
-        };
-        let rect = self.bounds(view)?;
-        rect.contains(point).then(|| {
-            let [x, y] = [point[0] - rect.x, point[1] - rect.y];
-            node.camera.ray([x, y], [rect.w, rect.h])
-        })
+        let view = self.view(view)?;
+        view.rect.contains(point).then(|| view.ray(point))
+    }
+
+    /// Where `point` in the world of the 3D view `view` shows in the scene's coordinates. `None`
+    /// if it's nearer than the camera's near plane or farther than its far one, or `view` isn't a
+    /// 3D view.
+    pub fn project(&self, view: NodeId, point: [f32; 3]) -> Option<[f32; 2]> {
+        self.view(view)?.project(point)
     }
 
     /// The nodes of the 3D view `view` under `point`, in the scene's coordinates, nearest first:
@@ -2479,7 +2493,7 @@ impl Build<'_> {
         if let Some((_, mesh)) = self.meshes.iter().find(|(made, _)| made == shape) {
             return Ok(mesh.clone());
         }
-        let mesh = self.assets.mesh(&shape.mesh_data())?;
+        let mesh = self.assets.mesh(shape)?;
         self.meshes.push((*shape, mesh.clone()));
         Ok(mesh)
     }

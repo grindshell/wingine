@@ -57,8 +57,9 @@ fn the_cellar_starts_dark_with_the_hero_at_the_start() {
     assert_eq!(eval::<u32>(&simulation, "#cellar.candles"), 4);
     assert_eq!(eval::<u32>(&simulation, "cellar.lit"), 0);
     // The floor, a plane under the whole map, the walls, the props, and 5 billboards, then the
-    // HUD: its shade, then its text. The props are two barrels and two crates, a draw call each,
-    // and a table's top and four legs.
+    // HUD: its shade, then its text. The walls are one mesh, drawn in a row, so they're one draw
+    // call, as are the billboards, of one sheet. The props are a crate, a barrel, a table, a crate
+    // and a barrel, a draw call each, but the table's top and its four legs, one mesh, two.
     let stats = simulation.context().frame_stats();
     assert_eq!(eval::<u32>(&simulation, "#cellar.props"), 5);
     assert_eq!(
@@ -83,7 +84,7 @@ fn the_cellar_starts_dark_with_the_hero_at_the_start() {
             model.triangle_count()
         })
         .sum();
-    assert_eq!(stats.draw_calls, 1 + WALLS + 4 + 5 + 5 + 2);
+    assert_eq!(stats.draw_calls, 1 + 1 + (1 + 1 + 2 + 1 + 1) + 1 + 2);
     assert_eq!(stats.triangles, 2 + WALLS * 12 + prop_triangles + 5 * 2);
 }
 

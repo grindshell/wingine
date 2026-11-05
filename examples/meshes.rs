@@ -228,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn draws_every_mesh_in_one_call_each() {
+    fn draws_each_run_of_a_mesh_in_one_call() {
         let mut simulation = simulation();
         simulation.run_frames(2);
         let stats = simulation.game().stats;
@@ -240,9 +240,10 @@ mod tests {
             + game.table.triangle_count() as usize
             + BARRELS.len() * game.barrel.triangle_count() as usize;
         assert_eq!(stats.triangles as usize, triangles);
-        // Seven meshes, the table's top and four legs, the two barrels, then the HUD: its shade,
-        // then its text.
-        assert_eq!(stats.draw_calls, 7 + 5 + 2 + 2);
+        // The field, then the field again showing grass, the three crates, one mesh, together,
+        // the post, the table's top, then its four legs together, the two barrels together, and
+        // the ball, then the HUD: its shade, then its text.
+        assert_eq!(stats.draw_calls, 1 + 1 + 1 + 1 + 2 + 1 + 1 + 2);
     }
 
     #[test]

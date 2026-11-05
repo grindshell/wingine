@@ -1260,19 +1260,15 @@ impl mlua::UserData for SceneNode {
             Ok(picked.into_iter().map(|id| node.at(id)).collect::<Vec<_>>())
         });
         methods.add_method("project", |_, node, point: mlua::Vector| {
-            let camera = node.read_kind("camera", |kind| match kind {
-                Kind::View3d(view) => Some(view.camera),
-                _ => None,
+            node.read_kind("camera", |kind| {
+                matches!(kind, Kind::View3d(_)).then_some(())
             })?;
-            let rect = node.read(|scene, id| scene.bounds(id))?;
-            let shown = rect.and_then(|rect| {
-                let [x, y] = camera.project(vector3(point), [rect.w, rect.h])?;
-                Some((rect.x + x, rect.y + y))
-            });
-            Ok(match shown {
-                Some((x, y)) => (Some(x), Some(y)),
-                None => (None, None),
-            })
+            Ok(
+                match node.read(|scene, id| scene.project(id, vector3(point)))? {
+                    Some([x, y]) => (Some(x), Some(y)),
+                    None => (None, None),
+                },
+            )
         });
         methods.add_method("world_position", |_, node, ()| {
             node.check_2d(

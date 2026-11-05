@@ -7,9 +7,9 @@ use mlua::{Lua, Table};
 use super::{Lent, Textures};
 use crate::{
     Context, Result,
-    graphics::{Mesh, MeshData, Model, Texture},
+    graphics::{Mesh, Model, Texture},
     lua::SceneNode,
-    scene::{Assets, Scene, SceneFile, TilesetFile},
+    scene::{Assets, Scene, SceneFile, Shape, TilesetFile},
 };
 
 /// The table, loading files relative to `folder`, and images through `textures`.
@@ -132,7 +132,7 @@ impl Assets for GameAssets<'_> {
         self.textures.model(self.ctx, self.files.folder.join(path))
     }
 
-    fn mesh(&mut self, data: &MeshData) -> Result<Mesh> {
-        self.ctx.create_mesh(data)
+    fn mesh(&mut self, shape: &Shape) -> Result<Mesh> {
+        self.ctx.create_mesh(&shape.mesh_data())
     }
 }

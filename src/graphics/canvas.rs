@@ -110,10 +110,23 @@ impl Canvas {
     }
 
     /// The draw calls rendering what was drawn so far this frame will take: one for each run of
-    /// quads with the same texture, and one for each mesh.
+    /// quads with the same texture, and one for each run of a 3D view's meshes that are the same
+    /// mesh showing the same texture.
     pub(crate) fn draw_call_count(&self) -> u32 {
         let quads = self.batches.iter().filter(|b| !b.quads.is_empty()).count();
-        (quads + self.mesh_draws.len()) as u32
+        let meshes: usize = self
+            .segments
+            .iter()
+            .map(|segment| self.mesh_runs(segment).count())
+            .sum();
+        (quads + meshes) as u32
+    }
+
+    /// The runs of `segment`'s meshes that draw in one draw call each, as instances of a mesh:
+    /// see [`MeshDraw::joins`].
+    pub(crate) fn mesh_runs(&self, segment: &Segment3d) -> impl Iterator<Item = &[MeshDraw]> {
+        let Range { start, end } = segment.draws.clone();
+        self.mesh_draws[start as usize..end as usize].chunk_by(MeshDraw::joins)
     }
 
     /// The triangles of the meshes drawn so far this frame.
@@ -153,6 +166,7 @@ impl Canvas {
             view: View3d { rect, ..view },
             before_batch: (self.batches.len() - 1) as u32,
             draws: first..first,
+            billboard_axes: view.camera.billboard_axes(),
         });
         Canvas3d { canvas: self }
     }

@@ -72,8 +72,12 @@ pub(crate) struct PartData {
 
 /// Reads a model file's `bytes`, `.gltf` or `.glb`, finding the files it names in `folder`.
 pub(crate) fn read(bytes: &[u8], folder: &Path) -> Result<ModelData, String> {
-    let unchecked =
-        ::gltf::Gltf::from_slice_without_validation(bytes).map_err(|err| err.to_string())?;
+    // Parsed once, and checked for what it needs before it's validated, which would fail on what
+    // the engine doesn't know with a less helpful error.
+    let ::gltf::Gltf {
+        document: unchecked,
+        mut blob,
+    } = ::gltf::Gltf::from_slice_without_validation(bytes).map_err(|err| err.to_string())?;
     let required: Vec<&str> = unchecked.extensions_required().collect();
     if !required.is_empty() {
         return Err(format!(
@@ -81,8 +85,8 @@ pub(crate) fn read(bytes: &[u8], folder: &Path) -> Result<ModelData, String> {
             required.join(", ")
         ));
     }
-    let ::gltf::Gltf { document, mut blob } =
-        ::gltf::Gltf::from_slice(bytes).map_err(|err| err.to_string())?;
+    let document =
+        ::gltf::Document::from_json(unchecked.into_json()).map_err(|err| err.to_string())?;
     let mut files = Vec::new();
     let buffers = document
         .buffers()

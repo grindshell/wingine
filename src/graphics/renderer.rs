@@ -675,10 +675,12 @@ impl MeshRenderer {
         pass.set_scissor_rect(x, y, width, height);
         let offset = (index as u64 * self.view_stride) as u32;
         pass.set_bind_group(0, &self.views_bind_group, &[offset]);
-        let instance_size = size_of::<Instance>() as u64;
+        // Each draw's instance is the one at its index among the canvas's.
+        pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         let mut pipeline = None;
-        for i in segment.draws.clone() {
-            let draw = &canvas.mesh_draws[i as usize];
+        let mut first = segment.draws.start;
+        for run in canvas.mesh_runs(segment) {
+            let draw = &run[0];
             let wanted = (draw.double_sided, draw.mirrored);
             if pipeline != Some(wanted) {
                 let [sides, winding] = [draw.double_sided, draw.mirrored].map(usize::from);
@@ -689,14 +691,10 @@ impl MeshRenderer {
             pass.set_bind_group(1, texture.bind_group(), &[]);
             let mesh = draw.mesh.as_ref().unwrap_or(&self.billboard);
             pass.set_vertex_buffer(0, mesh.vertex_buffer().slice(..));
-            let instance = u64::from(i) * instance_size;
-            pass.set_vertex_buffer(
-                1,
-                self.instance_buffer
-                    .slice(instance..instance + instance_size),
-            );
             pass.set_index_buffer(mesh.index_buffer().slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..mesh.index_count(), 0, 0..1);
+            let end = first + run.len() as u32;
+            pass.draw_indexed(0..mesh.index_count(), 0, first..end);
+            first = end;
         }
     }
 }

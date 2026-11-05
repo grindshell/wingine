@@ -84,8 +84,8 @@ mod tests {
 
     use wingine::{
         Result,
-        graphics::{Color, Mesh, MeshData, Model, Texture},
-        scene::{SceneFile, TilesetFile},
+        graphics::{Color, Mesh, Model, Texture},
+        scene::{SceneFile, Shape, TilesetFile},
     };
 
     use super::*;
@@ -110,7 +110,7 @@ mod tests {
             unreachable!("no models are read: {path}")
         }
 
-        fn mesh(&mut self, _: &MeshData) -> Result<Mesh> {
+        fn mesh(&mut self, _: &Shape) -> Result<Mesh> {
             unreachable!("no meshes are made")
         }
     }

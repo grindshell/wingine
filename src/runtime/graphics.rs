@@ -364,11 +364,8 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
     graphics.set("project", {
         let lent = lent.clone();
         lua.create_function(move |_, (view, point): (Table, Vector)| {
-            let (camera, rect, _) = view_parts(&view)?;
-            let rect = view_rect(&lent, rect)?;
-            let shown = camera.project(vector3(point), [rect.w, rect.h]);
-            Ok(match shown {
-                Some([x, y]) => (Some(rect.x + x), Some(rect.y + y)),
+            Ok(match read_view(&lent, &view)?.project(vector3(point)) {
+                Some([x, y]) => (Some(x), Some(y)),
                 None => (None, None),
             })
         })?
@@ -376,9 +373,7 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
     graphics.set("ray", {
         let lent = lent.clone();
         lua.create_function(move |_, (view, x, y): (Table, f32, f32)| {
-            let (camera, rect, _) = view_parts(&view)?;
-            let rect = view_rect(&lent, rect)?;
-            let ray = camera.ray([x - rect.x, y - rect.y], [rect.w, rect.h]);
+            let ray = read_view(&lent, &view)?.ray([x, y]);
             let [origin, direction] =
                 [ray.origin, ray.direction].map(|[x, y, z]| Vector::new(x, y, z));
             Ok((origin, direction))
@@ -446,6 +441,16 @@ fn view_parts(view: &Table) -> mlua::Result<(Camera3d, Option<Rect>, Lighting)> 
     let rect = view.get("rect").context("the view's rect")?;
     let lighting: Option<Lighting> = view.get("lighting").context("the view's lighting")?;
     Ok((camera, rect, lighting.unwrap_or_default()))
+}
+
+/// The 3D view a table describes, without a rect showing on the whole canvas.
+fn read_view(lent: &Lent, view: &Table) -> mlua::Result<View3d> {
+    let (camera, rect, lighting) = view_parts(view)?;
+    Ok(View3d {
+        camera,
+        rect: view_rect(lent, rect)?,
+        lighting,
+    })
 }
 
 /// `rect`, or without one, the whole canvas, in the coordinates drawing uses.

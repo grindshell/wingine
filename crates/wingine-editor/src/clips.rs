@@ -29,13 +29,40 @@ pub fn tidy_time(time: f32) -> f32 {
 /// sprites, billboards and meshes showing sprites have cells.
 pub fn value(node: &NodeDef, property: &str) -> Option<KeyValue> {
     if let Some(property) = Property::from_name(property) {
-        let number = *number_field(&mut node.clone(), property)?;
+        if !has(node, property) {
+            return None;
+        }
+        let placement = node.placement3;
+        let number = match property {
+            Property::X => node.x,
+            Property::Y => node.y,
+            Property::Rotation => node.rotation,
+            Property::ScaleX => node.scale_x,
+            Property::ScaleY => node.scale_y,
+            Property::Z => placement?.z,
+            Property::Yaw => placement?.yaw,
+            Property::Pitch => placement?.pitch,
+            Property::Roll => placement?.roll,
+            Property::ScaleZ => placement?.scale_z,
+        };
         return Some(KeyValue::Number(number));
     }
-    match property {
-        "visible" => Some(KeyValue::Visible(node.visible)),
-        "cell" => cell(&mut node.clone()).map(|cell| KeyValue::Cell(*cell)),
+    match (property, &node.kind) {
+        ("visible", _) => Some(KeyValue::Visible(node.visible)),
+        ("cell", KindDef::Sprite(sprite)) => Some(KeyValue::Cell(sprite.cell)),
+        ("cell", KindDef::Billboard(billboard)) => Some(KeyValue::Cell(billboard.cell)),
+        ("cell", KindDef::Mesh(mesh)) => mesh.sprite.as_ref().map(|s| KeyValue::Cell(s.cell)),
         _ => None,
+    }
+}
+
+/// Whether `node` has the number `property`: only nodes placed in 3D have `z`, `yaw`, `pitch`,
+/// `roll` and `scale_z`, and only the others `rotation`.
+fn has(node: &NodeDef, property: Property) -> bool {
+    if node.placement3.is_some() {
+        property.is_3d()
+    } else {
+        property.is_2d()
     }
 }
 
@@ -59,12 +86,7 @@ pub fn set_value(node: &mut NodeDef, property: &str, value: KeyValue) {
 
 /// `node`'s field of `property`, if it has it.
 fn number_field(node: &mut NodeDef, property: Property) -> Option<&mut f32> {
-    let in_3d = node.placement3.is_some();
-    if !(if in_3d {
-        property.is_3d()
-    } else {
-        property.is_2d()
-    }) {
+    if !has(node, property) {
         return None;
     }
     Some(match property {
@@ -355,6 +377,17 @@ mod tests {
         );
         set_value(&mut sprite, "cell", KeyValue::Cell([2, 1]));
         assert_eq!(value(&sprite, "cell"), Some(KeyValue::Cell([2, 1])));
+        assert_eq!(value(&sprite, "z"), None, "it's in the 2D scene");
+
+        // Placed in 3D, it has `z` and turns by yaw, pitch and roll, not a rotation.
+        let mut post = NodeDef::new("post", KindDef::Node);
+        post.placement3 = Some(wingine::scene::Placement3::default());
+        set_value(&mut post, "yaw", KeyValue::Number(1.5));
+        set_value(&mut post, "rotation", KeyValue::Number(2.0));
+        assert_eq!(value(&post, "yaw"), Some(KeyValue::Number(1.5)));
+        assert_eq!(value(&post, "z"), Some(KeyValue::Number(0.0)));
+        assert_eq!(value(&post, "rotation"), None);
+        assert_eq!(post.rotation, 0.0);
     }
 
     #[test]

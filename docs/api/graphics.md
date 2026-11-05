@@ -350,7 +350,7 @@ seconds, measured on the CPU:
 | `render` | Rendering what was drawn: uploading it to the GPU and submitting draw calls. Not the GPU's own work. |
 | `quads` | How many quads the frame drew: sprites, rectangles and glyphs of text. |
 | `triangles` | How many triangles of meshes and billboards the frame drew in [3D views](#3d-views). |
-| `draw_calls` | How many draw calls those took: one for each run of quads with the same texture, and one for each mesh or billboard. |
+| `draw_calls` | How many draw calls those took: one for each run of quads with the same texture, and one for each run of a 3D view's meshes, or billboards, that are the same and show the same texture. |
 
 Before the first frame has finished, everything is 0. To see what a frame really costs, turn
 [`vsync`](../project-structure.md#vsync) off, and run a release build. See
@@ -723,7 +723,8 @@ graphics.draw_mesh(crate, vector.create(2, 0.5, -1), { yaw = facing, sprite = pl
 graphics.draw_mesh(ball, vector.create(0, 1, 0), { scale = vector.create(1, 2, 1), tint = "#e05040" })
 ```
 
-Each mesh is a draw call of its own.
+Meshes drawn one after another that are the same mesh, showing the same sprite sheet's texture, are
+drawn together in one draw call, as sprites are, so drawing all of one mesh in a row is quicker.
 
 ### `graphics.draw_model`
 

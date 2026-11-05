@@ -2440,8 +2440,8 @@ fn luau_games_load_and_draw_models() {
         "{bounds:?}"
     );
     let stats = "seen[2].triangles, seen[2].draw_calls";
-    // The table's five parts and the crate's one.
-    assert_eq!(eval::<(u32, u32)>(&simulation, stats), (72, 6));
+    // The table's top, its four legs, one mesh, in a draw call, and the crate.
+    assert_eq!(eval::<(u32, u32)>(&simulation, stats), (72, 3));
     let frame = simulation.screenshot().unwrap();
     // Seen from the front, the table's top is a row of pixels from 0.4 to 0.5 up, tinted red.
     let [r, g, b, _] = pixel(&frame, 10, 5);

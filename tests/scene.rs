@@ -6,10 +6,10 @@ use std::{collections::HashMap, f32::consts::FRAC_PI_2, fs, path::Path, rc::Rc};
 
 use wingine::{
     Context, Error, Result,
-    graphics::{Color, Mesh, MeshData, Model, Texture},
+    graphics::{Color, Mesh, Model, Texture},
     headless::Headless,
     math::Rect,
-    scene::{Assets, Kind, Scene, SceneFile, TilesetFile, Value},
+    scene::{Assets, Kind, Scene, SceneFile, Shape, TilesetFile, Value},
 };
 
 const TILESET: &str = concat!(
@@ -81,8 +81,8 @@ impl Assets for Files<'_> {
         wingine::scene::load_model(self.ctx, &Path::new(EXAMPLES).join(path))
     }
 
-    fn mesh(&mut self, data: &MeshData) -> Result<Mesh> {
-        self.ctx.create_mesh(data)
+    fn mesh(&mut self, shape: &Shape) -> Result<Mesh> {
+        self.ctx.create_mesh(&shape.mesh_data())
     }
 }
 

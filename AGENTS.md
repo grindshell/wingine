@@ -165,9 +165,14 @@ networking or 3D pipelines.
   for the last few target sizes), with its viewport and scissor cut to the target and its
   projection corrected to match (`Viewport`), so a view's projection is the same however much of
   it shows. Meshes keep their vertices on the GPU (36 bytes each); each draw's transform, normal
-  matrix, sprite region and tint go into an instance buffer written each frame, bound at the
-  draw's offset, so a mesh is one draw call. Mirroring transforms draw with a second pipeline
-  whose front faces wind the other way. Rendering is at the target's resolution, so a fixed
+  matrix, sprite region and tint go into an instance buffer written each frame, in the order
+  they're drawn, and a run of draws of the same mesh showing the same texture the same way round
+  (`MeshDraw::joins`) is one instanced draw call, so batches of billboards or of one mesh cost
+  little more than one. Mirroring transforms draw with a second pipeline whose front faces wind
+  the other way. Billboards' axes are worked out once a view (`Segment3d::billboard_axes`).
+  Views place points and cast rays in their rects' coordinates (`View3d::project` and `ray`),
+  which `Scene::view`, `project` and `ray` and the editor use. Rendering is at the target's
+  resolution, so a fixed
   resolution renders 3D at the canvas's pixels. The `meshes` example uses all of it from Rust,
   and `cellar` from Luau, whose `graphics.begin_3d` records a view and whose `draw_mesh` and
   `draw_billboard` add to the last one while nothing else has been drawn since
@@ -175,7 +180,8 @@ networking or 3D pipelines.
   (`mlua::Vector`), and views, cameras and lighting are plain tables read each call.
 - Models (`model.rs`, `model_file.rs`): a `Model` is `ModelPart`s, each a `Mesh`, a sprite or
   none, an `Affine3` and whether it's double-sided, flattened from a glTF file's default scene by
-  `Context::load_model` and drawn with `Canvas3d::draw_model`, a draw call a part. Double-sided
+  `Context::load_model` and drawn with `Canvas3d::draw_model`, a draw call a part (a model of one
+  part drawn several times in a row, as a mesh is, takes one for them all). Double-sided
   parts draw with pipelines that cull nothing, and the shader turns the normals of the backs they
   show (`front_facing`). `model_file::read` reads the file without a GPU into `ModelData`
   (unit-tested with glTF the tests write, as JSON with base64 buffers, and the example props):
@@ -565,8 +571,9 @@ networking or 3D pipelines.
   the bit, through the stage and the boss, draw the same pixels, and that switching between them
   mid-fight changes nothing.
 - `benches/drawing.rs`: what drawing a sprite costs from Rust, from Luau, and through a native
-  library linked in, what moving a bullet costs in Luau, and what rendering 10,000 sprites costs,
-  measured with frame stats in a `Simulation`. A plain program (`harness = false`); CI doesn't
+  library linked in, what moving a bullet costs in Luau, and what drawing and rendering 10,000
+  sprites, billboards in a 3D view and cubes in one cost, measured with frame stats in a
+  `Simulation`. A plain program (`harness = false`); CI doesn't
   run it. Its numbers shift by a third with unrelated changes to the program, from how the
   compiler lays it out, so compare runs of the same build, or confirm a change against the
   commit before it.
