@@ -1068,6 +1068,97 @@ fn models_draw_their_parts() {
     );
 }
 
+/// Writes a `.gltf` model to `folder`: a square 2 across facing `+z`, centered on its origin,
+/// showing `texture.png`, red then blue, twice across it with the sampler's default repeating, and
+/// its material double-sided if `double_sided`. Its buffer and image are files beside it.
+#[cfg(feature = "models")]
+fn write_square_model(folder: &Path, double_sided: bool) -> std::path::PathBuf {
+    fs::create_dir_all(folder).unwrap();
+    let mut bytes = Vec::new();
+    let positions = [
+        -1.0, -1.0, 0.0, 1.0, -1.0, 0.0, 1.0, 1.0, 0.0, -1.0, 1.0, 0.0f32,
+    ];
+    let uvs = [0.0, 1.0, 2.0, 1.0, 2.0, 0.0, 0.0, 0.0f32];
+    for value in positions.iter().chain(&uvs) {
+        bytes.extend(value.to_le_bytes());
+    }
+    for index in [0u16, 1, 2, 0, 2, 3] {
+        bytes.extend(index.to_le_bytes());
+    }
+    fs::write(folder.join("square.bin"), &bytes).unwrap();
+    let mut texture = RgbaImage::new(2, 1);
+    texture.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
+    texture.put_pixel(1, 0, Rgba([0, 0, 255, 255]));
+    texture.save(folder.join("texture.png")).unwrap();
+    let json = format!(
+        r#"{{"asset":{{"version":"2.0"}},
+        "buffers":[{{"byteLength":{},"uri":"square.bin"}}],
+        "bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":48}},{{"buffer":0,"byteOffset":48,"byteLength":32}},{{"buffer":0,"byteOffset":80,"byteLength":12}}],
+        "accessors":[
+            {{"bufferView":0,"componentType":5126,"count":4,"type":"VEC3","min":[-1,-1,0],"max":[1,1,0]}},
+            {{"bufferView":1,"componentType":5126,"count":4,"type":"VEC2"}},
+            {{"bufferView":2,"componentType":5123,"count":6,"type":"SCALAR"}}
+        ],
+        "images":[{{"uri":"texture.png"}}],"textures":[{{"source":0}}],
+        "materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}}}},"doubleSided":{double_sided}}}],
+        "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"TEXCOORD_0":1}},"indices":2,"material":0}}]}}],
+        "nodes":[{{"mesh":0}}]}}"#,
+        bytes.len()
+    );
+    let path = folder.join("square.gltf");
+    fs::write(&path, json).unwrap();
+    path
+}
+
+/// A model's texture repeats where its sampler says so, and a double-sided material shows from
+/// behind, lit as though it faced that way, which a one-sided material doesn't.
+#[test]
+#[cfg(feature = "models")]
+fn models_repeat_textures_and_show_double_sided_backs() {
+    let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join("square_models");
+    let mut headless = headless();
+    let ctx = headless.context();
+    let one_sided = ctx
+        .load_model(write_square_model(&folder.join("one"), false))
+        .unwrap();
+    let both_sided = ctx
+        .load_model(write_square_model(&folder.join("both"), true))
+        .unwrap();
+    let background = [0x20, 0x30, 0x60, 255];
+    let mut render = |model: &Model, from: f32| {
+        let frame = headless
+            .render(64, 64, |canvas| {
+                canvas.clear(Color::rgb8(0x20, 0x30, 0x60));
+                let camera = Camera3d::orthographic([0.0, 0.0, from], [0.0; 3], 2.0);
+                // Lit from the camera, so only what faces it is lit: a back only if it's turned.
+                let view = View3d {
+                    lighting: Lighting {
+                        direction: [0.0, 0.0, -from.signum()],
+                        color: Color::WHITE,
+                        ambient: Color::BLACK,
+                    },
+                    ..View3d::new(camera, Rect::new(0.0, 0.0, 64.0, 64.0))
+                };
+                canvas
+                    .begin_3d(view)
+                    .draw_model(model, Affine3::IDENTITY, Color::WHITE);
+            })
+            .unwrap();
+        // A pixel in each quarter of a row across the middle.
+        [8, 24, 40, 56].map(|x| {
+            let i = ((32 * 64 + x) * 4) as usize;
+            <[u8; 4]>::try_from(&frame.pixels()[i..i + 4]).unwrap()
+        })
+    };
+    let [red, blue] = [[255, 0, 0, 255], [0, 0, 255, 255]];
+    // From the front, the texture twice across, as its coordinates run from 0 to 2.
+    assert_eq!(render(&one_sided, 5.0), [red, blue, red, blue]);
+    assert_eq!(render(&both_sided, 5.0), [red, blue, red, blue]);
+    // From behind, mirrored, and lit as the front is from the front.
+    assert_eq!(render(&one_sided, -5.0), [background; 4]);
+    assert_eq!(render(&both_sided, -5.0), [blue, red, blue, red]);
+}
+
 /// Sprites standing upright on the ground of a 3D view seen from above at an angle, each facing
 /// the camera: a hero in front of a crate, a tree behind it and partly hidden, and the hero
 /// mirrored by a negative width. They're lit as the ground is, so the white hero shows as bright

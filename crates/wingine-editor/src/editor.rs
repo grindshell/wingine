@@ -8,6 +8,7 @@ use std::{
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
 use wingine::{
@@ -15,7 +16,7 @@ use wingine::{
     graphics::Canvas,
     gui::egui::{self, Key, KeyboardShortcut, Modifiers},
     math::Affine,
-    scene::{KindDef, NodeDef, Placement3},
+    scene::{KindDef, NodeDef, Placement3, SceneFile},
 };
 
 use crate::{
@@ -400,6 +401,14 @@ impl Editor {
         }
     }
 
+    /// The open game's folder, which its scenes' files are in, or none without one.
+    fn project_folder(&self) -> PathBuf {
+        self.project
+            .as_ref()
+            .map(|project| project.folder.clone())
+            .unwrap_or_default()
+    }
+
     /// Does what the Scene dock asks.
     fn apply(&mut self, action: scene_tree::Action) {
         let tileset = self
@@ -412,6 +421,7 @@ impl Editor {
             .as_ref()
             .and_then(|project| project.model_files().into_iter().next())
             .unwrap_or_default();
+        let folder = self.project_folder();
         let Some(document) = self.documents.get_mut(self.current) else {
             return;
         };
@@ -444,7 +454,7 @@ impl Editor {
                 })
             }
             scene_tree::Action::Instance { parent, scene } => {
-                add_instance(document, &parent, &scene, [0.0, 0.0])
+                add_instance(document, &folder, &parent, &scene, [0.0, 0.0])
             }
             scene_tree::Action::Rename(path, name) => edit::rename(document.edit(), &path, &name),
             scene_tree::Action::Duplicate(path) => {
@@ -864,17 +874,43 @@ impl Editor {
     }
 }
 
-/// Places the scene file at `scene` in `document`, as the last child of `parent`, at `at` in the
-/// parent's coordinates.
-fn add_instance(
-    document: &mut Document,
+/// Fails unless the scene file at `scene`, read from the game's `folder`, can be placed inside the
+/// node at `parent` of `document`: see [`edit::check_placed`]. One that can't be read isn't
+/// checked, since building the preview says what's wrong with it.
+fn check_instance(
+    document: &Document,
+    folder: &Path,
     parent: &[usize],
     scene: &str,
-    [x, y]: [f32; 2],
 ) -> Result<(), String> {
     if scene == document.path {
         return Err("a scene can't be placed in itself".into());
     }
+    let mut load = |path: &str| SceneFile::read(folder.join(path)).ok().map(Rc::new);
+    let Some(file) = load(scene) else {
+        return Ok(());
+    };
+    let in_3d = edit::holds_3d(document.file(), parent);
+    edit::check_placed(&file, in_3d, &mut load).map_err(|why| {
+        let place = if in_3d {
+            "in a 3D view"
+        } else {
+            "in the 2D scene"
+        };
+        format!("`{scene}` can't be placed {place}: {why}")
+    })
+}
+
+/// Places the scene file at `scene` of the game in `folder` in `document`, as the last child of
+/// `parent`, at `at` in the parent's coordinates.
+fn add_instance(
+    document: &mut Document,
+    folder: &Path,
+    parent: &[usize],
+    scene: &str,
+    [x, y]: [f32; 2],
+) -> Result<(), String> {
+    check_instance(document, folder, parent, scene)?;
     let showing = edit::Showing {
         scene,
         ..edit::Showing::default()
@@ -906,9 +942,15 @@ fn add_3d(
     Ok(())
 }
 
-/// Places the scene file at `scene` in `document` at `at`, a point of the scene, in the selected
-/// node, or the tilemap of a selected layer, or the scene itself if nothing is selected.
-fn place_instance(document: &mut Document, scene: &str, at: [f32; 2]) -> Result<(), String> {
+/// Places the scene file at `scene` of the game in `folder` in `document` at `at`, a point of the
+/// scene, in the selected node, or the tilemap of a selected layer, or the scene itself if nothing
+/// is selected.
+fn place_instance(
+    document: &mut Document,
+    folder: &Path,
+    scene: &str,
+    at: [f32; 2],
+) -> Result<(), String> {
     let mut parent = document.selected.clone().unwrap_or_default();
     if let Some(node) = edit::node(document.file(), &parent)
         && matches!(node.kind, KindDef::TileLayer(_))
@@ -921,7 +963,7 @@ fn place_instance(document: &mut Document, scene: &str, at: [f32; 2]) -> Result<
         .zip(document.preview.as_ref())
         .and_then(|(id, scene)| scene.transform(id).inverse())
         .unwrap_or(Affine::IDENTITY);
-    add_instance(document, &parent, scene, to_parent.apply(at))
+    add_instance(document, folder, &parent, scene, to_parent.apply(at))
 }
 
 /// What the Tiles panel paints: the selected layer of `document`, with the tiles of its map's
@@ -1110,9 +1152,10 @@ impl Game for Editor {
                 }
             }
             Some(filesystem::Action::Instance(scene)) => {
+                let folder = self.project_folder();
                 if let Some(document) = self.documents.get_mut(self.current) {
                     let parent = document.selected.clone().unwrap_or_default();
-                    let result = add_instance(document, &parent, &scene, [0.0, 0.0]);
+                    let result = add_instance(document, &folder, &parent, &scene, [0.0, 0.0]);
                     document.end_change();
                     if let Err(err) = result {
                         self.output.push(Level::Error, err);
@@ -1264,22 +1307,22 @@ impl Game for Editor {
             }
             None => {}
         }
+        let folder = self.project_folder();
         if let Some(action) = viewport_action
             && let Some(document) = self.documents.get_mut(self.current)
         {
             let result = match action {
-                viewport::Action::Instance { scene, at } => place_instance(document, &scene, at),
+                viewport::Action::Instance { scene, at } => {
+                    place_instance(document, &folder, &scene, at)
+                }
                 viewport::Action::Instance3d { scene, view, at } => {
                     let showing = edit::Showing {
                         scene: &scene,
                         ..edit::Showing::default()
                     };
-                    (scene != document.path)
-                        .then_some(())
-                        .ok_or_else(|| "a scene can't be placed in itself".to_owned())
-                        .and_then(|()| {
-                            add_3d(document, &view, edit::new_node("instance", showing), at)
-                        })
+                    check_instance(document, &folder, &view, &scene).and_then(|()| {
+                        add_3d(document, &view, edit::new_node("instance", showing), at)
+                    })
                 }
                 viewport::Action::Model { model, view, at } => {
                     let showing = edit::Showing {

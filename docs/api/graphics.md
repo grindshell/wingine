@@ -887,8 +887,12 @@ graphics.new_sphere(radius: number, segments: number?, rings: number?): Mesh
 ```
 
 Returns a sphere of `radius` about its origin, made of `segments` slices around it (16 by default,
-at least 3) and `rings` from top to bottom (8 by default, at least 2). The sprite wraps once around
-it, its left and right edges meeting at the back, toward `-z`.
+from 3 to 512) and `rings` from top to bottom (8 by default, from 2 to 512). Fewer or more are made
+the fewest or the most. The sprite wraps once around it, its left and right edges meeting at the
+back, toward `-z`.
+
+The sizes and radii of these shapes must be above 0, since a shape of a negative size would be
+inside out.
 
 ### `graphics.new_mesh`
 
@@ -971,13 +975,17 @@ The engine draws what a model looks like, not how it moves. It reads the file's 
 nodes, each placing a mesh by its transform, and their meshes' triangles, with their normals (flat
 where the file has none), first texture coordinates and first vertex colors. Of each material, it
 reads the base color and its texture, which must be a PNG; pixels of it less than half opaque
-aren't drawn, unless the material is opaque. Parts that share a mesh in the file share it on the
-GPU.
+aren't drawn, unless the material is opaque. Where texture coordinates leave the texture, it
+repeats, mirrors or stretches its edge as the texture's sampler says (repeating, by default), and
+a texture's `KHR_texture_transform` moves its coordinates. A double-sided material shows from behind
+too, lit as though it faced that way; the rest show only from the side their triangles face, as
+meshes do. In Blender, a material is double-sided unless its Backface Culling is on. Parts that
+share a mesh in the file share it on the GPU.
 
 What it leaves out: skins and morph targets (parts are drawn as modelled), animations, cameras,
-lights, the rest of materials, and texture transforms. A file whose meshes are points or lines, one
-with a JPEG texture, and one that needs an extension, such as Draco or meshopt compression, are
-errors, saying what to export differently.
+lights and the rest of materials. A file whose meshes are points or lines, one with a JPEG texture,
+and one that needs an extension, such as Draco or meshopt compression, are errors, saying what to
+export differently.
 
 From Blender, export glTF 2.0 as a `.glb`, with the scene's units in metres, so a metre is a world
 unit, and its axes converted, as they are by default, so Blender's up is `+y`. Put each model's

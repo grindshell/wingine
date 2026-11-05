@@ -575,11 +575,15 @@ fn create_mesh(lent: &Lent, data: &MeshData) -> mlua::Result<Mesh> {
         .map_err(|err| mlua::Error::runtime(err.to_string()))
 }
 
-/// Fails unless every size is a finite number.
+/// Fails unless every size is above 0 and finite, as scene files' shapes must be: a shape of a
+/// negative size would be inside out.
 fn check_sizes(sizes: &[f32]) -> mlua::Result<()> {
-    match sizes.iter().find(|size| !size.is_finite()) {
+    match sizes
+        .iter()
+        .find(|size| !(**size > 0.0 && size.is_finite()))
+    {
         Some(size) => Err(mlua::Error::runtime(format!(
-            "a mesh's sizes must be finite, not {size}"
+            "a mesh's sizes must be above 0 and finite, not {size}"
         ))),
         None => Ok(()),
     }

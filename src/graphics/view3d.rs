@@ -79,18 +79,32 @@ impl Canvas3d<'_> {
         sprite: Option<&Sprite>,
         tint: Color,
     ) {
-        if mesh.index_count() > 0 {
-            let normal = transform.normal_matrix();
-            self.push(Some(mesh), transform, normal, sprite, tint);
-        }
+        self.draw_sides(mesh, transform, sprite, tint, false);
     }
 
     /// Draws each part of `model` as [`draw_mesh`](Self::draw_mesh) would, placed in the model,
     /// and the model placed by `transform`, all multiplied by `tint`: a draw call for each part.
+    /// Double-sided parts show from behind too.
     pub fn draw_model(&mut self, model: &Model, transform: Affine3, tint: Color) {
         for part in model.parts() {
             let placed = transform * part.transform;
-            self.draw_mesh(&part.mesh, placed, part.sprite.as_ref(), tint);
+            let sprite = part.sprite.as_ref();
+            self.draw_sides(&part.mesh, placed, sprite, tint, part.double_sided);
+        }
+    }
+
+    /// Draws `mesh` as [`draw_mesh`](Self::draw_mesh) does, from behind too if `double_sided`.
+    fn draw_sides(
+        &mut self,
+        mesh: &Mesh,
+        transform: Affine3,
+        sprite: Option<&Sprite>,
+        tint: Color,
+        double_sided: bool,
+    ) {
+        if mesh.index_count() > 0 {
+            let normal = transform.normal_matrix();
+            self.push(Some(mesh), transform, normal, sprite, tint, double_sided);
         }
     }
 
@@ -118,11 +132,11 @@ impl Canvas3d<'_> {
         };
         // Whichever way the quad faces, its normal points up, as the ground's do.
         let normal = [[0.0; 3], [0.0; 3], [0.0, 1.0, 0.0]];
-        self.push(None, transform, normal, Some(sprite), tint);
+        self.push(None, transform, normal, Some(sprite), tint, false);
     }
 
     /// Records `mesh`, or the billboard quad for `None`, placed by `transform`, with `normal`
-    /// moving its normals.
+    /// moving its normals, showing from behind too if `double_sided`.
     fn push(
         &mut self,
         mesh: Option<&Mesh>,
@@ -130,6 +144,7 @@ impl Canvas3d<'_> {
         normal: [[f32; 3]; 3],
         sprite: Option<&Sprite>,
         tint: Color,
+        double_sided: bool,
     ) {
         let determinant = transform.determinant();
         if !determinant.is_finite() {
@@ -152,6 +167,7 @@ impl Canvas3d<'_> {
             mesh: mesh.cloned(),
             texture: sprite.map(|sprite| sprite.texture().clone()),
             mirrored: determinant < 0.0,
+            double_sided,
         });
         let segment = canvas.segments.last_mut().expect("begin_3d adds a segment");
         segment.draws.end += 1;
@@ -181,6 +197,8 @@ pub(crate) struct MeshDraw {
     pub texture: Option<Texture>,
     /// Whether its transform mirrors it, which turns its triangles' winding round.
     pub mirrored: bool,
+    /// Whether its triangles show from behind too.
+    pub double_sided: bool,
 }
 
 /// How a mesh drawn is placed and colored, as the GPU reads it: 104 bytes.

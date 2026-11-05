@@ -244,7 +244,9 @@ node:world_position(): (number, number)
 ```
 
 Returns where its origin is in the scene, after every node it's inside has moved, turned and
-stretched it: in canvas pixels, or the world's with a camera, as the scene is drawn.
+stretched it: in canvas pixels, or the world's with a camera, as the scene is drawn. It's an error
+for a node in a 3D view, which is somewhere in the view's world instead: see
+[`node:world_position_3d`](#nodeworld_position_3d).
 
 ### `node:is_visible`
 

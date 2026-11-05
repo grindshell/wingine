@@ -170,7 +170,8 @@ size it.
   views too, from **⛓** or dropped in, placed in 3D.
 - **Dragging a model file** from the FileSystem dock into a view adds a model node showing it,
   where the ray under the pointer meets the ground. A scene file dropped in a view is placed there
-  the same way.
+  the same way. A scene holding what a view can't, such as sprites, isn't placed in one, nor a
+  scene of meshes in the 2D scene, and Output says why.
 - **Clicking** in a view selects what's under the pointer, by the boxes around what nodes show,
   the nearest first; clicking again in the same place reaches the next, as elsewhere. The
   selection's box is outlined.

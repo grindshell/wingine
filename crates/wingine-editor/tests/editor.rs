@@ -7,15 +7,15 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use wingine::{
     Redraw, WindowConfig,
-    headless::Simulation,
+    headless::{Headless, Simulation},
     input::{Key, MouseButton},
     scene::{
-        Clip, Interpolation, KeyValue, Keys, Kind, KindDef, MeshDef, Placement3, Property,
+        Assets, Clip, Interpolation, KeyValue, Keys, Kind, KindDef, MeshDef, Placement3, Property,
         SceneFile, Shape, TileLayerDef, Value,
     },
 };
@@ -26,6 +26,7 @@ use wingine_editor::{
     edit,
     editor::{BottomTab, MainScreen},
     lsp::{self, Severity},
+    project::AssetCache,
     viewport::Tool,
 };
 
@@ -849,6 +850,74 @@ fn model_files_dropped_in_a_view_are_placed_on_the_ground() {
     control(&mut simulation, Key::Z);
     let view = node(&simulation, "view");
     assert!(!view.children.iter().any(|child| child.name == "barrel"));
+}
+
+#[test]
+fn scenes_that_cannot_go_in_a_view_are_refused() {
+    let folder = copy_of("cellar", "scenes_refused");
+    let sign = "return { format = 2, children = { \
+                { name = 'board', kind = 'rect', width = 8, height = 4 } } }";
+    fs::write(folder.join("sign.scene.luau"), sign).unwrap();
+    let mut simulation = editor(Some(folder));
+    simulation
+        .game_mut()
+        .open_scene("cellar.scene.luau")
+        .unwrap();
+    simulation.run_frames(2);
+    let row = middle(simulation.gui_rect("sign.scene.luau").unwrap());
+    let to = world_to_window(&simulation, "view", [6.5, 0.0, 5.5]);
+    drag(&mut simulation, row, to);
+
+    let view = node(&simulation, "view");
+    assert!(!view.children.iter().any(|child| child.name == "sign"));
+    let lines = simulation.game().output().lines();
+    assert!(
+        lines.iter().any(|line| line.level == Level::Error
+            && line.text
+                == "`sign.scene.luau` can't be placed in a 3D view: its node `board` is a rect \
+                    node, which a 3D view can't hold"),
+        "{:?}",
+        lines.iter().map(|line| &line.text).collect::<Vec<_>>()
+    );
+    assert!(!simulation.game().has_unsaved_changes());
+    assert!(simulation.game().document().unwrap().error.is_none());
+}
+
+#[test]
+fn models_are_read_again_when_files_beside_them_change() {
+    let folder = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("editor")
+        .join("model_files_changed");
+    let _ = fs::remove_dir_all(&folder);
+    fs::create_dir_all(&folder).unwrap();
+    // A triangle `size` across, in a buffer beside the model.
+    let write_triangle = |size: f32| {
+        let corners = [0.0, 0.0, 0.0, size, 0.0, 0.0, 0.0, size, 0.0f32];
+        let bytes: Vec<u8> = corners.iter().flat_map(|v| v.to_le_bytes()).collect();
+        fs::write(folder.join("tri.bin"), bytes).unwrap();
+    };
+    write_triangle(1.0);
+    let gltf = r#"{"asset":{"version":"2.0"},"buffers":[{"byteLength":36,"uri":"tri.bin"}],
+        "bufferViews":[{"buffer":0,"byteLength":36}],
+        "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}],
+        "meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"nodes":[{"mesh":0}]}"#;
+    fs::write(folder.join("tri.gltf"), gltf).unwrap();
+
+    let mut headless = Headless::new().expect("a GPU adapter is available");
+    let mut cache = AssetCache::default();
+    let mut loader = cache.loader(headless.context(), &folder);
+    let mut width = || loader.model("tri.gltf").unwrap().bounds().unwrap().max[0];
+    assert_eq!(width(), 1.0);
+    write_triangle(2.0);
+    // Later than it was, however coarsely the file system keeps times.
+    let buffer = fs::File::options()
+        .write(true)
+        .open(folder.join("tri.bin"))
+        .unwrap();
+    buffer
+        .set_modified(SystemTime::now() + Duration::from_secs(10))
+        .unwrap();
+    assert_eq!(width(), 2.0, "the buffer changed, though the .gltf didn't");
 }
 
 /// Adds a 16 by 16 rect named `box` at the top of the open scene, at `x`, `y`, and selects it.

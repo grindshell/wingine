@@ -174,14 +174,20 @@ networking or 3D pipelines.
   (`Canvas::open_view`), and fail otherwise. Luau's 3D points are its native `vector`s
   (`mlua::Vector`), and views, cameras and lighting are plain tables read each call.
 - Models (`model.rs`, `model_file.rs`): a `Model` is `ModelPart`s, each a `Mesh`, a sprite or
-  none, and an `Affine3`, flattened from a glTF file's default scene by `Context::load_model`
-  and drawn with `Canvas3d::draw_model`, a draw call a part. `model_file::read` reads the file
-  without a GPU into `ModelData` (unit-tested with glTF the tests write, as JSON with base64
-  buffers, and the example props): primitives that the file's nodes share stay one mesh, a
-  material's base color factor and the vertex colors are multiplied and made sRGB into the
-  vertices' colors, missing normals are made flat, strips and fans become triangles, opaque
-  materials drop their textures' alpha, and points, lines, JPEG textures and required extensions
-  are errors saying what to export instead. Picking is by boxes, not triangles, since meshes keep
+  none, an `Affine3` and whether it's double-sided, flattened from a glTF file's default scene by
+  `Context::load_model` and drawn with `Canvas3d::draw_model`, a draw call a part. Double-sided
+  parts draw with pipelines that cull nothing, and the shader turns the normals of the backs they
+  show (`front_facing`). `model_file::read` reads the file without a GPU into `ModelData`
+  (unit-tested with glTF the tests write, as JSON with base64 buffers, and the example props):
+  primitives that the file's nodes share stay one mesh, a material's base color factor and the
+  vertex colors are multiplied and made sRGB into the vertices' colors, missing normals are made
+  flat, strips and fans become triangles, `KHR_texture_transform`s move texture coordinates,
+  opaque materials drop their textures' alpha, a texture wraps as its sampler says only along the
+  axes its mesh's coordinates leave it on (`Wrap`; it clamps along the rest, so edges don't pick
+  up the far side's texels), made with a sampler of its own (`Renderer::create_wrapped_texture`),
+  and points, lines, JPEG textures and required extensions are errors saying what to export
+  instead. It lists the files beside the model it read (`Model::files`), which the editor's
+  `AssetCache` checks the times of too. Picking is by boxes, not triangles, since meshes keep
   no vertices on the CPU: `Bounds3` (`math.rs`) from `MeshData::bounds`, kept by `Mesh` and
   `Model`, `transformed` by an `Affine3`, and `Ray::hit_box`, the distance to where a ray enters
   one. Luau has `graphics.load_model` (cached by path in `runtime/graphics.rs`, as textures are),
@@ -341,7 +347,9 @@ networking or 3D pipelines.
   selection's box as the camera projects it, and drags with the Move tool across the ground at
   the node's height, or with Shift, an upright plane facing the camera (`Drag3d`); model files
   dragged from the FileSystem dock carry a `ModelPath`, and they and scene files dropped in a view
-  are placed where the ray meets the ground. `edit::add` fits nodes to where they go
+  are placed where the ray meets the ground. Instances are added only of scenes whose nodes fit
+  where they go, through the instances they place (`edit::check_placed`, the rules `check_3d`
+  applies once the scene is built). `edit::add` fits nodes to where they go
   (`place_for`), the Scene dock offers `KINDS_3D` inside views, the Inspector shows
   `transform_3d` and sections for views, meshes, models and billboards (a node an instance places
   is shown in 3D when the preview has it there, `Document::is_in_3d`), and `AssetCache` rereads

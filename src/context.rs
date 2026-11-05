@@ -183,10 +183,12 @@ impl Context {
     ///
     /// It's what the default scene's nodes place: their meshes' triangles, with their normals
     /// (flat where the file has none), first texture coordinates and vertex colors, and each
-    /// material's base color and its texture, which must be a PNG. A material's alpha cuts out
-    /// what's less than half opaque, as meshes do, unless it's opaque, when its alpha is ignored.
-    /// Skins, morph targets, animations, cameras, lights and the rest of materials are left out,
-    /// and files that need an extension are refused.
+    /// material's base color and its texture, which must be a PNG, repeating or mirrored where
+    /// texture coordinates leave it if its sampler says so, and moved by its
+    /// `KHR_texture_transform`. A material's alpha cuts out what's less than half opaque, as
+    /// meshes do, unless it's opaque, when its alpha is ignored, and a double-sided material shows
+    /// from behind too. Skins, morph targets, animations, cameras, lights and the rest of
+    /// materials are left out, and files that need an extension are refused.
     #[cfg(feature = "models")]
     pub fn load_model(&mut self, path: impl AsRef<Path>) -> Result<Model> {
         let path = path.as_ref();
@@ -207,16 +209,22 @@ impl Context {
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(error)?;
         let sprites: Vec<Sprite> = data
-            .images
+            .textures
             .iter()
-            .map(|image| {
+            .map(|texture| {
+                let image = &texture.image;
                 let [width, height] = [image.width(), image.height()];
-                let texture = self.renderer.create_texture(
+                let address = texture.wrap.map(|wrap| match wrap {
+                    model_file::Wrap::Clamp => wgpu::AddressMode::ClampToEdge,
+                    model_file::Wrap::Repeat => wgpu::AddressMode::Repeat,
+                    model_file::Wrap::Mirror => wgpu::AddressMode::MirrorRepeat,
+                });
+                let texture = self.renderer.create_wrapped_texture(
                     &self.gpu.device,
                     &self.gpu.queue,
-                    width,
-                    height,
+                    [width, height],
                     image.as_raw(),
+                    address,
                 );
                 Sprite::new(texture, Rect::new(0.0, 0.0, width as f32, height as f32))
             })
@@ -226,10 +234,11 @@ impl Context {
             .iter()
             .map(|part| ModelPart {
                 mesh: meshes[part.mesh].clone(),
-                sprite: part.image.map(|image| sprites[image].clone()),
+                sprite: part.texture.map(|texture| sprites[texture].clone()),
                 transform: part.transform,
+                double_sided: part.double_sided,
             })
             .collect();
-        Ok(Model::new(parts))
+        Ok(Model::read_from(parts, data.files))
     }
 }

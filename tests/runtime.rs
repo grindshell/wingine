@@ -2141,7 +2141,12 @@ fn luau_games_make_meshes() {
                 vertices = { { position = vector.zero } },
                 indices = { 1, 1 },
             })
-            _, infinite = pcall(graphics.new_cube, math.huge)",
+            _, infinite = pcall(graphics.new_cube, math.huge)
+            _, negative = pcall(graphics.new_cuboid, -1, 1, 1)
+            _, flat = pcall(graphics.new_plane, 2, 0)
+            _, no_radius = pcall(graphics.new_sphere, 0)
+            -- Far more slices and rings than a sphere needs get the most it has, not a crash.
+            most = graphics.new_sphere(1, 4000000000, 4000000000):triangle_count()",
         )],
     );
     let simulation = simulation(&folder);
@@ -2152,8 +2157,16 @@ fn luau_games_make_meshes() {
     assert!(!eval::<bool>(&simulation, "from_zero"));
     let too_few: String = eval(&simulation, "tostring(too_few)");
     assert!(too_few.contains("2 indices"), "{too_few}");
-    let infinite: String = eval(&simulation, "tostring(infinite)");
-    assert!(infinite.contains("finite"), "{infinite}");
+    for name in ["infinite", "negative", "flat", "no_radius"] {
+        let err: String = eval(&simulation, &format!("tostring({name})"));
+        assert!(err.contains("must be above 0 and finite"), "{name}: {err}");
+    }
+    // The poles' rings are a triangle a slice, and the rest two.
+    let most = 512;
+    assert_eq!(
+        eval::<u32>(&simulation, "most"),
+        most * 2 + most * (most - 2) * 2
+    );
 }
 
 #[test]
@@ -2347,6 +2360,11 @@ fn scene_views_work_from_luau() {
         error("box:rotation()")
     );
     assert!(error("box:set_anchor(0, 0)").contains("has no anchor"));
+    assert!(
+        error("box:world_position()").contains("has no world position in the scene"),
+        "{}",
+        error("box:world_position()")
+    );
     assert!(
         error("stage:find('label'):position_3d()")
             .contains("node `label` isn't in a 3D view, so it isn't placed in 3D")

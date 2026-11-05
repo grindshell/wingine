@@ -1181,6 +1181,39 @@ fn nodes_in_3d_are_added_only_to_views() {
     );
 }
 
+/// An override giving a mesh showing no sprite a sheet names a sheet of the file the mesh is from,
+/// even through an instance inside the file the instance places.
+#[test]
+fn overridden_meshes_take_sheets_of_their_own_files() {
+    let mut headless = headless();
+    let jar = "return { format = 2, \
+               sheets = { glass = { path = 'glass.png', tile_width = 16, tile_height = 16 } }, \
+               children = { { name = 'jar', kind = 'mesh', shape = 'sphere' } } }";
+    // The shelf has a sheet of the same name, of other cells, which the jar's isn't.
+    let shelf = "return { format = 2, \
+                 sheets = { glass = { path = 'glass.png', tile_width = 8, tile_height = 8 } }, \
+                 children = { { name = 'jar', kind = 'instance', scene = 'jar.scene.luau' } } }";
+    let room = "return { format = 2, children = { { name = 'view', kind = 'view3d', width = 10, \
+                height = 10, camera = { position = { 0, 1, 2 }, target = { 0, 0, 0 } }, \
+                children = { { name = 'shelf', kind = 'instance', scene = 'shelf.scene.luau', \
+                overrides = { ['jar/jar'] = { sheet = 'glass', cell = { 1, 0 } } } } } } } }";
+    let files = [
+        ("jar.scene.luau", jar),
+        ("shelf.scene.luau", shelf),
+        ("room.scene.luau", room),
+    ];
+    let scene = load(&mut headless, &files, "room.scene.luau").unwrap();
+    let jar = scene.find(scene.root(), "view/shelf/jar/jar").unwrap();
+    let Kind::Mesh(mesh) = scene.node(jar).kind() else {
+        panic!("the jar is a mesh");
+    };
+    let sprite = mesh
+        .sprite
+        .as_ref()
+        .expect("the override gives it a sprite");
+    assert_eq!((sprite.width(), sprite.height()), (16.0, 16.0));
+}
+
 #[test]
 #[cfg(feature = "models")]
 fn model_nodes_show_their_files() {

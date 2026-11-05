@@ -2,7 +2,10 @@
 //! them. Nodes are addressed by [`NodePath`]s, so these work on the file alone, without a scene
 //! loaded to play.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
 
 use wingine::{
     graphics::{Align, Camera3d, Color, Lighting},
@@ -54,6 +57,72 @@ fn place_for(node: &mut NodeDef, in_3d: bool) -> Result<(), String> {
         }
     } else if node.kind.is_3d() || node.placement3.is_some() {
         return Err(format!("a {kind} placed in 3D goes in a 3D view"));
+    }
+    Ok(())
+}
+
+/// How deep through instances [`check_placed`] looks, so a file placing itself, which building
+/// the preview reports, doesn't loop forever here.
+const MAX_CHECKED_INSTANCES: usize = 32;
+
+/// Fails, saying why, if the nodes of `file`, placed by an instance in a 3D view if `in_3d` or in
+/// the 2D scene, can't be there once it's placed: a view holds only meshes, models, billboards,
+/// plain nodes and instances, placed in 3D, and only views hold meshes, models and billboards.
+/// `load` reads the files its instances place, which are checked too; those it can't read aren't,
+/// since building the preview says what's wrong with them.
+pub fn check_placed(
+    file: &SceneFile,
+    in_3d: bool,
+    load: &mut dyn FnMut(&str) -> Option<Rc<SceneFile>>,
+) -> Result<(), String> {
+    check_nodes(&file.children, "", in_3d, load, 0)
+}
+
+/// [`check_placed`] for `nodes`, inside the node at `path` of names.
+fn check_nodes(
+    nodes: &[NodeDef],
+    path: &str,
+    in_3d: bool,
+    load: &mut dyn FnMut(&str) -> Option<Rc<SceneFile>>,
+    instances: usize,
+) -> Result<(), String> {
+    for node in nodes {
+        let path = if path.is_empty() {
+            node.name.clone()
+        } else {
+            format!("{path}/{}", node.name)
+        };
+        let kind = node.kind.name();
+        let a = if kind.starts_with(['a', 'e', 'i', 'o', 'u']) {
+            "an"
+        } else {
+            "a"
+        };
+        if in_3d {
+            if !KINDS_3D.contains(&kind) {
+                return Err(format!(
+                    "its node `{path}` is {a} {kind} node, which a 3D view can't hold"
+                ));
+            }
+            if node.placement3.is_none() && (node.rotation != 0.0 || node.anchor.is_some()) {
+                return Err(format!(
+                    "its node `{path}` has a `rotation` or an `anchor`, which nodes in 3D views \
+                     don't"
+                ));
+            }
+        } else if node.kind.is_3d() || node.placement3.is_some() {
+            return Err(format!(
+                "its node `{path}` is {a} {kind} node placed in 3D, which only a 3D view holds"
+            ));
+        }
+        if let KindDef::Instance(instance) = &node.kind
+            && instances < MAX_CHECKED_INSTANCES
+            && let Some(placed) = load(&instance.scene)
+        {
+            check_nodes(&placed.children, &path, in_3d, load, instances + 1)?;
+        }
+        let inside = in_3d || matches!(node.kind, KindDef::View3d(_));
+        check_nodes(&node.children, &path, inside, load, instances)?;
     }
     Ok(())
 }
@@ -762,6 +831,63 @@ mod tests {
         assert_eq!(names(&file, &[]), ["b2", "a", "d"]);
         let moved = move_node(&mut file, &[1, 0], &[], 0).unwrap();
         assert_eq!(node(&file, &moved).unwrap().name, "b");
+    }
+
+    #[test]
+    fn placed_scenes_must_fit_where_they_go() {
+        let files: BTreeMap<&str, Rc<SceneFile>> = [
+            (
+                "flower",
+                "{ { name = 'petal', kind = 'rect', width = 1, height = 1 } }",
+            ),
+            (
+                "barrel",
+                "{ { name = 'barrel', kind = 'mesh', shape = 'cuboid' } }",
+            ),
+            (
+                "group",
+                "{ { name = 'group', kind = 'node', children = { \
+                 { name = 'barrel', kind = 'instance', scene = 'barrel' } } } }",
+            ),
+            (
+                "turned",
+                "{ { name = 'stand', kind = 'node', rotation = 1 } }",
+            ),
+            (
+                "loop",
+                "{ { name = 'again', kind = 'instance', scene = 'loop' } }",
+            ),
+        ]
+        .into_iter()
+        .map(|(name, children)| {
+            let source = format!("return {{ format = 2, children = {children} }}");
+            (name, Rc::new(SceneFile::parse(&source, name).unwrap()))
+        })
+        .collect();
+        let check = |name: &str, in_3d: bool| {
+            let mut load = |path: &str| files.get(path).cloned();
+            check_placed(&files[name], in_3d, &mut load)
+        };
+        assert_eq!(check("flower", false), Ok(()));
+        assert_eq!(
+            check("flower", true),
+            Err("its node `petal` is a rect node, which a 3D view can't hold".into())
+        );
+        assert_eq!(check("barrel", true), Ok(()));
+        assert_eq!(
+            check("barrel", false),
+            Err("its node `barrel` is a mesh node placed in 3D, which only a 3D view holds".into())
+        );
+        // Through the instances of the scene placed.
+        assert_eq!(check("group", true), Ok(()));
+        assert!(
+            check("group", false)
+                .unwrap_err()
+                .contains("`group/barrel/barrel`")
+        );
+        assert!(check("turned", true).unwrap_err().contains("`rotation`"));
+        // A scene placing itself is for building the preview to say.
+        assert_eq!(check("loop", true), Ok(()));
     }
 
     #[test]

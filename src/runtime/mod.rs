@@ -141,7 +141,8 @@
 //!   it tells what's under the mouse.
 //! - `graphics.new_cube(size)`, `graphics.new_cuboid(width, height, depth)`,
 //!   `graphics.new_plane(width, depth)` and `graphics.new_sphere(radius, segments, rings)` make
-//!   meshes, and `graphics.new_mesh(data)` one of `data.vertices`, each a table of `position`
+//!   meshes, their sizes above 0 and spheres' slices and rings at most 512, and
+//!   `graphics.new_mesh(data)` one of `data.vertices`, each a table of `position`
 //!   and optionally `normal`, `u`, `v` and `color`, and `data.indices`, three vertices for each
 //!   triangle, counting from 1.
 //! - `graphics.load_model(path)` loads a model file, glTF 2.0 as `.glb` or `.gltf` (with the

@@ -76,15 +76,17 @@ fn vs_main(vertex: VertexIn, instance: InstanceIn) -> VertexOut {
 }
 
 @fragment
-fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
     let color = textureSample(mesh_texture, mesh_sampler, in.uv) * in.color;
     if color.a < 0.5 {
         discard;
     }
+    // Only double-sided meshes show their backs, which are lit as though they faced the other way.
+    let normal = select(-in.normal, in.normal, front_facing);
     var facing = 0.0;
-    let normal_length = length(in.normal);
+    let normal_length = length(normal);
     if normal_length > 0.0 {
-        facing = max(dot(in.normal / normal_length, -view.light_direction.xyz), 0.0);
+        facing = max(dot(normal / normal_length, -view.light_direction.xyz), 0.0);
     }
     let light = min(view.ambient.rgb + view.light_color.rgb * facing, vec3<f32>(1.0));
     return vec4<f32>(color.rgb * light, 1.0);

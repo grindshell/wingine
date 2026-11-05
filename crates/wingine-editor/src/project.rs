@@ -243,7 +243,8 @@ pub struct AssetCache {
     textures: HashMap<PathBuf, (Option<SystemTime>, Texture)>,
     scenes: HashMap<PathBuf, (Option<SystemTime>, Rc<SceneFile>)>,
     tilesets: HashMap<PathBuf, (Option<SystemTime>, Rc<TilesetFile>)>,
-    models: HashMap<PathBuf, (Option<SystemTime>, Model)>,
+    /// With when the model file and each of the files beside it that it read last changed.
+    models: HashMap<PathBuf, (Vec<Option<SystemTime>>, Model)>,
     /// Meshes by their data, so a preview built again doesn't make its shapes' meshes again.
     meshes: Vec<(MeshData, Mesh)>,
 }
@@ -266,13 +267,18 @@ pub struct Loader<'a> {
     folder: &'a Path,
 }
 
+/// When the file at `path` last changed, if it's there.
+fn modified(path: &Path) -> Option<SystemTime> {
+    fs::metadata(path).and_then(|meta| meta.modified()).ok()
+}
+
 /// The entry for `path` in `cache`, read again with `read` if its file has changed since.
 fn cached<T: Clone>(
     cache: &mut HashMap<PathBuf, (Option<SystemTime>, T)>,
     path: PathBuf,
     read: impl FnOnce(&Path) -> wingine::Result<T>,
 ) -> wingine::Result<T> {
-    let modified = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
+    let modified = modified(&path);
     if let Some((when, value)) = cache.get(&path)
         && *when == modified
     {
@@ -310,11 +316,26 @@ impl Assets for Loader<'_> {
         })
     }
 
+    /// The model file at `path`, read again if it or any file beside it that it read, such as a
+    /// `.gltf`'s buffers and images, has changed since.
     fn model(&mut self, path: &str) -> wingine::Result<Model> {
-        let ctx = &mut *self.ctx;
-        cached(&mut self.cache.models, self.folder.join(path), |path| {
-            scene::load_model(ctx, path)
-        })
+        let path = self.folder.join(path);
+        let changes = |own: Option<SystemTime>, model: &Model| {
+            let beside = model.files().iter().map(|file| modified(file));
+            std::iter::once(own).chain(beside).collect::<Vec<_>>()
+        };
+        // Its own time is taken before it's read, so a change while it's read reads it again.
+        let own = modified(&path);
+        if let Some((when, model)) = self.cache.models.get(&path)
+            && *when == changes(own, model)
+        {
+            return Ok(model.clone());
+        }
+        let model = scene::load_model(self.ctx, &path)?;
+        self.cache
+            .models
+            .insert(path, (changes(own, &model), model.clone()));
+        Ok(model)
     }
 
     fn mesh(&mut self, data: &MeshData) -> wingine::Result<Mesh> {

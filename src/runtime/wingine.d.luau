@@ -411,7 +411,8 @@ declare extern type SceneNode with
     function scale(self): (number, number)
     --- Stretches it by `x` and `y`, or by `x` both ways.
     function set_scale(self, x: number, y: number?): ()
-    --- Returns where its origin is in the scene, after every node it's inside has placed it.
+    --- Returns where its origin is in the scene, after every node it's inside has placed it. An
+    --- error for a node in a 3D view: see `world_position_3d`.
     function world_position(self): (number, number)
     --- Returns whether it's shown.
     function is_visible(self): boolean
@@ -607,7 +608,7 @@ declare graphics: {
     --- its origin, showing the sprite with its top toward `-z`.
     new_plane: (width: number, depth: number) -> Mesh,
     --- Returns a sphere of `radius`, `segments` slices around (16 by default) and `rings` from top
-    --- to bottom (8 by default).
+    --- to bottom (8 by default), each from 2 or 3 to 512. Sizes and radii must be above 0.
     new_sphere: (radius: number, segments: number?, rings: number?) -> Mesh,
 }
 

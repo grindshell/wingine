@@ -98,11 +98,17 @@ impl MeshData {
         mesh
     }
 
-    /// A sphere of `radius`, made of `segments` slices around (at least 3) and `rings` from top
-    /// to bottom (at least 2). The sprite wraps once around it, its left and right edges meeting
-    /// at the back, toward `-z`, its top at the top.
+    /// The most slices around and rings from top to bottom a [`MeshData::sphere`] has: more than
+    /// any sphere needs to look round, and few enough that its vertices fit in memory.
+    pub const MAX_SPHERE_DIVISIONS: u32 = 512;
+
+    /// A sphere of `radius`, made of `segments` slices around (from 3 to
+    /// [`MAX_SPHERE_DIVISIONS`](Self::MAX_SPHERE_DIVISIONS)) and `rings` from top to bottom (from 2
+    /// to as many). The sprite wraps once around it, its left and right edges meeting at the back,
+    /// toward `-z`, its top at the top.
     pub fn sphere(radius: f32, segments: u32, rings: u32) -> Self {
-        let [segments, rings] = [segments.max(3), rings.max(2)];
+        let most = Self::MAX_SPHERE_DIVISIONS;
+        let [segments, rings] = [segments.clamp(3, most), rings.clamp(2, most)];
         let mut mesh = Self::default();
         for ring in 0..=rings {
             let (sin_down, cos_down) = (PI * ring as f32 / rings as f32).sin_cos();
@@ -390,8 +396,12 @@ mod tests {
         // The sprite's middle faces the front.
         let front = mesh.vertices.iter().find(|v| v.uv == [0.5, 0.5]).unwrap();
         assert!((front.position[2] - 2.0).abs() < 1e-5);
-        // Too few slices or rings for a shape get the fewest that make one.
+        // Too few slices or rings for a shape get the fewest that make one, and too many the most.
         assert_eq!(MeshData::sphere(1.0, 0, 0).triangle_count(), 3 * 2);
+        let most = MeshData::MAX_SPHERE_DIVISIONS as usize;
+        let huge = MeshData::sphere(1.0, u32::MAX, u32::MAX);
+        assert_eq!(huge.vertices.len(), (most + 1) * (most + 1));
+        assert_eq!(huge.problem(), None);
     }
 
     #[test]

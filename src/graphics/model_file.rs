@@ -2,17 +2,23 @@
 //!
 //! The engine draws what a model's meshes look like, not how they move: it reads the default
 //! scene's nodes and their meshes' triangles, with their positions, normals, texture coordinates
-//! and vertex colors, and each material's base color and PNG texture. Skins, morph targets,
-//! animations, cameras, lights and the rest of materials are left out, and files that require an
-//! extension are refused.
+//! and vertex colors, and each material's base color, PNG texture (how it wraps, and its
+//! `KHR_texture_transform`) and whether it's double-sided. Skins, morph targets, animations,
+//! cameras, lights and the rest of materials are left out, and files that require an extension
+//! are refused.
 
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
-use ::gltf::{buffer, image as gltf_image, material::AlphaMode, mesh::Mode};
+use ::gltf::{
+    buffer, image as gltf_image,
+    material::AlphaMode,
+    mesh::Mode,
+    texture::{self, WrappingMode},
+};
 use image::RgbaImage;
 
 use super::{Color, MeshData, MeshVertex};
@@ -27,8 +33,29 @@ pub(crate) struct ModelData {
     /// The parts' meshes, one for each primitive of the file's meshes that its nodes place.
     pub meshes: Vec<MeshData>,
     /// The parts' textures, decoded.
-    pub images: Vec<RgbaImage>,
+    pub textures: Vec<TextureData>,
     pub parts: Vec<PartData>,
+    /// The files beside the model file that it read, such as a `.gltf`'s buffers and images.
+    pub files: Vec<PathBuf>,
+}
+
+/// A texture of a model: its image, and how texture coordinates outside it pick its texels.
+#[derive(Debug)]
+pub(crate) struct TextureData {
+    pub image: RgbaImage,
+    /// Across, then down.
+    pub wrap: [Wrap; 2],
+}
+
+/// How texture coordinates outside 0 to 1, along one of a texture's axes, pick its texels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Wrap {
+    /// The texels at its edge.
+    Clamp,
+    /// The texture again, as tiles.
+    Repeat,
+    /// The texture again, every other time mirrored.
+    Mirror,
 }
 
 /// A mesh placed in a model.
@@ -36,9 +63,11 @@ pub(crate) struct ModelData {
 pub(crate) struct PartData {
     /// Which of the model's meshes it is: parts placing the same one share it.
     pub mesh: usize,
-    /// Which of its images it shows, if any.
-    pub image: Option<usize>,
+    /// Which of its textures it shows, if any.
+    pub texture: Option<usize>,
     pub transform: Affine3,
+    /// Whether its material is double-sided, showing its triangles from behind too.
+    pub double_sided: bool,
 }
 
 /// Reads a model file's `bytes`, `.gltf` or `.glb`, finding the files it names in `folder`.
@@ -54,12 +83,13 @@ pub(crate) fn read(bytes: &[u8], folder: &Path) -> Result<ModelData, String> {
     }
     let ::gltf::Gltf { document, mut blob } =
         ::gltf::Gltf::from_slice(bytes).map_err(|err| err.to_string())?;
+    let mut files = Vec::new();
     let buffers = document
         .buffers()
         .map(|buffer| {
             let data = match buffer.source() {
                 buffer::Source::Bin => blob.take().ok_or("its binary chunk is missing")?,
-                buffer::Source::Uri(uri) => load_uri(uri, folder)?,
+                buffer::Source::Uri(uri) => load_uri(uri, folder, &mut files)?,
             };
             if data.len() < buffer.length() {
                 return Err(format!(
@@ -77,8 +107,11 @@ pub(crate) fn read(bytes: &[u8], folder: &Path) -> Result<ModelData, String> {
         buffers,
         folder,
         meshes: HashMap::new(),
-        images: HashMap::new(),
-        data: ModelData::default(),
+        textures: HashMap::new(),
+        data: ModelData {
+            files,
+            ..ModelData::default()
+        },
     };
     match document
         .default_scene()
@@ -111,9 +144,9 @@ struct Reader<'a> {
     folder: &'a Path,
     /// The meshes read so far, in `data.meshes`, by the file's mesh and the primitive of it.
     meshes: HashMap<(usize, usize), usize>,
-    /// The images decoded so far, in `data.images`, by the file's image and whether its alpha is
-    /// ignored, as an opaque material's is.
-    images: HashMap<(usize, bool), usize>,
+    /// The textures made so far, in `data.textures`, by the file's image, whether its alpha is
+    /// ignored, as an opaque material's is, and how it wraps.
+    textures: HashMap<(usize, bool, [Wrap; 2]), usize>,
     data: ModelData,
 }
 
@@ -133,11 +166,13 @@ impl Reader<'_> {
                         primitive.index()
                     )
                 })?;
-                let image = self.texture(&primitive.material())?;
+                let material = primitive.material();
+                let texture = self.texture(&material, mesh_index)?;
                 self.data.parts.push(PartData {
                     mesh: mesh_index,
-                    image,
+                    texture,
                     transform,
+                    double_sided: material.double_sided(),
                 });
             }
         }
@@ -164,16 +199,35 @@ impl Reader<'_> {
         Ok(index)
     }
 
-    /// The index in `data.images` of `material`'s base color texture, if it has one, decoding it
-    /// if it hasn't been.
-    fn texture(&mut self, material: &::gltf::Material) -> Result<Option<usize>, String> {
+    /// The index in `data.textures` of `material`'s base color texture, if it has one, as the
+    /// mesh `mesh` of `data.meshes` shows it, decoding it if it hasn't been.
+    fn texture(
+        &mut self,
+        material: &::gltf::Material,
+        mesh: usize,
+    ) -> Result<Option<usize>, String> {
         let Some(info) = material.pbr_metallic_roughness().base_color_texture() else {
             return Ok(None);
         };
         let image = info.texture().source();
         let opaque = material.alpha_mode() == AlphaMode::Opaque;
-        let key = (image.index(), opaque);
-        if let Some(&index) = self.images.get(&key) {
+        // How it wraps matters only along the axes where the mesh's coordinates leave the texture,
+        // and clamping keeps the edges of those that don't from picking up the far side's texels.
+        let sampler = info.texture().sampler();
+        let modes = [sampler.wrap_s(), sampler.wrap_t()];
+        let vertices = &self.data.meshes[mesh].vertices;
+        let wrap = [0, 1].map(|axis| {
+            let leaves = vertices
+                .iter()
+                .any(|vertex| !(0.0..=1.0).contains(&vertex.uv[axis]));
+            match modes[axis] {
+                WrappingMode::Repeat if leaves => Wrap::Repeat,
+                WrappingMode::MirroredRepeat if leaves => Wrap::Mirror,
+                _ => Wrap::Clamp,
+            }
+        });
+        let key = (image.index(), opaque, wrap);
+        if let Some(&index) = self.textures.get(&key) {
             return Ok(Some(index));
         }
         let mut decoded = self
@@ -184,13 +238,16 @@ impl Reader<'_> {
                 pixel.0[3] = u8::MAX;
             }
         }
-        self.data.images.push(decoded);
-        let index = self.data.images.len() - 1;
-        self.images.insert(key, index);
+        self.data.textures.push(TextureData {
+            image: decoded,
+            wrap,
+        });
+        let index = self.data.textures.len() - 1;
+        self.textures.insert(key, index);
         Ok(Some(index))
     }
 
-    fn decode(&self, image: &::gltf::Image) -> Result<RgbaImage, String> {
+    fn decode(&mut self, image: &::gltf::Image) -> Result<RgbaImage, String> {
         let bytes = match image.source() {
             gltf_image::Source::View { view, .. } => {
                 let buffer = &self.buffers[view.buffer().index()];
@@ -201,7 +258,9 @@ impl Reader<'_> {
                         .ok_or("it runs past the end of its buffer")?,
                 )
             }
-            gltf_image::Source::Uri { uri, .. } => Cow::Owned(load_uri(uri, self.folder)?),
+            gltf_image::Source::Uri { uri, .. } => {
+                Cow::Owned(load_uri(uri, self.folder, &mut self.data.files)?)
+            }
         };
         if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
             return Err(
@@ -238,10 +297,27 @@ fn mesh_data(primitive: &::gltf::Primitive, buffers: &[Vec<u8>]) -> Result<MeshD
     let pbr = material.pbr_metallic_roughness();
     let factor = pbr.base_color_factor();
     let opaque = material.alpha_mode() == AlphaMode::Opaque;
-    let set = pbr.base_color_texture().map_or(0, |info| info.tex_coord());
+    let info = pbr.base_color_texture();
+    let transform = info.as_ref().and_then(texture::Info::texture_transform);
+    // A transform may pick other texture coordinates.
+    let set = info.as_ref().map_or(0, |info| {
+        let picked = transform
+            .as_ref()
+            .and_then(|transform| transform.tex_coord());
+        picked.unwrap_or(info.tex_coord())
+    });
     let uvs: Vec<[f32; 2]> = reader
         .read_tex_coords(set)
-        .map(|uvs| uvs.into_f32().collect())
+        .map(|uvs| match &transform {
+            Some(transform) => {
+                let [offset, scale] = [transform.offset(), transform.scale()];
+                let rotation = transform.rotation();
+                uvs.into_f32()
+                    .map(|uv| transform_uv(uv, offset, rotation, scale))
+                    .collect()
+            }
+            None => uvs.into_f32().collect(),
+        })
         .unwrap_or_default();
     let colors: Vec<[f32; 4]> = reader
         .read_colors(0)
@@ -289,6 +365,14 @@ fn mesh_data(primitive: &::gltf::Primitive, buffers: &[Vec<u8>]) -> Result<MeshD
     })
 }
 
+/// `uv` moved as `KHR_texture_transform` moves it: scaled, turned `rotation` radians, then
+/// moved by `offset`, as its specification's matrix `translation * rotation * scale` does.
+fn transform_uv(uv: [f32; 2], offset: [f32; 2], rotation: f32, scale: [f32; 2]) -> [f32; 2] {
+    let [x, y] = [uv[0] * scale[0], uv[1] * scale[1]];
+    let (sin, cos) = rotation.sin_cos();
+    [cos * x - sin * y + offset[0], sin * x + cos * y + offset[1]]
+}
+
 /// Three of `indices` for each triangle `mode` makes of them, each turning as the first does.
 fn triangles(mode: Mode, indices: &[u32]) -> Result<Vec<u32>, String> {
     let corners = |i: usize| indices[i];
@@ -333,8 +417,9 @@ fn named(what: &str, index: usize, name: Option<&str>) -> String {
     }
 }
 
-/// The data a URI in a file names: in itself, base64 after `data:`, or in a file in `folder`.
-fn load_uri(uri: &str, folder: &Path) -> Result<Vec<u8>, String> {
+/// The data a URI in a file names: in itself, base64 after `data:`, or in a file in `folder`,
+/// whose path it adds to `files`.
+fn load_uri(uri: &str, folder: &Path, files: &mut Vec<PathBuf>) -> Result<Vec<u8>, String> {
     if let Some(data) = uri.strip_prefix("data:") {
         let (kind, payload) = data.split_once(',').ok_or("a data URI holds no data")?;
         if !kind.ends_with(";base64") {
@@ -346,7 +431,11 @@ fn load_uri(uri: &str, folder: &Path) -> Result<Vec<u8>, String> {
         return Err(format!("`{uri}` isn't a file beside the model"));
     }
     let path = folder.join(percent_decoded(uri)?);
-    std::fs::read(&path).map_err(|err| format!("{}: {err}", path.display()))
+    let data = std::fs::read(&path).map_err(|err| format!("{}: {err}", path.display()));
+    if !files.contains(&path) {
+        files.push(path);
+    }
+    data
 }
 
 /// The bytes `text` encodes in base64, or `None` if it isn't base64.
@@ -545,8 +634,9 @@ mod tests {
             model
                 .parts
                 .iter()
-                .all(|part| part.mesh == 0 && part.image.is_none())
+                .all(|part| part.mesh == 0 && part.texture.is_none() && !part.double_sided)
         );
+        assert!(model.files.is_empty(), "its buffer is in the file itself");
         let mesh = &model.meshes[0];
         assert_eq!(mesh.indices, [0, 1, 2]);
         // Without normals, its corners face as the triangle does.
@@ -660,12 +750,84 @@ mod tests {
             primitive(2)
         ));
         let model = read_str(&json).unwrap();
-        let images: Vec<_> = model.parts.iter().map(|part| part.image).collect();
-        assert_eq!(images, [Some(0), Some(0), Some(1)]);
+        let textures: Vec<_> = model.parts.iter().map(|part| part.texture).collect();
+        assert_eq!(textures, [Some(0), Some(0), Some(1)]);
         // Opaque materials ignore its alpha; masked ones keep it.
-        assert_eq!(model.images[0].get_pixel(1, 0).0, [255, 0, 0, 255]);
-        assert_eq!(model.images[1].get_pixel(1, 0).0, [255, 0, 0, 100]);
+        let image = |i: usize| &model.textures[i].image;
+        assert_eq!(image(0).get_pixel(1, 0).0, [255, 0, 0, 255]);
+        assert_eq!(image(1).get_pixel(1, 0).0, [255, 0, 0, 100]);
         assert_eq!(model.meshes[0].vertices[0].uv, [0.0, 1.0]);
+        // Its coordinates stay on the texture, so however its sampler wraps, it clamps.
+        assert!(
+            model
+                .textures
+                .iter()
+                .all(|texture| texture.wrap == [Wrap::Clamp; 2])
+        );
+    }
+
+    /// A triangle showing a texture with its coordinates `uvs`, sampled by `sampler`'s JSON if
+    /// it has one, with `material`'s JSON in its material.
+    fn textured(uvs: &[f32], sampler: Option<&str>, material: &str) -> String {
+        let mut buffer = Buffer::new();
+        let (positions, indices) = triangle(&mut buffer);
+        let uvs = buffer.floats(uvs, "VEC2", 2);
+        let image = RgbaImage::from_pixel(1, 1, image::Rgba([9, 9, 9, 255]));
+        let uri = format!("data:image/png;base64,{}", encode_base64(&png(&image)));
+        let (samplers, texture) = match sampler {
+            Some(sampler) => (format!(r#""samplers":[{sampler}],"#), r#","sampler":0"#),
+            None => (String::new(), ""),
+        };
+        buffer.gltf(&format!(
+            r#"{samplers}"images":[{{"uri":"{uri}"}}],"textures":[{{"source":0{texture}}}],
+            "materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}}}}{material}}}],
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":{positions},"TEXCOORD_0":{uvs}}},"indices":{indices},"material":0}}]}}],
+            "nodes":[{{"mesh":0}}]"#
+        ))
+    }
+
+    #[test]
+    fn textures_wrap_as_their_samplers_say_where_coordinates_leave_them() {
+        // Repeating across, as glTF's samplers do by default, but not down, where it stays on.
+        let tiled = read_str(&textured(&[0.0, 0.0, 3.0, 0.0, 0.0, 1.0], None, "")).unwrap();
+        assert_eq!(tiled.textures[0].wrap, [Wrap::Repeat, Wrap::Clamp]);
+
+        // Mirrored across, and clamped down, though it leaves the texture that way too.
+        let sampler = r#"{"wrapS":33648,"wrapT":33071}"#;
+        let json = textured(&[-1.0, 0.0, 2.0, 0.0, 0.0, 2.0], Some(sampler), "");
+        let mirrored = read_str(&json).unwrap();
+        assert_eq!(mirrored.textures[0].wrap, [Wrap::Mirror, Wrap::Clamp]);
+    }
+
+    #[test]
+    fn texture_transforms_move_coordinates() {
+        let transform = r#","extensions":{"KHR_texture_transform":{"offset":[0.5,0],"rotation":1.5707964,"scale":[2,3]}}"#;
+        let json = textured(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0], None, "")
+            .replace(r#"{"index":0}"#, &format!(r#"{{"index":0{transform}}}"#))
+            .replace(
+                r#""asset""#,
+                r#""extensionsUsed":["KHR_texture_transform"],"asset""#,
+            );
+        let model = read_str(&json).unwrap();
+        let uvs: Vec<_> = model.meshes[0].vertices.iter().map(|v| v.uv).collect();
+        // Scaled to (2, 0) and (0, 3), turned a quarter turn to (0, 2) and (-3, 0), then moved.
+        let expected = [[0.5, 0.0], [0.5, 2.0], [-2.5, 0.0]];
+        for (uv, expected) in uvs.iter().zip(expected) {
+            assert!(
+                (uv[0] - expected[0]).abs() < 1e-5 && (uv[1] - expected[1]).abs() < 1e-5,
+                "{uvs:?}"
+            );
+        }
+        // Off the texture both ways now, and repeating as the sampler's default.
+        assert_eq!(model.textures[0].wrap, [Wrap::Repeat; 2]);
+    }
+
+    #[test]
+    fn double_sided_materials_say_so() {
+        let json = textured(&[0.0; 6], None, r#","doubleSided":true"#);
+        assert!(read_str(&json).unwrap().parts[0].double_sided);
+        let json = textured(&[0.0; 6], None, "");
+        assert!(!read_str(&json).unwrap().parts[0].double_sided);
     }
 
     #[test]
@@ -720,7 +882,10 @@ mod tests {
         );
         let model = read(json.as_bytes(), folder.path()).unwrap();
         assert_eq!(model.meshes[0].vertices.len(), 3);
-        assert_eq!(model.images[0].get_pixel(0, 0).0, [1, 2, 3, 255]);
+        assert_eq!(model.textures[0].image.get_pixel(0, 0).0, [1, 2, 3, 255]);
+        // Each read once, and listed, so tools know to read the model again when they change.
+        let files = ["tri data.bin", "skin.png"].map(|name| folder.path().join(name));
+        assert_eq!(model.files, files);
 
         let missing = json.replace("skin.png", "gone.png");
         let err = read(missing.as_bytes(), folder.path()).unwrap_err();
@@ -790,7 +955,7 @@ mod tests {
 
         // Colored by its vertices: staves of two browns and iron hoops.
         let barrel = prop("barrel.glb");
-        assert_eq!((barrel.parts.len(), barrel.images.len()), (1, 0));
+        assert_eq!((barrel.parts.len(), barrel.textures.len()), (1, 0));
         let colors: HashSet<[u8; 4]> = barrel.meshes[0]
             .vertices
             .iter()
@@ -799,10 +964,19 @@ mod tests {
         assert!(colors.contains(&[0x4c, 0x4a, 0x54, 255]), "{colors:?}");
         assert!(colors.len() >= 5, "{colors:?}");
 
-        // Textured, the texture held in the file.
+        // Textured, the texture held in the file. Its sampler repeats, but its coordinates stay on
+        // the texture, so it clamps; and like the other props, it shows only from outside.
         let crate_ = prop("crate.glb");
-        assert_eq!(crate_.parts[0].image, Some(0));
-        assert_eq!(crate_.images[0].dimensions(), (12, 12));
+        assert_eq!(crate_.parts[0].texture, Some(0));
+        assert_eq!(crate_.textures[0].image.dimensions(), (12, 12));
+        assert_eq!(crate_.textures[0].wrap, [Wrap::Clamp; 2]);
+        assert!(crate_.files.is_empty());
+        let props = [&barrel, &crate_];
+        assert!(
+            props
+                .iter()
+                .all(|prop| prop.parts.iter().all(|p| !p.double_sided))
+        );
 
         // A top, and four legs that share a mesh.
         let table = prop("table.glb");

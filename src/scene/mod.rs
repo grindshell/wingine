@@ -2188,7 +2188,7 @@ impl Expand<'_> {
     /// Changes the node at `target` among `nodes`, the nodes of the scene file `file` with any
     /// of its instances expanded, by the fields `change` sets.
     fn change(
-        &self,
+        &mut self,
         nodes: &mut [NodeDef],
         target: &str,
         change: &BTreeMap<String, Value>,
@@ -2222,7 +2222,7 @@ impl Expand<'_> {
             list = &mut node.children;
         };
         // Sprites name their sheets with their files' paths here: the file of the sheet the
-        // node shows, or a mesh showing none, the file the instance places.
+        // node shows, or for a mesh showing none, the file the node is from.
         let mut change = change.clone();
         if let Some(Value::String(sheet)) = change.get_mut("sheet") {
             let shown = match &node.kind {
@@ -2231,10 +2231,11 @@ impl Expand<'_> {
                 KindDef::Mesh(mesh) => mesh.sprite.as_ref().map(|sprite| &sprite.sheet),
                 _ => None,
             };
-            let from = shown
-                .and_then(|key| key.rsplit_once('#'))
-                .map_or(file, |(file, _)| file);
-            *sheet = sheet_key(from, sheet);
+            let from = match shown.and_then(|key| key.rsplit_once('#')) {
+                Some((from, _)) => from.to_owned(),
+                None => self.file_of(file, target),
+            };
+            *sheet = sheet_key(&from, sheet);
         }
         let inside = file::Parent {
             path: &parent,
@@ -2246,6 +2247,48 @@ impl Expand<'_> {
         *node = changed;
         Ok(())
     }
+
+    /// The scene file the node at `target`, a path of names among the nodes of the scene file
+    /// `file` with its instances expanded, is from: `file`, or a file one of its instances
+    /// places, through their instances. `file` if it can't tell.
+    fn file_of(&mut self, file: &str, target: &str) -> String {
+        let mut from = file.to_owned();
+        let Ok(mut scene) = self.assets.scene(&from) else {
+            return from;
+        };
+        // The indices of the nodes the path leads through, in `scene`.
+        let mut at: Vec<usize> = Vec::new();
+        for name in target.split('/') {
+            let children = children_at(&scene.children, &at);
+            if let Some(i) = children.iter().position(|node| node.name == name) {
+                at.push(i);
+                continue;
+            }
+            // Not among the node's own children, so among those of the scene file it places.
+            let placed = match at.split_last() {
+                Some((&last, above)) => match &children_at(&scene.children, above)[last].kind {
+                    KindDef::Instance(instance) => instance.scene.clone(),
+                    _ => return file.to_owned(),
+                },
+                None => return file.to_owned(),
+            };
+            let Ok(placed_scene) = self.assets.scene(&placed) else {
+                return file.to_owned();
+            };
+            let Some(i) = placed_scene.children.iter().position(|n| n.name == name) else {
+                return file.to_owned();
+            };
+            from = placed;
+            scene = placed_scene;
+            at = vec![i];
+        }
+        from
+    }
+}
+
+/// The children of the node the indices `at` lead to among `nodes`, or `nodes` for none.
+fn children_at<'a>(nodes: &'a [NodeDef], at: &[usize]) -> &'a [NodeDef] {
+    at.iter().fold(nodes, |nodes, &i| &nodes[i].children)
 }
 
 /// What building a scene's nodes needs: the scene file's path, for errors, the font for its text,

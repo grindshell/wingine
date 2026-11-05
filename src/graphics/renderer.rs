@@ -50,6 +50,10 @@ pub(crate) struct Renderer {
     texture_layout: wgpu::BindGroupLayout,
     /// Nearest-neighbor, so pixel art stays crisp when scaled.
     sampler: wgpu::Sampler,
+    /// Nearest-neighbor samplers for model files' textures that repeat, by how they wrap across
+    /// and down, made as they're first wanted.
+    #[cfg(feature = "models")]
+    wrapped_samplers: Vec<([wgpu::AddressMode; 2], wgpu::Sampler)>,
     /// 1x1 white texture used for solid fills.
     white: Texture,
     vertex_buffer: wgpu::Buffer,
@@ -62,8 +66,9 @@ pub(crate) struct Renderer {
 
 /// What draws the meshes of 3D views.
 struct MeshRenderer {
-    /// For meshes as they are, then for mirrored ones, whose triangles wind the other way.
-    pipelines: [wgpu::RenderPipeline; 2],
+    /// For meshes showing only the side their triangles face, then for double-sided ones, each
+    /// as they are, then mirrored, whose triangles wind the other way.
+    pipelines: [[wgpu::RenderPipeline; 2]; 2],
     views_layout: wgpu::BindGroupLayout,
     /// Each view's [`ViewUniform`], `view_stride` bytes apart.
     views_buffer: wgpu::Buffer,
@@ -202,6 +207,8 @@ impl Renderer {
             globals_bind_group,
             texture_layout,
             sampler,
+            #[cfg(feature = "models")]
+            wrapped_samplers: Vec::new(),
             white,
             vertex_buffer,
             index_buffer: create_index_buffer(device, INITIAL_QUADS),
@@ -230,6 +237,54 @@ impl Renderer {
             queue,
             &self.texture_layout,
             &self.sampler,
+            width,
+            height,
+            rgba,
+        )
+    }
+
+    /// Uploads `rgba` as [`create_texture`](Self::create_texture) does, sampled by `address`
+    /// across and down where texture coordinates leave it, as model files' textures may be.
+    #[cfg(feature = "models")]
+    pub fn create_wrapped_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        [width, height]: [u32; 2],
+        rgba: &[u8],
+        address: [wgpu::AddressMode; 2],
+    ) -> Texture {
+        let clamped = [wgpu::AddressMode::ClampToEdge; 2];
+        let sampler = if address == clamped {
+            &self.sampler
+        } else {
+            let index = match self
+                .wrapped_samplers
+                .iter()
+                .position(|(a, _)| *a == address)
+            {
+                Some(index) => index,
+                None => {
+                    let [address_mode_u, address_mode_v] = address;
+                    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                        label: Some("nearest, wrapped"),
+                        address_mode_u,
+                        address_mode_v,
+                        mag_filter: wgpu::FilterMode::Nearest,
+                        min_filter: wgpu::FilterMode::Nearest,
+                        ..Default::default()
+                    });
+                    self.wrapped_samplers.push((address, sampler));
+                    self.wrapped_samplers.len() - 1
+                }
+            };
+            &self.wrapped_samplers[index].1
+        };
+        create_texture(
+            device,
+            queue,
+            &self.texture_layout,
+            sampler,
             width,
             height,
             rgba,
@@ -412,7 +467,7 @@ impl MeshRenderer {
             bind_group_layouts: &[Some(&views_layout), Some(texture_layout)],
             immediate_size: 0,
         });
-        let pipeline = |front_face| {
+        let pipeline = |front_face, cull_mode| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("mesh"),
                 layout: Some(&layout),
@@ -450,7 +505,7 @@ impl MeshRenderer {
                 },
                 primitive: wgpu::PrimitiveState {
                     front_face,
-                    cull_mode: Some(wgpu::Face::Back),
+                    cull_mode,
                     ..Default::default()
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
@@ -475,10 +530,11 @@ impl MeshRenderer {
                 cache: None,
             })
         };
-        let pipelines = [
-            pipeline(wgpu::FrontFace::Ccw),
-            pipeline(wgpu::FrontFace::Cw),
-        ];
+        // Mirrored meshes' triangles face the other way round their corners, which also tells
+        // the shader which side of a double-sided mesh shows.
+        let pipelines = [Some(wgpu::Face::Back), None].map(|cull_mode| {
+            [wgpu::FrontFace::Ccw, wgpu::FrontFace::Cw].map(|front| pipeline(front, cull_mode))
+        });
 
         let alignment = u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let view_stride = (size_of::<ViewUniform>() as u64).next_multiple_of(alignment);
@@ -620,12 +676,14 @@ impl MeshRenderer {
         let offset = (index as u64 * self.view_stride) as u32;
         pass.set_bind_group(0, &self.views_bind_group, &[offset]);
         let instance_size = size_of::<Instance>() as u64;
-        let mut mirrored = None;
+        let mut pipeline = None;
         for i in segment.draws.clone() {
             let draw = &canvas.mesh_draws[i as usize];
-            if mirrored != Some(draw.mirrored) {
-                pass.set_pipeline(&self.pipelines[usize::from(draw.mirrored)]);
-                mirrored = Some(draw.mirrored);
+            let wanted = (draw.double_sided, draw.mirrored);
+            if pipeline != Some(wanted) {
+                let [sides, winding] = [draw.double_sided, draw.mirrored].map(usize::from);
+                pass.set_pipeline(&self.pipelines[sides][winding]);
+                pipeline = Some(wanted);
             }
             let texture = draw.texture.as_ref().unwrap_or(white);
             pass.set_bind_group(1, texture.bind_group(), &[]);

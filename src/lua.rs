@@ -101,7 +101,8 @@
 //!   `node:position()`, `node:set_position(x, y)`, `node:anchor()` (two fractions, or `nil`),
 //!   `node:set_anchor(x, y)` (or `nil` to place it from its parent's origin), `node:rotation()`,
 //!   `node:set_rotation(angle)`, `node:scale()`, `node:set_scale(x, y)` (`y` is `x` if left
-//!   out), `node:world_position()` (its origin in the scene's coordinates),
+//!   out), `node:world_position()` (its origin in the scene's coordinates, an error for a node
+//!   in a 3D view),
 //!   `node:is_visible()` and `node:set_visible(visible)`; numbers must be finite. Nodes in 3D
 //!   views have no rotation or anchor, but `node:position_3d()` and
 //!   `node:set_position_3d(position)` (a vector, of which `position` is `x` and `y`),
@@ -1039,18 +1040,20 @@ impl SceneNode {
         })?
     }
 
-    /// Fails if the node is placed in 3D, where `what` isn't: it turns by yaw, pitch and roll.
-    fn check_2d(&self, what: &str) -> mlua::Result<()> {
+    /// Fails if the node is placed in 3D, where `what` isn't, saying `instead` what it has.
+    fn check_2d(&self, what: &str, instead: &str) -> mlua::Result<()> {
         self.read(|scene, id| match scene.node(id).placement3() {
             Some(_) => Err(mlua::Error::runtime(format!(
-                "{} is placed in 3D, in a 3D view, so it has no {what}: it turns by yaw, pitch \
-                 and roll",
+                "{} is placed in 3D, in a 3D view, so it has no {what}: {instead}",
                 scene.describe(id)
             ))),
             None => Ok(()),
         })?
     }
 }
+
+/// What a node placed in 3D has instead of a rotation or an anchor.
+const TURNS_3D: &str = "it turns by yaw, pitch and roll";
 
 fn not_3d(described: &str) -> mlua::Error {
     mlua::Error::runtime(format!(
@@ -1114,12 +1117,12 @@ impl mlua::UserData for SceneNode {
             node.write(|scene, id| scene.node_mut(id).set_position([x, y]))
         });
         methods.add_method("rotation", |_, node, ()| {
-            node.check_2d("rotation")?;
+            node.check_2d("rotation", TURNS_3D)?;
             node.read(|scene, id| scene.node(id).rotation())
         });
         methods.add_method("set_rotation", |_, node, rotation: f32| {
             check_finite(&[rotation], "a rotation")?;
-            node.check_2d("rotation")?;
+            node.check_2d("rotation", TURNS_3D)?;
             node.write(|scene, id| scene.node_mut(id).set_rotation(rotation))
         });
         methods.add_method("scale", |_, node, ()| {
@@ -1153,7 +1156,7 @@ impl mlua::UserData for SceneNode {
                     }
                 };
                 if anchor.is_some() {
-                    node.check_2d("anchor")?;
+                    node.check_2d("anchor", TURNS_3D)?;
                 }
                 node.write(|scene, id| scene.node_mut(id).set_anchor(anchor))
             },
@@ -1272,6 +1275,10 @@ impl mlua::UserData for SceneNode {
             })
         });
         methods.add_method("world_position", |_, node, ()| {
+            node.check_2d(
+                "world position in the scene",
+                "node:world_position_3d() is where it is in its view's world",
+            )?;
             let [x, y] = node.read(|scene, id| scene.transform(id).apply([0.0, 0.0]))?;
             Ok((x, y))
         });
