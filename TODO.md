@@ -73,7 +73,7 @@ The suggested shapes are only suggestions; the design is the engine's to make.
   `>`. Dead keys and IME input deliver what they compose. Physical keys behave exactly as
   they do now.
 
-- [ ] **Handing a scripted run somewhere to start.**
+- [x] **Handing a scripted run somewhere to start.**
   Source: [script::run](src/script.rs), currently line 86, builds its `Simulation` from
   the config alone. Its commands are input, `resize`, `screenshot` and `benchmark`.
   A `WINGINE_SCRIPT` run keeps its saves in an empty temporary folder and can be handed

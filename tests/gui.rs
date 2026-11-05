@@ -1,5 +1,7 @@
 //! Tests for egui interfaces drawn over games, driven through `Simulation`.
 
+use std::{cell::Cell, fs, path::Path, rc::Rc};
+
 use wingine::{
     Context, Game, Redraw, WindowConfig,
     graphics::{Canvas, Color},
@@ -264,6 +266,51 @@ fn an_interface_wants_frames_only_while_it_changes() {
         .join()
         .unwrap();
     assert_eq!(simulation.next_frame_in(), Some(0.0));
+}
+
+/// A shop window, whose button counts its clicks where a test can read them after a scripted run
+/// has ended the game.
+struct Shop(Rc<Cell<u32>>);
+
+impl Game for Shop {
+    fn update(&mut self, _ctx: &mut Context, _dt: f32) {}
+
+    fn gui(&mut self, _ctx: &mut Context, ui: &mut egui::Ui) {
+        egui::Window::new("Shop")
+            .fixed_pos([10.0, 10.0])
+            .show(ui.ctx(), |ui| {
+                if ui.button("Buy a sword").clicked() {
+                    self.0.set(self.0.get() + 1);
+                }
+            });
+    }
+
+    fn draw(&mut self, _canvas: &mut Canvas) {}
+}
+
+#[test]
+fn a_script_clicks_widgets_by_label() {
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("gui-script");
+    fs::create_dir_all(&directory).unwrap();
+    let script = directory.join("shop.txt");
+    // The window shows from its second frame.
+    fs::write(
+        &script,
+        "wait 2\nclick-gui Buy a sword\nclick-gui Buy a sword\n",
+    )
+    .unwrap();
+    let bought = Rc::new(Cell::new(0));
+    let shop = Shop(bought.clone());
+    wingine::script::run(&config(), |_| Ok(shop), &script).unwrap();
+    assert_eq!(bought.get(), 2);
+
+    fs::write(&script, "click-gui Buy a sword\n").unwrap();
+    let err = wingine::script::run(&config(), |_| Ok(Shop(bought.clone())), &script).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("line 1: the interface had no widget labelled `Buy a sword`"),
+        "{err}"
+    );
 }
 
 #[test]

@@ -38,7 +38,8 @@ written.
 
 A game run [without a window](../running-games.md#checking-a-game-without-a-window) keeps its
 saves in a temporary folder instead, which starts empty and goes when the run ends, so checks and
-tests never see or change the player's saves.
+tests never see or change the player's saves. A scripted run can start with copies of a folder's
+saves instead, with its `saves` command.
 
 ## Functions
 

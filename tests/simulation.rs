@@ -8,6 +8,8 @@ use wingine::{
     headless::{KeyRepeat, Simulation},
     input::{GamepadButton, Key, MouseButton},
     math::Rect,
+    save::Saves,
+    scene::Value,
 };
 
 /// Records what the game sees of its input each frame.
@@ -284,6 +286,65 @@ impl Game for TextProbe {
     }
 
     fn draw(&mut self, _canvas: &mut Canvas) {}
+}
+
+/// Writes the save `progress` each update.
+struct Saver;
+
+impl Game for Saver {
+    fn update(&mut self, ctx: &mut Context, _dt: f32) {
+        ctx.saves()
+            .write("progress", &Value::Number(1.0))
+            .expect("the save is written");
+    }
+
+    fn draw(&mut self, _canvas: &mut Canvas) {}
+}
+
+#[test]
+fn a_script_starts_from_copies_of_saves() {
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("simulation-saves");
+    let _ = fs::remove_dir_all(&directory);
+    let start = directory.join("deep career");
+    Saves::in_folder(&start)
+        .write("career", &Value::Number(7.0))
+        .unwrap();
+    let script = directory.join("deep.txt");
+    fs::write(
+        &script,
+        "# From a career deep in.\nsaves deep career\nwait 2\n",
+    )
+    .unwrap();
+
+    // What the game read as it started, and where its saves were.
+    let seen = RefCell::new(None);
+    wingine::script::run(
+        &config(),
+        |ctx| {
+            let saves = ctx.saves();
+            let career = saves.read("career")?;
+            *seen.borrow_mut() = Some((career, saves.folder().unwrap().to_owned()));
+            Ok(Saver)
+        },
+        &script,
+    )
+    .unwrap();
+    let (career, folder) = seen.take().unwrap();
+    assert_eq!(career, Some(Value::Number(7.0)));
+    assert_ne!(folder, start);
+    assert!(!folder.exists(), "the copy goes when the run ends");
+    assert_eq!(
+        Saves::in_folder(&start).list().unwrap(),
+        ["career"],
+        "the run never writes the saves it started from"
+    );
+
+    fs::write(&script, "saves nowhere\n").unwrap();
+    let err = wingine::script::run(&config(), |_| Ok(Saver), &script).unwrap_err();
+    assert!(
+        matches!(&err, Error::Script { message, .. } if message.starts_with("line 1: could not read the saves in")),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]

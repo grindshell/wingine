@@ -455,7 +455,9 @@ networking or 3D pipelines.
   kind, so both draw the same pixels.
 - `src/script.rs`: scripted runs, which drive a game with simulated input from a text file
   (unrelated to Luau scripts), built on `Simulation`. Their `benchmark` command renders every
-  frame for a while and reports how long frames took.
+  frame for a while and reports how long frames took. A run can start somewhere: `saves`, first,
+  copies a folder's saves into a `TemporaryFolder` the run uses, and `click-gui` clicks egui
+  widgets by label (`Simulation::click_gui`), such as a debug window's.
 - `examples/garden/`: a garden around a windmill, laid out in `garden.scene.luau`, which
   `main.luau` loads and plays: it turns the mill's sails and a flock of birds (nodes whose
   children turn with them), walks the player, which waddles and mirrors about its feet, stops it

@@ -8,6 +8,7 @@
 //! A script has one command per line; `#` starts a comment:
 //!
 //! ```text
+//! saves deep-career      # start from copies of the saves in a folder: first, if at all
 //! wait 30                # run 30 frames
 //! wait 0.5s              # run half a second of game time (30 frames)
 //! press Right            # hold a key down (names as in `Key`, any case)
@@ -20,6 +21,7 @@
 //! mouse-up Left
 //! click 120 64           # move the cursor, press Left, run one frame, release
 //! click Right            # the same with another button, where the cursor already is
+//! click-gui Go to town   # click the interface's first widget labelled the rest of the line
 //! pad-down 1 South       # hold gamepad 1's button down (names as in `GamepadButton`)
 //! pad-up 1 South         # let it go
 //! pad-tap 2 Start        # press gamepad 2's button, run one frame, release
@@ -35,6 +37,16 @@
 //!
 //! Gamepads are numbered from 1, and connect when a command first names them, along with any
 //! numbered before them.
+//!
+//! A run's [saves](crate::save) are in a temporary folder, which starts empty, unless the script
+//! starts with `saves` and a folder, relative to the script's (the folder a window keeps them in,
+//! or one a run before kept): then it starts with copies of the files in that folder, so the run
+//! never changes them. Either way, the folder goes when the run ends.
+//!
+//! `click-gui` clicks a widget of the game's [interface](crate::gui) as
+//! [`Simulation::click_gui`] does, by its label: a button's text, or what a field is labelled by.
+//! The interface must have laid it out in the frame before, and a window shows from the frame
+//! after it opens, so `wait` a frame or two for one. It needs the `egui` feature.
 //!
 //! A key held down repeats as a window's system would repeat it, the last key pressed only: by
 //! default, after half a second, 30 times a second (see [`KeyRepeat`]). Keys pressed, and their
@@ -62,6 +74,7 @@ use crate::{
     Context, Error, FrameStats, Game, Result, WindowConfig,
     headless::{KeyRepeat, Simulation},
     input::{GamepadButton, Key, MouseButton, Stick},
+    save::TemporaryFolder,
 };
 
 /// The environment variable naming a script for [`run`](crate::run) to run instead of opening a
@@ -71,6 +84,7 @@ pub const ENV_VAR: &str = "WINGINE_SCRIPT";
 /// One script command.
 #[derive(Clone, Debug, PartialEq)]
 enum Command {
+    Saves(PathBuf),
     Wait(u32),
     Press(Key),
     Release(Key),
@@ -81,6 +95,8 @@ enum Command {
     MouseDown(MouseButton),
     MouseUp(MouseButton),
     Click(MouseButton, Option<[f32; 2]>),
+    #[cfg(feature = "egui")]
+    ClickGui(String),
     PadDown(u32, GamepadButton),
     PadUp(u32, GamepadButton),
     PadTap(u32, GamepadButton),
@@ -108,10 +124,30 @@ pub fn run<G: Game>(
     let commands = parse(&source).map_err(fail)?;
     let directory = path.parent().unwrap_or(Path::new("."));
 
-    let mut simulation = Simulation::new(config, init)?;
+    // Declared before the simulation, so its game has finished with the saves first.
+    let saves = match commands.first() {
+        Some((line, Command::Saves(folder))) => {
+            let copy = TemporaryFolder::new();
+            copy_files(&directory.join(folder), copy.path())
+                .map_err(|err| fail(format!("line {line}: {err}")))?;
+            Some(copy)
+        }
+        _ => None,
+    };
+    let config = WindowConfig {
+        save_folder: match &saves {
+            Some(saves) => Some(saves.path().to_owned()),
+            None => config.save_folder.clone(),
+        },
+        ..config.clone()
+    };
+    let mut simulation = Simulation::new(&config, init)?;
     // Gamepads connected so far.
     let mut gamepads = 0;
-    for command in commands {
+    for (line, command) in commands {
+        // Only `click-gui` names its line when it fails.
+        #[cfg(not(feature = "egui"))]
+        let _ = line;
         if let Command::PadDown(gamepad, _)
         | Command::PadUp(gamepad, _)
         | Command::PadTap(gamepad, _)
@@ -123,6 +159,8 @@ pub fn run<G: Game>(
             }
         }
         match command {
+            // Copied before the game started.
+            Command::Saves(_) => {}
             Command::Wait(frames) => simulation.run_frames(frames),
             Command::Press(key) => simulation.key_down(key),
             Command::Release(key) => simulation.key_up(key),
@@ -137,6 +175,17 @@ pub fn run<G: Game>(
                     simulation.move_mouse(x, y);
                 }
                 simulation.tap_mouse(button);
+            }
+            #[cfg(feature = "egui")]
+            Command::ClickGui(label) => {
+                if simulation.gui_rect(&label).is_none() {
+                    return Err(fail(format!(
+                        "line {line}: the interface had no widget labelled `{label}` in the \
+                         frame before (a window shows from the frame after it opens, so `wait` \
+                         for one)"
+                    )));
+                }
+                simulation.click_gui(&label);
             }
             Command::PadDown(gamepad, button) => simulation.button_down(gamepad, button),
             Command::PadUp(gamepad, button) => simulation.button_up(gamepad, button),
@@ -183,6 +232,22 @@ pub fn run<G: Game>(
                     println!("  saved {}", file.display());
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// Copies the files in folder `from` into folder `to`, which it makes.
+fn copy_files(from: &Path, to: &Path) -> Result<(), String> {
+    let entries = fs::read_dir(from)
+        .map_err(|err| format!("could not read the saves in {}: {err}", from.display()))?;
+    fs::create_dir_all(to).map_err(|err| format!("could not create {}: {err}", to.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|err| format!("could not read {}: {err}", from.display()))?;
+        let path = entry.path();
+        if path.is_file() {
+            fs::copy(&path, to.join(entry.file_name()))
+                .map_err(|err| format!("could not copy {}: {err}", path.display()))?;
         }
     }
     Ok(())
@@ -260,26 +325,44 @@ fn csv(first: u64, stats: &[FrameStats]) -> String {
     text
 }
 
-/// Parses a script, or describes the first problem with its line number.
-fn parse(source: &str) -> Result<Vec<Command>, String> {
+/// Parses a script into its commands and their line numbers, or describes the first problem
+/// with its line number.
+fn parse(source: &str) -> Result<Vec<(usize, Command)>, String> {
     let mut commands = Vec::new();
     for (index, line) in source.lines().enumerate() {
+        let number = index + 1;
         let line = line.split('#').next().unwrap_or_default();
         let words: Vec<&str> = line.split_whitespace().collect();
         let Some((&name, args)) = words.split_first() else {
             continue;
         };
-        // What `type` types is the rest of the line, spaces and all.
+        // What these commands take is the rest of the line, spaces and all.
         let rest = line.trim().strip_prefix(name).unwrap_or_default().trim();
         let command = match (name, rest) {
-            ("type", "") => Err(format!("wrong arguments for `{name}`")),
+            ("saves" | "type" | "click-gui", "") => Err(format!("wrong arguments for `{name}`")),
+            ("saves", _) if !commands.is_empty() => {
+                Err("`saves` must come before every other command".to_owned())
+            }
+            ("saves", folder) => Ok(Command::Saves(PathBuf::from(folder))),
             ("type", text) => Ok(Command::Type(text.to_owned())),
+            ("click-gui", label) => click_gui(label),
             _ => parse_command(name, args),
         }
-        .map_err(|err| format!("line {}: {err}", index + 1))?;
-        commands.push(command);
+        .map_err(|err| format!("line {number}: {err}"))?;
+        commands.push((number, command));
     }
     Ok(commands)
+}
+
+/// Parses `click-gui`, which needs the `egui` feature.
+fn click_gui(label: &str) -> Result<Command, String> {
+    #[cfg(feature = "egui")]
+    return Ok(Command::ClickGui(label.to_owned()));
+    #[cfg(not(feature = "egui"))]
+    {
+        let _ = label;
+        Err("`click-gui` needs the engine's `egui` feature".to_owned())
+    }
 }
 
 fn parse_command(name: &str, args: &[&str]) -> Result<Command, String> {
@@ -386,10 +469,17 @@ fn size(text: &str) -> Result<u32, String> {
 mod tests {
     use super::*;
 
+    /// The commands of `source`, without their line numbers.
+    fn commands(source: &str) -> Result<Vec<Command>, String> {
+        let commands = parse(source)?;
+        Ok(commands.into_iter().map(|(_, command)| command).collect())
+    }
+
     #[test]
     fn parses_every_command() {
         let script = "
             # A comment line.
+            saves deep career
             wait 10
             wait 0.5s      # trailing comment
             press right
@@ -419,8 +509,9 @@ mod tests {
             benchmark 10 stats/run.csv
         ";
         assert_eq!(
-            parse(script),
+            commands(script),
             Ok(vec![
+                Command::Saves(PathBuf::from("deep career")),
                 Command::Wait(10),
                 Command::Wait(30),
                 Command::Press(Key::Right),
@@ -455,6 +546,19 @@ mod tests {
                 Command::Benchmark(120, None),
                 Command::Benchmark(10, Some(PathBuf::from("stats/run.csv"))),
             ])
+        );
+        assert_eq!(parse("\n\nwait 1").unwrap()[0].0, 3, "lines count from 1");
+    }
+
+    #[test]
+    fn click_gui_takes_the_rest_of_the_line() {
+        let parsed = commands("click-gui Go to town  # by the stairs");
+        #[cfg(feature = "egui")]
+        assert_eq!(parsed, Ok(vec![Command::ClickGui("Go to town".into())]));
+        #[cfg(not(feature = "egui"))]
+        assert_eq!(
+            parsed,
+            Err("line 1: `click-gui` needs the engine's `egui` feature".into())
         );
     }
 
@@ -496,6 +600,11 @@ mod tests {
             parse("type # nothing"),
             Err("line 1: wrong arguments for `type`".into())
         );
+        assert_eq!(
+            parse("wait 1\nsaves deep"),
+            Err("line 2: `saves` must come before every other command".into())
+        );
+        assert!(parse("click-gui").is_err());
         assert!(parse("key-repeat -1 30").is_err());
         assert_eq!(
             parse("pad-tap 1 A"),

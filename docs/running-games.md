@@ -118,14 +118,15 @@ Instead of opening a window, the engine runs the game in a virtual window the si
 `width` and `height` settings, follows the script, and exits. Frames advance at exactly 60 a
 second of game time, however long they take to compute, so a run behaves the same every time if
 the game does. Audio is silent, but sounds still start and finish on time. The game's
-[saves](api/save.md) go in a temporary folder, which starts empty and goes when the run ends, so a
-run never sees or changes the player's saves. Screenshots are saved relative to the script's
+[saves](api/save.md) go in a temporary folder, which starts empty unless the script's `saves` fills
+it, and goes when the run ends, so a run never changes the player's saves. Screenshots are saved relative to the script's
 folder, and each is reported on standard output.
 
 The script has one command per line. `#` starts a comment.
 
 | Command | What it does |
 |---|---|
+| `saves deep career` | Starts the game with copies of the saves in a folder, relative to the script's. It must come first. See below. |
 | `wait 30` | Runs 30 frames. |
 | `wait 0.5s` | Runs half a second of game time: 30 frames. |
 | `press Right` | Holds a key down. Keys are named as in [Key names](api/input.md#key-names), in any case. |
@@ -138,6 +139,7 @@ The script has one command per line. `#` starts a comment.
 | `mouse-up Left` | Lets a mouse button go. |
 | `click 120 64` | Moves the cursor, presses the left button, runs one frame, and lets it go. |
 | `click Right` | Clicks another button where the cursor is. |
+| `click-gui Go to town` | Clicks the first widget of the game's [interface](api/gui.md) labelled the rest of the line, such as a button's text. See below. |
 | `pad-down 1 South` | Holds gamepad 1's button down. Buttons are named as in [Button names](api/input.md#button-names), in any case, and a stick's direction, such as `LeftStickLeft`, pushes the stick all the way. |
 | `pad-up 1 South` | Lets a gamepad's button go. |
 | `pad-tap 2 Start` | Presses gamepad 2's button, runs one frame, and lets it go. |
@@ -152,6 +154,28 @@ The script has one command per line. `#` starts a comment.
 
 Gamepads are numbered from 1, and connect when a command first names them, with any numbered
 before them, since a scripted run has no real gamepads.
+
+To check something deep in a game without playing up to it, start the run somewhere: either from
+saves, or through a debug window of the game's own.
+
+- `saves` starts the game with copies of the saves in a folder, such as one a check keeps beside
+  it, or the folder a window keeps the player's in (see [`save`](api/save.md)). The run writes
+  only to its copies, which go when it ends, so the folder is never changed. It must be the
+  script's first command, since the game may read its saves as it starts.
+- `click-gui` clicks a widget of the game's interface by its label, as the engine's tests do, so a
+  debug window's buttons can be pressed without finding them in a screenshot. The interface must
+  have shown the widget in the frame before, and a window shows from the frame after it opens, so
+  wait a frame or two for one:
+
+  ```text
+  tap F1                 # show the debug window
+  wait 2
+  click-gui Shrine       # its button that jumps to the shrine
+  tap F1
+  ```
+
+  A run stops with an error if no widget has the label. Labels are matched whole, and the first
+  of several, row by row from the top, is clicked.
 
 A key held down [repeats](api/input.md#inputkey_repeated) as a window's system would repeat it:
 by default, after half a second, 30 times a second, until it's let go or another key is pressed.
