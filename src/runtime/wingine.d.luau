@@ -563,8 +563,9 @@ declare graphics: {
     set_camera: ((x: number, y: number, bounds: Rect?, zoom: number?) -> ()) & ((nothing: nil) -> ()),
     --- Returns the canvas's width and height in canvas pixels.
     size: () -> (number, number),
-    --- Returns `color` as a number `0xRRGGBBAA`, the fastest way to pass it.
-    color: (color: Color) -> number,
+    --- Returns `color` as a number `0xRRGGBBAA`, the fastest way to pass it, with its alpha
+    --- multiplied by `opacity` if given, as for fading it.
+    color: (color: Color, opacity: number?) -> number,
     --- Returns how long the frame before took, and how much it drew.
     frame_stats: () -> FrameStats,
     --- Loads the PNG image at `path`, divided into sprites `tile_width` by `tile_height` texels.
@@ -762,6 +763,19 @@ declare exact: {
     log10: (x: number) -> number,
     pow: (x: number, y: number) -> number,
 }
+
+--- Rectangles, such as `node:bounds()` returns. Written in Luau, so they cost what a script's own
+--- functions do.
+declare rect: {
+    --- Whether `a` and `b` overlap. Rectangles that only touch don't.
+    overlaps: (a: Rect, b: Rect) -> boolean,
+    --- Whether the point `x`, `y` is in `r`, counting its top and left edges but not its bottom and
+    --- right, so a point on the edge between two rectangles side by side is in one of them.
+    contains: (r: Rect, x: number, y: number) -> boolean,
+}
+
+--- Returns `value` moved toward `target` by `step`, 0 or more, but no further than `target`.
+declare function approach(value: number, target: number, step: number): number
 
 --- Starts `f(...)` as a task, running it until it first waits or finishes. The engine resumes it
 --- every update from then on.

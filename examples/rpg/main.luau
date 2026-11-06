@@ -87,6 +87,8 @@ local NEW_GAME = "New Game"
 local BACKGROUND = "#101418"
 local HERO = "#f2d3ab"
 local HUD_PANEL = { r = 0, g = 0, b = 0, a = 0.6 }
+-- What the screen fades to between maps.
+local SHADE = "#000000"
 local TEXT = "#f4f0e8"
 local ALERT = "#f2c14e"
 
@@ -481,10 +483,9 @@ local function draw_hud()
             local title = font:scaled(2)
             local width, height = title:measure(banner.text)
             local x, y = math.round((WIDTH - width) / 2), 24
-            local backing = { r = 0, g = 0, b = 0, a = HUD_PANEL.a * alpha }
+            local backing = graphics.color(HUD_PANEL, alpha)
             graphics.fill_rect(x - 6, y - 4, width + 12, height + 4, backing)
-            local color = { r = 0.96, g = 0.94, b = 0.91, a = alpha }
-            graphics.draw_text(title, banner.text, x, y, color)
+            graphics.draw_text(title, banner.text, x, y, graphics.color(TEXT, alpha))
         end
     end
 
@@ -535,7 +536,7 @@ function draw()
     bag.draw()
     dialogue.draw()
     if rpg.fade > 0 then
-        graphics.fill_rect(0, 0, WIDTH, HEIGHT, { r = 0, g = 0, b = 0, a = rpg.fade })
+        graphics.fill_rect(0, 0, WIDTH, HEIGHT, graphics.color(SHADE, rpg.fade))
     end
 end
 

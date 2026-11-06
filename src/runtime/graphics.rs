@@ -217,7 +217,10 @@ pub(super) fn module(
     })?;
     graphics.set(
         "color",
-        lua.create_function(|_, color: Color| Ok(packed_color(color)))?,
+        lua.create_function(|_, (mut color, opacity): (Color, Option<f32>)| {
+            color.a *= opacity.unwrap_or(1.0);
+            Ok(packed_color(color))
+        })?,
     )?;
     graphics.set(
         "default_font",

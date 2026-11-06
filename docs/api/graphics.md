@@ -316,7 +316,7 @@ first frame will have.
 ### `graphics.color`
 
 ```lua
-graphics.color(color: Color): number
+graphics.color(color: Color, opacity: number?): number
 ```
 
 Returns `color` as a number `0xRRGGBBAA`. Numbers are the fastest way to pass a color: the engine
@@ -330,6 +330,20 @@ function draw()
     for _, bullet in bullets do
         graphics.draw_sprite(pellet, bullet.x, bullet.y, BULLET)
     end
+end
+```
+
+With `opacity`, the color's alpha is multiplied by it: 0.5 makes an opaque color half
+see-through, and a translucent one half as opaque as it was. The alpha it makes is kept from 0
+to 1. That's how a color made a number once fades, by a different amount each frame:
+
+```lua
+local SHIELD = graphics.color("#6ec6ff80")
+
+function draw()
+    -- Fades out over the shield's last second.
+    local opacity = math.min(shield.seconds_left, 1)
+    graphics.fill_circle(player.x, player.y, 12, graphics.color(SHIELD, opacity))
 end
 ```
 

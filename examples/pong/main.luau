@@ -109,16 +109,14 @@ end
 -- Whether `ball` is hitting the paddle on `side`, moving toward it. A ball that got behind the
 -- paddle is past saving.
 local function hits(ball: Ball, paddle: Paddle, side: Side): boolean
-    local left, top = ball.x - BALL_SIZE / 2, ball.y - BALL_SIZE / 2
+    local left = ball.x - BALL_SIZE / 2
     local in_front = if side == "left"
         then left >= paddle.x
         else left + BALL_SIZE <= paddle.x + PADDLE_WIDTH
     local toward = ball.vx * direction(side) > 0
-    local overlaps = left < paddle.x + PADDLE_WIDTH
-        and paddle.x < left + BALL_SIZE
-        and top < paddle.y + PADDLE_HEIGHT
-        and paddle.y < top + BALL_SIZE
-    return toward and in_front and overlaps
+    local ball_box = { x = left, y = ball.y - BALL_SIZE / 2, width = BALL_SIZE, height = BALL_SIZE }
+    local paddle_box = { x = paddle.x, y = paddle.y, width = PADDLE_WIDTH, height = PADDLE_HEIGHT }
+    return toward and in_front and rect.overlaps(ball_box, paddle_box)
 end
 
 -- Sends `ball` back from the paddle on `side`: faster, and steeper the further from the

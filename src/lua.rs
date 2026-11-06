@@ -33,6 +33,16 @@
 //!   times what `math`'s does, which Luau calls without leaving the VM. The rest of Luau's
 //!   arithmetic (`+`, `-`, `*`, `/`, `//`, `math.sqrt`, `math.floor` and the like) is exact under
 //!   IEEE 754 on every platform; `x ^ y` uses the C library's `pow`, and `exact.pow` doesn't.
+//! - `rect` is a table of functions of rectangles, tables `{ x, y, width, height }` such as
+//!   `node:bounds()` returns: `rect.overlaps(a, b)`, whether `a` and `b` overlap, which those that
+//!   only touch don't, and `rect.contains(r, x, y)`, whether the point `x`, `y` is in `r`, counting
+//!   its top and left edges but not its bottom and right, as [`Rect::overlaps`] and
+//!   [`Rect::contains`] do.
+//! - `approach(value, target, step)` returns `value` moved toward `target` by `step`, 0 or more,
+//!   but no further than `target`, as when easing a speed toward another a frame at a time.
+//!
+//! `wait`, `wait_until`, `rect` and `approach` are written in Luau, so calling them costs what
+//! calling a script's own function does.
 //!
 //! Engine types convert to and from Lua values:
 //!
@@ -186,6 +196,26 @@ function wait_until(condition: () -> boolean)
     while not condition() do
         coroutine.yield()
     end
+end
+
+type Rect = { x: number, y: number, width: number, height: number }
+
+-- As `Rect::overlaps` and `Rect::contains`, edge for edge.
+rect = {}
+
+function rect.overlaps(a: Rect, b: Rect): boolean
+    return a.x < b.x + b.width and b.x < a.x + a.width and a.y < b.y + b.height and b.y < a.y + a.height
+end
+
+function rect.contains(r: Rect, x: number, y: number): boolean
+    return r.x <= x and x < r.x + r.width and r.y <= y and y < r.y + r.height
+end
+
+function approach(value: number, target: number, step: number): number
+    if value < target then
+        return math.min(value + step, target)
+    end
+    return math.max(value - step, target)
 end
 "#;
 
@@ -1706,6 +1736,50 @@ mod tests {
         open.set(true);
         scripts.update(FRAME).unwrap();
         assert_eq!(count.get(), 1);
+    }
+
+    #[test]
+    fn rect_tests_rectangles_as_rect_does() {
+        let scripts = Scripts::new().unwrap();
+        let rect: mlua::Table = scripts.lua().globals().get("rect").unwrap();
+        let overlaps: mlua::Function = rect.get("overlaps").unwrap();
+        let contains: mlua::Function = rect.get("contains").unwrap();
+        let a = Rect::new(1.0, 2.0, 3.0, 2.0);
+        let mut overlapping = 0;
+        // Points, and rectangles from them, on a grid of halves around `a`, touching it and not,
+        // some with no width or height.
+        let steps = (-2..=12).map(|i| i as f32 / 2.0);
+        for x in steps.clone() {
+            for y in steps.clone() {
+                let inside: bool = contains.call((a, x, y)).unwrap();
+                assert_eq!(inside, a.contains([x, y]), "{x}, {y} in {a:?}");
+                for size in [0.0, 0.5, 1.0, 3.0] {
+                    let b = Rect::new(x, y, size, size / 2.0);
+                    let overlap: bool = overlaps.call((a, b)).unwrap();
+                    assert_eq!(overlap, a.overlaps(&b), "{a:?} and {b:?}");
+                    overlapping += usize::from(overlap);
+                }
+            }
+        }
+        assert!(overlapping > 0);
+        let err = scripts
+            .load_source("change", "rect.overlaps = nil")
+            .unwrap_err();
+        assert!(err.to_string().contains("readonly"), "{err}");
+    }
+
+    #[test]
+    fn approach_moves_toward_a_target_without_passing_it() {
+        let scripts = Scripts::new().unwrap();
+        let approach = |value: f64, target: f64, step: f64| -> f64 {
+            scripts.call("approach", (value, target, step)).unwrap()
+        };
+        assert_eq!(approach(0.0, 10.0, 3.0), 3.0);
+        assert_eq!(approach(9.0, 10.0, 3.0), 10.0);
+        assert_eq!(approach(10.0, 0.0, 4.0), 6.0);
+        assert_eq!(approach(1.0, 0.0, 4.0), 0.0);
+        assert_eq!(approach(-1.0, -1.0, 2.0), -1.0);
+        assert_eq!(approach(0.25, 0.75, 0.0), 0.25);
     }
 
     #[test]

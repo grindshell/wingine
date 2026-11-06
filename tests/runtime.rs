@@ -736,7 +736,7 @@ fn the_definitions_declare_every_function_of_the_engine() {
             "main.luau",
             "local tables = { graphics = graphics, input = input, audio = audio,
                 tilemap = tilemap, grid = grid, scene = scene, save = save, exact = exact,
-                window = window }
+                rect = rect, window = window }
             names = {}
             for table_name, functions in tables do
                 local found = {}
@@ -750,13 +750,13 @@ fn the_definitions_declare_every_function_of_the_engine() {
     );
     let mut simulation = simulation(&folder);
     let tables = [
-        "graphics", "input", "audio", "tilemap", "grid", "scene", "save", "exact", "window",
+        "graphics", "input", "audio", "tilemap", "grid", "scene", "save", "exact", "rect", "window",
     ];
     for table in tables {
         let functions: Vec<String> = simulation.eval(&format!("names.{table}"));
         assert_eq!(declared_fields(table), functions, "the fields of `{table}`");
     }
-    for built_in in ["spawn", "wait", "wait_until"] {
+    for built_in in ["spawn", "wait", "wait_until", "approach"] {
         assert_eq!(
             simulation.eval::<String>(&format!("type({built_in})")),
             "function"
@@ -1071,6 +1071,19 @@ fn colors_can_be_made_numbers() {
         simulation.eval::<(u32, u32)>("hex, table"),
         (0xff804080, 0x0000ffff)
     );
+    // An opacity multiplies the alpha, keeping it from 0 to 1.
+    let faded = [
+        ("0xf2c14eff, 0.5", 0xf2c14e80),
+        ("'#00000080', 0.5", 0x00000040),
+        ("{ r = 1, g = 1, b = 1, a = 0.25 }, 2", 0xffffff80),
+        ("'#ffffff', 2", 0xffffffff),
+        ("'#ffffff', -1", 0xffffff00),
+        ("0x12345678, 1", 0x12345678),
+    ];
+    for (arguments, color) in faded {
+        let found = simulation.eval::<u32>(&format!("graphics.color({arguments})"));
+        assert_eq!(found, color, "{arguments}: {found:08x}");
+    }
     simulation.step();
     let image = simulation.screenshot().unwrap();
     assert_eq!(pixel(&image, 0, 0), BLUE);

@@ -254,7 +254,9 @@ networking or 3D pipelines.
   every platform, unlike `math`'s from the C library (Windows' and Linux's differ). They can't
   replace `math`'s: Luau calls those as builtins without looking them up, which also makes them
   about five times quicker, so games call `exact`'s for what must replay and `math`'s for show.
-  Scripts compile at Luau's optimization level 2, whose inlining halves calls between Luau
+  `rect` (`overlaps` and `contains`, edge for edge as `Rect`'s) and `approach` are built-ins too,
+  written in Luau in the prelude with `wait` and `wait_until`, so calling them doesn't leave the
+  VM. Scripts compile at Luau's optimization level 2, whose inlining halves calls between Luau
   functions. Its unit tests don't need a GPU.
 - `src/runtime/`: games written entirely in Luau, run from a folder holding `main.luau` and an
   optional `conf.luau` of settings: the window's, the update rate, the identity that names its

@@ -377,12 +377,7 @@ function battle.update(dt: number)
     end
     state.time += dt
     for _, fighter in { state.player, state.foe } do
-        local change = fighter.max_hp * DRAIN_RATE * dt
-        if fighter.shown_hp > fighter.hp then
-            fighter.shown_hp = math.max(fighter.shown_hp - change, fighter.hp)
-        else
-            fighter.shown_hp = math.min(fighter.shown_hp + change, fighter.hp)
-        end
+        fighter.shown_hp = approach(fighter.shown_hp, fighter.hp, fighter.max_hp * DRAIN_RATE * dt)
         fighter.blink = math.max(fighter.blink - dt, 0)
         if fighter.fainted then
             fighter.fainted += dt

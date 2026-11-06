@@ -158,6 +158,24 @@ local util = require("../util") -- util.luau, in the folder above
 A script runs once, the first time it's required; requiring it again returns the same value.
 `main.luau` can require `conf.luau` to read the game's settings.
 
+### `approach`
+
+```lua
+approach(value: number, target: number, step: number): number
+```
+
+Returns `value` moved toward `target` by `step`, 0 or more, but no further than `target`, so a
+speed eases toward another a frame at a time and settles on it exactly:
+
+```lua
+-- Speeds up toward a run, and slows to a stop on letting go.
+local target = if input.held("right") then RUN_SPEED else 0
+player.vx = approach(player.vx, target, ACCELERATION * dt)
+```
+
+It's written in Luau, so calling it costs what calling a script's own function does. Functions of
+rectangles are in [`rect`](rect.md).
+
 ## Luau
 
 Scripts are [Luau](https://luau.org), with its sandboxed standard library. A few things that

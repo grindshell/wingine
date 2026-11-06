@@ -96,10 +96,11 @@
 //!   default at the start of each frame, draws in canvas pixels, as for a HUD.
 //! - `graphics.size()` returns the canvas's width and height.
 //! - `graphics.default_font()` returns the built-in pixel font.
-//! - `graphics.color(color)` returns `color`, such as a hex string or a table, as a number
-//!   `0xRRGGBBAA`, which passes faster: a string or table is read again each time it's passed,
-//!   which costs more than drawing a sprite, so code that draws a lot makes its colors numbers
-//!   once.
+//! - `graphics.color(color, opacity)` returns `color`, such as a hex string or a table, as a
+//!   number `0xRRGGBBAA`, which passes faster: a string or table is read again each time it's
+//!   passed, which costs more than drawing a sprite, so code that draws a lot makes its colors
+//!   numbers once. With `opacity`, its alpha is multiplied by it (and kept from 0 to 1), so a
+//!   color made a number once can fade a little each frame.
 //! - `graphics.frame_stats()` returns how long the frame before took, and how much it drew, as a
 //!   table: `frame`, `update`, `draw` and `render` are seconds, and `quads` and `draw_calls`
 //!   counts. Before the first frame has finished, all are 0. See `FrameStats` for what each

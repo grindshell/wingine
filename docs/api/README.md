@@ -1,11 +1,11 @@
 # API reference
 
-Scripts reach the engine through nine global tables, a few built-in functions, the objects those
+Scripts reach the engine through ten global tables, a few built-in functions, the objects those
 hand out, and the `Ui` a game's `gui` lays its interface out with:
 
 | Page | What it covers |
 |---|---|
-| [Built-ins](globals.md) | The game's `update`, `gui`, `draw` and `close_requested`, tasks (`spawn`, `wait`, `wait_until`), `print` and `require` |
+| [Built-ins](globals.md) | The game's `update`, `gui`, `draw` and `close_requested`, tasks (`spawn`, `wait`, `wait_until`), `print`, `require` and `approach` |
 | [`graphics`](graphics.md) | Drawing, the camera, sprite sheets, sprites, animations, fonts and text, frame stats, and 3D views of meshes, models and billboards, with picking by boxes |
 | [`input`](input.md) | The keyboard, mouse and gamepads, and actions bound to keys and buttons |
 | [`audio`](audio.md) | Sound effects, music and volume |
@@ -14,6 +14,7 @@ hand out, and the `Ui` a game's `gui` lays its interface out with:
 | [`scene`](scene.md) | Scenes loaded from scene files, and their nodes |
 | [`save`](save.md) | Data kept between runs of the game, such as progress |
 | [`exact`](exact.md) | Math that gives the same bits on every platform, for games that replay |
+| [`rect`](rect.md) | Whether rectangles overlap, and whether one holds a point |
 | [`window`](window.md) | Quitting the game, and asking before its window closes |
 | [`gui`](gui.md) | Interfaces over the game, such as debug tools, laid out with egui in the game's `gui` |
 | [`wingine-native`](native.md) | The Rust crate native libraries are written with |
@@ -103,7 +104,7 @@ almost transparent.
 
 A rectangle, as a table `{ x = ..., y = ..., width = ... , height = ... }`, where `x`, `y` is its
 top-left corner. [`map:bounds()`](tilemap.md#mapbounds) returns one, for
-[`graphics.set_camera`](graphics.md#graphicsset_camera).
+[`graphics.set_camera`](graphics.md#graphicsset_camera), and [`rect`](rect.md) tests them.
 
 ### `Direction`
 
