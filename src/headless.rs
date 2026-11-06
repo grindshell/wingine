@@ -1098,6 +1098,9 @@ fn read_texture(gpu: &Gpu, texture: &wgpu::Texture) -> Result<Image> {
 }
 
 /// A rendered frame: tightly packed 8-bit RGBA pixels in sRGB, row by row from the top-left.
+///
+/// Frames compare with [`Image::compare`], against each other or against PNGs saved before and
+/// loaded with [`Image::load_png`], as screenshot tests do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Image {
     width: u32,
@@ -1106,6 +1109,35 @@ pub struct Image {
 }
 
 impl Image {
+    /// An image of `pixels`, laid out as [`Image::pixels`] returns them, or `None` if there aren't
+    /// `width * height * 4` bytes of them.
+    pub fn from_pixels(width: u32, height: u32, pixels: Vec<u8>) -> Option<Self> {
+        let len = u64::from(width) * u64::from(height) * 4;
+        (pixels.len() as u64 == len).then_some(Self {
+            width,
+            height,
+            pixels,
+        })
+    }
+
+    /// Loads a PNG file, converting its pixels to 8-bit RGBA whatever it holds, so two files of
+    /// the same picture load the same.
+    pub fn load_png(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let image = image::open(path)
+            .map_err(|source| Error::LoadImage {
+                path: path.to_owned(),
+                source,
+            })?
+            .into_rgba8();
+        let (width, height) = image.dimensions();
+        Ok(Self {
+            width,
+            height,
+            pixels: image.into_raw(),
+        })
+    }
+
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -1120,6 +1152,66 @@ impl Image {
 
     pub fn into_pixels(self) -> Vec<u8> {
         self.pixels
+    }
+
+    /// The pixel at `x`, `y`, counting from 0 at the top-left: its red, green, blue and alpha.
+    ///
+    /// # Panics
+    ///
+    /// If it's outside the image.
+    pub fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
+        assert!(
+            x < self.width && y < self.height,
+            "{x}, {y} is outside a {}x{} image",
+            self.width,
+            self.height
+        );
+        let i = (y as usize * self.width as usize + x as usize) * 4;
+        self.pixels[i..i + 4].try_into().unwrap()
+    }
+
+    /// How this image differs from `other`: how many pixels differ by more than `tolerance` in
+    /// any channel, and the most any channel differs by. A `tolerance` of 0 compares exactly; a
+    /// small one lets frames rendered on different GPUs match, since they round blending a little
+    /// differently (the engine's own screenshot tests allow 2).
+    pub fn compare(&self, other: &Image, tolerance: u8) -> Comparison {
+        if (self.width, self.height) != (other.width, other.height) {
+            return Comparison::DifferentSizes;
+        }
+        let mut differing = 0;
+        let mut largest = 0;
+        for (a, b) in self
+            .pixels
+            .chunks_exact(4)
+            .zip(other.pixels.chunks_exact(4))
+        {
+            let difference = channel_difference(a, b);
+            largest = largest.max(difference);
+            differing += usize::from(difference > tolerance);
+        }
+        Comparison::SameSize { differing, largest }
+    }
+
+    /// This image dimmed to a third, with the pixels that differ from `other` by more than
+    /// `tolerance` (as [`Image::compare`] counts them) in magenta, to show where they are, or
+    /// `None` if the images are different sizes.
+    pub fn diff(&self, other: &Image, tolerance: u8) -> Option<Image> {
+        if (self.width, self.height) != (other.width, other.height) {
+            return None;
+        }
+        let pixels = self
+            .pixels
+            .chunks_exact(4)
+            .zip(other.pixels.chunks_exact(4))
+            .flat_map(|(a, b)| {
+                if channel_difference(a, b) > tolerance {
+                    [255, 0, 255, 255]
+                } else {
+                    [a[0] / 3, a[1] / 3, a[2] / 3, 255]
+                }
+            })
+            .collect();
+        Some(Image { pixels, ..*self })
     }
 
     /// Saves the image as a PNG file.
@@ -1137,5 +1229,141 @@ impl Image {
             path: path.to_owned(),
             source,
         })
+    }
+}
+
+/// How two images compare, from [`Image::compare`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Comparison {
+    /// The images are the same size. `differing` of their pixels differ by more than the
+    /// tolerance in some channel, and `largest` is the most any channel of any pixel differs by,
+    /// within the tolerance or not.
+    SameSize { differing: usize, largest: u8 },
+    /// The images are different sizes, so their pixels don't compare.
+    DifferentSizes,
+}
+
+impl Comparison {
+    /// Whether the images are the same size and at most `pixels` of their pixels differ: 0 for
+    /// images that match, or a few for scenes where GPUs disagree about some pixels, such as
+    /// textures in perspective.
+    pub fn differs_by_at_most(&self, pixels: usize) -> bool {
+        matches!(*self, Self::SameSize { differing, .. } if differing <= pixels)
+    }
+}
+
+/// The most any channel of two pixels differs by.
+fn channel_difference(a: &[u8], b: &[u8]) -> u8 {
+    a.iter()
+        .zip(b)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GRAY: [u8; 4] = [90, 90, 90, 255];
+
+    /// A 3x2 image of gray.
+    fn gray() -> Image {
+        Image::from_pixels(3, 2, GRAY.repeat(6)).unwrap()
+    }
+
+    /// `image` with the pixel at `x`, `y` changed to `pixel`.
+    fn with_pixel(mut image: Image, x: u32, y: u32, pixel: [u8; 4]) -> Image {
+        let i = ((y * image.width + x) * 4) as usize;
+        image.pixels[i..i + 4].copy_from_slice(&pixel);
+        image
+    }
+
+    #[test]
+    fn images_hold_width_by_height_pixels() {
+        assert!(Image::from_pixels(3, 2, vec![0; 23]).is_none());
+        assert!(Image::from_pixels(3, 2, vec![0; 25]).is_none());
+        let image = with_pixel(gray(), 2, 1, [1, 2, 3, 4]);
+        assert_eq!(image.pixel(2, 1), [1, 2, 3, 4]);
+        assert_eq!(image.pixel(1, 1), GRAY);
+    }
+
+    #[test]
+    #[should_panic(expected = "3, 0 is outside a 3x2 image")]
+    fn pixels_outside_the_image_panic() {
+        gray().pixel(3, 0);
+    }
+
+    #[test]
+    fn comparing_counts_pixels_beyond_the_tolerance() {
+        let image = gray();
+        let same = image.compare(&gray(), 0);
+        assert_eq!(
+            same,
+            Comparison::SameSize {
+                differing: 0,
+                largest: 0
+            }
+        );
+        assert!(same.differs_by_at_most(0));
+
+        let nudged = with_pixel(gray(), 0, 0, [92, 90, 90, 255]);
+        let moved = with_pixel(nudged.clone(), 1, 1, [90, 90, 90, 0]);
+        let exact = image.compare(&moved, 0);
+        assert_eq!(
+            exact,
+            Comparison::SameSize {
+                differing: 2,
+                largest: 255
+            }
+        );
+        assert!(!exact.differs_by_at_most(1) && exact.differs_by_at_most(2));
+        assert_eq!(
+            image.compare(&moved, 2),
+            Comparison::SameSize {
+                differing: 1,
+                largest: 255
+            },
+            "the nudged pixel is within it"
+        );
+        assert_eq!(
+            image.compare(&nudged, 2),
+            Comparison::SameSize {
+                differing: 0,
+                largest: 2
+            },
+            "the largest difference counts those within it"
+        );
+
+        let wider = Image::from_pixels(4, 2, GRAY.repeat(8)).unwrap();
+        assert_eq!(image.compare(&wider, 255), Comparison::DifferentSizes);
+        assert!(!image.compare(&wider, 255).differs_by_at_most(usize::MAX));
+    }
+
+    #[test]
+    fn diffs_show_the_differing_pixels_in_magenta() {
+        let moved = with_pixel(gray(), 2, 0, [200, 90, 90, 255]);
+        let diff = moved.diff(&gray(), 2).unwrap();
+        assert_eq!(diff.pixel(2, 0), [255, 0, 255, 255]);
+        assert_eq!(diff.pixel(0, 0), [30, 30, 30, 255], "the rest is dimmed");
+        let wider = Image::from_pixels(4, 2, GRAY.repeat(8)).unwrap();
+        assert!(moved.diff(&wider, 0).is_none());
+    }
+
+    #[test]
+    fn pngs_load_as_rgba_whatever_they_hold() {
+        let folder = std::env::temp_dir().join(format!("wingine-load-png-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let opaque = folder.join("opaque.png");
+        // Red, green and blue without alpha.
+        image::save_buffer(&opaque, &[90; 18], 3, 2, image::ExtendedColorType::Rgb8).unwrap();
+        let loaded = Image::load_png(&opaque).unwrap();
+        assert_eq!(loaded, gray());
+        let saved = folder.join("saved.png");
+        loaded.save_png(&saved).unwrap();
+        assert_eq!(Image::load_png(&saved).unwrap(), loaded);
+        let err = Image::load_png(folder.join("missing.png")).unwrap_err();
+        assert!(err.to_string().contains("missing.png"), "{err}");
+        std::fs::remove_dir_all(&folder).unwrap();
     }
 }

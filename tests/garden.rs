@@ -46,8 +46,7 @@ fn f1_outlines_what_is_solid() {
         let scale = image.width() / 320;
         let [column, row] =
             [x + width / 2.0, y + 0.5].map(|at| at.floor() as u32 * scale + scale / 2);
-        let offset = ((row * image.width() + column) * 4) as usize;
-        <[u8; 4]>::try_from(&image.pixels()[offset..offset + 4]).unwrap()
+        image.pixel(column, row)
     };
     let before = middle_of_top(&mut simulation);
 

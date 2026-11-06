@@ -245,7 +245,11 @@ networking or 3D pipelines.
   game called `Context::quit`. Each keeps its game's saves in a temporary folder of its own,
   unless its config gives one. Simulations run every frame they're asked to, but
   `next_frame_in` tells when a game that redraws on demand would want its next (input wants one
-  at once), so tests check it waits while nothing changes.
+  at once), so tests check it waits while nothing changes. Frames are `Image`s, which games'
+  tests compare as the screenshot tests do: `Image::compare` counts the pixels that differ by more
+  than a per-channel tolerance (a `Comparison`), `diff` shows them in magenta, and `load_png`
+  reads a reference back as 8-bit RGBA, whatever the file holds. Its unit tests of them don't
+  need a GPU.
 - `src/lua.rs`: `Scripts`, a sandboxed Luau VM for gameplay scripts, and its task scheduler.
   Games register Rust functions (`set_function`), load script files, and start script functions
   as tasks (`spawn`): coroutines that `update` resumes once a frame with the frame's duration.
@@ -754,8 +758,9 @@ device.
 ## Screenshot tests
 
 Rendering changes are covered by screenshot tests: each renders a scene with `Headless` and
-compares it with a reference PNG, allowing a per-channel difference of 2 so references pass on any
-GPU. Add a test there when adding a drawing feature.
+compares it with a reference PNG (`Image::compare`, the comparator games get too), allowing a
+per-channel difference of 2 so references pass on any GPU. Add a test there when adding a drawing
+feature.
 
 - A mismatch writes the rendered frame and a diff (mismatched pixels in magenta) to
   `target/tmp/screenshots/`. In CI they are uploaded as a build artifact.

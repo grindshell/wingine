@@ -12,7 +12,7 @@ use std::{
 
 use wingine::{
     Error,
-    headless::{Image, Simulation},
+    headless::Simulation,
     input::Key,
     runtime::{self, LibraryConfig, LuauGame},
 };
@@ -65,11 +65,6 @@ fn start(folder: &Path) -> Result<Simulation<LuauGame>, Error> {
 
 fn simulation(folder: &Path) -> Simulation<LuauGame> {
     start(folder).expect("game starts")
-}
-
-fn pixel(image: &Image, x: u32, y: u32) -> [u8; 4] {
-    let offset = ((y * image.width() + x) * 4) as usize;
-    image.pixels()[offset..offset + 4].try_into().unwrap()
 }
 
 /// A library that records what happens to it, for tests to look at through Luau.
@@ -357,7 +352,7 @@ fn hooks_run_around_update_and_draw() {
         "before_update update after_update before_draw draw after_draw"
     );
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 19, 19), [255, 255, 255, 255]);
+    assert_eq!(image.pixel(19, 19), [255, 255, 255, 255]);
 }
 
 #[test]
@@ -405,7 +400,7 @@ fn functions_get_the_context_or_canvas_as_scripts_do() {
     let err: String = simulation.eval("tostring(held_in_draw)");
     assert!(err.contains("not in `draw`"), "{err}");
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 0, 0), [0, 0, 255, 255]);
+    assert_eq!(image.pixel(0, 0), [0, 0, 255, 255]);
 }
 
 #[test]
@@ -420,11 +415,11 @@ fn one_call_draws_many_sprites() {
     simulation.step();
     assert_eq!(simulation.context().frame_stats().quads, 3);
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 1, 1), [255, 0, 0, 255]);
-    assert_eq!(pixel(&image, 13, 1), [255, 255, 255, 255]);
-    assert_eq!(pixel(&image, 14, 8), [255, 255, 255, 255]);
-    assert_eq!(pixel(&image, 10, 4), [0, 0, 0, 255]);
-    assert_eq!(pixel(&image, 15, 5), [0, 0, 0, 255]);
+    assert_eq!(image.pixel(1, 1), [255, 0, 0, 255]);
+    assert_eq!(image.pixel(13, 1), [255, 255, 255, 255]);
+    assert_eq!(image.pixel(14, 8), [255, 255, 255, 255]);
+    assert_eq!(image.pixel(10, 4), [0, 0, 0, 255]);
+    assert_eq!(image.pixel(15, 5), [0, 0, 0, 255]);
 }
 
 #[test]
@@ -475,10 +470,10 @@ fn libraries_make_meshes_and_draw_in_3d_views() {
         // after `draw` fills.
         assert_eq!((stats.triangles, stats.draw_calls), (6, 3));
         let image = simulation.screenshot().unwrap();
-        assert_eq!(pixel(&image, 5, 10), [255, 0, 0, 255], "the left square");
-        assert_eq!(pixel(&image, 15, 10), [0, 255, 0, 255], "the right square");
-        assert_eq!(pixel(&image, 10, 18), [0, 0, 255, 255], "the billboard");
-        assert_eq!(pixel(&image, 10, 2), [0, 0, 0, 255], "above them");
+        assert_eq!(image.pixel(5, 10), [255, 0, 0, 255], "the left square");
+        assert_eq!(image.pixel(15, 10), [0, 255, 0, 255], "the right square");
+        assert_eq!(image.pixel(10, 18), [0, 0, 255, 255], "the billboard");
+        assert_eq!(image.pixel(10, 2), [0, 0, 0, 255], "above them");
     };
     picture(&mut simulation);
     let bad_view: String = simulation.eval("tostring(bad_view)");

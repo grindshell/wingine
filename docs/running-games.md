@@ -227,10 +227,40 @@ fn serving_starts_a_rally() {
   folder, as `main.luau` does, getting the same ones the game has: `require("./opponent")`. Both
   panic with the error if the Luau fails; `try_exec` and `try_eval` return it instead, for a test
   that expects one.
+- `screenshot()` renders the latest frame as an `Image`, whose `pixel(x, y)` reads a pixel and
+  `save_png` writes it out.
 
 Keep the game's state in a global, such as Pong's `pong`, so tests can reach it.
 [`tests/pong.rs`](../tests/pong.rs) is a small example, and [`tests/rpg.rs`](../tests/rpg.rs) a
 larger one.
+
+### Comparing frames
+
+A test can check how the game looks by comparing a frame with one saved before, as the engine's
+own screenshot tests do. `Image::load_png` loads a PNG, and `compare` says how two images differ:
+`Comparison::SameSize` with how many pixels differ by more than a tolerance in any channel, and the
+most any channel differs by, or `Comparison::DifferentSizes`.
+
+```rust
+use wingine::headless::Image;
+
+let frame = simulation.screenshot().unwrap();
+let reference = Image::load_png("tests/screenshots/title.png").unwrap();
+let comparison = frame.compare(&reference, 2);
+if !comparison.differs_by_at_most(0) {
+    frame.save_png("target/title.actual.png").unwrap();
+    if let Some(diff) = frame.diff(&reference, 2) {
+        diff.save_png("target/title.diff.png").unwrap();
+    }
+    panic!("the title screen has changed: {comparison:?}");
+}
+```
+
+A tolerance of 0 compares exactly, which suits frames made on the same machine: a game that plays
+the same way each run renders the same bytes each run. Other GPUs, and the software ones CI
+machines use, round blending a little differently, so frames compared with a reference made
+elsewhere want a small tolerance: the engine's own tests allow 2. `diff` shows where two images
+differ: the frame dimmed, with the pixels that differ in magenta.
 
 ## Measuring performance
 

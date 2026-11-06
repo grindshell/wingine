@@ -6,19 +6,19 @@
 //! - On a mismatch, the rendered frame and a diff image (mismatched pixels in magenta) are written
 //!   to `target/tmp/screenshots/`.
 //!
-//! Matching allows a small per-channel difference, so references rendered on one GPU pass on
-//! others, including the software rasterizers used in CI.
+//! Matching, by `Image::compare`, allows a small per-channel difference, so references rendered on
+//! one GPU pass on others, including the software rasterizers used in CI.
 
 use std::{env, fs, path::Path, rc::Rc};
 
-use image::{Rgba, RgbaImage, imageops};
+use image::{RgbaImage, imageops};
 use wingine::{
     Context,
     graphics::{
         Camera, Camera3d, Canvas, Color, Lighting, Mesh, MeshData, MeshVertex, Model, Resolution,
         SpriteSheet, Texture, View3d,
     },
-    headless::{Headless, Image},
+    headless::{Comparison, Headless, Image},
     math::{Affine, Affine3, Rect},
     scene::{Assets, Scene, SceneFile, Shape, TilesetFile},
     tilemap::{Tile, Tilemap, Tileset},
@@ -1087,8 +1087,8 @@ fn write_square_model(folder: &Path, double_sided: bool) -> std::path::PathBuf {
     }
     fs::write(folder.join("square.bin"), &bytes).unwrap();
     let mut texture = RgbaImage::new(2, 1);
-    texture.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
-    texture.put_pixel(1, 0, Rgba([0, 0, 255, 255]));
+    texture.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+    texture.put_pixel(1, 0, image::Rgba([0, 0, 255, 255]));
     texture.save(folder.join("texture.png")).unwrap();
     let json = format!(
         r#"{{"asset":{{"version":"2.0"}},
@@ -1206,7 +1206,7 @@ fn meshes_billboards_rolled() {
     let hero = sheet.sprite(27, 0);
     let background = Color::rgb8(0x10, 0x10, 0x18);
     let mut render = |up: [f32; 3], width: f32| {
-        let frame = headless
+        headless
             .render(64, 64, |canvas| {
                 canvas.clear(background);
                 let camera = Camera3d {
@@ -1221,30 +1221,29 @@ fn meshes_billboards_rolled() {
                     .begin_3d(view)
                     .draw_billboard(&hero, [0.0; 3], [width, 1.0], Color::WHITE);
             })
-            .unwrap();
-        rgba(&frame)
+            .unwrap()
     };
     let upright = render([0.0, 1.0, 0.0], 1.0);
-    let corner = *upright.get_pixel(0, 0);
-    let shown = upright.pixels().filter(|p| **p != corner).count();
+    let corner = upright.pixel(0, 0);
+    let shown = upright.pixels().chunks(4).filter(|p| *p != corner).count();
     assert!(shown > 100, "the billboard shows only {shown} pixels");
 
     // Up the view is the world's `+x`, so its up is to the left of the view.
-    let on_its_side = imageops::rotate270(&upright);
+    let on_its_side = transformed(&upright, imageops::rotate270);
     assert_alike(
         &on_its_side,
         &render([1.0, 0.0, 0.0], 1.0),
         16,
         "a quarter turn",
     );
-    let upside_down = imageops::rotate180(&upright);
+    let upside_down = transformed(&upright, imageops::rotate180);
     assert_alike(
         &upside_down,
         &render([0.0, -1.0, 0.0], 1.0),
         16,
         "a half turn",
     );
-    let on_its_other_side = imageops::rotate90(&upright);
+    let on_its_other_side = transformed(&upright, imageops::rotate90);
     assert_alike(
         &on_its_other_side,
         &render([-1.0, 0.0, 0.0], 1.0),
@@ -1252,14 +1251,16 @@ fn meshes_billboards_rolled() {
         "three quarters of a turn",
     );
 
-    let mirrored = imageops::flip_horizontal(&upright);
+    let mirrored = transformed(&upright, imageops::flip_horizontal);
     assert!(
-        compare(&mirrored, &upright).is_some(),
+        !mirrored
+            .compare(&upright, CHANNEL_TOLERANCE)
+            .differs_by_at_most(0),
         "the sprite is lopsided"
     );
     assert_alike(&mirrored, &render([0.0, 1.0, 0.0], -1.0), 16, "mirrored");
     assert_alike(
-        &imageops::rotate180(&mirrored),
+        &transformed(&mirrored, imageops::rotate180),
         &render([0.0, -1.0, 0.0], -1.0),
         16,
         "mirrored, a half turn",
@@ -1303,16 +1304,15 @@ fn meshes_normals() {
             .unwrap()
     };
     let frame = render(&unit, Affine3::IDENTITY);
-    let shaded = rgba(&frame);
     let longer = render(&long, Affine3::IDENTITY);
-    assert_alike(&shaded, &rgba(&longer), 0, "a longer normal");
+    assert_alike(&frame, &longer, 0, "a longer normal");
     // Stretching it along `z` makes the normals pointing up three times as long as the one out of
     // it, but leaves their directions as they were, mirrored or not.
     let stretched = render(&unit, Affine3::from_scale([1.0, 1.0, 3.0]));
-    assert_alike(&shaded, &rgba(&stretched), 0, "stretched");
+    assert_alike(&frame, &stretched, 0, "stretched");
     let mirrored = render(&unit, Affine3::from_scale([-1.0, 1.0, 3.0]));
-    let flipped = imageops::flip_horizontal(&shaded);
-    assert_alike(&flipped, &rgba(&mirrored), 0, "mirrored and stretched");
+    let flipped = transformed(&frame, imageops::flip_horizontal);
+    assert_alike(&flipped, &mirrored, 0, "mirrored and stretched");
 
     assert_screenshot(&headless.adapter_name(), "meshes_normals", frame);
 }
@@ -1327,7 +1327,10 @@ fn meshes_cover_their_views_rect() {
         .context()
         .create_mesh(&MeshData::plane([4.0, 4.0]))
         .unwrap();
-    let lit = |frame: &RgbaImage| frame.pixels().filter(|p| p.0 != [0, 0, 0, 255]).count();
+    let lit = |frame: &Image| {
+        let pixels = frame.pixels().chunks(4);
+        pixels.filter(|p| *p != [0, 0, 0, 255]).count()
+    };
     for offset in [0.49, 0.5, 0.51] {
         for [x, y] in [[0.0, 0.0], [3.0, 0.0], [-3.0, -2.0], [8.0, 9.0]] {
             let rect = Rect::new(x + offset, y + offset, 10.0, 10.0);
@@ -1350,7 +1353,6 @@ fn meshes_cover_their_views_rect() {
                         .draw_mesh(&plane, Affine3::IDENTITY, None, Color::WHITE);
                 })
                 .unwrap();
-            let [fill, view] = [fill, view].map(|frame| rgba(&frame));
             assert!(
                 fill == view,
                 "{rect:?}: the view covers {} pixels, and a fill of its rect {}",
@@ -1458,54 +1460,51 @@ fn assert_screenshot(adapter: &str, name: &str, frame: Image) {
 /// perspective, where some pixels' middles land so near the edge between two texels that GPUs
 /// pick either.
 fn assert_screenshot_allowing(adapter: &str, name: &str, frame: Image, allowed: usize) {
-    let actual = RgbaImage::from_raw(frame.width(), frame.height(), frame.into_pixels())
-        .expect("frame dimensions match its pixel data");
     let reference_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/screenshots")
         .join(format!("{name}.png"));
     let output_dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("screenshots");
 
-    let mismatch = match image::open(&reference_path) {
-        Ok(reference) => compare(&actual, &reference.into_rgba8()),
-        Err(err) => Some(Mismatch::Missing(err.to_string())),
-    };
-    let mismatch = mismatch.filter(
-        |mismatch| !matches!(mismatch, Mismatch::Pixels { count, .. } if *count <= allowed),
-    );
-    let Some(mismatch) = mismatch else {
+    let reference = Image::load_png(&reference_path);
+    let matches = reference.as_ref().is_ok_and(|reference| {
+        let comparison = frame.compare(reference, CHANNEL_TOLERANCE);
+        comparison.differs_by_at_most(allowed)
+    });
+    if matches {
         return;
-    };
+    }
 
     if env::var_os("UPDATE_SCREENSHOTS").is_some() {
-        save(&actual, &reference_path);
+        save(&frame, &reference_path);
         return;
     }
 
     let actual_path = output_dir.join(format!("{name}.actual.png"));
-    save(&actual, &actual_path);
-    let details = match mismatch {
-        Mismatch::Missing(err) => format!("could not read the reference: {err}"),
-        Mismatch::Size(reference) => format!(
-            "size {}x{} does not match the reference's {}x{}",
-            actual.width(),
-            actual.height(),
-            reference.0,
-            reference.1
-        ),
-        Mismatch::Pixels {
-            count,
-            largest_difference,
-            diff,
-        } => {
-            let diff_path = output_dir.join(format!("{name}.diff.png"));
-            save(&diff, &diff_path);
-            format!(
-                "{count} pixels differ by more than {CHANNEL_TOLERANCE} \
-                 (largest channel difference: {largest_difference})\n\
-                 diff:      {}",
-                diff_path.display()
-            )
-        }
+    save(&frame, &actual_path);
+    let details = match &reference {
+        Err(err) => format!("could not read the reference: {err}"),
+        Ok(reference) => match frame.compare(reference, CHANNEL_TOLERANCE) {
+            Comparison::DifferentSizes => format!(
+                "size {}x{} does not match the reference's {}x{}",
+                frame.width(),
+                frame.height(),
+                reference.width(),
+                reference.height()
+            ),
+            Comparison::SameSize { differing, largest } => {
+                let diff_path = output_dir.join(format!("{name}.diff.png"));
+                save(
+                    &frame.diff(reference, CHANNEL_TOLERANCE).unwrap(),
+                    &diff_path,
+                );
+                format!(
+                    "{differing} pixels differ by more than {CHANNEL_TOLERANCE} \
+                     (largest channel difference: {largest})\n\
+                     diff:      {}",
+                    diff_path.display()
+                )
+            }
+        },
     };
     panic!(
         "screenshot `{name}` does not match its reference: {details}\n\
@@ -1521,72 +1520,26 @@ fn assert_screenshot_allowing(adapter: &str, name: &str, frame: Image, allowed: 
 
 /// Asserts that `actual` matches `expected`, rendered the same scene another way, but for at most
 /// `allowed` pixels.
-fn assert_alike(expected: &RgbaImage, actual: &RgbaImage, allowed: usize, what: &str) {
-    match compare(actual, expected) {
-        None => {}
-        Some(Mismatch::Pixels { count, .. }) if count <= allowed => {}
-        Some(Mismatch::Pixels {
-            count,
-            largest_difference,
-            ..
-        }) => panic!(
-            "{what}: {count} pixels differ by more than {CHANNEL_TOLERANCE} \
-             (largest channel difference: {largest_difference})"
+fn assert_alike(expected: &Image, actual: &Image, allowed: usize, what: &str) {
+    match actual.compare(expected, CHANNEL_TOLERANCE) {
+        comparison if comparison.differs_by_at_most(allowed) => {}
+        Comparison::SameSize { differing, largest } => panic!(
+            "{what}: {differing} pixels differ by more than {CHANNEL_TOLERANCE} \
+             (largest channel difference: {largest})"
         ),
-        Some(_) => panic!("{what}: the frames' sizes differ"),
+        Comparison::DifferentSizes => panic!("{what}: the frames' sizes differ"),
     }
 }
 
-fn rgba(frame: &Image) -> RgbaImage {
-    RgbaImage::from_raw(frame.width(), frame.height(), frame.pixels().to_vec())
-        .expect("frame dimensions match its pixel data")
+/// `frame` turned or flipped by `transform`, one of `image`'s operations.
+fn transformed(frame: &Image, transform: impl Fn(&RgbaImage) -> RgbaImage) -> Image {
+    let rgba = RgbaImage::from_raw(frame.width(), frame.height(), frame.pixels().to_vec())
+        .expect("frame dimensions match its pixel data");
+    let done = transform(&rgba);
+    Image::from_pixels(done.width(), done.height(), done.into_raw()).unwrap()
 }
 
-enum Mismatch {
-    Missing(String),
-    Size((u32, u32)),
-    Pixels {
-        count: usize,
-        largest_difference: u8,
-        /// The frame dimmed, with mismatched pixels in magenta.
-        diff: RgbaImage,
-    },
-}
-
-fn compare(actual: &RgbaImage, reference: &RgbaImage) -> Option<Mismatch> {
-    if actual.dimensions() != reference.dimensions() {
-        return Some(Mismatch::Size(reference.dimensions()));
-    }
-    let mut diff = RgbaImage::new(actual.width(), actual.height());
-    let mut count = 0;
-    let mut largest_difference = 0;
-    for ((x, y, a), r) in actual.enumerate_pixels().zip(reference.pixels()) {
-        let difference =
-            a.0.iter()
-                .zip(r.0)
-                .map(|(a, r)| a.abs_diff(r))
-                .max()
-                .unwrap();
-        largest_difference = largest_difference.max(difference);
-        let pixel = if difference > CHANNEL_TOLERANCE {
-            count += 1;
-            Rgba([255, 0, 255, 255])
-        } else {
-            let [r, g, b, _] = a.0;
-            Rgba([r / 3, g / 3, b / 3, 255])
-        };
-        diff.put_pixel(x, y, pixel);
-    }
-    (count > 0).then_some(Mismatch::Pixels {
-        count,
-        largest_difference,
-        diff,
-    })
-}
-
-fn save(image: &RgbaImage, path: &Path) {
+fn save(image: &Image, path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    image
-        .save(path)
-        .unwrap_or_else(|err| panic!("failed to write {}: {err}", path.display()));
+    image.save_png(path).unwrap_or_else(|err| panic!("{err}"));
 }

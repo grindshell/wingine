@@ -9,7 +9,7 @@ use std::{
 use wingine::{
     Error,
     graphics::Resolution,
-    headless::{Image, Simulation},
+    headless::Simulation,
     input::{GamepadButton, Key, Stick},
     runtime::{self, LibraryConfig, LuauGame},
 };
@@ -47,11 +47,6 @@ fn simulation(folder: &Path) -> Simulation<LuauGame> {
 fn stopped_with(simulation: &Simulation<LuauGame>) -> String {
     let err = simulation.game().error().expect("the game stopped");
     err.to_string()
-}
-
-fn pixel(image: &Image, x: u32, y: u32) -> [u8; 4] {
-    let offset = ((y * image.width() + x) * 4) as usize;
-    image.pixels()[offset..offset + 4].try_into().unwrap()
 }
 
 #[test]
@@ -298,8 +293,8 @@ fn update_and_tasks_run_each_frame_and_draw_draws() {
     );
 
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 5, 5), [0, 0, 255, 255]);
-    assert_eq!(pixel(&image, 15, 15), [255, 0, 0, 255]);
+    assert_eq!(image.pixel(5, 5), [0, 0, 255, 255]);
+    assert_eq!(image.pixel(15, 15), [255, 0, 0, 255]);
 }
 
 #[test]
@@ -375,7 +370,7 @@ fn an_error_stops_the_game_and_shows_it() {
 
     let image = simulation.screenshot().unwrap();
     assert_eq!(
-        pixel(&image, 19, 19),
+        image.pixel(19, 19),
         [0x30, 0x10, 0x18, 255],
         "the error's background"
     );
@@ -1011,10 +1006,10 @@ fn sprites_load_from_sheets_and_draw() {
 
     simulation.step();
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 9, 19), BLUE);
-    assert_eq!(pixel(&image, 10, 19), BLACK);
-    assert_eq!(pixel(&image, 12, 0), RED);
-    assert_eq!(pixel(&image, 13, 0), BLACK);
+    assert_eq!(image.pixel(9, 19), BLUE);
+    assert_eq!(image.pixel(10, 19), BLACK);
+    assert_eq!(image.pixel(12, 0), RED);
+    assert_eq!(image.pixel(13, 0), BLACK);
 }
 
 #[test]
@@ -1041,12 +1036,12 @@ fn sprites_draw_rotated_about_their_centers() {
     let mut simulation = simulation(&folder);
     simulation.step();
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 3, 1), BLUE);
-    assert_eq!(pixel(&image, 4, 8), BLUE);
-    assert_eq!(pixel(&image, 0, 4), BLACK);
-    assert_eq!(pixel(&image, 5, 5), BLACK);
-    assert_eq!(pixel(&image, 12, 0), RED);
-    assert_eq!(pixel(&image, 13, 0), BLACK);
+    assert_eq!(image.pixel(3, 1), BLUE);
+    assert_eq!(image.pixel(4, 8), BLUE);
+    assert_eq!(image.pixel(0, 4), BLACK);
+    assert_eq!(image.pixel(5, 5), BLACK);
+    assert_eq!(image.pixel(12, 0), RED);
+    assert_eq!(image.pixel(13, 0), BLACK);
 }
 
 #[test]
@@ -1086,8 +1081,8 @@ fn colors_can_be_made_numbers() {
     }
     simulation.step();
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 0, 0), BLUE);
-    assert_eq!(pixel(&image, 1, 0), BLACK);
+    assert_eq!(image.pixel(0, 0), BLUE);
+    assert_eq!(image.pixel(1, 0), BLACK);
 }
 
 #[test]
@@ -1138,9 +1133,9 @@ fn animations_show_their_frames_in_turn() {
     assert!(simulation.eval::<bool>("no_frames_fail and no_time_fails"));
 
     simulation.step();
-    assert_eq!(pixel(&simulation.screenshot().unwrap(), 0, 0), RED);
+    assert_eq!(simulation.screenshot().unwrap().pixel(0, 0), RED);
     simulation.run_for(0.3);
-    assert_eq!(pixel(&simulation.screenshot().unwrap(), 0, 0), BLUE);
+    assert_eq!(simulation.screenshot().unwrap().pixel(0, 0), BLUE);
 }
 
 #[test]
@@ -1249,11 +1244,11 @@ fn scenes_draw_and_change() {
     let mut simulation = simulation(&folder);
     simulation.step();
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 0, 19), [0, 255, 0, 255]);
+    assert_eq!(image.pixel(0, 19), [0, 255, 0, 255]);
     // The hand covers (9, 13) to (11, 15).
-    assert_eq!(pixel(&image, 9, 13), BLUE);
-    assert_eq!(pixel(&image, 10, 14), BLUE);
-    assert_eq!(pixel(&image, 8, 13), BLACK);
+    assert_eq!(image.pixel(9, 13), BLUE);
+    assert_eq!(image.pixel(10, 14), BLUE);
+    assert_eq!(image.pixel(8, 13), BLACK);
 
     simulation.exec(
         "room:find('arm'):set_rotation(0)
@@ -1264,15 +1259,15 @@ fn scenes_draw_and_change() {
     simulation.step();
     let image = simulation.screenshot().unwrap();
     // 4 along the arm, which now points right: (13, 9) to (15, 11).
-    assert_eq!(pixel(&image, 13, 9), RED);
-    assert_eq!(pixel(&image, 9, 13), BLACK);
-    assert_eq!(pixel(&image, 0, 19), BLUE);
-    assert_eq!(pixel(&image, 10, 19), BLACK);
+    assert_eq!(image.pixel(13, 9), RED);
+    assert_eq!(image.pixel(9, 13), BLACK);
+    assert_eq!(image.pixel(0, 19), BLUE);
+    assert_eq!(image.pixel(10, 19), BLACK);
 
     simulation.exec("room:find('arm'):set_visible(false)");
     simulation.step();
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 13, 9), BLACK);
+    assert_eq!(image.pixel(13, 9), BLACK);
 }
 
 #[test]
@@ -1319,7 +1314,7 @@ fn scenes_lay_out_on_the_canvas() {
     simulation.step();
     assert_eq!(simulation.eval::<(f32, f32)>(bounds), (58.0, 28.0));
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 59, 29), [255, 0, 0, 255]);
+    assert_eq!(image.pixel(59, 29), [255, 0, 0, 255]);
 
     simulation.exec("corner:set_anchor(0.5, 0) label:set_anchor(nil)");
     assert_eq!(simulation.eval::<(f32, f32)>(bounds), (28.0, -2.0));
@@ -1437,11 +1432,11 @@ fn clips_pose_scene_nodes() {
     simulation.exec("puppet:pose(clips.wave, 0.5) arm:set_rotation(0)");
     simulation.step();
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 14, 3), BLUE);
+    assert_eq!(image.pixel(14, 3), BLUE);
     simulation.exec("hand:set_cell(0, 0)");
     simulation.step();
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 14, 3), RED);
+    assert_eq!(image.pixel(14, 3), RED);
 
     let mut error = |code: &str| -> String {
         simulation.eval(&format!(
@@ -1557,11 +1552,11 @@ fn scene_tilemaps_and_instances_work_from_luau() {
     simulation.step();
     let image = simulation.screenshot().unwrap();
     // The map covers (4, 2) to (12, 8), its wall (6, 4) to (8, 6).
-    assert_eq!(pixel(&image, 4, 2), RED);
-    assert_eq!(pixel(&image, 6, 4), BLUE);
-    assert_eq!(pixel(&image, 3, 2), BLACK);
+    assert_eq!(image.pixel(4, 2), RED);
+    assert_eq!(image.pixel(6, 4), BLUE);
+    assert_eq!(image.pixel(3, 2), BLACK);
     assert_eq!(
-        pixel(&image, 1, 0),
+        image.pixel(1, 0),
         [0, 255, 0, 255],
         "the guide's body, overridden"
     );
@@ -1569,8 +1564,8 @@ fn scene_tilemaps_and_instances_work_from_luau() {
     simulation.exec("walls:set_tile(1, 1, nil) walls:set_tile(0, 0, 'blue')");
     simulation.step();
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 6, 4), RED);
-    assert_eq!(pixel(&image, 4, 2), BLUE);
+    assert_eq!(image.pixel(6, 4), RED);
+    assert_eq!(image.pixel(4, 2), BLUE);
 
     let mut error = |code: &str| -> String {
         simulation.eval(&format!(
@@ -1626,12 +1621,12 @@ fn scene_nodes_are_added_and_removed_from_luau() {
 
     simulation.step();
     // The twin, at the hand's position in the arm but in the room, covers (3, -1) to (5, 1).
-    assert_eq!(pixel(&simulation.screenshot().unwrap(), 4, 0), BLUE);
-    assert_eq!(pixel(&simulation.screenshot().unwrap(), 2, 0), BLACK);
+    assert_eq!(simulation.screenshot().unwrap().pixel(4, 0), BLUE);
+    assert_eq!(simulation.screenshot().unwrap().pixel(2, 0), BLACK);
 
     simulation.exec("twin:remove()");
     simulation.step();
-    assert_eq!(pixel(&simulation.screenshot().unwrap(), 4, 0), BLACK);
+    assert_eq!(simulation.screenshot().unwrap().pixel(4, 0), BLACK);
     assert!(simulation.eval::<bool>("twin:is_removed() and not hand:is_removed()"));
     let err = error(&mut simulation, "twin:position()");
     assert!(err.contains("has been removed"), "{err}");
@@ -1763,12 +1758,12 @@ fn tilemaps_hold_tiles_in_layers_and_draw_them() {
 
     simulation.step();
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 15, 5), BLUE, "the wall, over the ground");
-    assert_eq!(pixel(&image, 25, 15), RED);
+    assert_eq!(image.pixel(15, 5), BLUE, "the wall, over the ground");
+    assert_eq!(image.pixel(25, 15), RED);
     simulation.exec("only_ground = true");
     simulation.step();
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 15, 5), RED);
+    assert_eq!(image.pixel(15, 5), RED);
 }
 
 #[test]
@@ -1938,8 +1933,8 @@ fn the_camera_stays_inside_its_bounds() {
     let mut simulation = simulation(&folder);
     simulation.step();
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 1, 1), RED);
-    assert_eq!(pixel(&image, 11, 11), BLACK);
+    assert_eq!(image.pixel(1, 1), RED);
+    assert_eq!(image.pixel(11, 11), BLACK);
 }
 
 #[test]
@@ -1966,24 +1961,24 @@ fn outlines_lines_and_circles_draw_where_they_are_given() {
     simulation.step();
     let image = simulation.screenshot().unwrap();
     // A thin outline, with a circle inside it.
-    assert_eq!(pixel(&image, 0, 0), RED);
-    assert_eq!(pixel(&image, 9, 9), RED);
-    assert_eq!(pixel(&image, 1, 1), BLACK);
-    assert_eq!(pixel(&image, 4, 4), BLUE);
-    assert_eq!(pixel(&image, 3, 5), BLUE);
-    assert_eq!(pixel(&image, 2, 5), BLACK);
+    assert_eq!(image.pixel(0, 0), RED);
+    assert_eq!(image.pixel(9, 9), RED);
+    assert_eq!(image.pixel(1, 1), BLACK);
+    assert_eq!(image.pixel(4, 4), BLUE);
+    assert_eq!(image.pixel(3, 5), BLUE);
+    assert_eq!(image.pixel(2, 5), BLACK);
     // A thick outline, with a ring inside it.
-    assert_eq!(pixel(&image, 13, 1), RED);
-    assert_eq!(pixel(&image, 14, 3), BLUE);
-    assert_eq!(pixel(&image, 15, 3), BLACK);
+    assert_eq!(image.pixel(13, 1), RED);
+    assert_eq!(image.pixel(14, 3), BLUE);
+    assert_eq!(image.pixel(15, 3), BLACK);
     // A thin line along the middles of row 12, and a thick one over rows 15 and 16.
-    assert_eq!(pixel(&image, 10, 11), BLACK);
-    assert_eq!(pixel(&image, 10, 12), BLUE);
-    assert_eq!(pixel(&image, 10, 13), BLACK);
-    assert_eq!(pixel(&image, 3, 14), BLACK);
-    assert_eq!(pixel(&image, 3, 15), RED);
-    assert_eq!(pixel(&image, 3, 16), RED);
-    assert_eq!(pixel(&image, 3, 17), BLACK);
+    assert_eq!(image.pixel(10, 11), BLACK);
+    assert_eq!(image.pixel(10, 12), BLUE);
+    assert_eq!(image.pixel(10, 13), BLACK);
+    assert_eq!(image.pixel(3, 14), BLACK);
+    assert_eq!(image.pixel(3, 15), RED);
+    assert_eq!(image.pixel(3, 16), RED);
+    assert_eq!(image.pixel(3, 17), BLACK);
 }
 
 #[test]
@@ -2007,16 +2002,16 @@ fn the_camera_zooms_about_the_middle_of_the_view() {
     simulation.step();
     let image = simulation.screenshot().unwrap();
     // From the middle, (10, 10), twice the size.
-    assert_eq!(pixel(&image, 10, 10), RED);
-    assert_eq!(pixel(&image, 13, 13), RED);
-    assert_eq!(pixel(&image, 14, 14), BLACK);
-    assert_eq!(pixel(&image, 9, 9), BLACK);
+    assert_eq!(image.pixel(10, 10), RED);
+    assert_eq!(image.pixel(13, 13), RED);
+    assert_eq!(image.pixel(14, 14), BLACK);
+    assert_eq!(image.pixel(9, 9), BLACK);
 
     simulation.exec("zoom = 0.5");
     simulation.step();
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 10, 10), RED);
-    assert_eq!(pixel(&image, 11, 11), BLACK);
+    assert_eq!(image.pixel(10, 10), RED);
+    assert_eq!(image.pixel(11, 11), BLACK);
 
     for zoom in ["0", "-1", "0 / 0", "math.huge"] {
         let code = format!("graphics.set_camera(0, 0, nil, {zoom})");
@@ -2090,10 +2085,10 @@ fn luau_games_draw_meshes_and_billboards_in_3d_views() {
     assert_eq!(simulation.eval::<(u32, u32)>(stats), (14, 3));
 
     let frame = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&frame, 10, 7), [255, 0, 0, 255], "the cube");
-    assert_eq!(pixel(&frame, 17, 7), [0, 0, 0, 255], "beside it");
+    assert_eq!(frame.pixel(10, 7), [255, 0, 0, 255], "the cube");
+    assert_eq!(frame.pixel(17, 7), [0, 0, 0, 255], "beside it");
     assert_eq!(
-        pixel(&frame, 10, 13),
+        frame.pixel(10, 13),
         [0, 0, 255, 255],
         "the rect over the view"
     );
@@ -2102,7 +2097,7 @@ fn luau_games_draw_meshes_and_billboards_in_3d_views() {
     let green = (0..20)
         .flat_map(|x| (0..20).map(move |y| (x, y)))
         .filter(|&(x, y)| {
-            let [r, g, b, _] = pixel(&frame, x, y);
+            let [r, g, b, _] = frame.pixel(x, y);
             g > 128 && r < 32 && b < 32
         })
         .collect::<Vec<_>>();
@@ -2292,9 +2287,9 @@ fn scene_views_work_from_luau() {
     simulation.step();
     assert_eq!(simulation.game().error().map(ToString::to_string), None);
     let image = simulation.screenshot().unwrap();
-    assert_eq!(pixel(&image, 5, 10), RED, "the box");
-    assert_eq!(pixel(&image, 15, 10), RED, "the hero");
-    assert_eq!(pixel(&image, 10, 2), BLUE, "the wall");
+    assert_eq!(image.pixel(5, 10), RED, "the box");
+    assert_eq!(image.pixel(15, 10), RED, "the hero");
+    assert_eq!(image.pixel(10, 2), BLUE, "the wall");
 
     assert_eq!(
         simulation.eval::<(String, String, String)>("view:kind(), box:kind(), hero:kind()"),
@@ -2458,7 +2453,7 @@ fn luau_games_load_and_draw_models() {
     assert_eq!(simulation.eval::<(u32, u32)>(stats), (72, 3));
     let frame = simulation.screenshot().unwrap();
     // Seen from the front, the table's top is a row of pixels from 0.4 to 0.5 up, tinted red.
-    let [r, g, b, _] = pixel(&frame, 10, 5);
+    let [r, g, b, _] = frame.pixel(10, 5);
     assert!(r > 100 && g < 20 && b < 20, "{:?}", [r, g, b]);
 
     let missing: String = simulation.eval("tostring(missing)");
@@ -2691,7 +2686,7 @@ mod gui {
         let beside = simulation.gui_rect("Beside").unwrap();
         let [x, y] = [beside.x - 20.0, beside.y + beside.h / 2.0];
         let image = simulation.screenshot().unwrap();
-        assert_eq!(pixel(&image, x as u32, y as u32), RED);
+        assert_eq!(image.pixel(x as u32, y as u32), RED);
     }
 
     #[test]
