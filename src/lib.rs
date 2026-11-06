@@ -13,6 +13,8 @@ pub mod headless;
 pub mod input;
 pub mod lua;
 pub mod math;
+#[cfg(feature = "physics")]
+pub mod physics;
 pub mod runtime;
 pub mod save;
 pub mod scene;

@@ -147,6 +147,15 @@
 //!   child of `node`, named `name` or as `source` is, and returns it; `node:remove()` takes a
 //!   node out of its scene, after which using it is an error apart from `node:is_removed()` and
 //!   `tostring`.
+//! - A `PhysicsWorld`, with the `physics` feature, is userdata for a [`physics::World`] of a
+//!   scene's nodes, from `physics.world()`, whose nodes are all of one scene and none in a 3D
+//!   view. `world:add(node, options)` makes the node solid where it covers, as `node:contains`
+//!   tests, or with `options.edges`, only along its edges; adding it again changes which.
+//!   Colliders follow their nodes as they move, and go when their nodes are removed.
+//!   `world:remove(node)` makes it solid nowhere. `world:move(node, dx, dy, box)` moves the node
+//!   by up to `dx`, `dy` in the scene, as the `Rect` `box` around its position slides, stopping
+//!   at what's solid and sliding along it, without its own collider in the way, and returns how
+//!   far it moved; `box` must be wider and taller than 0.
 //! - A [`Clip`] is userdata for a clip of a scene file, from `scene.clips`. Like an animation, it
 //!   doesn't keep time: scripts keep how long it has played and pose nodes with it. Its methods
 //!   are `clip:duration()`, `clip:is_looping()` and `clip:is_finished(time)` (whether one that
@@ -180,6 +189,11 @@ use crate::{
         RectNode, Scene, SpriteNode, TextNode, TilemapNode, Value, View3dNode, a_node_of,
     },
     tilemap::{Tile, TileId, Tilemap, Tileset},
+};
+#[cfg(feature = "physics")]
+use crate::{
+    math::Affine,
+    physics::{self, ColliderId, Solid},
 };
 
 /// Built-ins written in Luau, defined before the sandbox makes the globals read-only. Each frame,
@@ -1502,6 +1516,170 @@ impl mlua::UserData for SceneNode {
                 .unwrap_or_else(|_| "removed".into());
             Ok(format!("SceneNode({described})"))
         });
+    }
+}
+
+/// A [`physics::World`] of a scene's nodes, as scripts hold it, from `physics.world()`: colliders
+/// that cover nodes as they're drawn, following them as they move and going when they do, and
+/// nodes moved among them.
+#[cfg(feature = "physics")]
+#[derive(Default)]
+pub struct PhysicsWorld {
+    world: physics::World,
+    /// The scene its nodes are of: the first node's given to it.
+    scene: Option<Rc<RefCell<Scene>>>,
+    /// The nodes with colliders, in the order they were added.
+    covered: Vec<Covered>,
+}
+
+/// A node of a [`PhysicsWorld`] with a collider.
+#[cfg(feature = "physics")]
+struct Covered {
+    node: NodeId,
+    solid: Solid,
+    collider: ColliderId,
+    /// Where the node was when its collider was last placed, or `None` if it covered nothing.
+    placed: Option<(Affine, Rect)>,
+}
+
+#[cfg(feature = "physics")]
+impl PhysicsWorld {
+    /// Fails unless `node` is of the 2D part of the world's scene, which becomes its scene if the
+    /// world has none yet.
+    fn check(&mut self, node: &SceneNode) -> mlua::Result<()> {
+        node.check_2d("place in a physics world", "physics worlds are 2D")?;
+        match &self.scene {
+            Some(scene) if !Rc::ptr_eq(scene, &node.scene) => {
+                let described = node.read(Scene::describe)?;
+                Err(mlua::Error::runtime(format!(
+                    "{described} is of another scene than the physics world's nodes"
+                )))
+            }
+            Some(_) => Ok(()),
+            None => {
+                self.scene = Some(Rc::clone(&node.scene));
+                Ok(())
+            }
+        }
+    }
+
+    /// Covers `node` with a collider, solid as `solid` says, or changes how solid it is if it
+    /// has one already.
+    fn add(&mut self, scene: &Scene, node: NodeId, solid: Solid) {
+        let placed = scene.placement(node);
+        let (transform, rect) = placed.unwrap_or((Affine::IDENTITY, Rect::default()));
+        match self.covered.iter_mut().find(|covered| covered.node == node) {
+            Some(covered) => {
+                self.world.set(covered.collider, transform, rect, solid);
+                covered.solid = solid;
+                covered.placed = placed;
+            }
+            None => {
+                let collider = self.world.add(transform, rect, solid);
+                self.covered.push(Covered {
+                    node,
+                    solid,
+                    collider,
+                    placed,
+                });
+            }
+        }
+    }
+
+    /// Brings the colliders up to date with their nodes: moved, reshaped, or gone.
+    fn follow(&mut self, scene: &Scene) {
+        let world = &mut self.world;
+        self.covered.retain_mut(|covered| {
+            if !scene.contains_node(covered.node) {
+                world.remove(covered.collider);
+                return false;
+            }
+            let placed = scene.placement(covered.node);
+            if placed != covered.placed {
+                let (transform, rect) = placed.unwrap_or((Affine::IDENTITY, Rect::default()));
+                world.set(covered.collider, transform, rect, covered.solid);
+                covered.placed = placed;
+            }
+            true
+        });
+    }
+}
+
+#[cfg(feature = "physics")]
+impl mlua::UserData for PhysicsWorld {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method_mut(
+            "add",
+            |_, world, (node, options): (mlua::UserDataRef<SceneNode>, Option<mlua::Table>)| {
+                let edges = match options {
+                    Some(options) => options.get::<Option<bool>>("edges")?.unwrap_or(false),
+                    None => false,
+                };
+                let solid = if edges { Solid::Edges } else { Solid::Whole };
+                world.check(&node)?;
+                node.read(|scene, id| world.add(scene, id, solid))
+            },
+        );
+        methods.add_method_mut("remove", |_, world, node: mlua::UserDataRef<SceneNode>| {
+            let ours = world
+                .scene
+                .as_ref()
+                .is_some_and(|scene| Rc::ptr_eq(scene, &node.scene));
+            let found = world
+                .covered
+                .iter()
+                .position(|covered| covered.node == node.id);
+            if let (true, Some(index)) = (ours, found) {
+                let covered = world.covered.remove(index);
+                world.world.remove(covered.collider);
+            }
+            Ok(())
+        });
+        methods.add_method_mut(
+            "move",
+            |_, world, (node, dx, dy, area): (mlua::UserDataRef<SceneNode>, f32, f32, Rect)| {
+                check_finite(&[dx, dy], "a move")?;
+                check_finite(&[area.x, area.y, area.w, area.h], "a box")?;
+                if !(area.w > 0.0 && area.h > 0.0) {
+                    let message = format!(
+                        "a box must be wider and taller than 0, not {} by {}",
+                        area.w, area.h
+                    );
+                    return Err(mlua::Error::runtime(message));
+                }
+                world.check(&node)?;
+                let moved = node.read(|scene, id| {
+                    world.follow(scene);
+                    let [x, y] = scene.transform(id).apply([0.0, 0.0]);
+                    let at = Rect::new(x + area.x, y + area.y, area.w, area.h);
+                    // The node's own collider isn't in its way.
+                    let own = world.covered.iter().find(|covered| covered.node == id);
+                    let own = own.map(|covered| covered.collider);
+                    world.world.slide(at, [dx, dy], own)
+                })?;
+                // Moved in the scene's coordinates, so in its parent's, by however much the
+                // parent turns and stretches it.
+                let moved = node.write(|scene, id| {
+                    let local = match scene.node(id).parent() {
+                        Some(parent) => match scene.transform(parent).inverse() {
+                            Some(inverse) => Affine {
+                                translation: [0.0, 0.0],
+                                ..inverse
+                            }
+                            .apply(moved),
+                            None => return [0.0, 0.0],
+                        },
+                        None => moved,
+                    };
+                    let [x, y] = scene.node(id).position();
+                    scene
+                        .node_mut(id)
+                        .set_position([x + local[0], y + local[1]]);
+                    moved
+                })?;
+                Ok((moved[0], moved[1]))
+            },
+        );
     }
 }
 

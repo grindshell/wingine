@@ -53,7 +53,7 @@
 //! `require("./opponent")`. Files the engine loads, such as sounds and images, are relative to
 //! the game's folder.
 //!
-//! The engine's API is in eight global tables:
+//! The engine's API is in nine global tables:
 //!
 //! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.color`, `graphics.default_font`,
 //! `graphics.frame_stats`, `graphics.new_animation` and `graphics.hit_box` work anywhere,
@@ -171,6 +171,14 @@
 //!   `direction`.
 //! - `grid.opposite(direction)`
 //!
+//! `physics`, for collision among a scene's nodes, anywhere:
+//!
+//! - `physics.world()` returns an empty `PhysicsWorld`, which the first node given to it makes a
+//!   world of that node's scene: its colliders cover nodes as they're drawn, following them as
+//!   they move and going when they do, and `world:move` moves nodes among them. See
+//!   [`physics`](crate::physics) for how. An engine built without its `physics` feature fails to
+//!   make one.
+//!
 //! `scene`, for loading [scenes](crate::scene):
 //!
 //! - `scene.load(path)`, while the game loads and in `update`, loads the scene file at `path`,
@@ -280,6 +288,7 @@ mod grid;
 mod gui;
 mod input;
 mod native;
+mod physics;
 mod save;
 mod scene;
 mod tilemap;
@@ -522,6 +531,7 @@ impl LuauGame {
         globals.set("audio", audio::module(lua, &lent, folder)?)?;
         globals.set("tilemap", tilemap::module(lua)?)?;
         globals.set("grid", grid::module(lua)?)?;
+        globals.set("physics", physics::module(lua)?)?;
         let scene = scene::module(lua, &lent, folder.to_owned(), textures)?;
         globals.set("scene", scene)?;
         globals.set("save", save::module(lua, ctx.saves())?)?;

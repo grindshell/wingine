@@ -57,7 +57,7 @@ The repository's examples are complete games, and the best place to see how the 
 | [`examples/pong`](../examples/pong) | A small game in one script and a module: input, sound, music, text, a camera that shakes, and `exact` trig, so it plays the same everywhere |
 | [`examples/rpg`](../examples/rpg) | A top-down RPG: tilemaps, grid movement, animation, dialogue, menus, turn-based battles, and a title screen that continues a saved game |
 | [`examples/shmup`](../examples/shmup) | A bullet hell at a fixed update rate, with an optional native library for its bullets, and a HUD laid out in a scene, whose menu takes the mouse |
-| [`examples/garden`](../examples/garden) | A garden laid out in a scene file: nodes found by path and tag, turned together, and areas for collision and notes, which F1 outlines |
+| [`examples/garden`](../examples/garden) | A garden laid out in a scene file: nodes found by path and tag, turned together, solid in a physics world the player walks in, and areas for notes, which F1 outlines |
 | [`examples/orchard`](../examples/orchard) | A character rigged from sprites and animated by clips, layered and crossfaded each frame, catching apples |
 | [`examples/native-particles`](../examples/native-particles/src/lib.rs) | A small native library: functions, a class and hooks |
 | [`examples/native-danmaku`](../examples/native-danmaku/src/lib.rs) | The shmup's bullets in Rust, drawn with one call per kind of bullet |

@@ -1,6 +1,6 @@
 # API reference
 
-Scripts reach the engine through ten global tables, a few built-in functions, the objects those
+Scripts reach the engine through eleven global tables, a few built-in functions, the objects those
 hand out, and the `Ui` a game's `gui` lays its interface out with:
 
 | Page | What it covers |
@@ -11,6 +11,7 @@ hand out, and the `Ui` a game's `gui` lays its interface out with:
 | [`audio`](audio.md) | Sound effects, music and volume |
 | [`tilemap`](tilemap.md) | Tilesets and maps of tiles in layers |
 | [`grid`](grid.md) | Characters that walk from tile to tile |
+| [`physics`](physics.md) | Scene nodes made solid, and characters that walk among them, sliding along what they bump into |
 | [`scene`](scene.md) | Scenes loaded from scene files, and their nodes |
 | [`save`](save.md) | Data kept between runs of the game, such as progress |
 | [`exact`](exact.md) | Math that gives the same bits on every platform, for games that replay |
@@ -71,7 +72,8 @@ time raises an error saying when it works.
 - **Everything else** works any time: `graphics.size`, `graphics.color`,
   `graphics.default_font`, `graphics.frame_stats`, `graphics.new_animation`,
   `graphics.hit_box`, `audio.load`,
-  `tilemap`, `grid`, `save`, and the methods of every object, scene nodes included.
+  `tilemap`, `grid`, `physics`, `save`, and the methods of every object, scene nodes and physics
+  worlds included.
 
 ## Values
 

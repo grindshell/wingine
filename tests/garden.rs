@@ -129,6 +129,44 @@ fn solid_things_are_in_the_way() {
 }
 
 #[test]
+fn walking_into_something_slantwise_slides_along_it() {
+    let mut simulation = simulation();
+    simulation.exec("garden.player:set_position(176, 120)");
+    simulation.hold(Key::Up, 1.0);
+    let [x, y] = player(&mut simulation);
+
+    // Up and to the right, against the bench's underside: only the part along it goes.
+    simulation.key_down(Key::Up);
+    simulation.key_down(Key::Right);
+    run_for(&mut simulation, 0.1);
+    simulation.key_up(Key::Up);
+    simulation.key_up(Key::Right);
+    let [across, down] = player(&mut simulation);
+    // 64 pixels a second, half of it each way.
+    assert!((across - x - 4.5).abs() < 0.5, "from {x} to {across}");
+    assert!((down - y).abs() < 0.01, "kept {y}, not {down}");
+}
+
+#[test]
+fn the_edges_of_the_ground_keep_the_player_on_it() {
+    let mut simulation = simulation();
+    // Below the pond, and clear of everything to the left and below.
+    simulation.exec("garden.player:set_position(20, 170)");
+    simulation.hold(Key::Left, 1.0);
+    let [x, _] = player(&mut simulation);
+    // Its feet reach 4 either side of its position.
+    assert!((4.0..4.1).contains(&x), "stopped at the left edge at {x}");
+
+    // The strip across its feet is half a pixel above the bottom of its position.
+    simulation.hold(Key::Down, 1.0);
+    let [_, y] = player(&mut simulation);
+    assert!(
+        (180.4..180.5).contains(&y),
+        "stopped at the bottom edge at {y}"
+    );
+}
+
+#[test]
 fn space_plants_and_picks_flowers() {
     let mut simulation = simulation();
     let flowers = |simulation: &mut Simulation<LuauGame>| -> u32 {

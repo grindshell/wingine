@@ -151,6 +151,13 @@ type MeshData = {
     indices: { number },
 }
 
+--- How `world:add` makes a node solid.
+type ColliderOptions = {
+    --- Whether only the node's edges are solid, keeping what's inside in and what's outside out,
+    --- rather than all of it. By default, false.
+    edges: boolean?,
+}
+
 --- A window of an interface, for `ui:window`. Positions and sizes are in points: the window's
 --- logical pixels, not the canvas's.
 type WindowOptions = {
@@ -468,6 +475,19 @@ declare extern type SceneNode with
     function set_tile(self, column: number, row: number, name: string?): ()
 end
 
+--- Colliders covering nodes of one scene as they're drawn, which follow the nodes as they move and
+--- go when they do, and nodes moved among them, from `physics.world()`.
+declare extern type PhysicsWorld with
+    --- Makes `node` solid where it's drawn, turned and stretched as it is, or with `edges`, only
+    --- along its edges. Adding a node again changes how solid it is.
+    function add(self, node: SceneNode, options: ColliderOptions?): ()
+    --- Makes `node` solid nowhere, if it was.
+    function remove(self, node: SceneNode): ()
+    --- Moves `node` by up to `dx`, `dy` in the scene, as `box` around its position does, stopping
+    --- at what's solid and sliding along it, and returns how far it moved.
+    function move(self, node: SceneNode, dx: number, dy: number, box: Rect): (number, number)
+end
+
 --- Where an interface is laid out, with egui, in the game's `gui(ui)`: the whole window, or the
 --- inside of a container. Widgets that change a value take it and return the new one. It works
 --- only until the function it was passed to returns, and inside a container, use the `Ui` the
@@ -716,6 +736,12 @@ declare grid: {
 }
 
 --- Scenes loaded from scene files, and their nodes.
+declare physics: {
+    --- Returns an empty physics world, which the first node given to it makes a world of that
+    --- node's scene.
+    world: () -> PhysicsWorld,
+}
+
 declare scene: {
     --- Loads the scene file at `path` and returns its root, a scene of its own.
     load: (path: string) -> SceneNode,

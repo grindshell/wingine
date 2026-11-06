@@ -34,6 +34,9 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **Rigged characters**: sprites for parts that turn about their joints, animated by clips of
   keyframes in scene files, which games layer and crossfade.
 - **Grid movement** from tile to tile, with tile collision.
+- **Collision** with [Rapier](https://rapier.rs): scene nodes made solid where they're drawn,
+  turned and stretched, or along their edges, and characters that walk among them, stopping at
+  what's solid and sliding along it, the same to the bit on every platform.
 - **Sprite animation**, such as walk cycles.
 - **Text** in a built-in pixel font, wrapped to a width and revealed a little at a time for
   dialogue.
@@ -223,9 +226,9 @@ Walk with the arrow keys or WASD, and stand beside something to read about it. P
 plant a flower, or to pick the one you're standing on. The mill's sails are a node holding four
 arms and cloths, which turn together as the script turns the node; the birds circle the same way.
 The trees and flowers are instances of scenes of their own, each changed by overrides, and
-planting adds another. Things tagged `solid` are in the player's way, and areas tagged `note`
-carry the text they show; F1 outlines them both, and circles what turns. See
-[Scenes](docs/scenes.md).
+planting adds another. Things tagged `solid` are in the player's way, solid in a physics world
+that the player walks in and slides along them, and areas tagged `note` carry the text they show;
+F1 outlines them both, and circles what turns. See [Scenes](docs/scenes.md).
 
 ### Orchard
 
@@ -361,7 +364,7 @@ end
 ```
 
 Run it with `cargo run -- path/to/folder`. The engine's API is the global tables `graphics`,
-`input`, `audio`, `tilemap`, `grid`, `scene` and `save`. [The docs](docs/README.md) cover making a game in
+`input`, `audio`, `tilemap`, `grid`, `physics`, `scene` and `save`. [The docs](docs/README.md) cover making a game in
 Luau, from a quick start to native libraries, with a reference to every function and type scripts
 use.
 

@@ -730,8 +730,8 @@ fn the_definitions_declare_every_function_of_the_engine() {
         &[(
             "main.luau",
             "local tables = { graphics = graphics, input = input, audio = audio,
-                tilemap = tilemap, grid = grid, scene = scene, save = save, exact = exact,
-                rect = rect, window = window }
+                tilemap = tilemap, grid = grid, physics = physics, scene = scene, save = save,
+                exact = exact, rect = rect, window = window }
             names = {}
             for table_name, functions in tables do
                 local found = {}
@@ -745,7 +745,8 @@ fn the_definitions_declare_every_function_of_the_engine() {
     );
     let mut simulation = simulation(&folder);
     let tables = [
-        "graphics", "input", "audio", "tilemap", "grid", "scene", "save", "exact", "rect", "window",
+        "graphics", "input", "audio", "tilemap", "grid", "physics", "scene", "save", "exact",
+        "rect", "window",
     ];
     for table in tables {
         let functions: Vec<String> = simulation.eval(&format!("names.{table}"));
@@ -2499,6 +2500,157 @@ fn rays_hit_boxes_from_luau() {
     assert_eq!(simulation.eval::<Vec<f32>>("hits"), [4.0, 4.0, 0.0, 8.0]);
     assert!(simulation.eval::<bool>("miss == nil"));
     assert_eq!(simulation.eval::<usize>("#empty"), 0);
+}
+
+/// Physics worlds of a scene's nodes.
+#[cfg(feature = "physics")]
+mod physics {
+    use super::*;
+
+    /// A yard fenced in 100 by 60, a wall from 10 to 20 across and 0 to 40 down, a cart scaled 2
+    /// with a rider, and a walker.
+    const YARD: &str = r##"return {
+    format = 2,
+    children = {
+        { name = "fence", kind = "area", width = 100, height = 60 },
+        { name = "wall", kind = "area", x = 10, width = 10, height = 40 },
+        {
+            name = "cart", kind = "node", x = 60, y = 20, scale_x = 2, scale_y = 2,
+            children = { { name = "rider", kind = "node" } },
+        },
+        { name = "walker", kind = "node", x = 2, y = 10 },
+    },
+}"##;
+
+    /// The yard, loaded as `yard`, with its fence's edges and its wall in `world`, and a 2 by 2
+    /// box around a node's position, `BOX`.
+    fn yard(test: &str) -> Simulation<LuauGame> {
+        let main = "yard = scene.load('yard.scene.luau')
+            walker = yard:find('walker')
+            BOX = { x = -1, y = -1, width = 2, height = 2 }
+            world = physics.world()
+            world:add(yard:find('fence'), { edges = true })
+            world:add(yard:find('wall'))";
+        let folder = game(test, &[("yard.scene.luau", YARD), ("main.luau", main)]);
+        simulation(&folder)
+    }
+
+    fn near(actual: f32, expected: f32) -> bool {
+        (actual - expected).abs() < 0.02
+    }
+
+    #[test]
+    fn nodes_stop_at_colliders_and_slide_along_them() {
+        let mut simulation = yard("physics_stop");
+        // The walker's box's right edge, at 3, reaches the wall at 10.
+        let (dx, dy): (f32, f32) = simulation.eval("world:move(walker, 20, 0, BOX)");
+        assert!(near(dx, 7.0) && dy == 0.0, "{dx}, {dy}");
+        assert_eq!(
+            simulation.eval::<(f32, f32)>("walker:position()"),
+            (2.0 + dx, 10.0)
+        );
+
+        // Down and into the wall, it slides down beside it.
+        let (dx, dy): (f32, f32) = simulation.eval("world:move(walker, 5, 20, BOX)");
+        assert!(near(dx, 0.0) && near(dy, 20.0), "{dx}, {dy}");
+
+        // The fence keeps it in.
+        simulation.exec("world:move(walker, -20, 0, BOX)");
+        let (x, y): (f32, f32) = simulation.eval("walker:position()");
+        assert!(near(x, 1.0) && near(y, 30.0), "{x}, {y}");
+    }
+
+    #[test]
+    fn colliders_follow_their_nodes() {
+        let mut simulation = yard("physics_follow");
+        simulation.exec("yard:find('wall'):set_position(30, 0)");
+        let (dx, _): (f32, f32) = simulation.eval("world:move(walker, 50, 0, BOX)");
+        assert!(near(dx, 27.0), "stopped at the wall where it went: {dx}");
+
+        // Once it's gone, nothing but the fence is in the way.
+        simulation.exec("yard:find('wall'):remove()");
+        simulation.exec("world:move(walker, 100, 0, BOX)");
+        let (x, _): (f32, f32) = simulation.eval("walker:position()");
+        assert!(near(x, 99.0), "stopped at the fence's far side: {x}");
+
+        // Nor the fence, once the world has no collider of it.
+        simulation.exec("world:remove(yard:find('fence'))");
+        assert_eq!(
+            simulation.eval::<(f32, f32)>("world:move(walker, 10, 0, BOX)"),
+            (10.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn adding_a_node_again_changes_how_solid_it_is() {
+        let mut simulation = yard("physics_again");
+        // Inside the wall, only its edges are in the way.
+        simulation.exec(
+            "world:add(yard:find('wall'), { edges = true })
+            walker:set_position(15, 10)",
+        );
+        assert_eq!(
+            simulation.eval::<(f32, f32)>("world:move(walker, 0, 5, BOX)"),
+            (0.0, 5.0)
+        );
+        let (dx, _): (f32, f32) = simulation.eval("world:move(walker, 10, 0, BOX)");
+        assert!(near(dx, 4.0), "stopped at the wall's right edge: {dx}");
+    }
+
+    #[test]
+    fn a_solid_node_is_not_in_its_own_way() {
+        let mut simulation = yard("physics_own_way");
+        // A box inside the wall, which is solid, moves it as freely as anything.
+        let moved: (f32, f32) = simulation
+            .eval("world:move(yard:find('wall'), 0, 15, { x = 1, y = 1, width = 8, height = 8 })");
+        assert_eq!(moved, (0.0, 15.0));
+        // And it's solid where it's gone, from 15 to 55 down.
+        simulation.exec("walker:set_position(2, 30)");
+        let (_, dy): (f32, f32) = simulation.eval("world:move(walker, 10, 0, BOX)");
+        assert_eq!(dy, 0.0);
+        let (x, _): (f32, f32) = simulation.eval("walker:position()");
+        assert!(near(x, 9.0), "stopped at the wall: {x}");
+    }
+
+    #[test]
+    fn nodes_move_in_the_scene_however_their_parents_stretch_them() {
+        let mut simulation = yard("physics_parents");
+        assert_eq!(
+            simulation.eval::<(f32, f32)>("world:move(yard:find('cart/rider'), 10, -4, BOX)"),
+            (10.0, -4.0)
+        );
+        assert_eq!(
+            simulation.eval::<(f32, f32)>("yard:find('cart/rider'):world_position()"),
+            (70.0, 16.0)
+        );
+        assert_eq!(
+            simulation.eval::<(f32, f32)>("yard:find('cart/rider'):position()"),
+            (5.0, -2.0),
+            "half as far in the cart, which doubles what's in it"
+        );
+    }
+
+    #[test]
+    fn a_world_is_of_one_scene() {
+        let mut simulation = yard("physics_one_scene");
+        let err = simulation
+            .try_exec("world:add(scene.load('yard.scene.luau'):find('wall'))")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("another scene"), "{err}");
+        let err = simulation
+            .try_exec("world:move(walker, 1, 0, { x = 0, y = 0, width = 0, height = 2 })")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("wider and taller than 0"), "{err}");
+        // Removing a node of another scene, or one with no collider, does nothing.
+        simulation.exec(
+            "world:remove(scene.load('yard.scene.luau'):find('wall'))
+            world:remove(walker)",
+        );
+        let (dx, _): (f32, f32) = simulation.eval("world:move(walker, 20, 0, BOX)");
+        assert!(near(dx, 7.0), "{dx}");
+    }
 }
 
 /// Interfaces Luau games lay out in `gui(ui)`, driven by clicking their widgets by label.

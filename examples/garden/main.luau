@@ -12,14 +12,16 @@
 --   arm and a cloth, so turning it turns them all; the `flock` node holds two birds, which circle
 --   as it turns.
 -- - Nodes tagged `solid` are in the player's way, and areas tagged `note` show their `text` when
---   the player stands in them.
+--   the player stands in them. The player walks with `physics`: a world of colliders covering the
+--   solid nodes as they're drawn, and the ground's edges, which the player's feet stop at and
+--   slide along.
 -- - The player turns and mirrors about its pivot, the middle of its feet: it waddles as it walks,
 --   and faces the way it's going.
 -- - The trees and flowers are instances of `tree.scene.luau` and `flower.scene.luau`, each changed
 --   by overrides: another sprite, another tint. Pressing Space plants a flower, adding a copy of
 --   `flower.scene.luau` to the garden, or picks the one the player stands on, removing it.
 -- - F1 shows what this script works with, drawn over the garden: outlines of what's solid and of
---   the areas with notes, the line across the player's feet that bumps into them, and the nodes
+--   the areas with notes, the strip across the player's feet that bumps into them, and the nodes
 --   it turns, with lines out to what they hold and the circles they turn it around.
 --
 -- Run with `cargo run -- examples/garden`. The tileset is Kenney's 1-bit Pack
@@ -37,6 +39,9 @@ input.bind("debug", { "F1" })
 
 -- How far either side of the middle of its feet the player bumps into things.
 local FOOT = 4
+-- What of the player bumps into things, from its position, the middle of its feet: a strip a
+-- pixel high across them.
+local FEET = { x = -FOOT, y = -1.5, width = FOOT * 2, height = 1 }
 -- How far the player waddles each way as it walks, in radians, and how quickly.
 local WADDLE = 0.12
 local WADDLE_SPEED = 14
@@ -45,6 +50,15 @@ local player = garden_scene:find("player")
 local sails = garden_scene:find("mill/sails")
 local flock = garden_scene:find("flock")
 
+-- What's in the player's way: the solid nodes, and the ground's edges, which keep it on the
+-- ground.
+local solids = garden_scene:tagged("solid")
+local world = physics.world()
+for _, solid in solids do
+    world:add(solid)
+end
+world:add(garden_scene:find("ground"), { edges = true })
+
 garden = {
     scene = garden_scene,
     player = player,
@@ -52,7 +66,9 @@ garden = {
     speed = player:props().speed,
     -- Seconds the player has been walking without stopping, for its waddle.
     walk_time = 0,
-    solids = garden_scene:tagged("solid"),
+    solids = solids,
+    -- The physics world the player walks in.
+    world = world,
     notes = garden_scene:tagged("note"),
     note = garden_scene:find("hud/note"),
     note_text = garden_scene:find("hud/note/text"),
@@ -73,23 +89,7 @@ local DEBUG_NOTE = graphics.color("#f2c14ed0")
 local DEBUG_FEET = graphics.color("#5ad2ff")
 local DEBUG_TURNING = graphics.color("#ffffff90")
 
-local WIDTH, HEIGHT = garden_scene:find("ground"):size()
-
--- Whether the player, with its feet at `x`, `y`, would be in something's way, or off the ground.
-local function blocked(x: number, y: number): boolean
-    if x - FOOT < 0 or x + FOOT > WIDTH or y < 1 or y > HEIGHT then
-        return true
-    end
-    for _, solid in garden.solids do
-        if solid:contains(x - FOOT, y - 1) or solid:contains(x + FOOT, y - 1) then
-            return true
-        end
-    end
-    return false
-end
-
--- Walks the player by the keys held, one axis at a time, so it slides along whatever it bumps
--- into.
+-- Walks the player by the keys held, sliding along whatever it bumps into.
 local function walk(dt: number)
     local dx, dy = 0, 0
     if input.held("left") then
@@ -111,14 +111,7 @@ local function walk(dt: number)
     end
     -- As fast diagonally as straight.
     local step = garden.speed * dt / math.sqrt(dx * dx + dy * dy)
-    local x, y = player:position()
-    if not blocked(x + dx * step, y) then
-        x += dx * step
-    end
-    if not blocked(x, y + dy * step) then
-        y += dy * step
-    end
-    player:set_position(x, y)
+    garden.world:move(player, dx * step, dy * step, FEET)
     if dx ~= 0 then
         player:set_scale(dx, 1)
     end
@@ -195,9 +188,8 @@ local function draw_debug()
     for _, area in garden.notes do
         outline(area, DEBUG_NOTE)
     end
-    -- Between the two points `blocked` checks.
     local x, y = player:position()
-    graphics.draw_line(x - FOOT, y - 1, x + FOOT, y - 1, DEBUG_FEET)
+    graphics.outline_rect(x + FEET.x, y + FEET.y, FEET.width, FEET.height, DEBUG_FEET)
     for _, node in { sails, flock } do
         local cx, cy = node:world_position()
         graphics.fill_circle(cx, cy, 2, DEBUG_TURNING)

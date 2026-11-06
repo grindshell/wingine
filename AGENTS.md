@@ -9,7 +9,7 @@ systems, and don't build more 3D features unless asked.
 
 Wingine has what its examples need: tilemaps and batched sprites, meshes and glTF models in 3D
 views picked by boxes, sprite animation, a camera, keyboard, mouse and gamepad input bound to
-actions, grid movement, text, audio, saves, Luau scripting with tasks, native libraries written
+actions, grid movement, collision with Rapier, text, audio, saves, Luau scripting with tasks, native libraries written
 in Rust, scenes (levels, screens and rigged characters), egui interfaces, and an editor built on
 the engine. Each feature is finished with a game or example that uses it, with tests.
 
@@ -35,6 +35,7 @@ networking or 3D pipelines.
 | Interfaces | `egui` | With `egui-winit` and `egui-wgpu`, behind the default `egui` feature |
 | Gamepads | `gilrs` | Read by the window; simulated without one |
 | Models | `gltf` | glTF 2.0 files, behind the default `models` feature |
+| Collision | `rapier2d` | 2D only, behind the default `physics` feature |
 
 - Rust edition 2024.
 - Licensed under MIT or Apache 2.0, at the user's option (`LICENSE-MIT`, `LICENSE-APACHE`), which
@@ -52,6 +53,11 @@ networking or 3D pipelines.
   features (whose `import` would bring a JPEG decoder): the engine reads buffers, data URIs and
   PNG textures itself. Without it, `Context::load_model` doesn't exist and Luau's
   `graphics.load_model` fails; the `meshes` example requires it.
+- The `physics` feature, on by default, brings `rapier2d` in, built with its
+  `enhanced-determinism`, without which its results differ between Windows and Linux; it costs a
+  few percent. Without the feature, `wingine::physics` doesn't exist and Luau's `physics.world`
+  fails; the garden needs it. Rapier breaks its API in most minor releases, and is
+  Apache-2.0 only, shipping no license file.
 - `kira` is built with only the WAV and OGG Vorbis decoders. Its output, `cpal`, links against
   ALSA on Linux, so building there needs `libasound2-dev` (CI installs it).
 - `gilrs` reads gamepads through Windows Gaming Input on Windows, which hears them only while the
@@ -223,6 +229,19 @@ networking or 3D pipelines.
 - `src/grid.rs`: `Direction` and `GridMover`, for characters that walk tile by tile. Each frame a
   game calls `update`, then `step` when the mover is idle; a step carries over time left from the
   one before, so continuous walking keeps an even pace.
+- `src/physics.rs`: `World`, collision by Rapier (the `physics` feature): fixed colliders without
+  bodies, each a `Rect` placed by an `Affine` as `Scene::placement` places a node's, solid all over
+  or only along its edges (`Solid`), and `slide`, which moves a box by up to a motion, stopping a
+  hundredth of a unit (`GAP`) short of what's solid and sliding along it. It casts the box through
+  Rapier's queries itself, not with Rapier's `KinematicCharacterController`, which is for
+  characters on floors and keeps its gap by rounding the box, so the normals it slides along come
+  back a little turned and a box pushed at a wall creeps along it; and it snaps the normals GJK
+  finds to the sides of the box or of what it hit, within a hair (`true_normal`). Rapier catches
+  up with changed colliders (`detect_collisions`) before the next slide. Its unit tests don't need
+  a GPU. Luau's `physics.world()` returns a `lua::PhysicsWorld`, colliders of one scene's nodes,
+  which before each move re-reads every node's placement to follow it and drops those of removed
+  nodes, and whose `move` slides a box around a node's position, without the node's own collider
+  in the way, then moves the node within its parent.
 - `src/headless.rs`: `Headless`, which renders a `Canvas` to an in-memory image without a window,
   and `Simulation`, which runs a whole `Game` without a window: fixed 60 fps frames, simulated
   keys, mouse and gamepads, and screenshots on demand. Held keys repeat as a system repeats them,
@@ -267,11 +286,11 @@ networking or 3D pipelines.
   save folder, and the native libraries to load, any of them optional (skipped if there's no such
   library, but an error if it's there and fails to load). `LuauGame`
   is the `Game` that runs one, and the engine's API for it is the global tables `graphics`,
-  `input`, `audio`, `tilemap`, `grid`, `scene`, `save` and `window`, one file each. The close
+  `input`, `audio`, `tilemap`, `grid`, `physics`, `scene`, `save` and `window`, one file each. The close
   button asks the game's global `close_requested`, lent the context as `update` is, and closes
   unless it returns false; a game stopped by an error always closes. The module docs are the
   reference for script authors; the engine types those tables hand out (sprites, animations,
-  meshes, tilemaps, grid movers, text layouts, scene nodes) are userdata, documented with their
+  meshes, tilemaps, grid movers, text layouts, scene nodes, physics worlds) are userdata, documented with their
   methods in `src/lua.rs`. Sprite sheets, scenes and `graphics.load_model` share one cache of
   images and models (`Textures`), so each is read once. `wingine.d.luau` (`runtime::DEFINITIONS`) declares that API's types, with short docs, as
   a definitions file for luau-lsp (`declare extern type ... with` for userdata, `declare name: {}`
@@ -472,8 +491,10 @@ networking or 3D pipelines.
   widgets by label (`Simulation::click_gui`), such as a debug window's.
 - `examples/garden/`: a garden around a windmill, laid out in `garden.scene.luau`, which
   `main.luau` loads and plays: it turns the mill's sails and a flock of birds (nodes whose
-  children turn with them), walks the player, which waddles and mirrors about its feet, stops it
-  at nodes tagged `solid`, and shows the `text` of areas tagged `note`. Its trees and flowers are
+  children turn with them), walks the player, which waddles and mirrors about its feet, in a
+  physics world (`garden.world`) of the nodes tagged `solid` and the ground's edges, which a strip
+  across its feet (`FEET`) slides along, and shows the `text` of areas tagged `note`. Its trees
+  and flowers are
   instances of `tree.scene.luau` and `flower.scene.luau`, changed by overrides, and Space plants
   a flower (`add`) or picks one (`remove`). F1 draws a debug view over it (`garden.debug`):
   outlines of the solid nodes and note areas, the player's feet, and the turning nodes' circles.
@@ -560,7 +581,8 @@ networking or 3D pipelines.
 - `tests/gui.rs`: tests for egui over games, through `Simulation`: clicking widgets by label,
   typing into a focused field, input egui takes not reaching the game, and the debug key.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders,
-  their saves, their 3D views, models and picking, scenes' views and their nodes, and in its
+  their saves, their 3D views, models and picking, scenes' views and their nodes, in its
+  `physics` module (with the `physics` feature), physics worlds of their nodes, and in its
   `gui` module (with the `egui` feature), their interfaces, clicked by label. A hash of what
   `exact` gives for spreads of arguments is pinned, so CI checks it's the same on Windows and
   Linux.
@@ -580,8 +602,9 @@ networking or 3D pipelines.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest, using
   its debug panel, and continuing a saved game in a second simulation sharing the first's save
   folder. Its `simulation()` starts a new game from the title screen.
-- `tests/garden.rs`: tests for the `garden` example, the same way, its F1 view, and that its scene
-  files are in the canonical layout.
+- `tests/garden.rs`: tests for the `garden` example, the same way: walking, stopping at and
+  sliding along what's solid and the ground's edges, its F1 view, and that its scene files are in
+  the canonical layout.
 - `tests/orchard.rs`: tests for the `orchard` example, the same way: its clips, the picker's walk
   easing in and out, catching and missing apples, the reactions, the end of the day and the
   camera's close-up, and that its scene files are in the canonical layout.
