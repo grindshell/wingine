@@ -169,7 +169,8 @@
 //!   body away, as removing the node does. `world:step(dt)` brings bodies up to date with nodes
 //!   scripts moved, moves the world on, and moves dynamic bodies' nodes to their bodies.
 //!   `world:walk(node, motion)` walks a character, moving its node, and returns how far it moved,
-//!   a vector, and whether it's on the ground. `world:velocity(node)`,
+//!   a vector, and whether it's on the ground; a character's node moved otherwise puts its body
+//!   there at once. `world:velocity(node)`,
 //!   `world:set_velocity(node, velocity)`, `world:push(node, impulse)` and
 //!   `world:is_resting(node)` read and change a body's motion.
 //! - A [`Clip`] is userdata for a clip of a scene file, from `scene.clips`. Like an animation, it

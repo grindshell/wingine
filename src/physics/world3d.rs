@@ -248,9 +248,11 @@ impl World3d {
         self.rapier.gravity = Vector::from(gravity);
     }
 
-    /// Adds `body`, or fails if its shape can't be made: triangles on a body that moves, a hull
-    /// or triangles with nothing inside, or sizes that aren't finite.
+    /// Adds `body`, or fails if its shape can't be made, or its material isn't one: triangles on
+    /// a body that moves, a hull or triangles with nothing inside, sizes that aren't finite, a
+    /// density, friction or bounce less than 0, or a dynamic body with a density of 0.
     pub fn add(&mut self, body: &Body3d) -> Result<BodyId, String> {
+        check_material(&body.material, body.kind)?;
         let collider = collider(&body.shape, body.kind)?
             .density(body.material.density)
             .friction(body.material.friction)
@@ -330,17 +332,29 @@ impl World3d {
     }
 
     /// Puts the body `id` at `pose`: a fixed or dynamic body at once, keeping a dynamic one's
-    /// velocity, and a kinematic one over the next step, pushing what's in its way.
+    /// velocity, and a kinematic one over the next step, pushing what's in its way. See
+    /// [`World3d::put`] for putting a kinematic one there at once.
     pub fn set_pose(&mut self, id: BodyId, pose: Pose3d) {
+        match self.rapier.bodies.get_mut(id.0) {
+            Some(body) if body.is_kinematic() => {
+                body.set_next_kinematic_position(pose.to_rapier());
+                self.wake(id.0);
+            }
+            Some(_) => self.put(id, pose),
+            None => {}
+        }
+    }
+
+    /// Puts the body `id` at `pose` at once, whatever its kind, keeping a dynamic one's
+    /// velocity: a kinematic one doesn't go there over the next step, sweeping through what's
+    /// between, as a character starting over shouldn't.
+    pub fn put(&mut self, id: BodyId, pose: Pose3d) {
         let Some(body) = self.rapier.bodies.get_mut(id.0) else {
             return;
         };
-        if body.is_kinematic() {
-            body.set_next_kinematic_position(pose.to_rapier());
-        } else {
-            body.set_position(pose.to_rapier(), false);
-            self.fresh.extend_from_slice(body.colliders());
-        }
+        // Where it is and where it's going next, so a kinematic one stays put.
+        body.set_position(pose.to_rapier(), false);
+        self.fresh.extend_from_slice(body.colliders());
         self.wake(id.0);
     }
 
@@ -407,12 +421,13 @@ impl World3d {
 
     /// Whether the body `id` is at rest: a dynamic body that has been still for a couple of
     /// seconds, which the world then leaves alone until something touches it. Fixed bodies
-    /// always are, and kinematic ones while they aren't being moved.
+    /// always are, and kinematic ones while they aren't being moved or turned.
     pub fn is_resting(&self, id: BodyId) -> bool {
+        // Rounding leaves a turned one that has stopped still moving by a hair.
+        const STILL: f32 = 1.0e-4;
         self.rapier.bodies.get(id.0).is_none_or(|body| {
-            body.is_fixed()
-                || body.is_sleeping()
-                || (body.is_kinematic() && body.linvel() == Vector::ZERO)
+            let still = body.linvel().length() < STILL && body.angvel().length() < STILL;
+            body.is_fixed() || body.is_sleeping() || (body.is_kinematic() && still)
         })
     }
 
@@ -850,6 +865,28 @@ fn square(normal: Vector) -> Vector {
         .unwrap_or(normal)
 }
 
+/// Fails unless `material` is one a body of `kind` can be of: what falls must weigh something.
+fn check_material(material: &Material, kind: BodyKind) -> Result<(), String> {
+    let Material {
+        density,
+        friction,
+        bounce,
+    } = *material;
+    for (name, value) in [
+        ("density", density),
+        ("friction", friction),
+        ("bounce", bounce),
+    ] {
+        if !(value.is_finite() && value >= 0.0) {
+            return Err(format!("a body's {name} must be 0 or more, not {value}"));
+        }
+    }
+    if kind == BodyKind::Dynamic && density == 0.0 {
+        return Err("a dynamic body's density must be more than 0, so it weighs something".into());
+    }
+    Ok(())
+}
+
 /// A collider of `shape`, for a body of `kind`.
 fn collider(shape: &Shape3d, kind: BodyKind) -> Result<ColliderBuilder, String> {
     let finite = |values: &[f32]| values.iter().all(|value| value.is_finite());
@@ -1145,6 +1182,81 @@ mod tests {
         let pose = world.pose(id).unwrap();
         assert_eq!(pose.position, turned.position);
         assert!((pose.yaw - 1.0).abs() < 1.0e-5, "{pose:?}");
+        // Turning where it is, it isn't at rest, and once it stops, it is.
+        world.set_pose(id, Pose3d { yaw: 2.0, ..turned });
+        world.step(FRAME);
+        assert!(!world.is_resting(id));
+        world.step(FRAME);
+        assert!(world.is_resting(id));
+    }
+
+    #[test]
+    fn kinematic_bodies_are_put_at_once() {
+        let mut world = ground();
+        let id = world
+            .add(&Body3d {
+                kind: BodyKind::Kinematic,
+                ..crate_at([-0.5, 0.0, 0.0])
+            })
+            .unwrap();
+        // A crate a hair from its right, which going there over a step would fling.
+        let beside = world.add(&crate_at([0.001, 0.0, 0.0])).unwrap();
+        for _ in 0..30 {
+            world.step(FRAME);
+        }
+        world.put(id, Pose3d::at([3.0, 0.0, 0.0]));
+        assert_eq!(world.pose(id).unwrap().position, [3.0, 0.0, 0.0]);
+        world.step(FRAME);
+        assert_eq!(world.pose(id).unwrap().position, [3.0, 0.0, 0.0]);
+        assert_eq!(world.velocity(id), [0.0; 3]);
+        let [vx, _, _] = world.velocity(beside);
+        assert!(vx.abs() < 0.1, "flung at {vx}");
+    }
+
+    #[test]
+    fn materials_that_cant_be_say_why() {
+        let mut world = World3d::new();
+        let with = |kind, material| Body3d {
+            kind,
+            material,
+            ..crate_at([0.0; 3])
+        };
+        let weightless = Material {
+            density: 0.0,
+            ..Material::default()
+        };
+        let err = world.add(&with(BodyKind::Dynamic, weightless)).unwrap_err();
+        assert!(err.contains("density must be more than 0"), "{err}");
+        // What doesn't fall needn't weigh anything.
+        assert!(world.add(&with(BodyKind::Fixed, weightless)).is_ok());
+        assert!(world.add(&with(BodyKind::Kinematic, weightless)).is_ok());
+        for (material, name) in [
+            (
+                Material {
+                    density: -1.0,
+                    ..Material::default()
+                },
+                "density",
+            ),
+            (
+                Material {
+                    friction: -0.5,
+                    ..Material::default()
+                },
+                "friction",
+            ),
+            (
+                Material {
+                    bounce: f32::NAN,
+                    ..Material::default()
+                },
+                "bounce",
+            ),
+        ] {
+            let err = world.add(&with(BodyKind::Fixed, material)).unwrap_err();
+            assert!(err.contains(&format!("{name} must be 0 or more")), "{err}");
+        }
+        assert_eq!(world.len(), 2);
     }
 
     #[test]

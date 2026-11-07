@@ -202,6 +202,10 @@ struct Bodied {
     character: Option<Character>,
     /// How the node was placed when the body was last put where it is, or put the node there.
     placed: Placed,
+    /// Where a character's last walk left its feet, in the view's world: its body goes there
+    /// over the next step, pushing what's in its way, but anywhere else a script puts its node,
+    /// at once.
+    walked: Option<[f32; 3]>,
 }
 
 /// What a body is shaped as, from what its node shows.
@@ -419,25 +423,16 @@ impl Asked {
                     ))
                 })?,
         };
+        // Checked as the world adds the body.
         let defaults = Material::default();
         let number = |name: &str, default: f32| -> mlua::Result<f32> {
-            let value = options.get::<Option<f32>>(name)?.unwrap_or(default);
-            if !(value.is_finite() && value >= 0.0) {
-                let message = format!("a body's {name} must be 0 or more, not {value}");
-                return Err(mlua::Error::runtime(message));
-            }
-            Ok(value)
+            Ok(options.get::<Option<f32>>(name)?.unwrap_or(default))
         };
         let material = Material {
             density: number("density", defaults.density)?,
             friction: number("friction", defaults.friction)?,
             bounce: number("bounce", defaults.bounce)?,
         };
-        if kind == BodyKind::Dynamic && material.density == 0.0 {
-            return Err(mlua::Error::runtime(
-                "a dynamic body's density must be more than 0, so it weighs something",
-            ));
-        }
         Ok(Self {
             kind,
             shaped,
@@ -659,6 +654,7 @@ impl PhysicsWorld3d {
             shaped: asked.shaped,
             character: asked.character,
             placed,
+            walked: None,
         };
         match self.bodies.iter_mut().find(|bodied| bodied.node == id) {
             Some(old) => {
@@ -700,13 +696,15 @@ impl PhysicsWorld3d {
                     let _ = world.set_shape(bodied.body, &shape);
                 }
             }
-            if bodied.kind != BodyKind::Fixed {
-                let pose = match bodied.character {
-                    // Upright, however its node is turned.
-                    Some(_) => Pose3d::at(pose.position),
-                    None => pose,
-                };
-                world.set_pose(bodied.body, pose);
+            match bodied.character {
+                // Upright, however its node is turned: over the next step to where it walked,
+                // and at once anywhere else, as when it starts over.
+                Some(_) if bodied.walked == Some(pose.position) => {
+                    world.set_pose(bodied.body, Pose3d::at(pose.position));
+                }
+                Some(_) => world.put(bodied.body, Pose3d::at(pose.position)),
+                None if bodied.kind != BodyKind::Fixed => world.set_pose(bodied.body, pose),
+                None => {}
             }
             bodied.placed = placed;
             true
@@ -823,14 +821,19 @@ impl mlua::UserData for PhysicsWorld3d {
                         )));
                     }
                 };
-                let feet = node.read(|scene, id| {
-                    world.follow(scene);
-                    let origin = parent_origin(scene, id).unwrap_or_default();
-                    let local = Local::of(scene.node(id)).expect("bodies' nodes are in 3D views");
-                    [0, 1, 2].map(|i| origin[i] + local.position[i])
-                })?;
+                // Where its feet are, unless the nodes it's in have since been turned or
+                // stretched, which would make its walk theirs too.
+                let feet = node
+                    .read(|scene, id| {
+                        world.follow(scene);
+                        let origin = parent_origin(scene, id)?;
+                        let local =
+                            Local::of(scene.node(id)).expect("bodies' nodes are in 3D views");
+                        Ok::<_, String>([0, 1, 2].map(|i| origin[i] + local.position[i]))
+                    })?
+                    .map_err(mlua::Error::runtime)?;
                 let walked = world.world.walk(&character, feet, motion, Some(body));
-                node.write(|scene, id| {
+                let feet = node.write(|scene, id| {
                     let node = scene.node_mut(id);
                     let [x, y] = node.position();
                     node.set_position([x + walked.moved[0], y + walked.moved[1]]);
@@ -838,7 +841,12 @@ impl mlua::UserData for PhysicsWorld3d {
                         placement.z += walked.moved[2];
                         let _ = node.set_placement3(placement);
                     }
+                    // As following the node will find it.
+                    place(scene, id, BodyKind::Kinematic).map(|(pose, _)| pose.position)
                 })?;
+                if let Some(index) = world.body_of(&node) {
+                    world.bodies[index].walked = feet.ok();
+                }
                 Ok((vector(walked.moved), walked.grounded))
             },
         );

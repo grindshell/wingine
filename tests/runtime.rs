@@ -2801,6 +2801,26 @@ mod physics {
     }
 
     #[test]
+    fn characters_go_where_they_walk_and_are_put_where_scripts_put_them() {
+        let mut simulation = pen("physics_3d_put");
+        // Walked, its body goes there over the step, as fast as it walked, pushing what's in
+        // its way.
+        walk(&mut simulation, "vector.create(0.05, -0.01, 0)", 1);
+        let vx: f32 = simulation.eval("world:velocity(walker).x");
+        assert!(near(vx, 3.0), "{vx}");
+        // Put somewhere by a script, as it starts over, it's there at once, sweeping through
+        // nothing between.
+        simulation.exec(
+            "walker:set_position_3d(vector.create(-6, 0.002, 0))
+            world:step(1 / 60)",
+        );
+        let vx: f32 = simulation.eval("world:velocity(walker).x");
+        assert_eq!(vx, 0.0);
+        let (feet, grounded) = walk(&mut simulation, "vector.create(0, -0.01, 0)", 1);
+        assert!(grounded && near(feet[0], -6.0), "{feet:?}");
+    }
+
+    #[test]
     fn fixed_bodies_follow_their_nodes_and_go_with_them() {
         let mut simulation = pen("physics_3d_follow");
         simulation.exec("view:find('wall'):set_position_3d(vector.create(1.25, 1, 0))");
@@ -2881,6 +2901,23 @@ mod physics {
         assert!(err.contains("not \"floating\""), "{err}");
         let err = error(&mut simulation, "world:add(crate, { shape = 'cone' })");
         assert!(err.contains("not \"cone\""), "{err}");
+        let err = error(
+            &mut simulation,
+            "world:add(crate, { body = 'dynamic', density = 0 })",
+        );
+        assert!(err.contains("density must be more than 0"), "{err}");
+        let err = error(&mut simulation, "world:add(crate, { friction = -1 })");
+        assert!(err.contains("friction must be 0 or more"), "{err}");
+        // A character whose group is turned once it's been added can't walk in it.
+        simulation.exec(
+            "world:add(view:find('group/block'), { character = {} })
+            view:find('group'):set_orientation(0.5)",
+        );
+        let err = error(
+            &mut simulation,
+            "world:walk(view:find('group/block'), vector.create(0.1, 0, 0))",
+        );
+        assert!(err.contains("turns or stretches"), "{err}");
         let err = error(&mut simulation, "world:walk(crate, vector.create(1, 0, 0))");
         assert!(err.contains("isn't a character"), "{err}");
         let err = error(&mut simulation, "world:velocity(view:find('turned'))");

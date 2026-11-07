@@ -273,8 +273,10 @@ networking or 3D pipelines.
   those that move placed by their node's position and turn, stretched by its scale, inside nodes
   that only move them (`parent_origin`). Before each walk and step it follows nodes scripts moved
   (comparing their placements, and for bodies that move, their parents' origins, to what it last
-  read or wrote) and drops those removed; after each
-  step it moves dynamic bodies' nodes to them, leaving those at rest.
+  read or wrote) and drops those removed: a character's body goes where it walked over the next
+  step, pushing what's in its way, and anywhere else a script puts its node, at once
+  (`World3d::put`, `Bodied::walked`). After each step it moves dynamic bodies' nodes to them,
+  leaving those at rest.
 - `src/headless.rs`: `Headless`, which renders a `Canvas` to an in-memory image without a window,
   and `Simulation`, which runs a whole `Game` without a window: fixed 60 fps frames, simulated
   keys, mouse and gamepads, and screenshots on demand. Held keys repeat as a system repeats them,

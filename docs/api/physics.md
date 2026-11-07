@@ -71,7 +71,9 @@ mesh's triangles, or a model's. Bodies are fixed, dynamic or kinematic:
 A **character** is a kinematic body walked by `world:walk`: an upright cylinder, standing on its
 flat feet. It walks across the ground, up stairs and slopes it can climb, down them without
 leaving the ground, and along walls, pushing dynamic bodies it walks into. The game keeps how fast
-it's falling, and makes it jump.
+it's falling, and makes it jump. A script that moves a character's node itself, rather than
+walking it, puts its body there at once, as when it starts over, without sweeping through what's
+between.
 
 Units are the view's, which Rapier is tuned for as metres: a crate half a unit across is half a
 metre, and gravity pulls down at 9.81 units a second each second unless the world says otherwise.
@@ -299,7 +301,7 @@ world:is_resting(node: SceneNode): boolean
 ```
 
 Returns whether `node`'s body is at rest: always for a fixed body, for a kinematic one while it
-isn't moving, and for a dynamic one once it has been still for a couple of seconds, after which
+isn't moving or turning, and for a dynamic one once it has been still for a couple of seconds, after which
 the world leaves it alone until something touches it.
 
 Using `velocity`, `set_velocity`, `push`, `is_resting` or `walk` on a node with no body in the
