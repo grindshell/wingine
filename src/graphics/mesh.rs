@@ -281,11 +281,7 @@ impl Mesh {
                 #[cfg(feature = "physics")]
                 geometry: Geometry {
                     points: data.vertices.iter().map(|vertex| vertex.position).collect(),
-                    triangles: data
-                        .indices
-                        .chunks_exact(3)
-                        .map(|triangle| [triangle[0], triangle[1], triangle[2]])
-                        .collect(),
+                    triangles: data.indices.as_chunks::<3>().0.to_vec(),
                 },
             }),
         })

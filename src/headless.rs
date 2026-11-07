@@ -1182,8 +1182,10 @@ impl Image {
         let mut largest = 0;
         for (a, b) in self
             .pixels
-            .chunks_exact(4)
-            .zip(other.pixels.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(other.pixels.as_chunks::<4>().0)
         {
             let difference = channel_difference(a, b);
             largest = largest.max(difference);
@@ -1201,8 +1203,10 @@ impl Image {
         }
         let pixels = self
             .pixels
-            .chunks_exact(4)
-            .zip(other.pixels.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(other.pixels.as_chunks::<4>().0)
             .flat_map(|(a, b)| {
                 if channel_difference(a, b) > tolerance {
                     [255, 0, 255, 255]
@@ -1253,7 +1257,7 @@ impl Comparison {
 }
 
 /// The most any channel of two pixels differs by.
-fn channel_difference(a: &[u8], b: &[u8]) -> u8 {
+fn channel_difference(a: &[u8; 4], b: &[u8; 4]) -> u8 {
     a.iter()
         .zip(b)
         .map(|(a, b)| a.abs_diff(*b))
