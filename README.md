@@ -25,10 +25,11 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
   files made in tools such as Blender, and the mouse picks what it points at by boxes.
 - **Tilemaps** with layers and tilesets, culled to the view, and a **camera** that follows the
   player and stays inside the map.
-- **Scenes**: trees of sprites, rectangles, text, areas, tilemaps and 3D views of meshes, models
-  and billboards, laid out in files of plain Luau data, which tools can write as well as people.
-  Nodes turn and stretch about pivots, carrying what's inside them along; screens anchor to the
-  canvas's edges and middle, with text aligned left, center or right; scenes place other scenes,
+- **Scenes**: trees of sprites, rectangles, text, areas, stacks, panels, tilemaps and 3D views of
+  meshes, models and billboards, laid out in files of plain Luau data, which tools can write as
+  well as people. Nodes turn and stretch about pivots, carrying what's inside them along; screens
+  anchor to the canvas's edges and middle, with text aligned left, center or right, and stack
+  lists in panels that fit them, filled or framed by sliced sprites; scenes place other scenes,
   changed by overrides; and games find nodes by path or tag, test the mouse against them, pick
   what's under it in 3D, and add and remove them as they play.
 - **Rigged characters**: sprites for parts that turn about their joints, animated by clips of

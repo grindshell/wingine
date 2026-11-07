@@ -56,17 +56,17 @@ end
 
 -- Sets the value of the panel's row `path`, and its color if given.
 local function row(path: string, value: string, color: number?)
-    local value_node = node(`panel/{path}/value`)
+    local value_node = node(`panel/rows/{path}/value`)
     value_node:set_text(value)
     if color then
         value_node:set_color(color)
     end
 end
 
--- How long the frame before took to update, draw and render, in milliseconds, in rows from `y`.
-local function timings(y: number)
+-- How long the frame before took to update, draw and render, in milliseconds. The rows stack
+-- under the play's, or with the stress test's hidden, first.
+local function timings()
     local frame = graphics.frame_stats()
-    node("panel/stats"):set_position(0, y)
     row("stats/bullets", hud.number(shmup.bullets.count()))
     row("stats/system", shmup.system, hud.SYSTEM_COLORS[shmup.system])
     row("stats/update", string.format("%.2f ms", frame.update * 1000))
@@ -80,9 +80,9 @@ end
 
 -- The stress test's numbers, and its plot's scale.
 local function fill_stress_panel()
-    timings(34)
+    timings()
     row("stress/work", string.format("%.2f ms", stress.frame_time()))
-    local rows = node("panel/stress/curves"):children()
+    local rows = node("panel/rows/stress/curves"):children()
     for _, curve_row in rows do
         curve_row:set_visible(false)
     end
@@ -95,19 +95,23 @@ local function fill_stress_panel()
         i += 1
     end
     local most_bullets, most_time = stress.scale()
-    node("panel/stress/plot/most_time"):set_text(string.format("%.0f ms", most_time))
-    node("panel/stress/plot/most_bullets"):set_text(hud.number(most_bullets))
+    node("panel/rows/stress/plot/most_time"):set_text(string.format("%.0f ms", most_time))
+    node("panel/rows/stress/plot/most_bullets"):set_text(hud.number(most_bullets))
 end
 
 local function fill_panel()
     local stressing = shmup.mode == "stress"
-    node("panel/play"):set_visible(not stressing)
-    node("panel/stress"):set_visible(stressing)
+    for _, part in { "rows/play", "help/play" } do
+        node(`panel/{part}`):set_visible(not stressing)
+    end
+    for _, part in { "rows/stress", "help/stress" } do
+        node(`panel/{part}`):set_visible(stressing)
+    end
     if stressing then
         fill_stress_panel()
         return
     end
-    timings(84)
+    timings()
     row("play/score", string.format("%010d", math.floor(shmup.score)))
     row("play/graze", hud.number(shmup.graze))
     row("play/lives", stars(shmup.player.lives))
@@ -182,7 +186,7 @@ function hud.draw()
     end
     graphics.draw_scene(hud.scene)
     if shmup.mode == "stress" then
-        local plot = node("panel/stress/plot"):bounds()
+        local plot = node("panel/rows/stress/plot"):bounds()
         stress.draw_plot(plot.x, plot.y, plot.width, plot.height, hud.SYSTEM_COLORS, PLOT_LINE)
     end
 end

@@ -328,6 +328,59 @@ impl Canvas {
         self.push_quad(Some(sprite.texture()), corners, sprite.uv_bounds(), tint);
     }
 
+    /// Draws `sprite` sliced to fill `dest`, as a frame or a panel is drawn at any size: `slice`
+    /// is how many texels along its left, top, right and bottom edges keep their size, a texel
+    /// to a unit, so its corners are drawn as they are, its edges stretch along their length, and
+    /// its middle stretches both ways. Where `dest` is too small for two edges, they shrink alike
+    /// to meet, and where the sprite is, they share it alike. With its colors multiplied by
+    /// `tint`.
+    pub fn draw_sprite_sliced(
+        &mut self,
+        sprite: &Sprite,
+        slice: [f32; 4],
+        dest: Rect,
+        tint: Color,
+    ) {
+        self.draw_sprite_sliced_transformed(sprite, slice, dest, Affine::IDENTITY, tint);
+    }
+
+    /// Draws `sprite` sliced to fill `rect`, as [`Canvas::draw_sprite_sliced`] does, then moved by
+    /// `transform`, as [`Canvas::draw_sprite_transformed`] places a sprite.
+    pub fn draw_sprite_sliced_transformed(
+        &mut self,
+        sprite: &Sprite,
+        slice: [f32; 4],
+        rect: Rect,
+        transform: Affine,
+        tint: Color,
+    ) {
+        if !(rect.w > 0.0 && rect.h > 0.0) {
+            return;
+        }
+        let [left, top, right, bottom] = slice.map(|texels| texels.max(0.0));
+        let across = slices(left, right, sprite.width(), rect.x, rect.w);
+        let down = slices(top, bottom, sprite.height(), rect.y, rect.h);
+        let (uv_min, uv_max) = sprite.uv_bounds();
+        let uv =
+            |axis: usize, fraction: f32| uv_min[axis] + (uv_max[axis] - uv_min[axis]) * fraction;
+        for row in 0..3 {
+            let (y0, y1) = (down.at[row], down.at[row + 1]);
+            for column in 0..3 {
+                let (x0, x1) = (across.at[column], across.at[column + 1]);
+                if x1 <= x0 || y1 <= y0 {
+                    continue;
+                }
+                let corners =
+                    self.transformed_corners(Rect::new(x0, y0, x1 - x0, y1 - y0), transform);
+                let region = (
+                    [uv(0, across.of[column]), uv(1, down.of[row])],
+                    [uv(0, across.of[column + 1]), uv(1, down.of[row + 1])],
+                );
+                self.push_quad(Some(sprite.texture()), corners, region, tint);
+            }
+        }
+    }
+
     /// Fills `rect` moved by `transform`, as [`Canvas::draw_sprite_transformed`] places a sprite.
     pub fn fill_rect_transformed(&mut self, rect: Rect, transform: Affine, color: Color) {
         let corners = self.transformed_corners(rect, transform);
@@ -434,6 +487,39 @@ impl Canvas {
 
 /// The texture region solid fills draw, the whole of the white texture.
 const SOLID: ([f32; 2], [f32; 2]) = ([0.0, 0.0], [1.0, 1.0]);
+
+/// Where a sliced sprite is cut along one axis: the edges of its three pieces where they're drawn,
+/// and as fractions of the sprite.
+#[derive(Debug, PartialEq)]
+struct Slices {
+    at: [f32; 4],
+    of: [f32; 4],
+}
+
+/// How a sprite `texels` long is sliced, `start` and `end` texels in from its edges, to fill
+/// `length` from `from`. The edges share the sprite alike if they'd overlap in it, then shrink
+/// alike if they'd overlap where they're drawn.
+fn slices(start: f32, end: f32, texels: f32, from: f32, length: f32) -> Slices {
+    let fit = |a: f32, b: f32, room: f32| {
+        if a + b > room && a + b > 0.0 {
+            let scale = room / (a + b);
+            (a * scale, b * scale)
+        } else {
+            (a, b)
+        }
+    };
+    let (start, end) = fit(start, end, texels.max(0.0));
+    let (near, far) = fit(start, end, length);
+    let of = if texels > 0.0 {
+        [0.0, start / texels, 1.0 - end / texels, 1.0]
+    } else {
+        [0.0, 0.0, 1.0, 1.0]
+    };
+    Slices {
+        at: [from, from + near, from + length - far, from + length],
+        of,
+    }
+}
 
 /// The polygon a circle is drawn as, with enough sides that its edge strays from the circle's by
 /// no more than an eighth of a pixel either way.
@@ -738,6 +824,30 @@ mod tests {
 
         canvas.clear(Color::BLACK);
         assert!(canvas.segments.is_empty());
+    }
+
+    #[test]
+    fn sliced_sprites_keep_their_edges_and_shrink_them_to_fit() {
+        // A 5 texel sprite, 2 kept at each end, filling 12 from 4: its middle texel stretches.
+        assert_eq!(
+            slices(2.0, 2.0, 5.0, 4.0, 12.0),
+            Slices {
+                at: [4.0, 6.0, 14.0, 16.0],
+                of: [0.0, 0.4, 0.6, 1.0],
+            }
+        );
+        // Too short for both edges, they shrink alike to meet, and nothing's between them.
+        assert_eq!(slices(2.0, 2.0, 5.0, 0.0, 3.0).at, [0.0, 1.5, 1.5, 3.0]);
+        // Edges more than the sprite share it alike.
+        assert_eq!(slices(4.0, 4.0, 4.0, 0.0, 10.0).of, [0.0, 0.5, 0.5, 1.0]);
+        // Not sliced, it stretches whole.
+        assert_eq!(
+            slices(0.0, 0.0, 16.0, 0.0, 32.0),
+            Slices {
+                at: [0.0, 0.0, 32.0, 32.0],
+                of: [0.0, 0.0, 1.0, 1.0],
+            }
+        );
     }
 
     #[test]

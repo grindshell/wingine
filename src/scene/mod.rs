@@ -92,8 +92,9 @@
 //!
 //! At the top of the file:
 //!
-//! - `format`, required, is the version of the format, 2 ([`FORMAT`]), which added 3D views. A
-//!   newer engine reads older formats, as this one reads format 1; this one refuses newer ones.
+//! - `format`, required, is the version of the format, 3 ([`FORMAT`]), which added stacks and
+//!   panels, as 2 added 3D views. A newer engine reads older formats, as this one reads formats 1
+//!   and 2; this one refuses newer ones.
 //! - `sheets` names the sprite sheets sprites come from: images, by their path relative to the
 //!   game's folder, divided into a grid of sprites `tile_width` by `tile_height` texels.
 //! - `props` is data for the game about the scene as a whole. The engine doesn't read props;
@@ -138,6 +139,13 @@
 //! - `area`: a rectangle `width` by `height` that doesn't draw, for marking out part of a scene,
 //!   such as somewhere the player can't walk or where something happens, or for laying out the
 //!   nodes inside it. It has a `stretch`, as a rect does.
+//! - `stack`: a rectangle that doesn't draw, laying out the nodes inside it one after another,
+//!   down or across, such as a menu's items or a panel's lines. See below.
+//! - `panel`: a stack that draws behind what it holds: filled with `color` (white by default),
+//!   inside a `border` that many units wide (0 by default) of `border_color` (white by default);
+//!   or, with a `sheet` and a `cell`, that sprite sliced as a frame is (see
+//!   [`Canvas::draw_sprite_sliced`]), `slice` texels along its edges, a number for them all or
+//!   `{ left, top, right, bottom }`, keeping their size while the rest stretches, times `tint`.
 //! - `tilemap`: a grid of `columns` by `rows` tiles from the tileset file `tileset`, with its
 //!   top-left corner at the node's origin. Its layers are its children of the kind `tile_layer`,
 //!   which draw in order with its other children, so a node can draw between two layers, such
@@ -224,6 +232,50 @@
 //!
 //! That's a bar 12 tall along the bottom of the canvas, as wide as it, with a score ending 4 in
 //! from its right end.
+//!
+//! Lists are laid out by stacks and panels, which place the nodes inside them one after another,
+//! so a game changes what's in a list, and how much of it shows, without placing anything:
+//!
+//! - `direction` is `"column"` (the default), down from the top, or `"row"`, across from the
+//!   left. Each node inside takes the space it covers that way, turned and stretched as it's
+//!   drawn, after the one before and the `gap` (0 by default). A hidden node takes no space, and
+//!   nor does its gap.
+//! - Across, each is lined up by its `anchor`, the same fraction of it at that fraction of the
+//!   stack (by whole units, as text lines up), at the start without one; one that stretches
+//!   across stretches with the stack. Its pivot doesn't move it, though it still turns about it,
+//!   and its `x` and `y` move it from where the stack puts it without moving the rest.
+//! - A plain node, as an instance becomes, has its origin at the start of its space, and takes
+//!   as much as the nodes inside it reach past its origin. They anchor and stretch across the
+//!   stack, from the start of its space.
+//! - `padding`, a number for every edge or `{ left, top, right, bottom }` (0 by default), is the
+//!   space between the stack's edges and what it holds.
+//! - `width` and `height` are its size, with a `stretch`, as an area has. Each is optional:
+//!   without one, it fits what it holds that way, with its padding, and has no stretch that way.
+//! - Its `pivot` is from the point of it its anchor names, its top-left corner without one, so a
+//!   stack anchored at its parent's bottom-right corner keeps its own there however much it
+//!   holds.
+//!
+//! ```lua
+//! {
+//!     name = "menu",
+//!     kind = "panel",
+//!     y = 80,
+//!     anchor = { 0.5, 0 },
+//!     gap = 2,
+//!     padding = { 6, 5, 6, 5 },
+//!     color = "#14182c",
+//!     border = 1,
+//!     border_color = "#f2d3ab",
+//!     children = {
+//!         { name = "continue", kind = "text", text = "Continue" },
+//!         { name = "new_game", kind = "text", text = "New Game" },
+//!     },
+//! }
+//! ```
+//!
+//! That's a menu 80 down the canvas, in the middle of it, as wide as its widest line and its
+//! padding, with a line of text 12 below the one before. Hiding `continue` leaves `new_game` at
+//! the top, and the menu shorter.
 //!
 //! Characters are rigs: sprites of their parts, each the child of the part it hangs from and
 //! turning about its pivot, its joint, as cutouts do. Clips animate them. Each is a `duration` in
@@ -327,8 +379,9 @@ use std::{
 pub use clip::{Clip, Interpolation, KeyValue, Keys, Property, Track};
 pub use file::{
     AreaDef, BillboardDef, CellDef, FORMAT, InstanceDef, KindDef, MeshDef, ModelDef, NodeDef,
-    Placement3, Props, RectDef, SceneFile, Shape, SheetDef, SpriteDef, TextDef, TileDef,
-    TileLayerDef, TilemapDef, TilesetFile, Value, View3dDef,
+    PanelDef, PanelFill, PanelLookDef, Placement3, Props, RectDef, SceneFile, Shape, SheetDef,
+    SpriteDef, Stack, StackDirection, TextDef, TileDef, TileLayerDef, TilemapDef, TilesetFile,
+    Value, View3dDef,
 };
 pub(crate) use file::{evaluate_any, plain};
 pub(crate) use writer::write_value;
@@ -520,6 +573,30 @@ pub enum Kind {
     Mesh(MeshNode),
     Model(ModelNode),
     Billboard(BillboardNode),
+    /// A rectangle that doesn't draw, laying out its children one after another.
+    Stack(Stack),
+    /// A stack that draws behind its children.
+    Panel(PanelNode),
+}
+
+/// A stack that draws behind its children.
+#[derive(Clone, Debug)]
+pub struct PanelNode {
+    pub stack: Stack,
+    pub look: PanelLook,
+}
+
+/// What a panel draws.
+#[derive(Clone, Debug)]
+pub enum PanelLook {
+    Fill(PanelFill),
+    /// A sprite, sliced: see [`Canvas::draw_sprite_sliced`].
+    Sprite {
+        sprite: Sprite,
+        /// The texels along its left, top, right and bottom edges that keep their size.
+        slice: [f32; 4],
+        tint: Color,
+    },
 }
 
 /// What a 3D view shows, and how it's laid out, as an area is.
@@ -651,6 +728,25 @@ impl Kind {
             Self::Mesh(_) => "mesh",
             Self::Model(_) => "model",
             Self::Billboard(_) => "billboard",
+            Self::Stack(_) => "stack",
+            Self::Panel(_) => "panel",
+        }
+    }
+
+    /// How a stack or a panel is laid out and lays out its children.
+    pub fn stack(&self) -> Option<&Stack> {
+        match self {
+            Self::Stack(stack) => Some(stack),
+            Self::Panel(panel) => Some(&panel.stack),
+            _ => None,
+        }
+    }
+
+    pub fn stack_mut(&mut self) -> Option<&mut Stack> {
+        match self {
+            Self::Stack(stack) => Some(stack),
+            Self::Panel(panel) => Some(&mut panel.stack),
+            _ => None,
         }
     }
 
@@ -1004,10 +1100,16 @@ impl Node {
     }
 
     /// The width and height of a sprite, rect, text, area, tilemap, tile layer or 3D view, before
-    /// stretching with its parent. A plain node has none, and nor do nodes in 3D views.
+    /// stretching with its parent. A plain node has none, and nor do nodes in 3D views. A stack's
+    /// or a panel's depends on its children, so it's [`Scene::size_of`].
     pub fn size(&self) -> Option<[f32; 2]> {
         match &self.kind {
-            Kind::Node | Kind::Mesh(_) | Kind::Model(_) | Kind::Billboard(_) => None,
+            Kind::Node
+            | Kind::Mesh(_)
+            | Kind::Model(_)
+            | Kind::Billboard(_)
+            | Kind::Stack(_)
+            | Kind::Panel(_) => None,
             Kind::Sprite(sprite) => Some(sprite.size),
             Kind::Rect(rect) => Some(rect.size),
             Kind::Text(text) => Some(text.layout.size()),
@@ -1023,7 +1125,8 @@ impl Node {
 
     /// The rectangle the node covers in its own coordinates, its pivot at the origin, inside a
     /// parent whose rectangle is `outer`, which it may stretch with. A plain node covers nothing,
-    /// and nor do nodes in 3D views.
+    /// and nor do nodes in 3D views. Nor does a stack or a panel here: what it covers depends on
+    /// its children, so [`Scene::rect_in`] measures it.
     fn rect_in(&self, outer: Rect) -> Option<Rect> {
         let size = self.size()?;
         let (stretch, [x, y]) = match &self.kind {
@@ -1041,7 +1144,9 @@ impl Node {
             | Kind::TileLayer(_)
             | Kind::Mesh(_)
             | Kind::Model(_)
-            | Kind::Billboard(_) => ([0.0, 0.0], [0.0, 0.0]),
+            | Kind::Billboard(_)
+            | Kind::Stack(_)
+            | Kind::Panel(_) => ([0.0, 0.0], [0.0, 0.0]),
         };
         let [width, height] = if stretch == [0.0, 0.0] {
             size
@@ -1074,21 +1179,37 @@ struct Placed {
     /// What it covers in its own coordinates, if anything.
     rect: Option<Rect>,
     /// The rectangle the nodes inside it anchor and stretch to, in its coordinates: what it
-    /// covers, or for a plain node, its parent's, carried along with it.
+    /// covers, inside its padding for a stack or panel, or for a plain node, its parent's,
+    /// carried along with it, or in a stack, the space the stack gives it.
     inner: Rect,
 }
 
 impl Placed {
-    /// Where `node` is, as a child of the node placed here.
-    fn child(&self, node: &Node) -> Self {
-        let local = node.local_in(self.inner);
-        let rect = node.rect_in(self.inner);
+    /// Where a node is that's placed here by `local`, within this one.
+    fn within(&self, local: Placed) -> Self {
         Self {
-            transform: self.transform * local,
-            rect,
-            inner: rect.unwrap_or(self.inner),
+            transform: self.transform * local.transform,
+            ..local
         }
     }
+}
+
+/// The rectangle inside `rect` its padding leaves, never less than nothing.
+fn padded(stack: &Stack, rect: Rect) -> Rect {
+    let [left, top, right, bottom] = stack.padding;
+    Rect::new(
+        rect.x + left,
+        rect.y + top,
+        (rect.w - left - right).max(0.0),
+        (rect.h - top - bottom).max(0.0),
+    )
+}
+
+/// The smallest rectangle holding both.
+fn union(a: Rect, b: Rect) -> Rect {
+    let [left, top] = [a.x.min(b.x), a.y.min(b.y)];
+    let [right, bottom] = [a.right().max(b.right()), a.bottom().max(b.bottom())];
+    Rect::new(left, top, right - left, bottom - top)
 }
 
 impl Scene {
@@ -1472,13 +1593,227 @@ impl Scene {
     /// Where the node is laid out: from the root down, each node placed in its parent.
     fn placed(&self, id: NodeId) -> Placed {
         let node = self.node(id);
-        match node.parent {
-            Some(parent) => self.placed(parent).child(node),
-            None => Placed {
+        let Some(parent) = node.parent else {
+            return Placed {
                 transform: node.local,
                 rect: None,
                 inner: Rect::new(0.0, 0.0, self.size[0], self.size[1]),
-            },
+            };
+        };
+        let above = self.placed(parent);
+        if let Some(stack) = self.node(parent).kind.stack() {
+            let siblings = &self.node(parent).children;
+            let index = siblings.iter().position(|&child| child == id);
+            let (slots, _) = self.lay_out_stack(parent, stack, above.inner);
+            return above.within(slots[index.expect("a node is among its parent's children")]);
+        }
+        self.child_placed(&above, id)
+    }
+
+    /// Where `id` is, as a child of a node placed at `parent` that isn't a stack.
+    fn child_placed(&self, parent: &Placed, id: NodeId) -> Placed {
+        let node = self.node(id);
+        let rect = self.rect_in(id, parent.inner);
+        Placed {
+            transform: parent.transform * node.local_in(parent.inner),
+            rect,
+            inner: self.inner_of(id, rect, parent.inner),
+        }
+    }
+
+    /// The rectangle the children of `id`, which covers `rect`, anchor and stretch to: what it
+    /// covers, inside its padding for a stack or a panel, or for a plain node, `passed`, its
+    /// parent's.
+    fn inner_of(&self, id: NodeId, rect: Option<Rect>, passed: Rect) -> Rect {
+        match (self.node(id).kind.stack(), rect) {
+            (Some(stack), Some(rect)) => padded(stack, rect),
+            (_, rect) => rect.unwrap_or(passed),
+        }
+    }
+
+    /// The rectangle `id` covers in its own coordinates, its pivot at the origin, inside a parent
+    /// whose rectangle is `outer`, which it may stretch with: see [`Node::rect_in`]. A stack or a
+    /// panel covers what it holds along the axes it fits it, with its padding.
+    fn rect_in(&self, id: NodeId, outer: Rect) -> Option<Rect> {
+        let node = self.node(id);
+        let Some(stack) = node.kind.stack() else {
+            return node.rect_in(outer);
+        };
+        let outer = [outer.w, outer.h];
+        let mut size = [0.0; 2];
+        for i in 0..2 {
+            if let Some(own) = stack.size[i] {
+                size[i] = if stack.stretch[i] == 0.0 {
+                    own
+                } else {
+                    (own + stack.stretch[i] * outer[i]).max(0.0)
+                };
+            }
+        }
+        if stack.size.contains(&None) {
+            // What it holds, laid out as wide or as tall as it is along the axes it has a size,
+            // and in no space at all along those it fits it, where the children stretching with
+            // it count as their own size.
+            let fixed = [0, 1].map(|i| {
+                if stack.size[i].is_some() {
+                    size[i]
+                } else {
+                    0.0
+                }
+            });
+            let content = padded(stack, Rect::new(0.0, 0.0, fixed[0], fixed[1]));
+            let (_, held) = self.lay_out_stack(id, stack, content);
+            let [left, top, right, bottom] = stack.padding;
+            let padding = [left + right, top + bottom];
+            for i in 0..2 {
+                if stack.size[i].is_none() {
+                    size[i] = (held[i] + padding[i]).max(0.0);
+                }
+            }
+        }
+        // From the point its anchor names, by whole units, as text lines up.
+        let anchor = node.anchor.unwrap_or([0.0, 0.0]);
+        let [x, y] = [0, 1].map(|i| (anchor[i] * size[i]).floor() + stack.pivot[i]);
+        Some(Rect::new(-x, -y, size[0], size[1]))
+    }
+
+    /// The width and height of `id` before stretching with its parent, if it has any: see
+    /// [`Node::size`]. A stack or a panel has its own along the axes it has one, and what it
+    /// holds, with its padding, along those it fits it.
+    pub fn size_of(&self, id: NodeId) -> Option<[f32; 2]> {
+        let node = self.node(id);
+        let Some(stack) = node.kind.stack() else {
+            return node.size();
+        };
+        let measured = self.rect_in(id, Rect::default())?;
+        let measured = [measured.w, measured.h];
+        Some([0, 1].map(|i| stack.size[i].unwrap_or(measured[i])))
+    }
+
+    /// Where the children of the stack or panel `id`, laid out by `stack`, are in its
+    /// coordinates, laid out in `content`, the rectangle inside its padding, and how much space
+    /// they take: along the stack, from the start of the first to the end of the last, and
+    /// across, the widest.
+    ///
+    /// Each child that's shown and covers something takes the space it covers along the stack,
+    /// turned and stretched as it's drawn, after the one before and the gap. Across, it's lined
+    /// up by its anchor: the same fraction of it at that fraction of `content`, at the start
+    /// without an anchor. A plain node's origin is at the start of its space, which its children
+    /// anchor in, and it takes as much as they reach past its origin. Either way, its `x` and `y`
+    /// move it from there without moving the rest. A hidden child takes no space, and nor does
+    /// its gap.
+    fn lay_out_stack(&self, id: NodeId, stack: &Stack, content: Rect) -> (Vec<Placed>, [f32; 2]) {
+        let main = stack.direction.axis();
+        let cross = 1 - main;
+        let start = [content.x, content.y];
+        let length = [content.w, content.h];
+        let children = &self.node(id).children;
+        let mut slots = Vec::with_capacity(children.len());
+        let mut along = 0.0;
+        let mut widest: f32 = 0.0;
+        let mut first = true;
+        for &child in children {
+            let node = self.node(child);
+            let rect = self.rect_in(child, content);
+            // A plain node's children anchor in the space it's given: as long as `content` is
+            // across, from its origin, which is at the start of that space.
+            let mut inner = [0.0; 2];
+            inner[cross] = length[cross];
+            let inner = match rect {
+                Some(rect) => self.inner_of(child, Some(rect), content),
+                None => Rect::new(0.0, 0.0, inner[0], inner[1]),
+            };
+            let turned = if node.kind.only_moves() {
+                Affine::IDENTITY
+            } else {
+                Affine::from_parts([0.0, 0.0], node.rotation, node.scale)
+            };
+            // Where what it covers starts, from its origin, and how far it reaches: for a plain
+            // node, whose origin is at the start of its space, as far as its children reach past
+            // it, so what's hidden in it never moves the rest.
+            let covered = match rect {
+                Some(rect) => {
+                    let covered = turned.bounds(rect);
+                    Some(([covered.x, covered.y], [covered.w, covered.h]))
+                }
+                None => self.span(child, inner).map(|span| {
+                    let reach = turned.bounds(span);
+                    ([0.0; 2], [reach.right().max(0.0), reach.bottom().max(0.0)])
+                }),
+            };
+            let mut origin = start;
+            origin[main] += along;
+            if let Some((min, size)) = covered.filter(|_| node.visible) {
+                if !first {
+                    along += stack.gap;
+                    origin[main] += stack.gap;
+                }
+                first = false;
+                origin[main] -= min[main];
+                if rect.is_some() {
+                    let fraction = node.anchor.map_or(0.0, |anchor| anchor[cross]);
+                    origin[cross] +=
+                        (fraction * (length[cross] - size[cross])).floor() - min[cross];
+                }
+                along += size[main];
+                widest = widest.max(size[cross]);
+            }
+            let [x, y] = node.position;
+            let local =
+                Affine::from_parts([origin[0] + x, origin[1] + y], node.rotation, node.scale);
+            slots.push(Placed {
+                transform: local,
+                rect,
+                inner,
+            });
+        }
+        let mut held = [0.0; 2];
+        held[main] = along;
+        held[cross] = widest;
+        (slots, held)
+    }
+
+    /// What the children of the plain node `id` cover in its coordinates, if they cover anything,
+    /// placed in `inner`.
+    fn span(&self, id: NodeId, inner: Rect) -> Option<Rect> {
+        self.node(id)
+            .children
+            .iter()
+            .filter_map(|&child| self.covered(child, inner))
+            .reduce(union)
+    }
+
+    /// The smallest axis-aligned rectangle around what `id` covers, if it's shown and covers
+    /// anything, in the coordinates of its parent, which isn't a stack, inside `outer`: what it
+    /// covers itself, or for a plain node, what its children do.
+    fn covered(&self, id: NodeId, outer: Rect) -> Option<Rect> {
+        let node = self.node(id);
+        if !node.visible {
+            return None;
+        }
+        let local = node.local_in(outer);
+        match self.rect_in(id, outer) {
+            Some(rect) if node.kind.only_moves() => {
+                Some(Affine::from_translation(local.translation).bounds(rect))
+            }
+            Some(rect) => Some(local.bounds(rect)),
+            None => self.span(id, outer).map(|span| local.bounds(span)),
+        }
+    }
+
+    /// Where each child of `id`, placed at `placed`, is, in order.
+    fn children_placed(&self, id: NodeId, placed: &Placed) -> Vec<Placed> {
+        let node = self.node(id);
+        match node.kind.stack() {
+            Some(stack) => {
+                let (slots, _) = self.lay_out_stack(id, stack, placed.inner);
+                slots.into_iter().map(|slot| placed.within(slot)).collect()
+            }
+            None => node
+                .children
+                .iter()
+                .map(|&child| self.child_placed(placed, child))
+                .collect(),
         }
     }
 
@@ -1911,17 +2246,30 @@ impl Scene {
                     }
                     return;
                 }
+                Kind::Panel(panel) => {
+                    if transform.bounds(rect).overlaps(&visible) {
+                        draw_panel(canvas, &panel.look, rect, transform);
+                    }
+                }
                 Kind::Node
                 | Kind::Area(_)
+                | Kind::Stack(_)
                 | Kind::Tilemap(_)
                 | Kind::Mesh(_)
                 | Kind::Model(_)
                 | Kind::Billboard(_) => {}
             }
         }
-        for &child in &node.children {
-            let child_placed = placed.child(self.node(child));
-            self.draw_tree(canvas, child, &child_placed, visible);
+        if node.kind.stack().is_some() {
+            let places = self.children_placed(id, placed);
+            for (&child, child_placed) in node.children.iter().zip(&places) {
+                self.draw_tree(canvas, child, child_placed, visible);
+            }
+        } else {
+            for &child in &node.children {
+                let child_placed = self.child_placed(placed, child);
+                self.draw_tree(canvas, child, &child_placed, visible);
+            }
         }
     }
 
@@ -1949,6 +2297,46 @@ impl Scene {
         for &child in &node.children {
             self.draw_3d(world, child, transform);
         }
+    }
+}
+
+/// Draws a panel's look over `rect`, placed by `transform`: its fill inside its border, then the
+/// border, its sides not overlapping, so a translucent one is even all round; or its sprite,
+/// sliced.
+fn draw_panel(canvas: &mut Canvas, look: &PanelLook, rect: Rect, transform: Affine) {
+    match look {
+        PanelLook::Fill(fill) => {
+            let border = fill.border.min(rect.w / 2.0).min(rect.h / 2.0).max(0.0);
+            if border == 0.0 {
+                canvas.fill_rect_transformed(rect, transform, fill.color);
+                return;
+            }
+            let [left, top, right, bottom] = [rect.x, rect.y, rect.right(), rect.bottom()];
+            let inside = Rect::new(
+                left + border,
+                top + border,
+                rect.w - border * 2.0,
+                rect.h - border * 2.0,
+            );
+            if inside.w > 0.0 && inside.h > 0.0 {
+                canvas.fill_rect_transformed(inside, transform, fill.color);
+            }
+            for side in [
+                Rect::new(left, top, rect.w, border),
+                Rect::new(left, top + border, border, inside.h),
+                Rect::new(right - border, top + border, border, inside.h),
+                Rect::new(left, bottom - border, rect.w, border),
+            ] {
+                if side.w > 0.0 && side.h > 0.0 {
+                    canvas.fill_rect_transformed(side, transform, fill.border_color);
+                }
+            }
+        }
+        PanelLook::Sprite {
+            sprite,
+            slice,
+            tint,
+        } => canvas.draw_sprite_sliced_transformed(sprite, *slice, rect, transform, *tint),
     }
 }
 
@@ -2183,6 +2571,14 @@ impl Expand<'_> {
                 | KindDef::Mesh(MeshDef {
                     sprite: Some(CellDef { sheet, .. }),
                     ..
+                })
+                | KindDef::Panel(PanelDef {
+                    look:
+                        PanelLookDef::Sprite {
+                            sprite: CellDef { sheet, .. },
+                            ..
+                        },
+                    ..
                 }) => *sheet = sheet_key(path, sheet),
                 _ => {}
             }
@@ -2243,6 +2639,10 @@ impl Expand<'_> {
                 KindDef::Sprite(sprite) => Some(&sprite.sheet),
                 KindDef::Billboard(billboard) => Some(&billboard.sheet),
                 KindDef::Mesh(mesh) => mesh.sprite.as_ref().map(|sprite| &sprite.sheet),
+                KindDef::Panel(PanelDef {
+                    look: PanelLookDef::Sprite { sprite, .. },
+                    ..
+                }) => Some(&sprite.sheet),
                 _ => None,
             };
             let from = match shown.and_then(|key| key.rsplit_once('#')) {
@@ -2472,6 +2872,25 @@ impl Build<'_> {
                     sheet: Some(sheet),
                     size: billboard.size,
                     tint: billboard.tint,
+                })
+            }
+            KindDef::Stack(stack) => Kind::Stack(*stack),
+            KindDef::Panel(panel) => {
+                let look = match &panel.look {
+                    PanelLookDef::Fill(fill) => PanelLook::Fill(*fill),
+                    PanelLookDef::Sprite {
+                        sprite,
+                        slice,
+                        tint,
+                    } => PanelLook::Sprite {
+                        sprite: self.sprite(&sprite.sheet, sprite.cell, node)?.0,
+                        slice: *slice,
+                        tint: *tint,
+                    },
+                };
+                Kind::Panel(PanelNode {
+                    stack: panel.stack,
+                    look,
                 })
             }
         };

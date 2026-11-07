@@ -152,7 +152,9 @@ networking or 3D pipelines.
   and ask it for the frame to draw, so one animation can be shared. Rotated sprites turn about the
   center of their destination, on the CPU as quads are recorded, and transformed sprites and fills
   (`draw_sprite_transformed`, `fill_rect_transformed`) are placed by an `Affine` the same way,
-  which is how scenes draw. Outlines, lines and circles are quads too: an outline four that meet
+  which is how scenes draw. Sliced sprites (`draw_sprite_sliced`, and `_transformed`) are up to
+  nine quads whose edges keep a texel to a unit, shrinking alike where there's no room (`slices`),
+  as frames and panels are drawn. Outlines, lines and circles are quads too: an outline four that meet
   without overlapping, so translucent ones are even, a line one, and a circle a polygon with sides
   enough for its size on the canvas (`Polygon`), filled as a fan of triangles two to a quad or
   outlined as a ring of quads. All quads go through one
@@ -368,6 +370,16 @@ networking or 3D pipelines.
   scene's `size` (the canvas's: drawing sets it, and `scene.load` starts it there;
   `draw_with_size` draws it laid out for another canvas, as the editor's viewport does) and a plain
   node passes its parent's on. So `transform`, `bounds` and `contains` walk down from the root.
+  Stacks and panels (format 3; a panel is a stack that draws a fill and border or a sliced
+  sprite) place their children themselves (`lay_out_stack`): one after another along their
+  `direction` with a `gap`, inside their `padding`, each taking the space it covers as drawn,
+  lined up across by its anchor's fraction, nudged by its `x` and `y`, and hidden ones taking
+  none; a plain node there has its origin at the start of its space and takes what its children
+  reach past it. Along an axis without a `width` or `height` a stack fits what it holds, which
+  the scene measures (`Scene::rect_in`, `size_of`; `Node::size` is `None` for them), laying the
+  children out in no space that way, and its pivot is from the point its anchor names, so an
+  anchored stack keeps that point in place as it grows. Their shared fields are `Stack`, the same
+  in files and live scenes.
   `clip.rs` holds `Clip`s, a file's tracks of keyframes on nodes' properties, which a file names
   apart from its nodes, so a clip poses whatever node it's given: `Scene::pose` finds every
   track's node first, failing before changing anything, then samples each, moving numbers by its
@@ -427,7 +439,9 @@ networking or 3D pipelines.
   at the same point of the node, and its size and stretch), the Select tool resizes sprites,
   rects and areas by handles on their edges, and the toolbar's canvas size, or dragging the
   canvas's corner, previews scenes laid out on canvases of other sizes (`Viewport::preview`),
-  which never changes the file. In 3D views, seen through their own cameras (the editor has
+  which never changes the file. Stacks and panels take presets by their anchors alone, with no
+  pivot, keeping on fitting what they hold unless stretched across; resizing one by a handle
+  gives it a size of its own that way, its origin making up for its pivot moving with its size. In 3D views, seen through their own cameras (the editor has
   none), the viewport picks by boxes (`Scene::pick`, a view's nodes before the view), outlines the
   selection's box as the camera projects it, and drags with the Move tool across the ground at
   the node's height, or with Shift, an upright plane facing the camera (`Drag3d`); model files
@@ -487,8 +501,12 @@ networking or 3D pipelines.
   shared look. `story.reached(stage)` compares quest stages, which run in the order of
   `story.STAGES`. F1 shows `debug_panel.luau`, an egui window from the game's `gui` that sets hit
   points, coins, items and the quest's stage, and jumps between maps (`ARRIVALS` in `main.luau`).
-  The game opens on `title.luau`, a title screen drawn in code, whose Continue (offered when
-  there's a save) restores the save `progress`, which `progress.luau` writes after every event
+  Its panels show `frame.png`, a 5x5 frame with cut corners, sliced: `ui.panel` draws it with
+  `graphics.draw_sprite_sliced`, and the panels of `title.scene.luau` (the title's name and menu)
+  and `bag.scene.luau` (the bag's stats) show it, fitting rows that `title.luau` and `bag.luau`
+  copy from a hidden one with `node:add`. The game opens on `title.luau`, a title screen whose
+  woods are drawn in code, whose Continue (offered when there's a save) restores the save
+  `progress`, which `progress.luau` writes after every event
   (`run_event`) once the title has closed: the player's state, where they are, and each visited
   level's beaten foes and found places (by cell). Continuing builds those levels afresh, marks
   them, and `story.restore` makes again what reaching the quest's stage changed, such as the open
@@ -509,8 +527,9 @@ networking or 3D pipelines.
   (`enemies.resume`, `enemies.frame`). `boss.luau` holds the spell cards, `stage.luau` the waves,
   `stress.luau` the stress test, which prints the limit it finds for runs without a window, and
   `hud.luau` the panel and screens, laid out in `hud.scene.luau` (in canvas pixels, so the title
-  menu's items, areas, are hit-tested against the mouse), which it fills in from the game's
-  state and draws each frame; `shmup.hud` is the scene's root, for tests, which check the file
+  menu's items, areas in a stack, are hit-tested against the mouse; the panel's rows are stacks,
+  the play's hidden to show the stress test's), which it fills in from the game's state and draws
+  each frame; `shmup.hud` is the scene's root, for tests, which check the file
   stays in the canonical layout. `shmup.start("boss")` is
   boss practice, and `shmup.cheats` (`invincible`, `damage`) are for tests. The game's state is
   the global `shmup`.
@@ -640,7 +659,7 @@ networking or 3D pipelines.
   `exact` gives for spreads of arguments is pinned, so CI checks it's the same on Windows and
   Linux.
 - `tests/scene.rs`: tests for scenes loaded to play: finding nodes, transforms, hit testing,
-  anchors and stretching, tilemaps, instances and overrides, adding and removing nodes, posing
+  anchors and stretching, stacks and panels laying out and fitting what they hold, tilemaps, instances and overrides, adding and removing nodes, posing
   with clips, and 3D views: placement composing, instances in views, posing in 3D, picking
   nearest first, and where 3D nodes may be, with files held in memory.
 - `tests/native.rs`: tests for native libraries, most of them linked into the test, its probe
@@ -653,8 +672,9 @@ networking or 3D pipelines.
   plays a whole match and checks a hash of it, pinned, so CI checks it's the same to the bit on
   Windows and Linux; a change to how Pong plays changes the hash.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest, using
-  its debug panel, and continuing a saved game in a second simulation sharing the first's save
-  folder. Its `simulation()` starts a new game from the title screen.
+  its debug panel, its title menu and bag's panels fitting what they hold, its scene files being
+  in the canonical layout, and continuing a saved game in a second simulation sharing the first's
+  save folder. Its `simulation()` starts a new game from the title screen.
 - `tests/garden.rs`: tests for the `garden` example, the same way: walking, stopping at and
   sliding along what's solid and the ground's edges, its F1 view, and that its scene files are in
   the canonical layout.

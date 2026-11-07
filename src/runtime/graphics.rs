@@ -32,6 +32,37 @@ type RotatedSpriteArgs = (
 /// and optionally the thickness.
 type ShapeArgs = (f32, f32, f32, f32, Color, Option<f32>);
 
+/// `graphics.draw_sprite_sliced`'s `slice`: a number of texels for every edge, or a list of four,
+/// `{ left, top, right, bottom }`.
+fn slice_edges(slice: mlua::Value) -> mlua::Result<[f32; 4]> {
+    let shape = || {
+        mlua::Error::runtime(
+            "a slice is a number of texels, or four of them, { left, top, right, bottom }",
+        )
+    };
+    let edges = match slice {
+        mlua::Value::Integer(n) => [n as f32; 4],
+        mlua::Value::Number(n) => [n as f32; 4],
+        mlua::Value::Table(table) => {
+            if table.raw_len() != 4 {
+                return Err(shape());
+            }
+            let mut edges = [0.0; 4];
+            for (i, edge) in edges.iter_mut().enumerate() {
+                *edge = table.raw_get::<f32>(i + 1).map_err(|_| shape())?;
+            }
+            edges
+        }
+        _ => return Err(shape()),
+    };
+    if edges.iter().any(|edge| !edge.is_finite()) {
+        return Err(mlua::Error::runtime(
+            "a slice's edges must be finite numbers",
+        ));
+    }
+    Ok(edges)
+}
+
 /// The table, loading files relative to `folder`, and images through `textures`.
 pub(super) fn module(
     lua: &Lua,
@@ -116,6 +147,28 @@ pub(super) fn module(
                 lent.canvas(|canvas| {
                     let dest = Rect::new(x, y, width, height);
                     canvas.draw_sprite_rotated(&sprite, dest, angle, tint)
+                })
+            },
+        )?
+    })?;
+    graphics.set("draw_sprite_sliced", {
+        let lent = lent.clone();
+        lua.create_function(
+            move |_,
+                  (sprite, x, y, width, height, slice, tint): (
+                UserDataRef<Sprite>,
+                f32,
+                f32,
+                f32,
+                f32,
+                mlua::Value,
+                Option<Color>,
+            )| {
+                let slice = slice_edges(slice)?;
+                let tint = tint.unwrap_or(Color::WHITE);
+                lent.canvas(|canvas| {
+                    let dest = Rect::new(x, y, width, height);
+                    canvas.draw_sprite_sliced(&sprite, slice, dest, tint)
                 })
             },
         )?

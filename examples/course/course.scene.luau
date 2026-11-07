@@ -1,5 +1,5 @@
 return {
-    format = 2,
+    format = 3,
     children = {
         {
             name = "view",

@@ -52,7 +52,7 @@ origin. A screen anchored to the canvas's edges is laid out as it is in the game
 - **Zoom** with the wheel, about the pointer. **Frame** shows the whole canvas again, and **1:1**
   shows a pixel of the scene for each of the screen's.
 - **Select** a node by clicking it. What can be seen comes first, a 3D view's nodes before the
-  view, then areas, then plain nodes near their origins, then tilemaps. Click again in the same
+  view, then areas and stacks, then plain nodes near their origins, then tilemaps. Click again in the same
   place for the node under that one, and so on, round to the first.
 
 The selected node is outlined in blue, with a cross at its origin. Text and tilemaps move with
@@ -80,9 +80,11 @@ The **Inspector** shows the selected node's fields, as scene files name them:
   `scale_y`, and its `anchor`, if it has one. Drag a number to change it, or click it to type one.
 - **Its kind's fields**: a sprite's sheet and cell (**Pick…** shows the sheet to click a cell
   in), its size, stretch, pivot and tint; a rect's size, stretch, pivot and color; text's text,
-  scale, wrap, alignment, pivot and color; an area's size, stretch and pivot; a tilemap's tileset
-  and size, which resizes its layers; an instance's scene, and the overrides it has, each of
-  which selects the node it changes when clicked.
+  scale, wrap, alignment, pivot and color; an area's size, stretch and pivot; a stack's width
+  and height, each its own or **fits** what it holds, its stretch, direction, gap, padding and
+  pivot, and a panel's too, with its look: a fill's color and border, or a sprite's sheet, cell,
+  slice and tint; a tilemap's tileset and size, which resizes its layers; an instance's scene,
+  and the overrides it has, each of which selects the node it changes when clicked.
 - **Props**: the node's data for the game. Add one by typing its name and choosing its kind of
   value; lists and tables hold more values.
 
@@ -100,11 +102,16 @@ shrinks with its parent.
   parent, along its top, middle or bottom, its left, middle or right, or all of it. The preset sets
   its `anchor`, a `pivot` at the same point of the node, and its size and `stretch`; `x` and `y`
   become the **margin** set below the presets, in from the parent's edges. Text lines up with the
-  edge or middle it's put at, and only sprites, rects and areas stretch. **No Anchor** takes the
-  anchor away, leaving the node where it is.
-- With the **Select** tool, a selected sprite, rect or area has handles on its edges and corners:
-  drag one to resize the node, its other edges staying where they are. A sprite takes a size of
-  its own the first time.
+  edge or middle it's put at, a stack or a panel by its anchor alone, keeping on fitting what it
+  holds unless it's stretched across, and only sprites, rects, areas, stacks, panels and views
+  stretch. **No Anchor** takes the anchor away, leaving the node where it is.
+- With the **Select** tool, a selected sprite, rect, area, stack, panel or view has handles on its
+  edges and corners: drag one to resize the node, its other edges staying where they are. A sprite
+  takes a size of its own the first time, and so does a stack or a panel, along the way it's
+  resized.
+- [Stacks and panels](scenes.md#stacks-and-panels) place the nodes inside them themselves, one
+  after another: add nodes to one, or hide them, and the rest move along. Moving a node in a stack
+  nudges it from where the stack puts it, and its anchor lines it up across the stack.
 - The canvas's size, in the toolbar, previews the scene laid out on canvases of other sizes:
   common ones, or any typed in, or drag the purple handle on the canvas's bottom-right corner. A
   preview changes nothing in the scene; **The game's** goes back to the game's own.

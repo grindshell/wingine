@@ -102,8 +102,8 @@
 //!   the mover too. `step` returns whether a step started.
 //! - A [`SceneNode`] is userdata for a node of a [`Scene`], which every node of the scene shares;
 //!   two of the same node are `==`. Finding nodes: `node:name()`, `node:kind()` (`"node"`,
-//!   `"sprite"`, `"rect"`, `"text"`, `"area"`, `"tilemap"`, `"tile_layer"`, `"view3d"`, `"mesh"`,
-//!   `"model"` or `"billboard"`), `node:path()`
+//!   `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`, `"tilemap"`, `"tile_layer"`,
+//!   `"view3d"`, `"mesh"`, `"model"` or `"billboard"`), `node:path()`
 //!   (the names from the root, joined by `/`), `node:find(path)` (the node `path` leads to from
 //!   this one, or `nil`), `node:tagged(tag)` (this node and those inside it with the tag, in draw
 //!   order), `node:parent()`, `node:children()`, `node:tags()`, `node:has_tag(tag)` and
@@ -124,13 +124,16 @@
 //!   `node:set_lighting(lighting)`, `node:pick(x, y)` (its nodes under a point of the scene,
 //!   nearest first) and `node:project(point)` (where a point of its world shows in the scene, or
 //!   nothing). What they cover: `node:size()` (before stretching with its parent, or a
-//!   billboard's), `node:set_size(width, height)` (sprites, rects, areas, views and billboards),
+//!   billboard's; a stack's or a panel's fits what it holds along the axes it has no size of its
+//!   own), `node:set_size(width, height)` (sprites, rects, areas, stacks, panels, views and
+//!   billboards; a stack or a panel then has a size of its own both ways),
 //!   `node:bounds()` (a `Rect` in the scene's coordinates, or `nil` for a plain node or one in a
 //!   view) and `node:contains(x, y)`. A scene is laid out on the canvas when it's loaded and each
 //!   time it's drawn, and one drawn without a camera is in canvas pixels, so `contains` tests the
 //!   mouse against a node. What they show: `node:set_sprite(sprite)`, `node:set_cell(column, row)`
 //!   (a cell of the sheet the scene file gave a sprite, billboard or mesh), `node:set_tint(tint)`
-//!   (sprites, meshes, models and billboards), `node:set_color(color)` (rects and text),
+//!   (sprites, meshes, models and billboards), `node:set_color(color)` (rects, text and filled
+//!   panels),
 //!   `node:text()` and `node:set_text(text)` (text). Posing: `node:pose(clip, time, weight)`
 //!   poses the node and those inside it as `clip` has them `time` seconds after it started;
 //!   `weight`, from 0 to 1
@@ -202,8 +205,9 @@ use crate::{
     input::{Control, GamepadButton, Key, MouseButton},
     math::{Bounds3, Rect},
     scene::{
-        AreaNode, BillboardNode, Clip, Kind, MeshNode, ModelNode, Node, NodeId, Placement3, Props,
-        RectNode, Scene, SpriteNode, TextNode, TilemapNode, Value, View3dNode, a_node_of,
+        AreaNode, BillboardNode, Clip, Kind, MeshNode, ModelNode, Node, NodeId, PanelFill,
+        PanelLook, PanelNode, Placement3, Props, RectNode, Scene, SpriteNode, TextNode,
+        TilemapNode, Value, View3dNode, a_node_of,
     },
     tilemap::{Tile, TileId, Tilemap, Tileset},
 };
@@ -1434,9 +1438,9 @@ impl mlua::UserData for SceneNode {
                 if let Kind::Billboard(billboard) = node.kind() {
                     return Ok(billboard.size);
                 }
-                node.size().ok_or_else(|| {
+                scene.size_of(id).ok_or_else(|| {
                     let described = scene.describe(id);
-                    let is = a_node_of(scene.node(id).kind().name());
+                    let is = a_node_of(node.kind().name());
                     mlua::Error::runtime(format!("{described} is {is}, which has no size"))
                 })
             })??;
@@ -1451,6 +1455,9 @@ impl mlua::UserData for SceneNode {
                     | Kind::Area(AreaNode { size, .. })
                     | Kind::View3d(View3dNode { size, .. })
                     | Kind::Billboard(BillboardNode { size, .. }) => *size = [width, height],
+                    Kind::Stack(stack) | Kind::Panel(PanelNode { stack, .. }) => {
+                        stack.size = [Some(width), Some(height)];
+                    }
                     _ => return None,
                 }
                 Some(())
@@ -1498,7 +1505,11 @@ impl mlua::UserData for SceneNode {
             node.write_kind("color", |kind| {
                 match kind {
                     Kind::Rect(RectNode { color: c, .. })
-                    | Kind::Text(TextNode { color: c, .. }) => {
+                    | Kind::Text(TextNode { color: c, .. })
+                    | Kind::Panel(PanelNode {
+                        look: PanelLook::Fill(PanelFill { color: c, .. }),
+                        ..
+                    }) => {
                         *c = color;
                     }
                     _ => return None,

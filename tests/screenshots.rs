@@ -36,6 +36,9 @@ const TILESET: &str = concat!(
 /// The examples' folder, which scenes' model files are in.
 const EXAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
 
+/// The RPG's frame for its panels: 5 texels square, a border a texel wide, its corners cut.
+const FRAME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/rpg/frame.png");
+
 #[test]
 fn clear() {
     let mut headless = headless();
@@ -436,6 +439,75 @@ fn scene_anchors() {
         })
         .unwrap();
     assert_screenshot(&headless.adapter_name(), "scene_anchors_sized", frame);
+}
+
+/// Panels. The RPG's frame, sliced so its cut corners and one-texel border keep their size: wide,
+/// tall, exactly as tall as its edges (so with no middle), turned a quarter about its corner, and
+/// tinted. Then a scene's: a panel in the bottom-right corner fitting two lines of text inside its
+/// padding and border, its fill translucent so the background shows through it but not its
+/// border, the second line lined up at the right by its anchor; and a row of rects stacked across
+/// with a gap, lined up down a stack 16 tall by their anchors, the last stretching down it.
+#[test]
+fn panels() {
+    use std::f32::consts::FRAC_PI_2;
+
+    let screen = r##"return {
+        format = 3,
+        children = {
+            {
+                name = "menu", kind = "panel", x = -4, y = -4, anchor = { 1, 1 },
+                padding = { 6, 5, 6, 5 }, color = "#14182cc0", border = 1,
+                border_color = "#f2d3ab",
+                children = {
+                    { name = "first", kind = "text", text = "Continue", color = "#f2c14e" },
+                    { name = "second", kind = "text", anchor = { 1, 0 }, text = "New" },
+                },
+            },
+            {
+                name = "swatches", kind = "stack", x = 4, y = 30, height = 16,
+                direction = "row", gap = 2,
+                children = {
+                    { name = "a", kind = "rect", width = 8, height = 8, color = "#ff7b9c" },
+                    {
+                        name = "b", kind = "rect", anchor = { 0, 0.5 }, width = 8, height = 12,
+                        color = "#4de0e0",
+                    },
+                    {
+                        name = "c", kind = "rect", anchor = { 0, 1 }, width = 8, height = 4,
+                        color = "#f2c14e",
+                    },
+                    {
+                        name = "d", kind = "rect", width = 8, height = 0, stretch = { 0, 1 },
+                        color = "#8fd16a",
+                    },
+                },
+            },
+        },
+    }"##;
+    let mut headless = headless();
+    let frame = headless.context().load_texture(FRAME).unwrap().sprite();
+    let mut scene = load_scene(&mut headless, &[("panels.scene.luau", screen)]);
+    let image = headless
+        .render(128, 80, |canvas| {
+            canvas.clear(Color::rgb8(0x2a, 0x3d, 0x2c));
+            let slice = [2.0; 4];
+            canvas.draw_sprite_sliced(&frame, slice, Rect::new(4.0, 4.0, 24.0, 12.0), Color::WHITE);
+            canvas.draw_sprite_sliced(&frame, slice, Rect::new(32.0, 4.0, 6.0, 20.0), Color::WHITE);
+            canvas.draw_sprite_sliced(&frame, slice, Rect::new(42.0, 4.0, 16.0, 4.0), Color::WHITE);
+            let turned = Affine::from_parts([76.0, 4.0], FRAC_PI_2, [1.0, 1.0]);
+            canvas.draw_sprite_sliced_transformed(
+                &frame,
+                slice,
+                Rect::new(0.0, 0.0, 16.0, 8.0),
+                turned,
+                Color::WHITE,
+            );
+            let tint = Color::rgb8(0x8f, 0xd1, 0x6a);
+            canvas.draw_sprite_sliced(&frame, slice, Rect::new(84.0, 4.0, 12.0, 12.0), tint);
+            scene.draw(canvas);
+        })
+        .unwrap();
+    assert_screenshot(&headless.adapter_name(), "panels", image);
 }
 
 /// Four instances of a puppet, off the pixel grid, posed by a clip that raises its arm, the

@@ -78,6 +78,12 @@
 //! - `graphics.draw_sprite_rotated(sprite, x, y, angle, tint, width, height)` draws `sprite` as
 //!   `draw_sprite` does, then rotated by `angle` radians about its center. Positive angles turn
 //!   clockwise, since `y` grows downward.
+//! - `graphics.draw_sprite_sliced(sprite, x, y, width, height, slice, tint)` draws `sprite` sliced
+//!   to fill `width` by `height` with its top-left corner at `x`, `y`, as a frame or a panel is
+//!   drawn at any size: `slice` is how many texels along its edges keep their size, a number for
+//!   them all or `{ left, top, right, bottom }`, so its corners are drawn as they are, its edges
+//!   stretch along their length and its middle both ways. Edges too big for the space shrink
+//!   alike to meet. `tint` is white by default.
 //! - `graphics.draw_text(font, text, x, y, color)` draws `text` with its top-left corner at `x`,
 //!   `y`, rounded to whole pixels.
 //! - `graphics.draw_text_layout(layout, x, y, color, glyphs)` draws text laid out with

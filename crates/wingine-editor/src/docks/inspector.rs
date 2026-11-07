@@ -16,7 +16,10 @@ use wingine::{
     Context,
     graphics::{Align, Camera3d, Color, Projection},
     gui::egui,
-    scene::{CellDef, KindDef, NodeDef, Placement3, Props, Shape, SheetDef, Value},
+    scene::{
+        CellDef, KindDef, NodeDef, PanelFill, PanelLookDef, Placement3, Props, Shape, SheetDef,
+        Stack, StackDirection, Value,
+    },
 };
 
 use crate::{
@@ -776,8 +779,153 @@ impl Inspector {
                     cell_picker(ui, sheet, &mut billboard.cell, services);
                 }
             }),
+            KindDef::Stack(stack) => section(ui, &title, |ui| {
+                grid(ui, "stack", |ui| stack_fields(ui, stack, over));
+            }),
+            KindDef::Panel(panel) => section(ui, &title, |ui| {
+                grid(ui, "panel", |ui| {
+                    stack_fields(ui, &mut panel.stack, over);
+                    over.label(ui, "look", &["sheet", "cell", "color"]);
+                    let showing = matches!(panel.look, PanelLookDef::Sprite { .. });
+                    let first = sheets.keys().next();
+                    egui::ComboBox::from_id_salt("look")
+                        .selected_text(if showing { "sprite" } else { "fill" })
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(!showing, "fill").clicked() && showing {
+                                panel.look = PanelLookDef::Fill(PanelFill {
+                                    color: Color::WHITE,
+                                    border: 0.0,
+                                    border_color: Color::WHITE,
+                                });
+                            }
+                            let pick = ui.add_enabled(
+                                first.is_some(),
+                                egui::Button::selectable(showing, "sprite"),
+                            );
+                            if pick.clicked()
+                                && !showing
+                                && let Some(sheet) = first
+                            {
+                                panel.look = PanelLookDef::Sprite {
+                                    sprite: CellDef {
+                                        sheet: sheet.clone(),
+                                        cell: [0, 0],
+                                    },
+                                    slice: [0.0; 4],
+                                    tint: Color::WHITE,
+                                };
+                            }
+                        });
+                    ui.end_row();
+                    match &mut panel.look {
+                        PanelLookDef::Fill(fill) => {
+                            over.label(ui, "color", &["color"]);
+                            color(ui, &mut fill.color);
+                            ui.end_row();
+                            over.label(ui, "border", &["border"]);
+                            ui.horizontal(|ui| {
+                                number(ui, "border", &mut fill.border, 0.1);
+                                color(ui, &mut fill.border_color);
+                            });
+                            fill.border = fill.border.max(0.0);
+                            ui.end_row();
+                        }
+                        PanelLookDef::Sprite {
+                            sprite,
+                            slice,
+                            tint,
+                        } => {
+                            over.label(ui, "sheet", &["sheet"]);
+                            sheet_choice(ui, &mut sprite.sheet, sheets);
+                            ui.end_row();
+                            over.label(ui, "cell", &["cell"]);
+                            cell_fields(ui, &mut sprite.cell, &mut self.picking_cell);
+                            ui.end_row();
+                            over.label(ui, "slice", &["slice"]);
+                            edges(ui, "slice", slice);
+                            for texels in slice.iter_mut() {
+                                *texels = texels.max(0.0);
+                            }
+                            ui.end_row();
+                            over.label(ui, "tint", &["tint"]);
+                            color(ui, tint);
+                            ui.end_row();
+                        }
+                    }
+                });
+                if self.picking_cell
+                    && let PanelLookDef::Sprite { sprite, .. } = &mut panel.look
+                    && let Some(sheet) = sheets.get(&sprite.sheet)
+                {
+                    cell_picker(ui, sheet, &mut sprite.cell, services);
+                }
+            }),
         }
     }
+}
+
+/// The fields of a stack or a panel that size, place and lay it out, in a grid's rows: along each
+/// axis, its own size or fitting what it holds.
+fn stack_fields(ui: &mut egui::Ui, stack: &mut Stack, over: &mut Marks) {
+    for (i, (field, fits)) in [("width", "fit width"), ("height", "fit height")]
+        .into_iter()
+        .enumerate()
+    {
+        over.label(ui, field, &[field]);
+        ui.horizontal(|ui| {
+            let mut fitting = stack.size[i].is_none();
+            let response = ui.checkbox(&mut fitting, "fits");
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::Role::CheckBox, true, fitting, fits)
+            });
+            if response.changed() {
+                stack.size[i] = if fitting { None } else { Some(16.0) };
+                if fitting {
+                    stack.stretch[i] = 0.0;
+                }
+            }
+            if let Some(length) = &mut stack.size[i] {
+                number(ui, field, length, 1.0);
+            }
+        });
+        ui.end_row();
+    }
+    over.label(ui, "stretch", &["stretch"]);
+    ui.horizontal(|ui| {
+        for (i, axis) in ["x", "y"].into_iter().enumerate() {
+            ui.add_enabled_ui(stack.size[i].is_some(), |ui| {
+                number(ui, &format!("stretch {axis}"), &mut stack.stretch[i], 0.01);
+            });
+        }
+    });
+    ui.end_row();
+    over.label(ui, "direction", &["direction"]);
+    egui::ComboBox::from_id_salt("direction")
+        .selected_text(stack.direction.name())
+        .show_ui(ui, |ui| {
+            for direction in [StackDirection::Column, StackDirection::Row] {
+                ui.selectable_value(&mut stack.direction, direction, direction.name());
+            }
+        });
+    ui.end_row();
+    over.label(ui, "gap", &["gap"]);
+    number(ui, "gap", &mut stack.gap, 0.1);
+    ui.end_row();
+    over.label(ui, "padding", &["padding"]);
+    edges(ui, "padding", &mut stack.padding);
+    ui.end_row();
+    over.label(ui, "pivot", &["pivot"]);
+    pair(ui, &mut stack.pivot, 1.0);
+    ui.end_row();
+}
+
+/// Numbers for the left, top, right and bottom edges of something, named `name` and the edge.
+fn edges(ui: &mut egui::Ui, name: &str, edges: &mut [f32; 4]) {
+    ui.horizontal(|ui| {
+        for (edge, value) in ["left", "top", "right", "bottom"].into_iter().zip(edges) {
+            number(ui, &format!("{name} {edge}"), value, 0.1);
+        }
+    });
 }
 
 /// Keeps a size above 0, as a shape's must be.

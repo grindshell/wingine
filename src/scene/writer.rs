@@ -11,8 +11,8 @@ use std::{collections::BTreeMap, fmt::Write};
 use super::{
     clip::{Clip, Interpolation, Keys, Track},
     file::{
-        FORMAT, KindDef, NodeDef, Placement3, SceneFile, Shape, SheetDef, TileDef, TilesetFile,
-        Value,
+        FORMAT, KindDef, NodeDef, PanelLookDef, Placement3, SceneFile, Shape, SheetDef, Stack,
+        StackDirection, TileDef, TilesetFile, Value,
     },
 };
 use crate::{
@@ -481,7 +481,69 @@ impl Writer {
                 }
                 self.color("tint", billboard.tint);
             }
+            KindDef::Stack(stack) => self.stack(stack)?,
+            KindDef::Panel(panel) => match &panel.look {
+                PanelLookDef::Fill(fill) => {
+                    self.stack(&panel.stack)?;
+                    self.color("color", fill.color);
+                    if fill.border != 0.0 {
+                        self.number_field("border", fill.border)?;
+                    }
+                    self.color("border_color", fill.border_color);
+                }
+                PanelLookDef::Sprite {
+                    sprite,
+                    slice,
+                    tint,
+                } => {
+                    self.field("sheet", &quoted(&sprite.sheet));
+                    let [column, row] = sprite.cell;
+                    self.field("cell", &format!("{{ {column}, {row} }}"));
+                    self.edges("slice", *slice)?;
+                    self.stack(&panel.stack)?;
+                    self.color("tint", *tint);
+                }
+            },
         }
+        Ok(())
+    }
+
+    /// A stack's or panel's size and layout, leaving out what's at its defaults.
+    fn stack(&mut self, stack: &Stack) -> Result<(), String> {
+        for (i, key) in ["width", "height"].into_iter().enumerate() {
+            if let Some(length) = stack.size[i] {
+                self.number_field(key, length)?;
+            }
+        }
+        self.stretch(stack.stretch)?;
+        if stack.direction != StackDirection::Column {
+            self.field("direction", &quoted(stack.direction.name()));
+        }
+        if stack.gap != 0.0 {
+            self.number_field("gap", stack.gap)?;
+        }
+        self.edges("padding", stack.padding)?;
+        self.pivot(stack.pivot)
+    }
+
+    /// Numbers for the left, top, right and bottom edges, unless they're all 0: one, if they're
+    /// all the same.
+    fn edges(&mut self, key: &str, edges: [f32; 4]) -> Result<(), String> {
+        let [left, top, right, bottom] = edges;
+        if edges == [0.0; 4] {
+            return Ok(());
+        }
+        if edges.iter().all(|&edge| edge == left) {
+            return self.number_field(key, left);
+        }
+        let value = format!(
+            "{{ {}, {}, {}, {} }}",
+            single(left, key)?,
+            single(top, key)?,
+            single(right, key)?,
+            single(bottom, key)?
+        );
+        self.field(key, &value);
         Ok(())
     }
 
@@ -685,7 +747,7 @@ mod tests {
 
     /// A scene in its canonical layout.
     const CANONICAL: &str = r##"return {
-    format = 2,
+    format = 3,
     sheets = {
         tiles = {
             path = "tiles.png",
@@ -852,7 +914,7 @@ mod tests {
 
     /// A level: a tilemap with two layers and people between them, and an instance.
     const LEVEL: &str = r##"return {
-    format = 2,
+    format = 3,
     children = {
         {
             name = "map",
@@ -917,7 +979,7 @@ mod tests {
     /// A screen: a bar along the bottom of the canvas, with a label at its right end, and a
     /// panel in the middle.
     const SCREEN: &str = r##"return {
-    format = 2,
+    format = 3,
     children = {
         {
             name = "bar",
@@ -960,7 +1022,7 @@ mod tests {
 
     /// A rig: an arm with a hand, and clips that wave it and make it blink.
     const RIG: &str = r##"return {
-    format = 2,
+    format = 3,
     sheets = {
         hands = {
             path = "hands.png",
@@ -1042,9 +1104,78 @@ mod tests {
         assert_eq!(scene.to_luau().unwrap(), RIG);
     }
 
+    /// A menu: a panel fitting a column of items, a sliced frame, and a row stretched across.
+    const MENU: &str = r##"return {
+    format = 3,
+    sheets = {
+        ui = {
+            path = "ui.png",
+            tile_width = 5,
+            tile_height = 5,
+        },
+    },
+    children = {
+        {
+            name = "menu",
+            kind = "panel",
+            anchor = { 0.5, 0 },
+            gap = 2,
+            padding = { 6, 5, 6, 5 },
+            color = "#14182c",
+            border = 1,
+            border_color = "#f2d3ab",
+            children = {
+                {
+                    name = "play",
+                    kind = "text",
+                    text = "Play",
+                },
+            },
+        },
+        {
+            name = "frame",
+            kind = "panel",
+            sheet = "ui",
+            cell = { 0, 0 },
+            slice = 2,
+            width = 40,
+            padding = 4,
+            pivot = { 1, 2 },
+            tint = "#c8b8e8",
+        },
+        {
+            name = "bar",
+            kind = "stack",
+            y = -12,
+            anchor = { 0, 1 },
+            width = 0,
+            height = 12,
+            stretch = { 1, 0 },
+            direction = "row",
+            padding = { 1, 0, 1, 0 },
+        },
+    },
+}
+"##;
+
+    #[test]
+    fn menus_write_and_read_back() {
+        let scene = parse(MENU);
+        assert_eq!(scene.to_luau().unwrap(), MENU);
+        let KindDef::Panel(menu) = &scene.children[0].kind else {
+            panic!("a panel");
+        };
+        assert_eq!(menu.stack.size, [None, None], "fitting what it holds");
+        let bar = scene.children[2].kind.stack().unwrap();
+        assert_eq!(
+            (bar.size, bar.direction),
+            ([Some(0.0), Some(12.0)], StackDirection::Row)
+        );
+    }
+
     /// A tileset in its canonical layout.
     const TILESET: &str = r##"return {
-    format = 2,
+    format = 3,
     tile_width = 16,
     tile_height = 16,
     sheets = {
@@ -1081,7 +1212,7 @@ mod tests {
     /// A 3D level: a view with a camera and lighting holding meshes, a model, a billboard and a
     /// node placed in 3D, and a view from above through an orthographic camera.
     const WORLD: &str = r##"return {
-    format = 2,
+    format = 3,
     sheets = {
         tiles = {
             path = "tiles.png",

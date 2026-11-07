@@ -21,8 +21,9 @@ use crate::{
 };
 
 /// The version of the scene and tileset formats this engine writes, their `format`. It reads
-/// files of this format and every one before it: format 2 added 3D views and their nodes.
-pub const FORMAT: u32 = 2;
+/// files of this format and every one before it: format 2 added 3D views and their nodes, and
+/// format 3 stacks and panels.
+pub const FORMAT: u32 = 3;
 
 /// How deeply tables may nest. Files written by hand or by an editor come nowhere near, but one
 /// that builds a table holding itself would otherwise never finish being read.
@@ -219,6 +220,10 @@ pub enum KindDef {
     Model(ModelDef),
     /// A sprite standing upright in a 3D view, turned to face the camera.
     Billboard(BillboardDef),
+    /// A rectangle that doesn't draw, laying the nodes inside it out one after another.
+    Stack(Stack),
+    /// A stack that draws behind what it holds.
+    Panel(PanelDef),
 }
 
 impl KindDef {
@@ -237,12 +242,31 @@ impl KindDef {
             Self::Mesh(_) => "mesh",
             Self::Model(_) => "model",
             Self::Billboard(_) => "billboard",
+            Self::Stack(_) => "stack",
+            Self::Panel(_) => "panel",
         }
     }
 
     /// Whether it's a kind only 3D views hold: a mesh, model or billboard.
     pub fn is_3d(&self) -> bool {
         is_3d_kind(self.name())
+    }
+
+    /// How a stack or a panel is laid out and lays out what it holds.
+    pub fn stack(&self) -> Option<&Stack> {
+        match self {
+            Self::Stack(stack) => Some(stack),
+            Self::Panel(panel) => Some(&panel.stack),
+            _ => None,
+        }
+    }
+
+    pub fn stack_mut(&mut self) -> Option<&mut Stack> {
+        match self {
+            Self::Stack(stack) => Some(stack),
+            Self::Panel(panel) => Some(&mut panel.stack),
+            _ => None,
+        }
     }
 }
 
@@ -314,6 +338,106 @@ pub struct AreaDef {
     pub stretch: [f32; 2],
     /// As a sprite's.
     pub pivot: [f32; 2],
+}
+
+/// How a stack or panel is sized and placed, and how it lays out the nodes inside it: one after
+/// another, down or across, each taking the space it covers. It's the same in scene files and in
+/// scenes loaded to play.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stack {
+    /// Its width and height, or `None` along an axis it fits what it holds, with its padding.
+    pub size: [Option<f32>; 2],
+    /// As a rect's, along the axes it has a size of its own.
+    pub stretch: [f32; 2],
+    /// The point of it at the node's origin, which it turns and stretches about: from the point
+    /// of it its anchor names, as fractions of its width and height, or from its top-left
+    /// corner without an anchor. So an anchored stack stays lined up with its parent however
+    /// much it holds.
+    pub pivot: [f32; 2],
+    pub direction: StackDirection,
+    /// The space between each child and the next.
+    pub gap: f32,
+    /// The space between its edges and what it holds: left, top, right and bottom.
+    pub padding: [f32; 4],
+}
+
+impl Stack {
+    /// A stack laying out a column, fitting what it holds both ways, with no gap or padding.
+    pub const FITTING: Self = Self {
+        size: [None, None],
+        stretch: [0.0, 0.0],
+        pivot: [0.0, 0.0],
+        direction: StackDirection::Column,
+        gap: 0.0,
+        padding: [0.0; 4],
+    };
+}
+
+/// Which way a stack's children follow one another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StackDirection {
+    /// Down, from the top.
+    Column,
+    /// Across, from the left.
+    Row,
+}
+
+impl StackDirection {
+    /// Its name in scene files: `"column"` or `"row"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Column => "column",
+            Self::Row => "row",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "column" => Some(Self::Column),
+            "row" => Some(Self::Row),
+            _ => None,
+        }
+    }
+
+    /// The axis children follow one another along: 0 across, 1 down.
+    pub fn axis(self) -> usize {
+        match self {
+            Self::Row => 0,
+            Self::Column => 1,
+        }
+    }
+}
+
+/// A stack that draws behind what it holds: a fill with a border, or a sprite sliced so its
+/// edges keep their size.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PanelDef {
+    pub stack: Stack,
+    pub look: PanelLookDef,
+}
+
+/// What a panel draws.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PanelLookDef {
+    Fill(PanelFill),
+    /// A sprite of one of the scene's sheets, sliced: see [`Canvas::draw_sprite_sliced`].
+    ///
+    /// [`Canvas::draw_sprite_sliced`]: crate::graphics::Canvas::draw_sprite_sliced
+    Sprite {
+        sprite: CellDef,
+        /// The texels along its left, top, right and bottom edges that keep their size.
+        slice: [f32; 4],
+        tint: Color,
+    },
+}
+
+/// A panel filled with a color, within a border of another.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PanelFill {
+    pub color: Color,
+    /// How wide the border is, inside the panel's edges: 0 for none.
+    pub border: f32,
+    pub border_color: Color,
 }
 
 /// A grid of tiles from a tileset file, its top-left corner at the node's origin, with its layers
@@ -1346,14 +1470,125 @@ fn read_kind(
                 tint: optional_color(fields, "tint")?,
             })
         }
+        "stack" => KindDef::Stack(read_stack(fields, "a stack")?),
+        "panel" => {
+            let stack = read_stack(fields, "a panel")?;
+            let look = if fields.has("sheet") || fields.has("cell") {
+                for field in ["color", "border", "border_color"] {
+                    if fields.has(field) {
+                        return Err(format!(
+                            "a panel showing a sprite has no `{field}`: the sprite is how it looks"
+                        ));
+                    }
+                }
+                let (sheet, cell) = read_sheet_cell(fields, sheets, "a panel showing a sprite")?;
+                let slice = match fields.take("slice") {
+                    Some(slice) => edges(slice, "slice")?,
+                    None => [0.0; 4],
+                };
+                if slice.iter().any(|&texels| texels < 0.0) {
+                    return Err("`slice` can't be less than 0".into());
+                }
+                PanelLookDef::Sprite {
+                    sprite: CellDef { sheet, cell },
+                    slice,
+                    tint: optional_color(fields, "tint")?,
+                }
+            } else {
+                for field in ["slice", "tint"] {
+                    if fields.has(field) {
+                        return Err(format!(
+                            "a panel has a `{field}` only if it shows a sprite, with a `sheet` and \
+                             a `cell`"
+                        ));
+                    }
+                }
+                let border = match fields.take("border") {
+                    Some(border) => finite(border, "border")?,
+                    None => 0.0,
+                };
+                if border < 0.0 {
+                    return Err("`border` can't be less than 0".into());
+                }
+                PanelLookDef::Fill(PanelFill {
+                    color: optional_color(fields, "color")?,
+                    border,
+                    border_color: optional_color(fields, "border_color")?,
+                })
+            };
+            KindDef::Panel(PanelDef { stack, look })
+        }
         other => {
             return Err(format!(
                 "there's no kind of node `{other}`: a node is a node, sprite, rect, text, area, \
-                 tilemap, tile_layer, instance, view3d, mesh, model or billboard"
+                 stack, panel, tilemap, tile_layer, instance, view3d, mesh, model or billboard"
             ));
         }
     };
     Ok(kind)
+}
+
+/// The fields of a stack or panel, `what`, that size, place and lay it out.
+fn read_stack(fields: &mut Fields, what: &str) -> Result<Stack, String> {
+    let mut length = |field: &str| match fields.take(field) {
+        Some(value) => finite(value, field).map(Some),
+        None => Ok(None),
+    };
+    let size = [length("width")?, length("height")?];
+    let stretch = read_stretch(fields)?;
+    for (i, field) in ["width", "height"].into_iter().enumerate() {
+        if size[i].is_none() && stretch[i] != 0.0 {
+            return Err(format!(
+                "{what} without a `{field}` fits what it holds, so it can't stretch with its \
+                 parent that way"
+            ));
+        }
+    }
+    let direction = match fields.take("direction") {
+        Some(direction) => {
+            let name = string(direction, "direction")?;
+            StackDirection::from_name(&name)
+                .ok_or_else(|| format!(r#"`direction` must be "column" or "row", not "{name}""#))?
+        }
+        None => StackDirection::Column,
+    };
+    let gap = match fields.take("gap") {
+        Some(gap) => finite(gap, "gap")?,
+        None => 0.0,
+    };
+    let padding = match fields.take("padding") {
+        Some(padding) => edges(padding, "padding")?,
+        None => [0.0; 4],
+    };
+    Ok(Stack {
+        size,
+        stretch,
+        pivot: read_pivot(fields)?,
+        direction,
+        gap,
+        padding,
+    })
+}
+
+/// Numbers for the left, top, right and bottom edges of something: one for them all, or a list
+/// of four, `{ left, top, right, bottom }`.
+fn edges(value: Value, field: &str) -> Result<[f32; 4], String> {
+    if let Value::Number(_) = value {
+        return Ok([finite(value, field)?; 4]);
+    }
+    let shape = || format!("`{field}` must be a number, or four, {{ left, top, right, bottom }}");
+    let Value::List(items) = value else {
+        return Err(shape());
+    };
+    match <[Value; 4]>::try_from(items) {
+        Ok([left, top, right, bottom]) => Ok([
+            finite(left, field)?,
+            finite(top, field)?,
+            finite(right, field)?,
+            finite(bottom, field)?,
+        ]),
+        Err(_) => Err(shape()),
+    }
 }
 
 /// A view's camera, `{ position, target }` with `up`, `fov` or `height`, `near` and `far` if
@@ -1889,8 +2124,53 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
             set("height", number(billboard.size[1]));
             set("tint", hex(billboard.tint));
         }
+        KindDef::Stack(stack) => stack_fields(stack, &mut set),
+        KindDef::Panel(panel) => {
+            stack_fields(&panel.stack, &mut set);
+            match &panel.look {
+                PanelLookDef::Fill(fill) => {
+                    set("color", hex(fill.color));
+                    set("border", number(fill.border));
+                    set("border_color", hex(fill.border_color));
+                }
+                PanelLookDef::Sprite {
+                    sprite,
+                    slice,
+                    tint,
+                } => {
+                    set("sheet", string(&sprite.sheet));
+                    set("cell", cell_value(sprite.cell));
+                    set("slice", edges_value(*slice));
+                    set("tint", hex(*tint));
+                }
+            }
+        }
     }
     fields
+}
+
+/// The fields of a stack or panel that size, place and lay it out, as a scene file holds them.
+fn stack_fields(stack: &Stack, set: &mut impl FnMut(&str, Value)) {
+    let number = |n: f32| Value::Number(n.into());
+    for (i, field) in ["width", "height"].into_iter().enumerate() {
+        if let Some(length) = stack.size[i] {
+            set(field, number(length));
+        }
+    }
+    let [x, y] = stack.stretch;
+    set("stretch", Value::List(vec![number(x), number(y)]));
+    let [x, y] = stack.pivot;
+    set("pivot", Value::List(vec![number(x), number(y)]));
+    set(
+        "direction",
+        Value::String(stack.direction.name().to_owned()),
+    );
+    set("gap", number(stack.gap));
+    set("padding", edges_value(stack.padding));
+}
+
+fn edges_value(edges: [f32; 4]) -> Value {
+    Value::List(edges.map(|n| Value::Number(n.into())).into())
 }
 
 fn triple_value(numbers: [f32; 3]) -> Value {
@@ -2319,9 +2599,9 @@ mod tests {
     fn the_format_is_required_and_checked() {
         let err = error("return {}");
         assert!(err.contains("has no `format`"), "{err}");
-        let err = error("return { format = 3 }");
+        let err = error("return { format = 4 }");
         assert!(
-            err.contains("format 3, newer than this engine reads (2)"),
+            err.contains("format 4, newer than this engine reads (3)"),
             "{err}"
         );
         let err = error("return { format = 0 }");
@@ -2331,6 +2611,86 @@ mod tests {
             "older files still read"
         );
         assert!(parse("return { format = 2 }").is_ok());
+        assert!(parse("return { format = 3 }").is_ok());
+    }
+
+    #[test]
+    fn stacks_and_panels_read_their_layout_and_look() {
+        let scene = parse(
+            "return { format = 3, sheets = { ui = { path = 'ui.png', tile_width = 5, tile_height = 5 } },
+            children = {
+                { name = 'menu', kind = 'stack', direction = 'row', gap = 2, padding = 3,
+                  width = 40, stretch = { 0.5, 0 } },
+                { name = 'box', kind = 'panel', padding = { 1, 2, 3, 4 }, border = 1,
+                  color = '#14182c' },
+                { name = 'frame', kind = 'panel', sheet = 'ui', cell = { 0, 0 },
+                  slice = { 2, 2, 2, 3 } },
+            } }",
+        )
+        .unwrap();
+        let menu = scene.children[0].kind.stack().unwrap();
+        assert_eq!(menu.size, [Some(40.0), None]);
+        assert_eq!(menu.stretch, [0.5, 0.0]);
+        assert_eq!(menu.direction, StackDirection::Row);
+        assert_eq!((menu.gap, menu.padding), (2.0, [3.0; 4]));
+        let KindDef::Panel(panel) = &scene.children[1].kind else {
+            panic!("a panel");
+        };
+        assert_eq!(panel.stack.padding, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(
+            panel.look,
+            PanelLookDef::Fill(PanelFill {
+                color: Color::rgba8(0x14, 0x18, 0x2c, 0xff),
+                border: 1.0,
+                border_color: Color::WHITE,
+            })
+        );
+        let KindDef::Panel(PanelDef {
+            look: PanelLookDef::Sprite { slice, .. },
+            ..
+        }) = &scene.children[2].kind
+        else {
+            panic!("a panel showing a sprite");
+        };
+        assert_eq!(*slice, [2.0, 2.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn stacks_and_panels_that_cannot_be_read_are_errors() {
+        let node = |fields: &str| {
+            error(&format!(
+                "return {{ format = 3, sheets = {{ ui = {{ path = 'ui.png', tile_width = 5, \
+                 tile_height = 5 }} }}, children = {{ {{ name = 'n', {fields} }} }} }}"
+            ))
+        };
+        let err = node("kind = 'stack', stretch = { 1, 0 }");
+        assert!(
+            err.contains("a stack without a `width` fits what it holds, so it can't stretch"),
+            "{err}"
+        );
+        let err = node("kind = 'stack', direction = 'up'");
+        assert!(
+            err.contains(r#"`direction` must be "column" or "row", not "up""#),
+            "{err}"
+        );
+        let err = node("kind = 'panel', padding = { 1, 2 }");
+        assert!(err.contains("`padding` must be a number, or four"), "{err}");
+        let err = node("kind = 'panel', sheet = 'ui', cell = { 0, 0 }, color = '#ffffff'");
+        assert!(
+            err.contains("a panel showing a sprite has no `color`"),
+            "{err}"
+        );
+        let err = node("kind = 'panel', slice = 2");
+        assert!(
+            err.contains("has a `slice` only if it shows a sprite"),
+            "{err}"
+        );
+        let err = node("kind = 'panel', border = -1");
+        assert!(err.contains("`border` can't be less than 0"), "{err}");
+        let err = node("kind = 'panel', sheet = 'ui', cell = { 0, 0 }, slice = -1");
+        assert!(err.contains("`slice` can't be less than 0"), "{err}");
+        let err = node("kind = 'stack', color = '#ffffff'");
+        assert!(err.contains("a stack node has no field `color`"), "{err}");
     }
 
     /// A level with a 3D view: a crate on a floor, a prop placed in it, and a billboard.

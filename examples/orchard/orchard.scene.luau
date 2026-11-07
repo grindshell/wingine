@@ -1,5 +1,5 @@
 return {
-    format = 2,
+    format = 3,
     sheets = {
         big = {
             path = "orchard.png",

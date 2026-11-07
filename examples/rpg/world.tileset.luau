@@ -1,5 +1,5 @@
 return {
-    format = 2,
+    format = 3,
     tile_width = 16,
     tile_height = 16,
     sheets = {

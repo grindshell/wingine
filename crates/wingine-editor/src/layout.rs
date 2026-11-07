@@ -60,7 +60,12 @@ pub fn fits(node: &NodeDef, preset: &Preset) -> bool {
     let kind = &node.kind;
     let stretches = matches!(
         kind,
-        KindDef::Sprite(_) | KindDef::Rect(_) | KindDef::Area(_) | KindDef::View3d(_)
+        KindDef::Sprite(_)
+            | KindDef::Rect(_)
+            | KindDef::Area(_)
+            | KindDef::Stack(_)
+            | KindDef::Panel(_)
+            | KindDef::View3d(_)
     );
     let wide = preset.places.contains(&Wide);
     let placed = matches!(kind, KindDef::TileLayer(_)) || node.placement3.is_some();
@@ -104,6 +109,29 @@ pub fn apply(node: &mut NodeDef, preset: &Preset, size: [f32; 2], margin: f32) {
         }
         KindDef::Rect(rect) => (&mut rect.size, &mut rect.stretch, &mut rect.pivot),
         KindDef::Area(area) => (&mut area.size, &mut area.stretch, &mut area.pivot),
+        KindDef::Stack(_) | KindDef::Panel(_) => {
+            // A stack's anchor lines it up by itself, so its pivot is from there, and one that
+            // fits what it holds keeps fitting it, unless it stretches across its parent.
+            let Some(stack) = node.kind.stack_mut() else {
+                return;
+            };
+            for (i, place) in preset.places.iter().enumerate() {
+                stack.pivot[i] = 0.0;
+                match *place {
+                    At(_) => {
+                        if stack.size[i].is_some() {
+                            stack.size[i] = Some(size[i]);
+                        }
+                        stack.stretch[i] = 0.0;
+                    }
+                    Wide => {
+                        stack.size[i] = Some(-2.0 * margin);
+                        stack.stretch[i] = 1.0;
+                    }
+                }
+            }
+            return;
+        }
         KindDef::View3d(view) => (&mut view.size, &mut view.stretch, &mut view.pivot),
         KindDef::Text(text) => {
             // Text lines up with the edge or middle it's placed at.
@@ -166,7 +194,7 @@ fn lay_out(
 mod tests {
     use wingine::{
         graphics::Color,
-        scene::{RectDef, SpriteDef, TextDef},
+        scene::{RectDef, SpriteDef, Stack, TextDef},
     };
 
     use super::*;
@@ -255,6 +283,32 @@ mod tests {
             unreachable!()
         };
         assert_eq!((def.size, def.stretch), (Some([0.0, 0.0]), [1.0, 1.0]));
+    }
+
+    #[test]
+    fn stacks_line_up_by_their_anchors_and_keep_fitting() {
+        let mut node = NodeDef::new("menu", KindDef::Stack(Stack::FITTING));
+        apply(&mut node, named("Bottom Right"), [60.0, 40.0], 4.0);
+        assert_eq!(node.anchor, Some([1.0, 1.0]));
+        assert_eq!([node.x, node.y], [-4.0, -4.0]);
+        assert_eq!(
+            node.kind.stack(),
+            Some(&Stack::FITTING),
+            "no pivot, still fitting"
+        );
+
+        apply(&mut node, named("Top Wide"), [60.0, 40.0], 4.0);
+        let stack = node.kind.stack().unwrap();
+        assert_eq!(stack.size, [Some(-8.0), None]);
+        assert_eq!(stack.stretch, [1.0, 0.0]);
+
+        // Back to a corner, at the size it was drawn across, and still fitting down.
+        apply(&mut node, named("Center"), [300.0, 40.0], 0.0);
+        let stack = node.kind.stack().unwrap();
+        assert_eq!(
+            (stack.size, stack.stretch),
+            ([Some(300.0), None], [0.0, 0.0])
+        );
     }
 
     #[test]

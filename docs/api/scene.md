@@ -92,8 +92,9 @@ Returns the node's name, unique among its siblings. The root's is `""`.
 node:kind(): string
 ```
 
-Returns `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"tilemap"`, `"tile_layer"`,
-`"view3d"`, `"mesh"`, `"model"` or `"billboard"`. An instance is a `"node"` once loaded.
+Returns `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`, `"tilemap"`,
+`"tile_layer"`, `"view3d"`, `"mesh"`, `"model"` or `"billboard"`. An instance is a `"node"` once
+loaded.
 
 ### `node:path`
 
@@ -280,7 +281,9 @@ Returns the width and height it covers, before any scaling: a sprite's size, a r
 area's or a 3D view's, the size of a text's text, or the size of a tilemap's map. For a node that
 [stretches](../scenes.md#laying-out-screens) with its parent, it's the size it has before
 stretching, as [`set_size`](#nodeset_size) sets it; [`bounds`](#nodebounds) is where it is. A
-billboard's is its width and height in its view's world.
+billboard's is its width and height in its view's world. A [stack's or a
+panel's](../scenes.md#stacks-and-panels) is its own size along the axes it has one, and what it
+holds, with its padding, along those it fits it.
 
 ### `node:set_size`
 
@@ -288,8 +291,9 @@ billboard's is its width and height in its view's world.
 node:set_size(width: number, height: number)
 ```
 
-Changes the size of a sprite, a rect, an area, a 3D view or a billboard. A sprite stretches to
-it, and a billboard with a negative width is mirrored.
+Changes the size of a sprite, a rect, an area, a stack, a panel, a 3D view or a billboard. A
+sprite stretches to it, a billboard with a negative width is mirrored, and a stack or a panel
+then has a size of its own both ways, rather than fitting what it holds.
 
 ### `node:bounds`
 
@@ -372,7 +376,7 @@ Changes the color the colors of a sprite, mesh, model or billboard node are mult
 node:set_color(color: Color)
 ```
 
-Changes the color of a rect or text node.
+Changes the color of a rect or text node, or the fill of a panel that isn't showing a sprite.
 
 ### `node:text`
 

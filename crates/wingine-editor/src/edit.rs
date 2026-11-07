@@ -10,8 +10,9 @@ use std::{
 use wingine::{
     graphics::{Align, Camera3d, Color, Lighting},
     scene::{
-        AreaDef, BillboardDef, InstanceDef, KindDef, MeshDef, ModelDef, NodeDef, Placement3,
-        RectDef, SceneFile, Shape, SpriteDef, TextDef, TileLayerDef, TilemapDef, View3dDef,
+        AreaDef, BillboardDef, InstanceDef, KindDef, MeshDef, ModelDef, NodeDef, PanelDef,
+        PanelFill, PanelLookDef, Placement3, RectDef, SceneFile, Shape, SpriteDef, Stack, TextDef,
+        TileLayerDef, TilemapDef, View3dDef,
     },
 };
 
@@ -21,8 +22,8 @@ use wingine::{
 pub type NodePath = Vec<usize>;
 
 /// The kinds of node that can be added to the 2D scene, as scene files name them.
-pub const KINDS: [&str; 8] = [
-    "node", "sprite", "rect", "text", "area", "tilemap", "view3d", "instance",
+pub const KINDS: [&str; 10] = [
+    "node", "sprite", "rect", "text", "area", "stack", "panel", "tilemap", "view3d", "instance",
 ];
 
 /// The kinds of node that can be added to a 3D view, placed in 3D.
@@ -416,6 +417,19 @@ pub fn new_node(kind: &str, showing: Showing) -> NodeDef {
             size: [16.0, 16.0],
             stretch: [0.0, 0.0],
             pivot: [0.0, 0.0],
+        }),
+        "stack" => KindDef::Stack(Stack::FITTING),
+        // A dark panel with a light border, which shows even with nothing in it.
+        "panel" => KindDef::Panel(PanelDef {
+            stack: Stack {
+                padding: [4.0; 4],
+                ..Stack::FITTING
+            },
+            look: PanelLookDef::Fill(PanelFill {
+                color: Color::rgba8(0x14, 0x18, 0x2c, 0xff),
+                border: 1.0,
+                border_color: Color::WHITE,
+            }),
         }),
         "tilemap" => KindDef::Tilemap(TilemapDef {
             tileset: tileset.to_owned(),

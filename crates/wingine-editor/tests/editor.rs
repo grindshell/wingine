@@ -758,6 +758,59 @@ fn views_and_their_nodes_are_added_and_inspected() {
 }
 
 #[test]
+fn stacks_and_panels_are_added_and_inspected() {
+    let mut simulation = garden(copy_of("garden", "panels_added"));
+    simulation.click_gui("garden");
+    menu(&mut simulation, "➕", "▣ panel");
+    assert_eq!(selected_name(&simulation).as_deref(), Some("panel"));
+    let KindDef::Panel(panel) = &node(&simulation, "panel").kind else {
+        panic!("a panel");
+    };
+    assert_eq!(panel.stack.size, [None, None], "fitting what it holds");
+
+    // What's added inside it is laid out by it: new rects are 16 square, one under the other
+    // inside the panel's padding of 4.
+    menu(&mut simulation, "➕", "■ rect");
+    select(&mut simulation, "panel");
+    menu(&mut simulation, "➕", "■ rect");
+    let names: Vec<String> = node(&simulation, "panel")
+        .children
+        .iter()
+        .map(|child| child.name.clone())
+        .collect();
+    assert_eq!(names.len(), 2);
+    let bounds = |simulation: &Simulation<Editor>, path: &str| {
+        let scene = simulation
+            .game()
+            .document()
+            .unwrap()
+            .preview
+            .as_ref()
+            .unwrap();
+        let id = scene.find(scene.root(), path).unwrap();
+        scene.bounds(id).unwrap()
+    };
+    let panel = bounds(&simulation, "panel");
+    let first = bounds(&simulation, &format!("panel/{}", names[0]));
+    let second = bounds(&simulation, &format!("panel/{}", names[1]));
+    assert_eq!([first.x, first.y], [panel.x + 4.0, panel.y + 4.0]);
+    assert_eq!([second.x, second.y], [first.x, first.bottom()]);
+    assert_eq!([panel.w, panel.h], [24.0, 40.0]);
+
+    // A gap between them, and a width of its own.
+    select(&mut simulation, "panel");
+    set_field(&mut simulation, "gap", "3");
+    simulation.click_gui("fit width");
+    simulation.run_frames(2);
+    set_field(&mut simulation, "width", "40");
+    let stack = node(&simulation, "panel").kind.stack().unwrap();
+    assert_eq!((stack.gap, stack.size), (3.0, [Some(40.0), None]));
+    let panel = bounds(&simulation, "panel");
+    assert_eq!([panel.w, panel.h], [40.0, 43.0]);
+    assert!(simulation.game().document().unwrap().error.is_none());
+}
+
+#[test]
 fn clicking_in_a_view_picks_its_nodes_nearest_first() {
     let (mut simulation, _) = cellar("views_picked");
     let crate_ = world_to_window(

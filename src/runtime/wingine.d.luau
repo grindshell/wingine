@@ -391,8 +391,8 @@ end
 declare extern type SceneNode with
     --- Returns the node's name, unique among its siblings. The root's is `""`.
     function name(self): string
-    --- Returns `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"tilemap"`, `"tile_layer"`,
-    --- `"view3d"`, `"mesh"`, `"model"` or `"billboard"`.
+    --- Returns `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`,
+    --- `"tilemap"`, `"tile_layer"`, `"view3d"`, `"mesh"`, `"model"` or `"billboard"`.
     function kind(self): string
     --- Returns the names from the root to the node, separated by `/`.
     function path(self): string
@@ -640,6 +640,10 @@ declare graphics: {
     --- Draws `sprite` as `draw_sprite` does, turned by `angle` radians clockwise about the center
     --- of where it's drawn.
     draw_sprite_rotated: (sprite: Sprite, x: number, y: number, angle: number, tint: Color?, width: number?, height: number?) -> (),
+    --- Draws `sprite` sliced to fill `width` by `height`, as a frame is drawn at any size: the
+    --- `slice` texels along its edges (one number for all four, or `{ left, top, right, bottom }`)
+    --- keep their size, so its corners stay as they are and the rest stretches.
+    draw_sprite_sliced: (sprite: Sprite, x: number, y: number, width: number, height: number, slice: number | { number }, tint: Color?) -> (),
     --- Draws `text` with its top-left corner at `x`, `y`. `"\n"` starts a new line.
     draw_text: (font: Font, text: string, x: number, y: number, color: Color) -> (),
     --- Draws text laid out with `font:layout`, or only its first `glyphs` glyphs.

@@ -1464,7 +1464,7 @@ fn under(document: &Document, map: &ViewMap, pos: egui::Pos2) -> Vec<NodePath> {
     nodes.reverse();
     let pickable = |id: NodeId| match scene.node(id).kind() {
         Kind::Tilemap(_) | Kind::TileLayer(_) => Pickable::Tiles,
-        Kind::Area(_) => Pickable::Area,
+        Kind::Area(_) | Kind::Stack(_) => Pickable::Area,
         _ => Pickable::Seen,
     };
     let covering = |which: Pickable| {
@@ -1590,7 +1590,8 @@ fn preset_button(ui: &mut egui::Ui, preset: &Preset, enabled: bool) -> egui::Res
     if enabled {
         response
     } else {
-        response.on_disabled_hover_text("Only sprites, rects and areas stretch")
+        response
+            .on_disabled_hover_text("Only sprites, rects, areas, stacks, panels and views stretch")
     }
 }
 
@@ -1608,7 +1609,12 @@ fn node_handles(document: &Document) -> Option<(NodePath, Vec<Handle>)> {
     let node = edit::node(document.file(), &path)?;
     if !matches!(
         node.kind,
-        KindDef::Sprite(_) | KindDef::Rect(_) | KindDef::Area(_) | KindDef::View3d(_)
+        KindDef::Sprite(_)
+            | KindDef::Rect(_)
+            | KindDef::Area(_)
+            | KindDef::Stack(_)
+            | KindDef::Panel(_)
+            | KindDef::View3d(_)
     ) {
         return None;
     }
@@ -1645,7 +1651,7 @@ fn start_sizing(document: &Document, path: NodePath, edges: [i8; 2]) -> Option<S
         path,
         start,
         edges,
-        own: scene.node(id).size()?,
+        own: scene.size_of(id)?,
         rect: scene.rect(id)?,
         to_node: transform.inverse()?,
         to_parent: Affine {
@@ -1679,6 +1685,17 @@ fn size_to(document: &mut Document, sizing: &Sizing, point: [f32; 2]) {
         }
     }
     let mut node = sizing.start.clone();
+    if let Some(stack) = node.kind.stack_mut() {
+        // A stack's pivot is from the point its anchor names, which moves as it grows, so its
+        // origin makes up the difference. It has a size of its own along the axes it's resized.
+        let anchor = node.anchor.unwrap_or([0.0, 0.0]);
+        for i in 0..2 {
+            if sizing.edges[i] != 0 {
+                moved[i] += (anchor[i] * own[i]).floor() - (anchor[i] * sizing.own[i]).floor();
+                stack.size[i] = Some(own[i]);
+            }
+        }
+    }
     let [dx, dy] = sizing.to_parent.apply(moved);
     node.x += dx;
     node.y += dy;
@@ -1687,6 +1704,7 @@ fn size_to(document: &mut Document, sizing: &Sizing, point: [f32; 2]) {
         KindDef::Rect(rect) => rect.size = own,
         KindDef::Area(area) => area.size = own,
         KindDef::View3d(view) => view.size = own,
+        KindDef::Stack(_) | KindDef::Panel(_) => {}
         _ => return,
     }
     // Keyed, if a clip posing the preview moves it.

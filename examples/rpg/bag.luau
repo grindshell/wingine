@@ -1,6 +1,7 @@
 -- The player's bag, opened with the menu key: their stats, which gear they've equipped, and
 -- what they carry. From it they change their gear and use items. `bag.visit` runs it as part
--- of a task, through menus in the dialogue box, with the stats in a panel beside them.
+-- of a task, through menus in the dialogue box, with the stats in a panel beside them, laid out
+-- in `bag.scene.luau`: a panel that fits its lines, copies of its hidden `line`.
 
 local dialogue = require("./dialogue")
 local items = require("./items")
@@ -8,16 +9,33 @@ local ui = require("./ui")
 
 local bag = {}
 
-local PADDING = 6
--- The stats panel's corner, and the width of its column of names.
-local PANEL_X, PANEL_Y = 4, 4
-local NAMES_WIDTH = 52
 local NOTHING = "—"
 
 -- Stats raised by gear.
 local RAISED = "#8fd16a"
 
-local font = graphics.default_font()
+bag.scene = scene.load("bag.scene.luau")
+
+-- The panel's lines by what they show: the stats, then each slot's gear, then coins.
+local lines = {}
+do
+    local panel = bag.scene:find("stats")
+    local template = panel:find("line")
+    local function line(key: string, name: string)
+        local copy = panel:add(template, key)
+        copy:set_visible(true)
+        copy:find("name"):set_text(name)
+        lines[key] = copy:find("value")
+    end
+    line("hp", "HP")
+    line("attack", "Attack")
+    line("defense", "Defense")
+    line("speed", "Speed")
+    for _, slot in items.SLOTS do
+        line(slot, items.SLOT_NAMES[slot])
+    end
+    line("coins", "Coins")
+end
 
 -- Whether the bag is open.
 bag.open = false
@@ -115,34 +133,19 @@ function bag.draw()
         return
     end
     local stats = items.stats()
-    local line = function(name: string, value: string, raised: boolean?)
-        return { name = name, value = value, raised = raised }
+    local function show(key: string, value: string, raised: boolean?)
+        lines[key]:set_text(value)
+        lines[key]:set_color(if raised then RAISED else ui.TEXT)
     end
-    local lines = {
-        line("HP", `{rpg.hp}/{stats.max_hp}`, stats.max_hp > rpg.stats.max_hp),
-        line("Attack", tostring(stats.attack), stats.attack > rpg.stats.attack),
-        line("Defense", tostring(stats.defense), stats.defense > rpg.stats.defense),
-        line("Speed", tostring(stats.speed), stats.speed > rpg.stats.speed),
-    }
+    show("hp", `{rpg.hp}/{stats.max_hp}`, stats.max_hp > rpg.stats.max_hp)
+    show("attack", tostring(stats.attack), stats.attack > rpg.stats.attack)
+    show("defense", tostring(stats.defense), stats.defense > rpg.stats.defense)
+    show("speed", tostring(stats.speed), stats.speed > rpg.stats.speed)
     for _, slot in items.SLOTS do
-        table.insert(lines, line(items.SLOT_NAMES[slot], name_of(rpg.equipped[slot])))
+        show(slot, name_of(rpg.equipped[slot]))
     end
-    table.insert(lines, line("Coins", tostring(rpg.coins)))
-
-    local widest = 0
-    for _, entry in lines do
-        widest = math.max(widest, font:measure(entry.value))
-    end
-    local line_height = font:line_height()
-    local width = NAMES_WIDTH + widest + PADDING * 2
-    local height = #lines * line_height + PADDING * 2 - 2
-    ui.panel(PANEL_X, PANEL_Y, width, height)
-    for i, entry in lines do
-        local y = PANEL_Y + PADDING - 1 + (i - 1) * line_height
-        graphics.draw_text(font, entry.name, PANEL_X + PADDING, y, ui.DIM)
-        local color = if entry.raised then RAISED else ui.TEXT
-        graphics.draw_text(font, entry.value, PANEL_X + PADDING + NAMES_WIDTH, y, color)
-    end
+    show("coins", tostring(rpg.coins))
+    graphics.draw_scene(bag.scene)
 end
 
 return bag

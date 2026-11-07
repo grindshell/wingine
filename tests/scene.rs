@@ -272,6 +272,193 @@ fn nodes_anchor_and_stretch_to_their_parents() {
     assert_eq!(scene.bounds(bar), Some(Rect::new(9.0, 44.0, 92.0, 12.0)));
 }
 
+/// A menu stacking its items down, and a bar along the bottom-right corner stacking across.
+const STACKS: &str = r##"return {
+    format = 3,
+    children = {
+        {
+            name = "menu", kind = "stack", x = 10, y = 20, width = 100, gap = 2,
+            padding = { 4, 3, 4, 5 },
+            children = {
+                { name = "a", kind = "rect", width = 20, height = 10 },
+                { name = "b", kind = "rect", x = 1, anchor = { 1, 0 }, width = 30, height = 6 },
+                { name = "hidden", kind = "rect", width = 50, height = 50, visible = false },
+                {
+                    name = "c", kind = "rect", width = 0, height = 4, stretch = { 1, 0 },
+                    pivot = { 0, 4 },
+                },
+                { name = "d", kind = "area", anchor = { 0.5, 0 }, width = 10, height = 10 },
+            },
+        },
+        {
+            name = "bar", kind = "stack", x = -2, y = -2, anchor = { 1, 1 }, direction = "row",
+            gap = 3, padding = 1,
+            children = {
+                { name = "icon", kind = "rect", anchor = { 0, 0.5 }, width = 8, height = 8 },
+                {
+                    name = "label", kind = "node",
+                    children = {
+                        { name = "text", kind = "text", text = "Hi" },
+                        { name = "badge", kind = "rect", x = 2, y = 12, width = 4, height = 2 },
+                    },
+                },
+                { name = "tall", kind = "area", width = 5, height = 20 },
+            },
+        },
+    },
+}"##;
+
+#[test]
+fn stacks_lay_out_their_children_one_after_another() {
+    let mut headless = headless();
+    let mut scene = load(
+        &mut headless,
+        &[("stacks.scene.luau", STACKS)],
+        "stacks.scene.luau",
+    )
+    .unwrap();
+    scene.set_size([200.0, 100.0]);
+    let root = scene.root();
+    let [menu, a, b, hidden, c, d, bar, icon, text, tall] = [
+        "menu",
+        "menu/a",
+        "menu/b",
+        "menu/hidden",
+        "menu/c",
+        "menu/d",
+        "bar",
+        "bar/icon",
+        "bar/label/text",
+        "bar/tall",
+    ]
+    .map(|path| scene.find(root, path).unwrap());
+    // Down from inside the padding, the gap between each, each lined up across by its anchor:
+    // `b` at the right, and moved 1 by its `x`; `c` stretched across, its pivot not moving it;
+    // `d` in the middle. The hidden one takes no space.
+    assert_eq!(scene.bounds(a), Some(Rect::new(14.0, 23.0, 20.0, 10.0)));
+    assert_eq!(scene.bounds(b), Some(Rect::new(77.0, 35.0, 30.0, 6.0)));
+    assert_eq!(scene.bounds(c), Some(Rect::new(14.0, 43.0, 92.0, 4.0)));
+    assert_eq!(scene.bounds(d), Some(Rect::new(55.0, 49.0, 10.0, 10.0)));
+    // As wide as it says, and as tall as what it holds and its padding.
+    assert_eq!(scene.bounds(menu), Some(Rect::new(10.0, 20.0, 100.0, 44.0)));
+    assert_eq!(scene.size_of(menu), Some([100.0, 44.0]));
+    assert!(scene.node(menu).size().is_none(), "the scene measures it");
+
+    // Hiding one closes up the space it took.
+    scene.node_mut(b).set_visible(false);
+    assert_eq!(scene.bounds(c), Some(Rect::new(14.0, 35.0, 92.0, 4.0)));
+    assert_eq!(scene.bounds(d), Some(Rect::new(55.0, 41.0, 10.0, 10.0)));
+    assert_eq!(scene.bounds(menu), Some(Rect::new(10.0, 20.0, 100.0, 36.0)));
+    scene.node_mut(hidden).set_visible(true);
+    assert_eq!(
+        scene.bounds(hidden),
+        Some(Rect::new(14.0, 35.0, 50.0, 50.0))
+    );
+    assert_eq!(scene.bounds(menu).unwrap().h, 88.0);
+
+    // Across: the bar fits what it holds, and its anchor keeps its bottom-right corner 2 in from
+    // the canvas's, however wide that is. The plain node takes the space its children cover.
+    let [text_width, _] = scene.size_of(text).unwrap();
+    let label = text_width.max(6.0);
+    let width = 1.0 + 8.0 + 3.0 + label + 3.0 + 5.0 + 1.0;
+    assert_eq!(
+        scene.bounds(bar),
+        Some(Rect::new(198.0 - width, 76.0, width, 22.0))
+    );
+    // The icon in the middle of the bar's height, the label's text from the top.
+    assert_eq!(
+        scene.bounds(icon),
+        Some(Rect::new(199.0 - width, 83.0, 8.0, 8.0))
+    );
+    assert_near(
+        scene.transform(text).apply([0.0, 0.0]),
+        [210.0 - width, 77.0],
+    );
+    assert_eq!(scene.bounds(tall), Some(Rect::new(192.0, 77.0, 5.0, 20.0)));
+    assert!(scene.contains(tall, [193.0, 90.0]));
+}
+
+/// A panel fitting a column of rows, each a plain node with a name and a value at its right, and
+/// a panel showing a sprite, sliced.
+const PANELS: &str = r##"return {
+    format = 3,
+    sheets = { tiles = { path = "tiles.png", tile_width = 16, tile_height = 16 } },
+    children = {
+        {
+            name = "stats", kind = "panel", x = 4, y = 4, padding = { 6, 5, 6, 5 },
+            color = "#14182c", border = 1, border_color = "#f2d3ab",
+            children = {
+                {
+                    name = "rows", kind = "stack", width = 60,
+                    children = {
+                        {
+                            name = "hp", kind = "node",
+                            children = {
+                                { name = "name", kind = "text", text = "HP" },
+                                { name = "value", kind = "text", x = 52, text = "10" },
+                            },
+                        },
+                        {
+                            name = "coins", kind = "node",
+                            children = {
+                                { name = "name", kind = "text", text = "Coins" },
+                                {
+                                    name = "value", kind = "text", anchor = { 1, 0 },
+                                    text = "3", align = "right",
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        {
+            name = "frame", kind = "panel", sheet = "tiles", cell = { 0, 0 }, slice = 4,
+            width = 40, height = 30, anchor = { 0.5, 0.5 },
+        },
+    },
+}"##;
+
+#[test]
+fn panels_fit_what_they_hold() {
+    let mut headless = headless();
+    let mut scene = load(
+        &mut headless,
+        &[("panels.scene.luau", PANELS)],
+        "panels.scene.luau",
+    )
+    .unwrap();
+    scene.set_size([200.0, 100.0]);
+    let root = scene.root();
+    let [stats, hp, coins, coins_value, frame] = [
+        "stats",
+        "stats/rows/hp/name",
+        "stats/rows/coins/name",
+        "stats/rows/coins/value",
+        "frame",
+    ]
+    .map(|path| scene.find(root, path).unwrap());
+    // Two rows of text, each a line tall, inside the padding.
+    assert_eq!(scene.bounds(stats), Some(Rect::new(4.0, 4.0, 72.0, 30.0)));
+    assert_near(scene.transform(hp).apply([0.0, 0.0]), [10.0, 9.0]);
+    assert_near(scene.transform(coins).apply([0.0, 0.0]), [10.0, 19.0]);
+    // A row's children anchor across the space the stack gives it.
+    assert_eq!(scene.bounds(coins_value).unwrap().right(), 70.0);
+    let Kind::Panel(panel) = scene.node(stats).kind() else {
+        panic!("a panel");
+    };
+    assert_eq!(panel.stack.padding, [6.0, 5.0, 6.0, 5.0]);
+    // Its own size, lined up by its anchor in the middle of the canvas.
+    assert_eq!(scene.bounds(frame), Some(Rect::new(80.0, 35.0, 40.0, 30.0)));
+
+    let frame_image = headless
+        .render(200, 100, |canvas| scene.draw(canvas))
+        .unwrap();
+    let pixel = |x: u32, y: u32| frame_image.pixel(x, y);
+    assert_eq!(pixel(4, 4), [0xf2, 0xd3, 0xab, 0xff], "the border");
+    assert_eq!(pixel(5, 5), [0x14, 0x18, 0x2c, 0xff], "the fill");
+}
+
 #[test]
 fn props_and_kinds_come_from_the_file() {
     let mut scene = garden(&mut headless());

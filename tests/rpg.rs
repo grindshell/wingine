@@ -1129,6 +1129,73 @@ fn the_bag_changes_gear() {
     assert_eq!(simulation.eval::<i32>("rpg.busy"), 0);
 }
 
+/// The bounds of the node `node`, an expression, as `x, y, width, height`.
+fn bounds(simulation: &mut Simulation<LuauGame>, node: &str) -> (f64, f64, f64, f64) {
+    simulation.eval(&format!(
+        "{node}:bounds().x, {node}:bounds().y, {node}:bounds().width, {node}:bounds().height"
+    ))
+}
+
+#[test]
+fn the_bags_stats_panel_fits_its_lines() {
+    let mut simulation = simulation();
+    simulation.exec("rpg.items.oak_staff = 1");
+    simulation.tap(Key::Tab);
+    let value = |name: &str| format!("rpg.bag.scene:find('stats/{name}/value')");
+    assert_eq!(
+        simulation.eval::<String>(&format!("{}:text()", value("hp"))),
+        "36/36"
+    );
+    // Eight lines inside its padding, as wide as the names' column and the widest value.
+    let (widest, _): (f64, f64) = simulation.eval(&format!("{}:size()", value("hp")));
+    let panel = bounds(&mut simulation, "rpg.bag.scene:find('stats')");
+    assert_eq!(panel, (4.0, 4.0, 6.0 + 52.0 + widest + 6.0, 90.0));
+    assert_eq!(
+        bounds(&mut simulation, &value("coins")).1,
+        4.0 + 5.0 + 70.0,
+        "the last line"
+    );
+
+    // A staff's name is wider, and the panel grows to fit it.
+    choose_labeled(&mut simulation, "Gear");
+    choose_labeled(&mut simulation, "Weapon");
+    choose_labeled(&mut simulation, "Oak Staff");
+    let (staff, _): (f64, f64) = simulation.eval(&format!("{}:size()", value("weapon")));
+    assert!(staff > widest);
+    let (_, _, width, _) = bounds(&mut simulation, "rpg.bag.scene:find('stats')");
+    assert_eq!(width, 6.0 + 52.0 + staff + 6.0);
+}
+
+#[test]
+fn the_title_menu_fits_its_choices_and_scene_files_are_canonical() {
+    for path in [
+        "title.scene.luau",
+        "bag.scene.luau",
+        "maps/village.scene.luau",
+        "maps/shrine.scene.luau",
+    ] {
+        let path = Path::new(GAME).join(path);
+        // As checked out, which may have turned line endings into CRLF.
+        let text = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+        let scene = wingine::scene::SceneFile::parse(&text, &path).unwrap();
+        assert!(
+            scene.to_luau().unwrap() == text,
+            "{} isn't in the layout scenes are written in: write it again with \
+             `SceneFile::write`",
+            path.display()
+        );
+    }
+
+    let mut simulation = start(None);
+    let menu = "rpg.title.scene:find('menu')";
+    let (label, _): (f64, f64) = simulation.eval(&format!("{menu}:find('choice_1/label'):size()"));
+    let (x, y, width, height) = bounds(&mut simulation, menu);
+    // One choice inside its padding, after the pointer's column, in the middle of the screen.
+    assert_eq!((y, width, height), (80.0, 6.0 + 8.0 + label + 6.0, 20.0));
+    assert_eq!(x, 160.0 - (width / 2.0).floor());
+    assert!(simulation.eval::<bool>(&format!("{menu}:find('choice_1/pointer'):is_visible()")));
+}
+
 #[test]
 fn herbs_can_be_used_from_the_bag() {
     let mut simulation = simulation();

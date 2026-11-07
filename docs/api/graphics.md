@@ -10,6 +10,7 @@ functions work only in `draw`.
   [`outline_rect`](#graphicsoutline_rect), [`draw_line`](#graphicsdraw_line),
   [`fill_circle`](#graphicsfill_circle), [`outline_circle`](#graphicsoutline_circle),
   [`draw_sprite`](#graphicsdraw_sprite), [`draw_sprite_rotated`](#graphicsdraw_sprite_rotated),
+  [`draw_sprite_sliced`](#graphicsdraw_sprite_sliced),
   [`draw_text`](#graphicsdraw_text), [`draw_text_layout`](#graphicsdraw_text_layout),
   [`draw_tilemap`](#graphicsdraw_tilemap), [`draw_scene`](#graphicsdraw_scene)
 - [The camera](#the-camera): [`set_camera`](#graphicsset_camera)
@@ -152,6 +153,28 @@ own center at `cx`, `cy`:
 ```lua
 local width, height = arrow:size()
 graphics.draw_sprite_rotated(arrow, cx - width / 2, cy - height / 2, angle)
+```
+
+### `graphics.draw_sprite_sliced`
+
+```lua
+graphics.draw_sprite_sliced(sprite: Sprite, x: number, y: number, width: number, height: number, slice: number | { number }, tint: Color?)
+```
+
+Draws `sprite` sliced to fill `width` by `height` with its top-left corner at `x`, `y`, as a frame
+or a panel is drawn at any size. `slice` is how many texels along its edges keep their size, a
+number for them all or `{ left, top, right, bottom }`, a texel to a pixel: its corners are drawn as
+they are, its edges stretch along their length, and its middle stretches both ways. Where the space
+is too small for two edges, they shrink alike to meet. `tint` multiplies its colors, white by
+default. [Panels](../scenes.md#stacks-and-panels) in scenes draw their sprites this way.
+
+```lua
+-- A frame 5 texels square, its border and corners 2 texels in, around a box of any size.
+local frame = graphics.load_sprite_sheet("frame.png", 5, 5):sprite(0, 0)
+
+function draw()
+    graphics.draw_sprite_sliced(frame, 8, 8, 120, 40, 2)
+end
 ```
 
 ### `graphics.draw_text`

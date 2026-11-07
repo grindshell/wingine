@@ -1,7 +1,8 @@
 # Scenes
 
-A scene is a tree of sprites, rectangles, text and areas, and 3D views of meshes, models and
-billboards, laid out in a file of its own rather than in code: a level, a screen, a character. The game loads it with
+A scene is a tree of sprites, rectangles, text, areas, stacks and panels, and 3D views of meshes,
+models and billboards, laid out in a file of its own rather than in code: a level, a screen, a
+character. The game loads it with
 [`scene.load`](api/scene.md#sceneload), finds the nodes it cares about by name or tag, moves and
 changes them, and draws the whole tree with one call:
 
@@ -29,7 +30,7 @@ scene's clips, and [`examples/cellar`](../examples/cellar) one whose level is a 
 ```lua
 -- garden.scene.luau
 return {
-    format = 2,
+    format = 3,
     sheets = {
         tiles = {
             path = "tiles.png",
@@ -84,7 +85,7 @@ At the top of the file:
 
 | Field | What it is |
 |---|---|
-| `format` | Required: the version of the format, `2`, which added 3D views. The engine reads files of format 1 too, and refuses files newer than it reads. |
+| `format` | Required: the version of the format, `3`, which added stacks and panels, as `2` added 3D views. The engine reads files of formats 1 and 2 too, and refuses files newer than it reads. |
 | `sheets` | The sprite sheets the scene's sprites come from, by name: each an image's `path`, relative to the game's folder, divided into sprites `tile_width` by `tile_height` texels, as [`graphics.load_sprite_sheet`](api/graphics.md#graphicsload_sprite_sheet) divides one. |
 | `props` | Data for the game about the scene as a whole, such as its music. |
 | `children` | The nodes at the top of the scene's tree. |
@@ -97,7 +98,7 @@ Every node has a `name` and a `kind`, and may have any of the rest:
 | Field | What it is | Default |
 |---|---|---|
 | `name` | Required. Unique among the node's siblings, and without `/`. | |
-| `kind` | Required. `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"tilemap"`, `"tile_layer"`, `"instance"`, `"view3d"`, `"mesh"`, `"model"` or `"billboard"`. | |
+| `kind` | Required. `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`, `"tilemap"`, `"tile_layer"`, `"instance"`, `"view3d"`, `"mesh"`, `"model"` or `"billboard"`. | |
 | `x`, `y` | Where the node's origin is within its parent. | `0` |
 | `anchor` | The point of the parent's rectangle that `x` and `y` are measured from, `{ x, y }`, as fractions of its width and height. See [Laying out screens](#laying-out-screens). | the parent's origin |
 | `rotation` | Radians, clockwise, about its origin. | `0` |
@@ -128,6 +129,9 @@ Each kind has fields of its own:
 - **`area`**: a rectangle `width` by `height` that doesn't draw, for marking out part of a scene:
   where the player can't walk, where something happens, a door to another scene, a button to
   click. Like a rect, it may `stretch`.
+- **`stack`** and **`panel`**: a rectangle that lays out the nodes inside it one after another,
+  such as a menu's items, and fits them; a panel draws behind them, as a box or a frame. See
+  [Stacks and panels](#stacks-and-panels).
 - **`tilemap`** and **`tile_layer`**: a grid of tiles, and its layers. See [Tilemaps](#tilemaps).
 - **`instance`**: another scene file, placed here. See [Instances](#instances).
 - **`view3d`**, and **`mesh`**, **`model`** and **`billboard`** in it: a 3D world shown in a
@@ -160,7 +164,7 @@ Menus and HUDs sit against the canvas's edges, or in its middle, whatever its si
 says which point of the parent's rectangle a node is placed from: `{ 0, 0 }` is its top-left
 corner, `{ 0.5, 0.5 }` its middle and `{ 1, 1 }` its bottom-right. `x` and `y` are then measured
 from there, so a node `anchor = { 1, 0 }` with `x = -8` stays 8 in from its parent's right edge.
-`stretch` makes a sprite, rect or area grow with its parent: it adds those fractions of the
+`stretch` makes a sprite, rect, area, stack or panel grow with its parent: it adds those fractions of the
 parent's width and height to its own, so `width = 0` with `stretch = { 1, 0 }` is as wide as the
 parent, and `width = -16` 16 narrower.
 
@@ -200,6 +204,8 @@ Which rectangle a node anchors to:
 - A plain node covers nothing, so it passes its parent's rectangle on to its children, carried
   along with it as it moves. Grouping nodes in one changes nothing, and moving the group moves
   everything in it, anchored or not.
+- A stack or a panel places the nodes inside it itself, inside its padding: see
+  [Stacks and panels](#stacks-and-panels).
 
 A node without an `anchor` is placed from its parent's origin, which is where a pivot puts it, as
 the parts of a character are. In a rect with a pivot at its bottom, an unanchored child is placed
@@ -207,6 +213,73 @@ from its bottom.
 
 The shmup's [panel, title screen and messages](../examples/shmup/hud.scene.luau) are a scene
 like this, which [`hud.luau`](../examples/shmup/hud.luau) fills in each frame.
+
+## Stacks and panels
+
+Lists — a menu's items, a panel's lines, a row of icons — are laid out by a `stack`, which places
+the nodes inside it one after another, so the game changes what's in the list, or hides some of
+it, without placing anything. A `panel` is a stack that draws behind what it holds.
+
+```lua
+{
+    name = "menu",
+    kind = "panel",
+    y = 80,
+    anchor = { 0.5, 0 },
+    gap = 2,
+    padding = { 6, 5, 6, 5 },
+    color = "#14182c",
+    border = 1,
+    border_color = "#f2d3ab",
+    children = {
+        { name = "continue", kind = "text", text = "Continue" },
+        { name = "new_game", kind = "text", text = "New Game" },
+    },
+}
+```
+
+That's a menu 80 down the canvas, in the middle of it, as wide as its widest line and its padding,
+with each line 2 below the one before. Hide `continue` and `new_game` moves to the top, and the
+menu is a line shorter.
+
+| Field | What it is | Default |
+|---|---|---|
+| `direction` | `"column"`, down from the top, or `"row"`, across from the left. | `"column"` |
+| `gap` | The space between each node and the next. | `0` |
+| `padding` | The space between the stack's edges and what it holds: a number for every edge, or `{ left, top, right, bottom }`. | `0` |
+| `width`, `height` | Its size, with a `stretch`, as an area has. Without one, it fits what it holds that way, with its padding, and can't stretch that way. | fits |
+| `pivot` | The point of it at its origin, measured from the point its `anchor` names (its top-left corner without one). | `{ 0, 0 }` |
+
+How a stack places what's inside it:
+
+- Along it, each node takes the space it covers, turned and stretched as it's drawn, after the one
+  before and the gap. A hidden node takes no space, and nor does its gap.
+- Across it, each node is lined up by its `anchor`: `{ 0.5, 0 }` in a column centers it, and
+  `{ 1, 0 }` puts it at the right. Without an anchor, it's at the start. A node that stretches
+  across, `width = 0` with `stretch = { 1, 0 }` in a column, is as wide as the stack's inside.
+- A node's pivot doesn't move it (it still turns about it), and its `x` and `y` nudge it from where
+  the stack puts it, without moving the rest.
+- A plain node, and so an instance, has its origin at the start of its space, and takes as much as
+  what's inside it reaches past its origin. What's inside anchors and stretches across the stack,
+  so a line of a name at its left and a value anchored at its right spans the stack.
+
+A stack's `pivot` is measured from the point its anchor names, so one anchored at the bottom-right
+corner of its parent, `anchor = { 1, 1 }`, keeps its own bottom-right corner there however much it
+holds, growing up and to the left.
+
+A panel draws one of two looks:
+
+- Filled with `color`, inside a `border` that many pixels wide of `border_color`, as above. Both
+  colors are white if left out, and there's no border unless it's given.
+- A sprite from one of the scene's sheets, `sheet` and `cell`, sliced as a frame is: `slice`, a
+  number or `{ left, top, right, bottom }`, is how many texels along its edges keep their size, so
+  its corners stay as they're drawn and the rest stretches to fit, times `tint`. That's
+  [`graphics.draw_sprite_sliced`](api/graphics.md#graphicsdraw_sprite_sliced).
+
+The RPG's [title menu](../examples/rpg/title.scene.luau) is a panel showing its frame sprite,
+whose choices are copies of a hidden row that [`title.luau`](../examples/rpg/title.luau) adds with
+[`node:add`](api/scene.md#nodeadd), and its [bag's stats](../examples/rpg/bag.scene.luau) are
+another. The shmup's panel stacks its rows, and hides the play's to show the stress test's.
 
 ## Tilemaps
 
@@ -273,7 +346,7 @@ data:
 ```lua
 -- world.tileset.luau
 return {
-    format = 2,
+    format = 3,
     tile_width = 16,
     tile_height = 16,
     sheets = {
