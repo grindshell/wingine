@@ -158,6 +158,49 @@ type ColliderOptions = {
     edges: boolean?,
 }
 
+--- A 3D physics world, for `physics.world_3d`.
+type World3dOptions = {
+    --- How fast dynamic bodies falling speed up each second. By default, 9.81 down, as Earth's
+    --- gravity does in metres.
+    gravity: vector?,
+}
+
+--- How `world:add` gives a node in a 3D view a body.
+type BodyOptions = {
+    --- How it moves: not at all (`"fixed"`, the default), as it's pushed and falls
+    --- (`"dynamic"`), or where its node is put (`"kinematic"`, a character's).
+    body: ("fixed" | "dynamic" | "kinematic")?,
+    --- What it's shaped as, from what its node shows: its triangles (`"triangles"`, by default
+    --- for fixed bodies, and only for them), the convex shape around them (`"hull"`, by default
+    --- for the rest), the box around them (`"box"`), or the ball inside that box as wide as its
+    --- widest side (`"ball"`).
+    shape: ("triangles" | "hull" | "box" | "ball")?,
+    --- How heavy each unit of its volume is. By default, 1.
+    density: number?,
+    --- How much it grips what slides along it, from 0 for ice. By default, 0.5.
+    friction: number?,
+    --- How much it bounces, from 0 for not at all to 1 for as fast as it hit. By default, 0.
+    bounce: number?,
+    --- Makes it a character, which `world:walk` walks: an upright cylinder, kinematic.
+    character: CharacterOptions?,
+}
+
+--- A character's size and how it walks, for `BodyOptions.character`.
+type CharacterOptions = {
+    --- How far it reaches out from its middle. By default, half the widest its node's box is
+    --- across the ground.
+    radius: number?,
+    --- How tall it is. By default, as tall as its node's box.
+    height: number?,
+    --- The highest it steps up, as onto a stair. By default, a third of its height.
+    step: number?,
+    --- The steepest slope it walks up and stands on, in radians. By default, 45 degrees
+    --- (`math.pi / 4`).
+    slope: number?,
+    --- How heavy it is, for how hard it pushes dynamic bodies. By default, 1.
+    mass: number?,
+}
+
 --- A window of an interface, for `ui:window`. Positions and sizes are in points: the window's
 --- logical pixels, not the canvas's.
 type WindowOptions = {
@@ -488,6 +531,34 @@ declare extern type PhysicsWorld with
     function move(self, node: SceneNode, dx: number, dy: number, box: Rect): (number, number)
 end
 
+--- Bodies of nodes of one 3D view, shaped like what they show, from `physics.world_3d()`: fixed
+--- and kinematic bodies follow their nodes, dynamic bodies move their nodes as the world steps,
+--- and characters walk their nodes among them. Bodies go when their nodes do.
+declare extern type PhysicsWorld3d with
+    --- Gives `node` a body, or a new one if it has one. Nodes around a body that moves may move
+    --- it, but not turn or stretch it.
+    function add(self, node: SceneNode, options: BodyOptions?): ()
+    --- Takes away `node`'s body, if it has one.
+    function remove(self, node: SceneNode): ()
+    --- Moves the world on by `dt` seconds: dynamic bodies fall, tumble and come to rest, moving
+    --- their nodes, and kinematic bodies move to their nodes.
+    function step(self, dt: number): ()
+    --- Walks the character `node` by up to `motion`: across the ground, up stairs and slopes it
+    --- can walk up, along walls, pushing dynamic bodies; or off the ground, or rising, as `motion`
+    --- says. Returns how far it moved, and whether it's on the ground.
+    function walk(self, node: SceneNode, motion: vector): (vector, boolean)
+    --- Returns how fast `node`'s body is moving, in units a second.
+    function velocity(self, node: SceneNode): vector
+    --- Sets how fast `node`'s dynamic body is moving.
+    function set_velocity(self, node: SceneNode, velocity: vector): ()
+    --- Pushes `node`'s dynamic body through its middle, changing its velocity by `impulse` over
+    --- its mass.
+    function push(self, node: SceneNode, impulse: vector): ()
+    --- Returns whether `node`'s body is at rest: always for a fixed body, and for a dynamic one
+    --- once it has stopped.
+    function is_resting(self, node: SceneNode): boolean
+end
+
 --- Where an interface is laid out, with egui, in the game's `gui(ui)`: the whole window, or the
 --- inside of a container. Widgets that change a value take it and return the new one. It works
 --- only until the function it was passed to returns, and inside a container, use the `Ui` the
@@ -735,11 +806,14 @@ declare grid: {
     opposite: (direction: Direction) -> Direction,
 }
 
---- Scenes loaded from scene files, and their nodes.
+--- Collision among a scene's nodes, and bodies and characters in its 3D views.
 declare physics: {
     --- Returns an empty physics world, which the first node given to it makes a world of that
     --- node's scene.
     world: () -> PhysicsWorld,
+    --- Returns an empty 3D physics world, which the first node given to it makes a world of the
+    --- 3D view that node is in.
+    world_3d: (options: World3dOptions?) -> PhysicsWorld3d,
 }
 
 declare scene: {

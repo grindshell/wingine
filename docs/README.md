@@ -59,6 +59,7 @@ The repository's examples are complete games, and the best place to see how the 
 | [`examples/shmup`](../examples/shmup) | A bullet hell at a fixed update rate, with an optional native library for its bullets, and a HUD laid out in a scene, whose menu takes the mouse |
 | [`examples/garden`](../examples/garden) | A garden laid out in a scene file: nodes found by path and tag, turned together, solid in a physics world the player walks in, and areas for notes, which F1 outlines |
 | [`examples/orchard`](../examples/orchard) | A character rigged from sprites and animated by clips, layered and crossfaded each frame, catching apples |
+| [`examples/course`](../examples/course) | A course in a 3D view of models: fixed bodies shaped by their triangles, crates that fall and tumble, and a character that walks up stairs and slopes, jumps and pushes crates |
 | [`examples/native-particles`](../examples/native-particles/src/lib.rs) | A small native library: functions, a class and hooks |
 | [`examples/native-danmaku`](../examples/native-danmaku/src/lib.rs) | The shmup's bullets in Rust, drawn with one call per kind of bullet |
 

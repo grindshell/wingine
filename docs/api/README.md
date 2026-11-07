@@ -11,7 +11,7 @@ hand out, and the `Ui` a game's `gui` lays its interface out with:
 | [`audio`](audio.md) | Sound effects, music and volume |
 | [`tilemap`](tilemap.md) | Tilesets and maps of tiles in layers |
 | [`grid`](grid.md) | Characters that walk from tile to tile |
-| [`physics`](physics.md) | Scene nodes made solid, and characters that walk among them, sliding along what they bump into |
+| [`physics`](physics.md) | Scene nodes made solid, and characters that walk among them, sliding along what they bump into; in 3D views, bodies that fall and tumble, and characters that walk up stairs and slopes |
 | [`scene`](scene.md) | Scenes loaded from scene files, and their nodes |
 | [`save`](save.md) | Data kept between runs of the game, such as progress |
 | [`exact`](exact.md) | Math that gives the same bits on every platform, for games that replay |

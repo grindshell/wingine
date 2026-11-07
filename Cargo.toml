@@ -30,8 +30,10 @@ default = ["egui", "models", "physics"]
 egui = ["dep:egui", "dep:egui-wgpu", "dep:egui-winit"]
 # Model files, glTF 2.0, for drawing in 3D views.
 models = ["dep:gltf"]
-# Collision in 2D by Rapier: colliders, and characters that slide along them.
-physics = ["dep:rapier2d"]
+# Physics by Rapier: collision in 2D, with characters that slide along colliders, and in 3D
+# views, bodies that fall and tumble, and characters that walk among them. Meshes keep their
+# triangles on the CPU for it.
+physics = ["dep:rapier2d", "dep:rapier3d"]
 
 [dependencies]
 bytemuck = { version = "1.25.2", features = ["derive"] }
@@ -56,6 +58,7 @@ pollster = "1.0.1"
 # With `enhanced-determinism`, it moves things the same to the bit on every platform, as `exact`
 # does: without, its results differ between Windows and Linux.
 rapier2d = { version = "0.36.1", optional = true, features = ["enhanced-determinism"] }
+rapier3d = { version = "0.36.1", optional = true, features = ["enhanced-determinism"] }
 thiserror = "2.0.21"
 wgpu = "30.0.1"
 wingine-abi = { path = "crates/wingine-abi" }

@@ -1,15 +1,25 @@
-//! Collision in 2D, by [Rapier](https://rapier.rs): fixed colliders, and boxes moved among them,
-//! which stop at what's solid and slide along it, as characters walk.
+//! Physics, by [Rapier](https://rapier.rs): collision in 2D, and bodies and characters in 3D.
 //!
-//! A [`World`] holds colliders, each a rectangle placed by an [`Affine`], as a scene node's is
-//! ([`Scene::placement`](crate::scene::Scene::placement)), so a collider can cover a node as it's
-//! drawn: turned, stretched and mirrored. All of a collider is solid ([`Solid::Whole`]), or only
-//! its edges ([`Solid::Edges`]), which keep what's inside in, as a fence around a field does.
-//! [`World::slide`] moves a box among them. Coordinates are whatever the colliders are placed in,
-//! such as a scene's, with `y` down.
+//! In 2D, a [`World`] holds fixed colliders, and boxes moved among them stop at what's solid and
+//! slide along it, as characters walk. Each collider is a rectangle placed by an [`Affine`], as a
+//! scene node's is ([`Scene::placement`](crate::scene::Scene::placement)), so a collider can cover
+//! a node as it's drawn: turned, stretched and mirrored. All of a collider is solid
+//! ([`Solid::Whole`]), or only its edges ([`Solid::Edges`]), which keep what's inside in, as a
+//! fence around a field does. [`World::slide`] moves a box among them. Coordinates are whatever
+//! the colliders are placed in, such as a scene's, with `y` down.
 //!
-//! Rapier is built with its `enhanced-determinism`, so the same colliders and moves give the same
-//! results to the bit on every platform. Its types stay inside the engine.
+//! In 3D, a [`World3d`] holds bodies, fixed, dynamic or kinematic, which [`World3d::step`] moves
+//! through time, and [`World3d::walk`] walks characters among them, up stairs and slopes, pushing
+//! what's in their way. Its coordinates are a 3D view's world's, with `y` up.
+//!
+//! Rapier is built with its `enhanced-determinism`, so the same colliders, bodies and moves give
+//! the same results to the bit on every platform. Its types stay inside the engine.
+
+mod world3d;
+
+pub use world3d::{
+    Body3d, BodyId, BodyKind, Character, Material, Pose3d, Shape3d, Walked, World3d,
+};
 
 use rapier2d::{
     parry::{

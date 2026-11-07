@@ -2651,6 +2651,240 @@ mod physics {
         let (dx, _): (f32, f32) = simulation.eval("world:move(walker, 20, 0, BOX)");
         assert!(near(dx, 7.0), "{dx}");
     }
+
+    /// A 3D view of a pen: a floor whose top is at `y` 0, a wall across `x` from 2 to 2.5, a crate
+    /// half a unit across held up at 2, a turned group with a box in it, and a walker.
+    const PEN: &str = r##"return {
+    format = 2,
+    children = {
+        {
+            name = "view", kind = "view3d", width = 0, height = 0, stretch = { 1, 1 },
+            camera = { position = { 0, 4, 8 }, target = { 0, 0, 0 } },
+            children = {
+                { name = "floor", kind = "mesh", shape = "cuboid", y = -0.5, size = { 20, 1, 20 } },
+                { name = "wall", kind = "mesh", shape = "cuboid", x = 2.25, y = 1, size = { 0.5, 2, 20 } },
+                { name = "crate", kind = "mesh", shape = "cuboid", x = -2, y = 2, size = { 0.5, 0.5, 0.5 } },
+                {
+                    name = "turned", kind = "node", z = -3, yaw = 0.5,
+                    children = {
+                        { name = "box", kind = "mesh", shape = "cuboid", y = 0.25, size = { 0.5, 0.5, 0.5 } },
+                    },
+                },
+                { name = "walker", kind = "node", y = 0.002 },
+            },
+        },
+        { name = "flat", kind = "rect", width = 1, height = 1 },
+    },
+}"##;
+
+    /// The pen, loaded as `pen`, its view `view`, with the floor and the wall fixed and the crate
+    /// dynamic in `world`, and the walker a character 0.4 across and 1 tall.
+    fn pen(test: &str) -> Simulation<LuauGame> {
+        let main = "pen = scene.load('pen.scene.luau')
+            view = pen:find('view')
+            walker = view:find('walker')
+            crate = view:find('crate')
+            world = physics.world_3d()
+            world:add(view:find('floor'))
+            world:add(view:find('wall'))
+            world:add(crate, { body = 'dynamic', shape = 'box' })
+            world:add(walker, { character = { radius = 0.2, height = 1 } })";
+        let folder = game(test, &[("pen.scene.luau", PEN), ("main.luau", main)]);
+        let mut simulation = simulation(&folder);
+        simulation.step();
+        simulation
+    }
+
+    /// Walks the walker by `motion` once a frame for `frames`, stepping the world, and returns
+    /// where it ends up and whether it's on the ground.
+    fn walk(simulation: &mut Simulation<LuauGame>, motion: &str, frames: u32) -> ([f32; 3], bool) {
+        simulation.exec(&format!(
+            "on_ground = false
+            for _ = 1, {frames} do
+                local _, grounded = world:walk(walker, {motion})
+                on_ground = grounded
+                world:step(1 / 60)
+            end"
+        ));
+        let (x, y, z): (f32, f32, f32) = simulation
+            .eval("walker:position_3d().x, walker:position_3d().y, walker:position_3d().z");
+        ([x, y, z], simulation.eval("on_ground"))
+    }
+
+    #[test]
+    fn dynamic_bodies_fall_and_move_their_nodes() {
+        let mut simulation = pen("physics_3d_fall");
+        assert!(!simulation.eval::<bool>("world:is_resting(crate)"));
+        simulation.exec("for _ = 1, 240 do world:step(1 / 60) end");
+        // Its middle half its height up, resting on the floor where it fell.
+        let (x, y, z): (f32, f32, f32) =
+            simulation.eval("crate:position_3d().x, crate:position_3d().y, crate:position_3d().z");
+        assert!(
+            near(x, -2.0) && near(y, 0.25) && near(z, 0.0),
+            "{x}, {y}, {z}"
+        );
+        assert!(simulation.eval::<bool>("world:is_resting(crate)"));
+        assert!(simulation.eval::<bool>("world:is_resting(view:find('floor'))"));
+
+        // Pushed, it slides along the floor, slowing.
+        simulation.exec("world:push(crate, vector.create(0.25, 0, 0))");
+        let vx: f32 = simulation.eval("world:velocity(crate).x");
+        assert!(vx > 1.0, "{vx}");
+        simulation.exec("for _ = 1, 30 do world:step(1 / 60) end");
+        let (x, slower): (f32, f32) =
+            simulation.eval("crate:position_3d().x, world:velocity(crate).x");
+        assert!(x > -1.9 && slower < vx, "{x}, {slower}");
+        simulation.exec("world:set_velocity(crate, vector.create(0, 5, 0))");
+        assert_eq!(simulation.eval::<f32>("world:velocity(crate).y"), 5.0);
+    }
+
+    #[test]
+    fn moving_a_dynamic_body_s_node_moves_the_body() {
+        let mut simulation = pen("physics_3d_teleport");
+        simulation.exec(
+            "crate:set_position_3d(vector.create(0, 5, 1))
+            world:step(1 / 60)",
+        );
+        let (x, y, z): (f32, f32, f32) =
+            simulation.eval("crate:position_3d().x, crate:position_3d().y, crate:position_3d().z");
+        assert!(x == 0.0 && y < 5.0 && y > 4.9 && z == 1.0, "{x}, {y}, {z}");
+    }
+
+    #[test]
+    fn characters_walk_and_stop_at_what_is_solid() {
+        let mut simulation = pen("physics_3d_walk");
+        let (feet, grounded) = walk(&mut simulation, "vector.create(0.05, -0.01, 0)", 60);
+        // Its side, at 0.2 from its middle, a hair from the wall's at 2.
+        assert!(grounded);
+        assert!(near(feet[0], 1.8) && feet[0] < 1.8, "{feet:?}");
+        assert!(near(feet[1], 0.0) && feet[2] == 0.0, "{feet:?}");
+        let (moved, grounded): (f32, bool) =
+            simulation.eval("(function() local moved, grounded = world:walk(walker, vector.create(1, 0, 0)) return moved.x, grounded end)()");
+        assert!(moved.abs() < 1.0e-3 && grounded, "{moved}");
+
+        // Off the ground, it falls as it's told to.
+        simulation.exec("walker:set_position_3d(vector.create(0, 1, 0))");
+        let (feet, grounded) = walk(&mut simulation, "vector.create(0, -0.1, 0)", 5);
+        assert!(!grounded && near(feet[1], 0.5), "{feet:?}");
+    }
+
+    #[test]
+    fn fixed_bodies_follow_their_nodes_and_go_with_them() {
+        let mut simulation = pen("physics_3d_follow");
+        simulation.exec("view:find('wall'):set_position_3d(vector.create(1.25, 1, 0))");
+        let (feet, _) = walk(&mut simulation, "vector.create(0.05, -0.01, 0)", 60);
+        assert!(
+            near(feet[0], 0.8),
+            "stopped at the wall where it went: {feet:?}"
+        );
+
+        // Once it's gone, nothing's in the way.
+        simulation.exec("view:find('wall'):remove()");
+        let (feet, _) = walk(&mut simulation, "vector.create(0.05, -0.01, 0)", 20);
+        assert!(near(feet[0], 1.8), "{feet:?}");
+        // Nor once the world has no body of it.
+        simulation.exec("world:remove(view:find('floor'))");
+        let (feet, grounded) = walk(&mut simulation, "vector.create(0, -0.1, 0)", 5);
+        assert!(!grounded && near(feet[1], -0.5), "{feet:?}");
+    }
+
+    #[test]
+    fn fixed_bodies_are_placed_however_their_parents_turn_them() {
+        let mut simulation = pen("physics_3d_turned");
+        // Two units out from the box's left side, turned as it is, walking straight at it.
+        simulation.exec(
+            "world:add(view:find('turned/box'), { shape = 'box' })
+            walker:set_position_3d(vector.create(-2 * math.cos(0.5), 0.002, -3 + 2 * math.sin(0.5)))",
+        );
+        let (feet, _) = walk(
+            &mut simulation,
+            "vector.create(0.05 * math.cos(0.5), -0.01, -0.05 * math.sin(0.5))",
+            60,
+        );
+        // Stopped its radius from the side, a quarter from the box's middle, and no farther along.
+        let (sin, cos) = 0.5_f32.sin_cos();
+        let (out, along) = (
+            feet[0] * cos - (feet[2] + 3.0) * sin,
+            feet[0] * sin + (feet[2] + 3.0) * cos,
+        );
+        assert!(
+            near(out, -0.45) && along.abs() < 1.0e-3,
+            "{feet:?}: {out}, {along}"
+        );
+    }
+
+    #[test]
+    fn worlds_are_of_one_view_and_say_what_is_wrong() {
+        let mut simulation = pen("physics_3d_errors");
+        let error = |simulation: &mut Simulation<LuauGame>, code: &str| {
+            simulation.try_exec(code).unwrap_err().to_string()
+        };
+        let err = error(&mut simulation, "world:add(pen:find('flat'))");
+        assert!(err.contains("isn't in a 3D view"), "{err}");
+        let err = error(&mut simulation, "physics.world():add(walker)");
+        assert!(err.contains("physics.world_3d()"), "{err}");
+        let err = error(
+            &mut simulation,
+            "world:add(scene.load('pen.scene.luau'):find('view/wall'))",
+        );
+        assert!(err.contains("another 3D view"), "{err}");
+        let err = error(
+            &mut simulation,
+            "world:add(view:find('wall'), { body = 'dynamic', shape = 'triangles' })",
+        );
+        assert!(err.contains("only fixed bodies"), "{err}");
+        let err = error(
+            &mut simulation,
+            "world:add(view:find('turned/box'), { body = 'dynamic' })",
+        );
+        assert!(err.contains("turns or stretches"), "{err}");
+        let err = error(&mut simulation, "world:add(view:find('turned'))");
+        assert!(err.contains("shows nothing"), "{err}");
+        let err = error(
+            &mut simulation,
+            "world:add(view:find('turned'), { character = {} })",
+        );
+        assert!(err.contains("give it a radius"), "{err}");
+        let err = error(&mut simulation, "world:add(crate, { body = 'floating' })");
+        assert!(err.contains("not \"floating\""), "{err}");
+        let err = error(&mut simulation, "world:add(crate, { shape = 'cone' })");
+        assert!(err.contains("not \"cone\""), "{err}");
+        let err = error(&mut simulation, "world:walk(crate, vector.create(1, 0, 0))");
+        assert!(err.contains("isn't a character"), "{err}");
+        let err = error(&mut simulation, "world:velocity(view:find('turned'))");
+        assert!(err.contains("has no body"), "{err}");
+        // Removing a node with no body does nothing.
+        simulation.exec("world:remove(view:find('turned'))");
+    }
+
+    #[test]
+    #[cfg(feature = "models")]
+    fn models_are_solid_where_their_triangles_are() {
+        let main = "pen = scene.load('pen.scene.luau')
+            view = pen:find('view')
+            walker = view:find('walker')
+            world = physics.world_3d()
+            world:add(view:find('floor'))
+            world:add(walker, { character = { radius = 0.2, height = 1 } })";
+        let pen = PEN.replace(
+            r#"{ name = "walker", kind = "node", y = 0.002 },"#,
+            r#"{ name = "walker", kind = "node", y = 0.002 },
+                { name = "crate_model", kind = "model", x = 1.5, model = "models/crate.glb" },"#,
+        );
+        let folder = game(
+            "physics_3d_models",
+            &[("pen.scene.luau", &pen), ("main.luau", main)],
+        );
+        copy_props(&folder);
+        let mut simulation = simulation(&folder);
+        simulation.exec("world:add(view:find('crate_model'))");
+        let (feet, _) = walk(&mut simulation, "vector.create(0.05, -0.01, 0)", 60);
+        let near_side: f32 = simulation.eval("({view:find('crate_model'):bounds_3d()})[1].x");
+        assert!(
+            feet[0] < near_side - 0.2 && feet[0] > near_side - 0.21,
+            "{feet:?}, {near_side}"
+        );
+    }
 }
 
 /// Interfaces Luau games lay out in `gui(ui)`, driven by clicking their widgets by label.

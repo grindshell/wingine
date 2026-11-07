@@ -227,6 +227,19 @@ struct MeshInner {
     indices: wgpu::Buffer,
     index_count: u32,
     bounds: Option<Bounds3>,
+    #[cfg(feature = "physics")]
+    geometry: Geometry,
+}
+
+/// Where a mesh's corners are and which make its triangles, kept on the CPU when physics needs
+/// them, as colliders shaped like what nodes show.
+#[cfg(feature = "physics")]
+#[derive(Debug, Default)]
+pub(crate) struct Geometry {
+    pub points: Vec<[f32; 3]>,
+    /// Three indices into `points` for each triangle, counter-clockwise seen from the side it
+    /// faces.
+    pub triangles: Vec<[u32; 3]>,
 }
 
 impl Mesh {
@@ -265,8 +278,23 @@ impl Mesh {
                 ),
                 index_count: data.indices.len() as u32,
                 bounds: data.bounds(),
+                #[cfg(feature = "physics")]
+                geometry: Geometry {
+                    points: data.vertices.iter().map(|vertex| vertex.position).collect(),
+                    triangles: data
+                        .indices
+                        .chunks_exact(3)
+                        .map(|triangle| [triangle[0], triangle[1], triangle[2]])
+                        .collect(),
+                },
             }),
         })
+    }
+
+    /// Its corners and triangles, as it was made.
+    #[cfg(feature = "physics")]
+    pub(crate) fn geometry(&self) -> &Geometry {
+        &self.inner.geometry
     }
 
     /// How many triangles there are.

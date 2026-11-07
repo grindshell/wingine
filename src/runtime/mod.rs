@@ -171,13 +171,19 @@
 //!   `direction`.
 //! - `grid.opposite(direction)`
 //!
-//! `physics`, for collision among a scene's nodes, anywhere:
+//! `physics`, for collision among a scene's nodes, and bodies and characters in 3D views,
+//! anywhere:
 //!
 //! - `physics.world()` returns an empty `PhysicsWorld`, which the first node given to it makes a
 //!   world of that node's scene: its colliders cover nodes as they're drawn, following them as
-//!   they move and going when they do, and `world:move` moves nodes among them. See
-//!   [`physics`](crate::physics) for how. An engine built without its `physics` feature fails to
-//!   make one.
+//!   they move and going when they do, and `world:move` moves nodes among them.
+//! - `physics.world_3d(options)` returns an empty `PhysicsWorld3d`, whose dynamic bodies fall with
+//!   `options.gravity`, a vector (9.81 down by default), and which the first node given to it
+//!   makes a world of that node's 3D view: bodies shaped like what nodes show, which `world:step`
+//!   moves on through time, and characters `world:walk` walks among them.
+//!
+//! See [`physics`](crate::physics) for how. An engine built without its `physics` feature fails to
+//! make either.
 //!
 //! `scene`, for loading [scenes](crate::scene):
 //!

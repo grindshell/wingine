@@ -247,7 +247,7 @@ fn double_clicking_a_scene_opens_it_in_a_tab() {
 
 #[test]
 fn every_example_scene_opens_without_errors() {
-    for game in ["garden", "orchard", "rpg", "shmup", "cellar"] {
+    for game in ["garden", "orchard", "rpg", "shmup", "cellar", "course"] {
         let mut simulation = editor(Some(examples().join(game)));
         let scenes = simulation
             .game()
@@ -1735,7 +1735,9 @@ fn the_examples_scripts_check_against_the_engines_definitions() {
         return;
     }
     let (definitions, luaurc) = lsp::support_files().unwrap();
-    for game in ["pong", "rpg", "shmup", "garden", "orchard", "cellar"] {
+    for game in [
+        "pong", "rpg", "shmup", "garden", "orchard", "cellar", "course",
+    ] {
         let folder = examples().join(game);
         let scripts: Vec<String> = project_scripts(&folder, "");
         let output = Command::new(lsp::program())

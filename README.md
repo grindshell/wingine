@@ -34,9 +34,11 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **Rigged characters**: sprites for parts that turn about their joints, animated by clips of
   keyframes in scene files, which games layer and crossfade.
 - **Grid movement** from tile to tile, with tile collision.
-- **Collision** with [Rapier](https://rapier.rs): scene nodes made solid where they're drawn,
-  turned and stretched, or along their edges, and characters that walk among them, stopping at
-  what's solid and sliding along it, the same to the bit on every platform.
+- **Physics** with [Rapier](https://rapier.rs), the same to the bit on every platform: in 2D,
+  scene nodes made solid where they're drawn, turned and stretched, or along their edges, and
+  characters that walk among them, stopping at what's solid and sliding along it; in 3D views,
+  bodies shaped like the meshes and models nodes show, which fall, tumble and come to rest, and
+  characters that walk up stairs and slopes among them, pushing what's in their way.
 - **Sprite animation**, such as walk cycles.
 - **Text** in a built-in pixel font, wrapped to a width and revealed a little at a time for
   dialogue.
@@ -89,6 +91,7 @@ need ALSA's library (`libasound2`) and glibc 2.35 or newer.
 | [Garden](#garden) | Luau, around a scene file | `cargo run -- examples/garden` |
 | [Orchard](#orchard) | Luau, around a rigged character | `cargo run -- examples/orchard` |
 | [Cellar](#cellar) | Luau, in 2.5D | `cargo run -- examples/cellar` |
+| [Course](#course) | Luau, in 3D with physics | `cargo run -- examples/course` |
 | [Sprites](#sprites) | Rust, with Luau scripts | `cargo run --example sprites` |
 | [Shapes](#shapes) | Rust | `cargo run --example shapes` |
 | [Meshes](#meshes) | Rust, in 3D | `cargo run --example meshes` |
@@ -258,6 +261,21 @@ sprites standing among them, billboards that turn to face the camera as it follo
 ![The hero after lighting every candle in the cellar, with the mouse naming a barrel](docs/screenshots/cellar.png)
 
 Walk with the arrow keys or WASD, and point at a prop with the mouse to name it.
+
+### Course
+
+[`examples/course`](examples/course) is a course to run around in 3D, written entirely in Luau:
+up the stairs onto the platform, down the slope, onto the block, and around the crates, picking
+up the coins. Its level is a scene, [`course.scene.luau`](examples/course/course.scene.luau), of
+models from Kenney's [Prototype Kit](https://kenney.nl/assets/prototype-kit) (CC0), which a
+[physics world](docs/api/physics.md#in-3d) makes solid: the stairs and the slope by their
+triangles, and the crates as boxes that fall and tumble.
+
+![The figurine running past the crates, toward the block and its coin](docs/screenshots/course.png)
+
+Walk with the arrow keys, WASD or a gamepad's stick, and jump with Space. The player is a
+character that walks up the stairs and the slope, along the walls, and into the crates, pushing
+them: off the platform, or into the stack, which topples.
 
 ### Sprites
 

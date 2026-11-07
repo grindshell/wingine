@@ -1,0 +1,4 @@
+{
+    "globals": ["course"],
+    "lint": { "BuiltinGlobalWrite": false }
+}

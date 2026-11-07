@@ -9,7 +9,7 @@ systems, and don't build more 3D features unless asked.
 
 Wingine has what its examples need: tilemaps and batched sprites, meshes and glTF models in 3D
 views picked by boxes, sprite animation, a camera, keyboard, mouse and gamepad input bound to
-actions, grid movement, collision with Rapier, text, audio, saves, Luau scripting with tasks, native libraries written
+actions, grid movement, physics with Rapier (collision in 2D; bodies and characters in 3D views), text, audio, saves, Luau scripting with tasks, native libraries written
 in Rust, scenes (levels, screens and rigged characters), egui interfaces, and an editor built on
 the engine. Each feature is finished with a game or example that uses it, with tests.
 
@@ -35,7 +35,7 @@ networking or 3D pipelines.
 | Interfaces | `egui` | With `egui-winit` and `egui-wgpu`, behind the default `egui` feature |
 | Gamepads | `gilrs` | Read by the window; simulated without one |
 | Models | `gltf` | glTF 2.0 files, behind the default `models` feature |
-| Collision | `rapier2d` | 2D only, behind the default `physics` feature |
+| Physics | `rapier2d`, `rapier3d` | Behind the default `physics` feature |
 
 - Rust edition 2024.
 - Licensed under MIT or Apache 2.0, at the user's option (`LICENSE-MIT`, `LICENSE-APACHE`), which
@@ -53,11 +53,12 @@ networking or 3D pipelines.
   features (whose `import` would bring a JPEG decoder): the engine reads buffers, data URIs and
   PNG textures itself. Without it, `Context::load_model` doesn't exist and Luau's
   `graphics.load_model` fails; the `meshes` example requires it.
-- The `physics` feature, on by default, brings `rapier2d` in, built with its
-  `enhanced-determinism`, without which its results differ between Windows and Linux; it costs a
-  few percent. Without the feature, `wingine::physics` doesn't exist and Luau's `physics.world`
-  fails; the garden needs it. Rapier breaks its API in most minor releases, and is
-  Apache-2.0 only, shipping no license file.
+- The `physics` feature, on by default, brings `rapier2d` and `rapier3d` in, built with their
+  `enhanced-determinism`, without which their results differ between Windows and Linux; it costs
+  a few percent. With it, meshes keep their triangles on the CPU too (`Mesh::geometry`), for
+  bodies shaped like them. Without the feature, `wingine::physics` doesn't exist and Luau's
+  `physics.world` and `physics.world_3d` fail; the garden and the course need it. Rapier breaks its
+  API in most minor releases, and is Apache-2.0 only, shipping no license file.
 - `kira` is built with only the WAV and OGG Vorbis decoders. Its output, `cpal`, links against
   ALSA on Linux, so building there needs `libasound2-dev` (CI installs it).
 - `gilrs` reads gamepads through Windows Gaming Input on Windows, which hears them only while the
@@ -209,7 +210,7 @@ networking or 3D pipelines.
   and points, lines, JPEG textures and required extensions are errors saying what to export
   instead. It lists the files beside the model it read (`Model::files`), which the editor's
   `AssetCache` checks the times of too. Picking is by boxes, not triangles, since meshes keep
-  no vertices on the CPU: `Bounds3` (`math.rs`) from `MeshData::bounds`, kept by `Mesh` and
+  no vertices on the CPU but for physics: `Bounds3` (`math.rs`) from `MeshData::bounds`, kept by `Mesh` and
   `Model`, `transformed` by an `Affine3`, and `Ray::hit_box`, the distance to where a ray enters
   one. Luau has `graphics.load_model` (cached by path in `runtime/graphics.rs`, as textures are),
   `graphics.draw_model` (`draw_mesh`'s options but `sprite`), `mesh:bounds()` and
@@ -242,6 +243,34 @@ networking or 3D pipelines.
   which before each move re-reads every node's placement to follow it and drops those of removed
   nodes, and whose `move` slides a box around a node's position, without the node's own collider
   in the way, then moves the node within its parent.
+- `src/physics/world3d.rs`: `World3d`, physics in 3D views by Rapier: bodies (`Body3d`), fixed,
+  dynamic or kinematic (`BodyKind`, kinematic ones never asleep, since Rapier doesn't wake one
+  that dynamic bodies bump into and leave), each a `Shape3d` (triangles, which only fixed bodies
+  have, a hull, a box, a ball or a character's upright cylinder) placed by a `Pose3d`, a position
+  and yaw, pitch and roll as nodes have, turned to and from Rapier's quaternions with `libm`.
+  `step` takes steps longer than a sixtieth of a second in equal parts. `walk` walks a
+  `Character`, an upright cylinder with flat feet (a capsule's rounded bottom slides off stair
+  edges), by casts of its own as the 2D `slide` does: on the ground, along it first, up slopes no
+  steeper than its `slope` and along walls and steeper slopes as though upright, and only if that
+  hits something, over it as well (up a `step`, across, and down onto something to stand on),
+  keeping whichever went farther; then down to the ground by up to a step, or falling off a ledge;
+  off the ground, or rising, as it's told, landing on what it can stand on. It pushes the dynamic
+  bodies it walks into at the height of their centers of mass, as a collision of its mass and
+  theirs would, at the speed it walked over the last step's time. Its `true_normal` snaps GJK's
+  normals, off by up to a hundredth of a radian, to a face of what it hit within a few degrees
+  (the triangles near where it touched, from either side, a cuboid's sides, or a hull's face), or
+  to the cylinder's flat ends or its side. Rapier's `detect_collisions` would catch up with
+  bodies added or moved since the last step, but it forgets new bodies as the step that follows
+  looks for them, so they're never simulated: `refresh` puts those colliders in the query tree
+  itself (`set_aabb`). Its unit tests, which pin a hash of a pile of bodies and a walk so CI checks
+  it's the same on Windows and Linux, don't need a GPU. Luau's `physics.world_3d()` returns a
+  `lua::PhysicsWorld3d` (`src/lua/physics.rs`, with the 2D world), bodies of one view's nodes,
+  shaped like the mesh or model they show (`geometry`, a model's parts placed in it): fixed ones
+  baked through the node's whole transform, composed with `libm`'s sines (`exact_transform`), and
+  those that move placed by their node's position and turn, stretched by its scale, inside nodes
+  that only move them (`parent_origin`). Before each walk and step it follows nodes scripts moved
+  (comparing their placements to what it last read or wrote) and drops those removed; after each
+  step it moves dynamic bodies' nodes to them, leaving those at rest.
 - `src/headless.rs`: `Headless`, which renders a `Canvas` to an in-memory image without a window,
   and `Simulation`, which runs a whole `Game` without a window: fixed 60 fps frames, simulated
   keys, mouse and gamepads, and screenshots on demand. Held keys repeat as a system repeats them,
@@ -527,6 +556,19 @@ networking or 3D pipelines.
   message over their head once every candle is lit. The scene file is in the canonical layout,
   and `tests/cellar.rs` checks it stays so. The game's state is the global `cellar`, its view
   `cellar.world`.
+- `examples/course/`: a course in 3D with physics, written entirely in Luau, at a fixed 60
+  updates a second so its steps replay. `course.scene.luau` is a view of models from Kenney's
+  Prototype Kit, copied into its `models` folder with their colormap texture and license: a
+  ground, low walls, a platform, stairs and a slope up to it, and a block, tagged `solid` and made
+  fixed bodies by their triangles; crates tagged `crate`, dynamic boxes, on the platform's edge
+  and stacked; coins tagged `coin`; and the player, a figurine, a character. `main.luau` keeps how
+  fast the player is rising (`course.rising`, with gravity of its own, quicker than the
+  crates'), walks it with `world:walk`, jumping only from the ground, faces it the way it walks
+  (`exact.atan2`) and waddles it, starts it again when it falls off, and takes away crates that
+  fall off. The coins aren't bodies: they spin and bob, and the player picks one up by coming
+  near it. The camera follows the player from above and behind (`course.camera()`). The scene
+  file is in the canonical layout, and `tests/course.rs` checks it stays so. The game's state is
+  the global `course`, its physics world `course.world`.
 - `src/math.rs`: geometry types: `Rect`, `Affine` and `Affine3`, 2D and 3D transforms that
   compose with `*`, and `Bounds3`, a box in 3D.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
@@ -538,6 +580,8 @@ networking or 3D pipelines.
   every platform. The sounds and music in
   `examples/sounds/` were synthesized for `sprites`; `pong`, `rpg` and `shmup` have copies of
   the ones they use, and `rpg`, `shmup`, `garden` and `cellar` copies of the tileset.
+  `kenney_prototype-kit/` is Kenney's Prototype Kit (CC0), models for 3D examples, which copy the
+  ones they use, as `course` does.
   `shmup/bullets.png`
   was drawn pixel by pixel for it: pellets, orbs and rice in eight colors, the hitbox, and the
   player's shot. `orchard/orchard.png` was drawn pixel by pixel for it too: the picker's parts and
@@ -561,7 +605,8 @@ networking or 3D pipelines.
   barrels from `models/`, and it has tests too.
 - `README.md`: the project's overview, with a screenshot of each example in `docs/screenshots/`.
   They were taken headlessly at 640x360 (768x432 for `sprites`, so its 256x144 canvas scales
-  without bars, 960x720 for `shmup`, twice its canvas, and 1280x720 for the editor, with the
+  without bars, 960x720 for `shmup` and 960x540 for `course`, twice their canvases, and 1280x720
+  for the editor, with the
   garden open and its pond selected with the Move tool); retake them when an example changes
   how it looks. The shmup's results, how many bullets fit in a frame and what each costs, come
   from the stress test, run with the script beside them, and the per-bullet costs from fitting
@@ -582,7 +627,9 @@ networking or 3D pipelines.
   typing into a focused field, input egui takes not reaching the game, and the debug key.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders,
   their saves, their 3D views, models and picking, scenes' views and their nodes, in its
-  `physics` module (with the `physics` feature), physics worlds of their nodes, and in its
+  `physics` module (with the `physics` feature), physics worlds of their nodes, 2D and 3D (bodies
+  falling, characters walking, fixed bodies following and placed by turned parents, models' triangles,
+  and the errors), and in its
   `gui` module (with the `egui` feature), their interfaces, clicked by label. A hash of what
   `exact` gives for spreads of arguments is pinned, so CI checks it's the same on Windows and
   Linux.
@@ -612,6 +659,12 @@ networking or 3D pipelines.
   hero, walking through the cellar lighting every candle, what each frame draws, from its frame
   stats, the mouse pointing at props, the camera following the hero, and that its level is in the
   canonical layout.
+- `tests/course.rs`: tests for the `course` example, the same way: crates settling, walls
+  stopping the player without its creeping along them, climbing the stairs, walking down the
+  slope on the ground all the way, jumping onto the block, pushing crates off the platform and
+  toppling the stack, falling off and starting again, and finding every coin. One plays a run and
+  checks a hash of every crate's pose and the player's feet, pinned, so CI checks physics is the
+  same to the bit on Windows and Linux; a change to how the course plays changes it.
 - `tests/shmup.rs`: tests for the `shmup` example, the same way: the title menu by key and by
   mouse, its HUD's scene, the player, the bullet systems
   through `shmup.bullets`, spell cards, clearing the stage with cheats, the same seed firing the
@@ -720,6 +773,7 @@ cargo run -- examples/rpg
 cargo run -- examples/garden
 cargo run -- examples/orchard
 cargo run -- examples/cellar
+cargo run -- examples/course
 cargo run --example meshes
 cargo run --release -- examples/shmup
 cargo build --release -p native-danmaku
