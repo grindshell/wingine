@@ -247,7 +247,7 @@ menu is a line shorter.
 | `direction` | `"column"`, down from the top, or `"row"`, across from the left. | `"column"` |
 | `gap` | The space between each node and the next. | `0` |
 | `padding` | The space between the stack's edges and what it holds: a number for every edge, or `{ left, top, right, bottom }`. | `0` |
-| `width`, `height` | Its size, with a `stretch`, as an area has. Without one, it fits what it holds that way, with its padding, and can't stretch that way. | fits |
+| `width`, `height` | Its size, with a `stretch`, as an area has. Without one, or with `false`, it fits what it holds that way, with its padding, and can't stretch that way. | fits |
 | `pivot` | The point of it at its origin, measured from the point its `anchor` names (its top-left corner without one). | `{ 0, 0 }` |
 
 How a stack places what's inside it:
@@ -418,6 +418,12 @@ Any field but `name`, `kind` and `children` can be overridden. `props` change on
 than being replaced, and a `sheet` is one of the sheets of the file the node comes from. A path
 can reach into an instance inside the placed scene, such as `["family/mother/body"]`. A scene that
 places itself, through its instances or theirs, is an error.
+
+A stack or panel's `width = false` or `height = false` restores fitting that axis instead of
+inheriting a fixed size; its `stretch` must be zero that way too. A panel's appearance can be
+replaced: setting `sheet` and `cell` replaces its fill and border with a sprite, and setting
+`color`, `border` or `border_color` replaces its sprite with a fill. Fields from the previous
+appearance are discarded; explicitly mixing fill and sprite fields in one override is an error.
 
 ## 3D views
 

@@ -815,6 +815,10 @@ impl Inspector {
                                     tint: Color::WHITE,
                                 };
                             }
+                        })
+                        .response
+                        .widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Panel look")
                         });
                     ui.end_row();
                     match &mut panel.look {
@@ -1031,9 +1035,10 @@ fn changed_override(
             change.insert(key.clone(), tidy(key, value));
         }
     }
-    // Fields that went, such as a sprite's own size, can only go back to the scene's.
+    // Drop overrides of fields that left, including those of a panel's previous appearance.
+    // An optional stack size has an explicit `false` value when it fits instead.
     for key in before.keys() {
-        if !after.contains_key(key) && !base.contains_key(key) {
+        if !after.contains_key(key) {
             change.remove(key);
         }
     }
@@ -1612,5 +1617,38 @@ mod tests {
         after.props.remove("petals");
         let changed = changed_override(&change, &base, &before, &after, &Marks::default());
         assert!(changed.is_empty(), "{changed:?}");
+    }
+
+    #[test]
+    fn panel_appearance_changes_discard_overrides_of_the_old_look() {
+        let scene = SceneFile::parse(
+            "return { format = 3,
+                sheets = { ui = { path = 'ui.png', tile_width = 5, tile_height = 5 } },
+                children = {
+                    { name = 'fill', kind = 'panel', color = '#123456', border = 2 },
+                    { name = 'sprite', kind = 'panel', sheet = 'ui', cell = { 0, 0 }, slice = 1 },
+                } }",
+            "panels.scene.luau",
+        )
+        .unwrap();
+        // Start with an existing override of either appearance, then change to the other.
+        for (from, to, field, value) in [
+            (0, 1, "border", Value::Number(3.0)),
+            (1, 0, "slice", Value::Number(2.0)),
+        ] {
+            let base = &scene.children[from];
+            let change = [(field.to_owned(), value)].into();
+            let before = base.overridden(&change, &scene.sheets, None).unwrap();
+            let mut after = before.clone();
+            after.kind = scene.children[to].kind.clone();
+            let changed = changed_override(&change, base, &before, &after, &Marks::default());
+            assert!(!changed.contains_key(field));
+            assert_eq!(
+                base.overridden(&changed, &scene.sheets, None).unwrap(),
+                after
+            );
+            let reverted = changed_override(&changed, base, &after, base, &Marks::default());
+            assert!(reverted.is_empty(), "{reverted:?}");
+        }
     }
 }

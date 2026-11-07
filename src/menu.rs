@@ -262,22 +262,21 @@ fn neighbor(items: &[MenuItem], from: usize, axis: Axis, sign: f32, wrap: bool) 
             }
         })
         .collect();
-    let ahead = |lined_up: bool| {
-        candidates
-            .iter()
-            .filter(|candidate| candidate.past && (candidate.lined_up || !lined_up))
-            .min_by(|a, b| a.order(b, false))
-    };
-    let behind = |lined_up: bool| {
-        candidates
-            .iter()
-            .filter(|candidate| wrap && candidate.before && (candidate.lined_up || !lined_up))
-            .min_by(|a, b| a.order(b, true))
-    };
-    ahead(true)
-        .or_else(|| behind(true))
-        .or_else(|| ahead(false))
-        .or_else(|| behind(false))
+    // An aligned item behind us still marks this row or column's end when wrapping is off.
+    // Only leave it diagonally when there are no aligned items in either direction.
+    let lined_up = candidates
+        .iter()
+        .any(|candidate| candidate.lined_up && (candidate.past || candidate.before));
+    candidates
+        .iter()
+        .filter(|candidate| candidate.past && (candidate.lined_up || !lined_up))
+        .min_by(|a, b| a.order(b, false))
+        .or_else(|| {
+            candidates
+                .iter()
+                .filter(|candidate| wrap && candidate.before && (candidate.lined_up || !lined_up))
+                .min_by(|a, b| a.order(b, true))
+        })
         .map(|candidate| candidate.index)
 }
 
@@ -457,6 +456,45 @@ mod tests {
         assert_eq!(go(Key::Down), 0, "round the column");
         assert_eq!(go(Key::Up), 3);
         assert_eq!(go(Key::Left), 4, "round the row");
+    }
+
+    #[test]
+    fn non_wrapping_grids_stop_at_the_end_of_a_row_or_column() {
+        for transpose in [false, true] {
+            let mut items = grid(3, 5);
+            if transpose {
+                for item in &mut items {
+                    item.rect = Rect::new(item.rect.y, item.rect.x, item.rect.h, item.rect.w);
+                }
+            }
+            let (mut menu, mut input) = (Menu::new(), input());
+            menu.wrap = false;
+            menu.select(Some(4));
+            let forward = if transpose { Key::Down } else { Key::Right };
+            assert_eq!(press(&mut menu, &items, &mut input, forward), None);
+            assert_eq!(menu.selected(), Some(4));
+
+            // Wrapping stays within that row or column.
+            menu.wrap = true;
+            assert_eq!(
+                press(&mut menu, &items, &mut input, forward),
+                Some(MenuEvent::Moved(3))
+            );
+            // A lone item in its column or row can still go diagonally to the shorter one.
+            menu.wrap = false;
+            menu.select(Some(2));
+            let across = if transpose { Key::Right } else { Key::Down };
+            assert_eq!(
+                press(&mut menu, &items, &mut input, across),
+                Some(MenuEvent::Moved(4))
+            );
+            // An item that isn't enabled doesn't keep the selection in its row or column.
+            items[3].enabled = false;
+            assert_eq!(
+                press(&mut menu, &items, &mut input, forward),
+                Some(MenuEvent::Moved(2))
+            );
+        }
     }
 
     #[test]

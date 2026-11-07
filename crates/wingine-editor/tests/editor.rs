@@ -811,6 +811,113 @@ fn stacks_and_panels_are_added_and_inspected() {
 }
 
 #[test]
+fn instance_panels_keep_appearance_and_fitting_overrides() {
+    let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join("editor/panel-overrides");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(folder.join("main.luau"), "").unwrap();
+    fs::copy(examples().join("rpg/frame.png"), folder.join("frame.png")).unwrap();
+    fs::write(
+        folder.join("base.scene.luau"),
+        "return { format = 3,
+        sheets = { ui = { path = 'frame.png', tile_width = 5, tile_height = 5 } },
+        children = {
+            { name = 'filled', kind = 'panel', width = 40, height = 30, color = '#123456',
+              children = {{ name = 'child', kind = 'rect', width = 20, height = 10 }} },
+            { name = 'framed', kind = 'panel', sheet = 'ui', cell = { 0, 0 }, slice = 1,
+              width = 40, height = 30 },
+        } }",
+    )
+    .unwrap();
+    fs::write(
+        folder.join("screen.scene.luau"),
+        "return { format = 3, children = {
+        { name = 'instance', kind = 'instance', scene = 'base.scene.luau' }
+    } }",
+    )
+    .unwrap();
+    let mut simulation = editor(Some(folder.clone()));
+    simulation
+        .game_mut()
+        .open_scene("screen.scene.luau")
+        .unwrap();
+    simulation.run_frames(2);
+    for (name, choice, field, value) in [
+        ("filled", "sprite", "border", "3"),
+        ("framed", "fill", "slice left", "2"),
+    ] {
+        simulation
+            .game_mut()
+            .document_mut()
+            .unwrap()
+            .select_inner(vec![0], name.into());
+        simulation.run_frames(2);
+        // An override of the old appearance must go when the look changes.
+        set_field(&mut simulation, field, value);
+        menu(&mut simulation, "Panel look", choice);
+        let document = simulation.game().document().unwrap();
+        assert!(document.error.is_none(), "{:?}", document.error);
+        let scene = document.preview.as_ref().unwrap();
+        let id = scene
+            .find(scene.root(), &format!("instance/{name}"))
+            .unwrap();
+        let wingine::scene::Kind::Panel(panel) = scene.node(id).kind() else {
+            unreachable!()
+        };
+        assert_eq!(
+            matches!(panel.look, wingine::scene::PanelLook::Sprite { .. }),
+            choice == "sprite"
+        );
+    }
+    simulation
+        .game_mut()
+        .document_mut()
+        .unwrap()
+        .select_inner(vec![0], "filled".into());
+    simulation.run_frames(2);
+    simulation.click_gui("fit width");
+    simulation.run_frames(2);
+    simulation.click_gui("fit height");
+    simulation.run_frames(2);
+    let document = simulation.game().document().unwrap();
+    let KindDef::Instance(instance) = &document.file().children[0].kind else {
+        unreachable!()
+    };
+    assert_eq!(instance.overrides["filled"]["width"], Value::Bool(false));
+    assert_eq!(instance.overrides["filled"]["height"], Value::Bool(false));
+    let scene = document.preview.as_ref().unwrap();
+    let id = scene.find(scene.root(), "instance/filled").unwrap();
+    let rect = scene.bounds(id).unwrap();
+    assert_eq!([rect.w, rect.h], [20.0, 10.0]);
+    simulation
+        .game_mut()
+        .document_mut()
+        .unwrap()
+        .save(&folder)
+        .unwrap();
+    drop(simulation);
+
+    // A saved override loads into a fresh editor, with fitting still following its content.
+    let mut simulation = editor(Some(folder));
+    simulation
+        .game_mut()
+        .open_scene("screen.scene.luau")
+        .unwrap();
+    simulation.run_frames(2);
+    let document = simulation.game_mut().document_mut().unwrap();
+    assert!(document.error.is_none(), "{:?}", document.error);
+    let scene = document.preview.as_mut().unwrap();
+    let panel = scene.find(scene.root(), "instance/filled").unwrap();
+    assert_eq!(scene.node(panel).kind().stack().unwrap().size, [None, None]);
+    let child = scene.find(panel, "child").unwrap();
+    let wingine::scene::Kind::Rect(rect) = scene.node_mut(child).kind_mut() else {
+        unreachable!()
+    };
+    rect.size = [60.0, 25.0];
+    let rect = scene.bounds(panel).unwrap();
+    assert_eq!([rect.w, rect.h], [60.0, 25.0]);
+}
+
+#[test]
 fn clicking_in_a_view_picks_its_nodes_nearest_first() {
     let (mut simulation, _) = cellar("views_picked");
     let crate_ = world_to_window(

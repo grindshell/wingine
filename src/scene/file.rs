@@ -152,7 +152,9 @@ impl NodeDef {
     /// The node with the fields `change` sets, as an instance's `overrides` set them: its props
     /// one by one, and any other field but its `name`, `kind` and `children` replaced. `sheets`
     /// are the sheets of the file it's from, and `tilemap` the columns and rows of the tilemap
-    /// it's in, if it's a layer. Fails as reading the changed node from a file would.
+    /// it's in, if it's a layer. A panel's new appearance replaces the previous one's fields;
+    /// a stack or panel's `width` or `height` of `false` restores fitting that axis. Fails as
+    /// reading the changed node from a file would.
     pub fn overridden(
         &self,
         change: &BTreeMap<String, Value>,
@@ -179,6 +181,28 @@ pub(super) fn override_node(
     parent: &Parent,
 ) -> Result<NodeDef, String> {
     let mut fields = node_fields(node);
+    if let KindDef::Panel(panel) = &node.kind {
+        // Replacing a panel's appearance replaces its old variant's fields. Fields explicitly
+        // mixed in `change` are still merged below, so the reader rejects conflicting looks.
+        let replaced: &[&str] = match &panel.look {
+            PanelLookDef::Fill(_)
+                if change.contains_key("sheet") || change.contains_key("cell") =>
+            {
+                &["color", "border", "border_color"]
+            }
+            PanelLookDef::Sprite { .. }
+                if ["color", "border", "border_color"]
+                    .iter()
+                    .any(|key| change.contains_key(*key)) =>
+            {
+                &["sheet", "cell", "slice", "tint"]
+            }
+            _ => &[],
+        };
+        for &field in replaced {
+            fields.remove(field);
+        }
+    }
     for (field, value) in change {
         match (field.as_str(), value) {
             ("name" | "kind" | "children", _) => {
@@ -1531,8 +1555,8 @@ fn read_kind(
 /// The fields of a stack or panel, `what`, that size, place and lay it out.
 fn read_stack(fields: &mut Fields, what: &str) -> Result<Stack, String> {
     let mut length = |field: &str| match fields.take(field) {
+        None | Some(Value::Bool(false)) => Ok(None),
         Some(value) => finite(value, field).map(Some),
-        None => Ok(None),
     };
     let size = [length("width")?, length("height")?];
     let stretch = read_stretch(fields)?;
@@ -2153,9 +2177,8 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
 fn stack_fields(stack: &Stack, set: &mut impl FnMut(&str, Value)) {
     let number = |n: f32| Value::Number(n.into());
     for (i, field) in ["width", "height"].into_iter().enumerate() {
-        if let Some(length) = stack.size[i] {
-            set(field, number(length));
-        }
+        // An explicit fitting value lets overrides replace a size inherited from the scene.
+        set(field, stack.size[i].map_or(Value::Bool(false), number));
     }
     let [x, y] = stack.stretch;
     set("stretch", Value::List(vec![number(x), number(y)]));
@@ -2653,6 +2676,96 @@ mod tests {
             panic!("a panel showing a sprite");
         };
         assert_eq!(*slice, [2.0, 2.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn panel_overrides_replace_the_previous_appearance() {
+        let scene = parse(
+            "return { format = 3,
+                sheets = { ui = { path = 'ui.png', tile_width = 5, tile_height = 5 } },
+                children = {
+                    { name = 'fill', kind = 'panel', color = '#123456', border = 2 },
+                    { name = 'sprite', kind = 'panel', sheet = 'ui', cell = { 0, 0 },
+                      slice = 1, tint = '#abcdef' },
+                } }",
+        )
+        .unwrap();
+        let sprite = [
+            ("sheet".into(), Value::String("ui".into())),
+            ("cell".into(), cell_value([0, 0])),
+            ("slice".into(), Value::Number(1.0)),
+        ]
+        .into();
+        let changed = scene.children[0]
+            .overridden(&sprite, &scene.sheets, None)
+            .unwrap();
+        assert!(matches!(
+            changed.kind,
+            KindDef::Panel(PanelDef {
+                look: PanelLookDef::Sprite {
+                    tint: Color::WHITE,
+                    ..
+                },
+                ..
+            })
+        ));
+        let fill = [("color".into(), Value::String("#123456".into()))].into();
+        let changed = scene.children[1]
+            .overridden(&fill, &scene.sheets, None)
+            .unwrap();
+        assert!(matches!(
+            changed.kind,
+            KindDef::Panel(PanelDef {
+                look: PanelLookDef::Fill(PanelFill { border: 0.0, .. }),
+                ..
+            })
+        ));
+
+        // Explicitly mixing both appearances remains an error, whichever is inherited.
+        let mut mixed: BTreeMap<String, Value> = sprite;
+        mixed.extend(fill);
+        for node in &scene.children {
+            assert!(node.overridden(&mixed, &scene.sheets, None).is_err());
+        }
+    }
+
+    #[test]
+    fn stack_overrides_restore_fitting_instead_of_inheriting_a_size() {
+        let mut scene = parse(
+            "return { format = 3, children = {
+                { name = 'list', kind = 'stack', width = 40, height = 50, stretch = { 1, 1 } },
+                { name = 'panel', kind = 'panel', width = 40, height = 50 },
+            } }",
+        )
+        .unwrap();
+        let change = [
+            ("width".into(), Value::Bool(false)),
+            ("height".into(), Value::Bool(false)),
+            ("stretch".into(), Value::List(vec![Value::Number(0.0); 2])),
+        ]
+        .into();
+        for node in &mut scene.children {
+            *node = node.overridden(&change, &scene.sheets, None).unwrap();
+            assert_eq!(node.kind.stack().unwrap().size, [None, None]);
+            assert_eq!(node.fields()["width"], Value::Bool(false));
+            assert_eq!(node.fields()["height"], Value::Bool(false));
+        }
+        assert_eq!(parse(&scene.to_luau().unwrap()).unwrap(), scene);
+        // Fitting and stretching the same axis still conflict.
+        let err = error(
+            "return { format = 3, children = {
+            { name = 'list', kind = 'stack', width = false, stretch = { 1, 0 } }
+        } }",
+        );
+        assert!(err.contains("can't stretch"), "{err}");
+        assert!(
+            parse(
+                "return { format = 3, children = {
+            { name = 'list', kind = 'stack', width = true }
+        } }"
+            )
+            .is_err()
+        );
     }
 
     #[test]

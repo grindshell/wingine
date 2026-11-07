@@ -250,7 +250,8 @@
 //! - `padding`, a number for every edge or `{ left, top, right, bottom }` (0 by default), is the
 //!   space between the stack's edges and what it holds.
 //! - `width` and `height` are its size, with a `stretch`, as an area has. Each is optional:
-//!   without one, it fits what it holds that way, with its padding, and has no stretch that way.
+//!   without one, or with `false`, it fits what it holds that way, with its padding, and has no
+//!   stretch that way. `false` restores fitting in an instance's override of a fixed size.
 //! - Its `pivot` is from the point of it its anchor names, its top-left corner without one, so a
 //!   stack anchored at its parent's bottom-right corner keeps its own there however much it
 //!   holds.
@@ -1736,10 +1737,9 @@ impl Scene {
                     let covered = turned.bounds(rect);
                     Some(([covered.x, covered.y], [covered.w, covered.h]))
                 }
-                None => self.span(child, inner).map(|span| {
-                    let reach = turned.bounds(span);
-                    ([0.0; 2], [reach.right().max(0.0), reach.bottom().max(0.0)])
-                }),
+                None => self
+                    .span(child, inner, turned)
+                    .map(|reach| ([0.0; 2], [reach.right().max(0.0), reach.bottom().max(0.0)])),
             };
             let mut origin = start;
             origin[main] += along;
@@ -1773,31 +1773,31 @@ impl Scene {
         (slots, held)
     }
 
-    /// What the children of the plain node `id` cover in its coordinates, if they cover anything,
-    /// placed in `inner`.
-    fn span(&self, id: NodeId, inner: Rect) -> Option<Rect> {
+    /// What the children of the plain node `id` cover, placed in `inner`, then by `transform`:
+    /// composed down to each child before finding its bounds, since text only moves.
+    fn span(&self, id: NodeId, inner: Rect, transform: Affine) -> Option<Rect> {
         self.node(id)
             .children
             .iter()
-            .filter_map(|&child| self.covered(child, inner))
+            .filter_map(|&child| self.covered(child, inner, transform))
             .reduce(union)
     }
 
     /// The smallest axis-aligned rectangle around what `id` covers, if it's shown and covers
-    /// anything, in the coordinates of its parent, which isn't a stack, inside `outer`: what it
-    /// covers itself, or for a plain node, what its children do.
-    fn covered(&self, id: NodeId, outer: Rect) -> Option<Rect> {
+    /// anything, inside `outer`, then placed by `parent`: what it covers itself, or for a plain
+    /// node, what its children do.
+    fn covered(&self, id: NodeId, outer: Rect, parent: Affine) -> Option<Rect> {
         let node = self.node(id);
         if !node.visible {
             return None;
         }
-        let local = node.local_in(outer);
+        let local = parent * node.local_in(outer);
         match self.rect_in(id, outer) {
             Some(rect) if node.kind.only_moves() => {
                 Some(Affine::from_translation(local.translation).bounds(rect))
             }
             Some(rect) => Some(local.bounds(rect)),
-            None => self.span(id, outer).map(|span| local.bounds(span)),
+            None => self.span(id, outer, local),
         }
     }
 

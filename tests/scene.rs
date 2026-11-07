@@ -378,6 +378,53 @@ fn stacks_lay_out_their_children_one_after_another() {
     assert!(scene.contains(tall, [193.0, 90.0]));
 }
 
+#[test]
+fn stacks_measure_transformed_groups_as_their_contents_are_drawn() {
+    let source = r#"return { format = 3, children = {
+        { name = 'list', kind = 'stack', children = {
+            { name = 'row', kind = 'node', PLACEMENT children = {
+                { name = 'group', kind = 'node', x = 3, y = 4, children = {
+                    { name = 'item', CONTENT },
+                    { name = 'hidden', kind = 'rect', width = 1000, height = 1000,
+                      visible = false },
+                } },
+            } },
+            { name = 'next', kind = 'rect', width = 4, height = 2 },
+        } },
+    } }"#;
+    let mut headless = headless();
+    for placement in [
+        "",
+        "scale_y = 0.5,",
+        "scale_y = 2,",
+        "rotation = 1.5707964,",
+    ] {
+        for content in [
+            "kind = 'text', text = 'Hello'",
+            "kind = 'rect', width = 20, height = 10",
+        ] {
+            let source = source
+                .replace("PLACEMENT", placement)
+                .replace("CONTENT", content);
+            let scene = load(
+                &mut headless,
+                &[("group.scene.luau", &source)],
+                "group.scene.luau",
+            )
+            .unwrap();
+            let find = |path| scene.find(scene.root(), path).unwrap();
+            let row = scene.extent(find("list/row")).unwrap();
+            let next = scene.bounds(find("list/next")).unwrap();
+            assert!(
+                (next.y - row.bottom()).abs() < 1e-4,
+                "{placement} {content}: row={row:?}, next={next:?}"
+            );
+            let list = scene.bounds(find("list")).unwrap();
+            assert!((list.h - next.bottom()).abs() < 1e-4, "{list:?}, {next:?}");
+        }
+    }
+}
+
 /// A panel fitting a column of rows, each a plain node with a name and a value at its right, and
 /// a panel showing a sprite, sliced.
 const PANELS: &str = r##"return {
