@@ -1,9 +1,14 @@
 -- The dialogue box, for descriptions, conversations and menus. `say` and `ask` open it and wait
 -- for the player, so they only work in tasks. While a box is open, `update` takes the player's
--- input: the interact key shows the rest of the text, then closes the box, and with choices, up
--- and down pick one first.
+-- input: the interact key shows the rest of the text, then closes the box, and with choices, a
+-- menu picks one first: up and down, or the mouse, highlight a choice, and the interact key or a
+-- click picks it.
+--
+-- The box is drawn here, revealing its text a glyph at a time. A question's choices are laid out
+-- in `dialogue.scene.luau`, over the box's right end: a panel that fits them, copies of its hidden
+-- `choice` row beside copies of its `detail`, and to its left, the highlighted choice's note.
 
-local ui = require("./ui")
+local look = require("./look")
 local conf = require("./conf")
 
 local dialogue = {}
@@ -21,13 +26,20 @@ local PADDING = 6
 local MIN_LINES = 2
 -- Seconds between flashes of the marker that says there's more.
 local BLINK_SECONDS = 0.4
--- Space between a choice and its detail.
-local DETAIL_GAP = 12
--- How wide the panel with the highlighted choice's note is.
-local NOTE_WIDTH = 132
 
 local font = graphics.default_font()
 local blip = audio.load("sounds/blip.wav")
+
+dialogue.scene = scene.load("dialogue.scene.luau")
+local question = dialogue.scene:find("question")
+local note = question:find("note")
+local labels = question:find("choices/labels")
+local details = question:find("choices/details")
+local choice_template = labels:find("choice")
+local detail_template = details:find("detail")
+-- The rows of the question being asked, a copy of the hidden ones for each choice.
+local rows = {}
+local detail_rows = {}
 
 -- Settings for `ask`, all optional.
 export type Options = {
@@ -51,8 +63,8 @@ type Box = {
     choices: { string }?,
     details: { string }?,
     notes: { string }?,
-    -- The notes laid out, by choice, as they're first shown.
-    note_layouts: { [number]: any },
+    -- The menu of the choices, once they're shown.
+    menu: Menu?,
     -- The choice the cancel key picks, if it picks one.
     cancel: number?,
     -- The highlighted choice, then the one picked.
@@ -65,18 +77,24 @@ type Box = {
 -- The open box, if any.
 dialogue.box = nil :: Box?
 
+-- How tall a box of `layout` is.
+local function box_height(layout: any): number
+    local lines = math.max(layout:line_count(), MIN_LINES)
+    return lines * font:line_height() + PADDING * 2 - 2
+end
+
 local function open(text: string, speaker: string?): Box
     local box = {
         text = text,
         speaker = speaker,
         layout = font:layout(text, WIDTH - MARGIN * 2 - PADDING * 2),
         shown = 0,
-        note_layouts = {},
         selected = 1,
         closed = false,
         idle = 0,
     }
     dialogue.box = box
+    question:set_visible(false)
     return box
 end
 
@@ -91,6 +109,30 @@ function dialogue.say(text: string, speaker: string?)
     wait_for(open(text, speaker))
 end
 
+-- Lays out the box's choices in the scene, with their details, for its menu to pick from once the
+-- text is revealed.
+local function lay_out_choices(box: Box, choices: { string })
+    for i, row in rows do
+        row:remove()
+        detail_rows[i]:remove()
+    end
+    rows, detail_rows = {}, {}
+    local box_details = box.details
+    for i, choice in choices do
+        local row = labels:add(choice_template, `choice_{i}`)
+        row:set_visible(true)
+        row:find("label"):set_text(choice)
+        rows[i] = row
+        local detail = details:add(detail_template, `detail_{i}`)
+        detail:set_visible(true)
+        detail:set_text(box_details and box_details[i] or "")
+        detail_rows[i] = detail
+    end
+    details:set_visible(box_details ~= nil)
+    -- Its bottom-right corner just over the box's top-right one.
+    question:set_position(-MARGIN, -(MARGIN + box_height(box.layout) + 1))
+end
+
 -- Shows `text` and `choices`, and waits for the player to pick one. Returns its number. The
 -- cancel key picks the last choice, so it should be the one that backs out, unless
 -- `options.cancel` is false.
@@ -101,6 +143,7 @@ function dialogue.ask(text: string, choices: { string }, options: Options?): num
     box.details = settings.details
     box.notes = settings.notes
     box.cancel = if settings.cancel == false then nil else #choices
+    lay_out_choices(box, choices)
     wait_for(box)
     return box.selected
 end
@@ -112,6 +155,15 @@ end
 local function close(box: Box)
     box.closed = true
     dialogue.box = nil
+    question:set_visible(false)
+end
+
+-- Shows the box's choices, once its text is revealed, and returns the menu that picks one.
+local function show_choices(box: Box): Menu
+    question:set_visible(true)
+    local menu = ui.menu(labels, { confirm = "interact" })
+    box.menu = menu
+    return menu
 end
 
 function dialogue.update(dt: number)
@@ -131,68 +183,46 @@ function dialogue.update(dt: number)
                 audio.play(blip)
             end
         end
+        if box.shown >= total and box.choices then
+            show_choices(box)
+        end
         return
     end
     box.idle += dt
-    local choices = box.choices
-    if choices then
-        local count = #choices
-        if input.pressed("up") then
-            box.selected = (box.selected - 2) % count + 1
-        elseif input.pressed("down") then
-            box.selected = box.selected % count + 1
-        elseif input.pressed("cancel") and box.cancel then
-            box.selected = box.cancel
+    if not box.choices then
+        if confirm then
             close(box)
-            return
         end
+        return
     end
-    if confirm then
+    local menu = box.menu or show_choices(box)
+    local happened, choice = menu:update()
+    box.selected = menu:selected() or box.selected
+    if happened == "picked" then
+        box.selected = choice
+        close(box)
+    elseif happened == "cancelled" and box.cancel then
+        box.selected = box.cancel
         close(box)
     end
 end
 
--- Draws the box's choices in a panel whose bottom-right corner is at `right`, `bottom`, and the
--- highlighted choice's note beside them.
-local function draw_choices(box: Box, choices: { string }, right: number, bottom: number)
-    local line_height = font:line_height()
-    local details = box.details or {}
-    local widest = 0
-    for i, choice in choices do
-        local detail = details[i]
-        local detail_width = if detail then DETAIL_GAP + font:measure(detail) else 0
-        widest = math.max(widest, font:measure(choice) + detail_width)
-    end
-    local width = widest + PADDING * 2 + 8
-    local height = #choices * line_height + PADDING * 2 - 2
-    local left, top = right - width, bottom - height
-    ui.panel(left, top, width, height)
-    for i, choice in choices do
-        local line_top = top + PADDING - 1 + (i - 1) * line_height
+-- Points out the highlighted choice, as the title's menu does, and shows its note.
+local function show_selected(box: Box)
+    for i, row in rows do
         local selected = i == box.selected
-        if selected then
-            graphics.draw_text(font, ">", left + PADDING, line_top, ui.HIGHLIGHT)
-        end
-        local color = if selected then ui.TEXT else ui.DIM
-        graphics.draw_text(font, choice, left + PADDING + 8, line_top, color)
-        local detail = details[i]
-        if detail then
-            local detail_x = right - PADDING - font:measure(detail)
-            graphics.draw_text(font, detail, detail_x, line_top, color)
-        end
+        row:find("pointer"):set_visible(selected)
+        local color = if selected then look.TEXT else look.DIM
+        row:find("label"):set_color(color)
+        detail_rows[i]:set_color(color)
     end
-
-    local note = box.notes and box.notes[box.selected]
-    if note then
-        local layout = box.note_layouts[box.selected]
-        if not layout then
-            layout = font:layout(note, NOTE_WIDTH - PADDING * 2)
-            box.note_layouts[box.selected] = layout
+    local text = box.notes and box.notes[box.selected]
+    note:set_visible(text ~= nil)
+    if text then
+        local note_text = note:find("text")
+        if note_text:text() ~= text then
+            note_text:set_text(text)
         end
-        local note_height = layout:line_count() * line_height + PADDING * 2 - 2
-        local note_left = left - NOTE_WIDTH - 1
-        ui.panel(note_left, top, NOTE_WIDTH, note_height)
-        graphics.draw_text_layout(layout, note_left + PADDING, top + PADDING - 1, ui.TEXT)
     end
 end
 
@@ -202,31 +232,30 @@ function dialogue.draw()
         return
     end
     local line_height = font:line_height()
-    local lines = math.max(box.layout:line_count(), MIN_LINES)
     local width = WIDTH - MARGIN * 2
-    local height = lines * line_height + PADDING * 2 - 2
+    local height = box_height(box.layout)
     local x, y = MARGIN, HEIGHT - MARGIN - height
-    ui.panel(x, y, width, height)
-    graphics.draw_text_layout(box.layout, x + PADDING, y + PADDING - 1, ui.TEXT, box.shown)
+    look.panel(x, y, width, height)
+    graphics.draw_text_layout(box.layout, x + PADDING, y + PADDING - 1, look.TEXT, box.shown)
 
     if box.speaker then
         local name_width = font:measure(box.speaker)
-        ui.panel(x, y - line_height - 1, name_width + PADDING * 2, line_height + 2)
-        graphics.draw_text(font, box.speaker, x + PADDING, y - line_height + 1, ui.HIGHLIGHT)
+        look.panel(x, y - line_height - 1, name_width + PADDING * 2, line_height + 2)
+        graphics.draw_text(font, box.speaker, x + PADDING, y - line_height + 1, look.HIGHLIGHT)
     end
 
-    local complete = box.shown >= box.layout:glyph_count()
-    if not complete then
+    if box.menu then
+        show_selected(box)
+        graphics.draw_scene(dialogue.scene)
         return
     end
-    if box.choices then
-        draw_choices(box, box.choices, x + width, y - 1)
-    elseif box.idle % (BLINK_SECONDS * 2) < BLINK_SECONDS then
+    local complete = box.shown >= box.layout:glyph_count()
+    if complete and not box.choices and box.idle % (BLINK_SECONDS * 2) < BLINK_SECONDS then
         -- A little arrow in the corner, saying there's more to read.
         local right, bottom = x + width - PADDING, y + height - PADDING + 1
-        graphics.fill_rect(right - 5, bottom - 3, 5, 1, ui.BORDER)
-        graphics.fill_rect(right - 4, bottom - 2, 3, 1, ui.BORDER)
-        graphics.fill_rect(right - 3, bottom - 1, 1, 1, ui.BORDER)
+        graphics.fill_rect(right - 5, bottom - 3, 5, 1, look.BORDER)
+        graphics.fill_rect(right - 4, bottom - 2, 3, 1, look.BORDER)
+        graphics.fill_rect(right - 3, bottom - 1, 1, 1, look.BORDER)
     end
 end
 

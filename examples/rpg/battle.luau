@@ -9,7 +9,7 @@
 local dialogue = require("./dialogue")
 local foes = require("./foes")
 local items = require("./items")
-local ui = require("./ui")
+local look = require("./look")
 local conf = require("./conf")
 local world = require("./world")
 
@@ -387,14 +387,14 @@ end
 
 -- A fighter's name and hit points, in a panel. The player's shows the numbers too.
 local function draw_panel(fighter: Fighter, name: string, at, numbers: boolean)
-    ui.panel(at.x, at.y, at.width, PANEL_HEIGHT)
-    graphics.draw_text(font, name, at.x + 6, at.y + 4, ui.TEXT)
+    look.panel(at.x, at.y, at.width, PANEL_HEIGHT)
+    graphics.draw_text(font, name, at.x + 6, at.y + 4, look.TEXT)
     if numbers then
         local text = `{math.ceil(fighter.shown_hp)}/{fighter.max_hp}`
         local width = font:measure(text)
-        graphics.draw_text(font, text, at.x + at.width - 6 - width, at.y + 4, ui.TEXT)
+        graphics.draw_text(font, text, at.x + at.width - 6 - width, at.y + 4, look.TEXT)
     end
-    graphics.draw_text(font, "HP", at.x + 6, at.y + 16, ui.TEXT)
+    graphics.draw_text(font, "HP", at.x + 6, at.y + 16, look.TEXT)
     local bar_x, bar_y, bar_width = at.x + 22, at.y + 19, at.width - 28
     local share = fighter.shown_hp / fighter.max_hp
     local color = if share > 0.5 then HEALTHY elseif share > 0.2 then HURT else CRITICAL

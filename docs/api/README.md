@@ -1,6 +1,6 @@
 # API reference
 
-Scripts reach the engine through eleven global tables, a few built-in functions, the objects those
+Scripts reach the engine through twelve global tables, a few built-in functions, the objects those
 hand out, and the `Ui` a game's `gui` lays its interface out with:
 
 | Page | What it covers |
@@ -13,6 +13,7 @@ hand out, and the `Ui` a game's `gui` lays its interface out with:
 | [`grid`](grid.md) | Characters that walk from tile to tile |
 | [`physics`](physics.md) | Scene nodes made solid, and characters that walk among them, sliding along what they bump into; in 3D views, bodies that fall and tumble, and characters that walk up stairs and slopes |
 | [`scene`](scene.md) | Scenes loaded from scene files, and their nodes |
+| [`ui`](ui.md) | Menus over a scene's nodes, which the keys and the mouse choose from |
 | [`save`](save.md) | Data kept between runs of the game, such as progress |
 | [`exact`](exact.md) | Math that gives the same bits on every platform, for games that replay |
 | [`rect`](rect.md) | Whether rectangles overlap, and whether one holds a point |
@@ -64,16 +65,16 @@ time raises an error saying when it works.
   `main.luau` and the modules it requires), in `update` and the tasks it resumes, and in `gui`:
   everything in `input`, and everything in `audio` but `audio.load`. So do
   `graphics.load_sprite_sheet`, `graphics.load_model`, the functions that make meshes
-  (`graphics.new_cube`, `new_cuboid`, `new_plane`, `new_sphere` and `new_mesh`), `scene.load` and
-  `window.quit`, and all
+  (`graphics.new_cube`, `new_cuboid`, `new_plane`, `new_sphere` and `new_mesh`), `scene.load`,
+  `menu:update` and `window.quit`, and all
   of them work in `close_requested` too. `graphics.project` and `graphics.ray` work then and in
   `draw`.
 - **Interfaces** are laid out only in `gui`, with the `Ui` it's passed.
 - **Everything else** works any time: `graphics.size`, `graphics.color`,
   `graphics.default_font`, `graphics.frame_stats`, `graphics.new_animation`,
   `graphics.hit_box`, `audio.load`,
-  `tilemap`, `grid`, `physics`, `save`, and the methods of every object, scene nodes and physics
-  worlds included.
+  `tilemap`, `grid`, `physics`, `save`, `ui.menu`, and the methods of every object, scene nodes,
+  physics worlds and menus included, but `menu:update`.
 
 ## Values
 

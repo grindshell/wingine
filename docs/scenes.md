@@ -770,4 +770,22 @@ function draw()
 end
 ```
 
+For a menu the keys move through as well as the mouse, [`ui.menu`](api/ui.md) makes one of a
+node's children, such as a stack's rows, or the nodes inside it with a tag. It moves the selection
+by where the items are drawn, wraps, passes over items that can't be picked, and says each update
+what the player did, while the game shows the selection however it likes:
+
+```lua
+local menu = ui.menu(screen:find("buttons"))
+
+function update(dt: number)
+    local happened, item = menu:update()
+    if happened == "picked" then
+        start(menu:items()[item]:props().action)
+    end
+end
+```
+
+The RPG's title screen and questions, and the shmup's title menu, are picked this way.
+
 See [the `scene` reference](api/scene.md) for everything a node can do.

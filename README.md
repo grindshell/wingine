@@ -32,6 +32,9 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
   lists in panels that fit them, filled or framed by sliced sprites; scenes place other scenes,
   changed by overrides; and games find nodes by path or tag, test the mouse against them, pick
   what's under it in 3D, and add and remove them as they play.
+- **Menus** over scenes' nodes, which the keys move through by where the items are, lists and
+  grids alike, wrapping round and repeating as keys are held, and the mouse points at and clicks,
+  passing over items that can't be picked; games show the selection as they like.
 - **Rigged characters**: sprites for parts that turn about their joints, animated by clips of
   keyframes in scene files, which games layer and crossfade.
 - **Grid movement** from tile to tile, with tile collision.
@@ -111,7 +114,8 @@ battle and trip between maps, and its title screen continues from there.
 | ![Talking to Elder Rowan](docs/screenshots/rpg-dialogue.png) | ![A creature notices the player on Shrine Hill](docs/screenshots/rpg-shrine.png) | ![A battle against the Shade Bat](docs/screenshots/rpg-battle.png) |
 
 Walk with the arrow keys or WASD. Press Space, Enter or E to talk or to examine what's in front
-of you, Tab or I to open your bag, and Escape or Backspace to back out of menus. F1 shows a debug
+of you, Tab or I to open your bag, and Escape or Backspace to back out of menus, whose choices
+the mouse can point at and click too. F1 shows a debug
 window, laid out with egui from Luau, to set your hit points, coins, items and quest, and jump
 between maps.
 
@@ -131,9 +135,9 @@ card down without being hit or bombing for its bonus.
 Move with the arrow keys or WASD, and hold Shift to move slowly and see your hitbox. Hold Z to
 shoot and press X to bomb, which clears the bullets and keeps you safe for a moment. Grazing
 bullets scores. Escape pauses. The title screen also offers boss practice and a stress test,
-chosen with the keys or the mouse. The panel, title screen and messages are laid out in a
-[scene](docs/scenes.md#laying-out-screens), [`hud.scene.luau`](examples/shmup/hud.scene.luau),
-which the game fills in each frame.
+chosen with the keys or the mouse, a [menu](docs/api/ui.md) of the title's items. The panel, title
+screen and messages are laid out in a [scene](docs/scenes.md#laying-out-screens),
+[`hud.scene.luau`](examples/shmup/hud.scene.luau), which the game fills in each frame.
 
 The game is a benchmark too, and is best run as a release build. Its enemy bullets go through one
 interface, implemented in Luau by [`bullets.luau`](examples/shmup/bullets.luau) and in Rust by
@@ -383,7 +387,7 @@ end
 ```
 
 Run it with `cargo run -- path/to/folder`. The engine's API is the global tables `graphics`,
-`input`, `audio`, `tilemap`, `grid`, `physics`, `scene` and `save`. [The docs](docs/README.md) cover making a game in
+`input`, `audio`, `tilemap`, `grid`, `physics`, `scene`, `ui`, `save` and `window`. [The docs](docs/README.md) cover making a game in
 Luau, from a quick start to native libraries, with a reference to every function and type scripts
 use.
 

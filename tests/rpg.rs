@@ -8,7 +8,7 @@ use std::{
 
 use wingine::{
     headless::Simulation,
-    input::Key,
+    input::{Key, MouseButton},
     runtime::{self, LuauGame},
 };
 
@@ -1194,6 +1194,38 @@ fn the_title_menu_fits_its_choices_and_scene_files_are_canonical() {
     assert_eq!((y, width, height), (80.0, 6.0 + 8.0 + label + 6.0, 20.0));
     assert_eq!(x, 160.0 - (width / 2.0).floor());
     assert!(simulation.eval::<bool>(&format!("{menu}:find('choice_1/pointer'):is_visible()")));
+}
+
+#[test]
+fn questions_are_laid_out_by_the_dialogue_scene_and_answered_by_mouse_too() {
+    let path = Path::new(GAME).join("dialogue.scene.luau");
+    let text = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+    let scene = wingine::scene::SceneFile::parse(&text, &path).unwrap();
+    assert!(
+        scene.to_luau().unwrap() == text,
+        "dialogue.scene.luau isn't in the layout scenes are written in: write it again with \
+         `SceneFile::write`"
+    );
+
+    let mut simulation = simulation();
+    simulation.exec(
+        "spawn(function()
+            rpg.answer = rpg.dialogue.ask('Which way?', { 'Left', 'Right', 'Neither' })
+        end)",
+    );
+    // Shown in full, the question's choices show, and the cursor moving onto one highlights it.
+    simulation.tap(Key::Space);
+    let label = "rpg.dialogue.scene:find('question/choices/labels/choice_2/label')";
+    let (x, y, _, _) = bounds(&mut simulation, label);
+    simulation.move_mouse(x as f32 + 1.0, y as f32 + 1.0);
+    simulation.step();
+    assert_eq!(simulation.eval::<u32>("rpg.dialogue.box.selected"), 2);
+    simulation.tap(Key::Down);
+    assert_eq!(simulation.eval::<u32>("rpg.dialogue.box.selected"), 3);
+    // Clicking one picks it.
+    simulation.click(MouseButton::Left, x as f32 + 1.0, y as f32 + 1.0);
+    assert_eq!(dialogue(&mut simulation), None);
+    assert_eq!(simulation.eval::<u32>("rpg.answer"), 2);
 }
 
 #[test]

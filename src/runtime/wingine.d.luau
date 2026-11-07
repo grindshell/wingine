@@ -230,6 +230,32 @@ type PanelOptions = {
     resizable: boolean?,
 }
 
+--- How `ui.menu` finds its items and takes input. The actions are named as `input.bind` binds
+--- them, and one that isn't bound does nothing.
+type MenuOptions = {
+    --- Makes the items the nodes inside the menu's node with this tag, in the order they draw,
+    --- rather than its children.
+    tag: string?,
+    --- Whether moving past the last item that way goes round to the farthest the other way. By
+    --- default, true.
+    wrap: boolean?,
+    --- Whether the mouse moving onto an item selects it, and clicking one picks it. By default,
+    --- true.
+    mouse: boolean?,
+    --- The actions that move the selection, by default `"up"`, `"down"`, `"left"` and `"right"`.
+    up: string?,
+    down: string?,
+    left: string?,
+    right: string?,
+    --- The action that picks the selected item, by default `"confirm"`.
+    confirm: string?,
+    --- The action that cancels the menu, by default `"cancel"`.
+    cancel: string?,
+}
+
+--- What happened to a menu in an update.
+type MenuEvent = "moved" | "picked" | "cancelled"
+
 --- A rectangle of an image, to draw, from a sprite sheet.
 declare extern type Sprite with
     --- Returns the sprite's width and height in texels.
@@ -559,6 +585,26 @@ declare extern type PhysicsWorld3d with
     function is_resting(self, node: SceneNode): boolean
 end
 
+--- A selection among a node's items, its children or the nodes inside it with a tag, those shown,
+--- from `ui.menu`. Items are numbered from 1 in order, and found again each call, so they may come
+--- and go; the selection stays on its item while it's there, and on one that can be picked.
+declare extern type Menu with
+    --- Takes the player's input, in `update`, and returns what they did, if anything, and to
+    --- which item: `"moved"` the selection to it, by an action or the mouse moving onto it,
+    --- `"picked"` it, by the confirm action or a click, or `"cancelled"` the menu.
+    function update(self): (MenuEvent?, number?)
+    --- Returns the selected item's number, or nil without an item that can be picked.
+    function selected(self): number?
+    --- Selects item `item`, or if it can't be picked, the next that can.
+    function select(self, item: number): ()
+    --- Returns the items, in order.
+    function items(self): { SceneNode }
+    --- Sets whether item `item` can be selected and picked. Every item can, until this says not.
+    function set_enabled(self, item: number, enabled: boolean): ()
+    --- Returns whether item `item` can be selected and picked.
+    function is_enabled(self, item: number): boolean
+end
+
 --- Where an interface is laid out, with egui, in the game's `gui(ui)`: the whole window, or the
 --- inside of a container. Widgets that change a value take it and return the new one. It works
 --- only until the function it was passed to returns, and inside a container, use the `Ui` the
@@ -825,6 +871,14 @@ declare scene: {
     load: (path: string) -> SceneNode,
     --- Returns the clips of the scene file at `path`, by name.
     clips: (path: string) -> { [string]: Clip },
+}
+
+--- Menus over scenes' nodes, which games show as they like.
+declare ui: {
+    --- Returns a menu of `node`'s items: its children, such as a stack's, or with `options.tag`,
+    --- the nodes inside it with that tag. Those shown are the items, where they're drawn, which
+    --- must be in canvas pixels, without a camera, for the mouse to point at them.
+    menu: (node: SceneNode, options: MenuOptions?) -> Menu,
 }
 
 --- Data kept between runs of the game, in saves named with letters, digits, `_` and `-`. Saves

@@ -78,11 +78,8 @@ end
 shmup = {
     -- "title", "play", "over" (out of lives), "clear" (the boss is beaten) or "stress".
     mode = "title",
-    -- The title menu's selected item.
+    -- The title menu's selected item, which `hud.menu` moves.
     selected = 1,
-    -- Where the cursor was the frame before, if it was in the window, so the menu can tell when
-    -- it moves.
-    cursor = nil :: { x: number, y: number }?,
     -- The root of the HUD's scene, which `hud.luau` fills in.
     hud = hud.scene,
     -- The bullet system running, and its name.
@@ -202,22 +199,12 @@ local function update_stars(dt: number)
 end
 
 local function update_title()
-    local items = #hud.items
-    -- The cursor selects the item it moves onto, and clicking one starts it.
-    local x, y = input.mouse_position()
-    local last = shmup.cursor
-    local pointed = if x and y then hud.item_at(x, y) else nil
-    if pointed and (not last or last.x ~= x or last.y ~= y) then
-        shmup.selected = pointed
-    end
-    shmup.cursor = if x and y then { x = x, y = y } else nil
-    local clicked = pointed ~= nil and input.mouse_pressed("left")
-    if input.pressed("up") then
-        shmup.selected = (shmup.selected - 2) % items + 1
-    elseif input.pressed("down") then
-        shmup.selected = shmup.selected % items + 1
-    elseif input.pressed("confirm") or clicked then
-        local start = hud.items[shmup.selected]:props().start
+    -- The keys move the selection, as does the cursor moving onto an item, and the confirm key
+    -- or clicking an item starts it.
+    local happened, item = hud.menu:update()
+    shmup.selected = hud.menu:selected() or 1
+    if happened == "picked" then
+        local start = hud.items[item]:props().start
         if start == "play" then
             shmup.start()
         elseif start == "boss" then

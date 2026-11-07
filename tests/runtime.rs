@@ -10,7 +10,7 @@ use wingine::{
     Error,
     graphics::Resolution,
     headless::Simulation,
-    input::{GamepadButton, Key, Stick},
+    input::{GamepadButton, Key, MouseButton, Stick},
     runtime::{self, LibraryConfig, LuauGame},
 };
 
@@ -731,7 +731,7 @@ fn the_definitions_declare_every_function_of_the_engine() {
             "main.luau",
             "local tables = { graphics = graphics, input = input, audio = audio,
                 tilemap = tilemap, grid = grid, physics = physics, scene = scene, save = save,
-                exact = exact, rect = rect, window = window }
+                exact = exact, rect = rect, window = window, ui = ui }
             names = {}
             for table_name, functions in tables do
                 local found = {}
@@ -746,7 +746,7 @@ fn the_definitions_declare_every_function_of_the_engine() {
     let mut simulation = simulation(&folder);
     let tables = [
         "graphics", "input", "audio", "tilemap", "grid", "physics", "scene", "save", "exact",
-        "rect", "window",
+        "rect", "window", "ui",
     ];
     for table in tables {
         let functions: Vec<String> = simulation.eval(&format!("names.{table}"));
@@ -1328,6 +1328,158 @@ fn scenes_lay_out_on_the_canvas() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("set_anchor takes fractions"), "{err}");
+}
+
+#[test]
+fn menus_pick_among_the_nodes_shown() {
+    let folder = game(
+        "menus",
+        &[
+            ("conf.luau", "return { width = 100, height = 60 }"),
+            (
+                "screen.scene.luau",
+                r##"return {
+                    format = 3,
+                    children = {
+                        {
+                            name = "list", kind = "stack", x = 10, y = 10, gap = 2,
+                            children = {
+                                { name = "a", kind = "area", width = 40, height = 10 },
+                                { name = "b", kind = "area", width = 40, height = 10 },
+                                {
+                                    name = "hidden", kind = "area", visible = false, width = 40,
+                                    height = 10,
+                                },
+                                { name = "c", kind = "area", width = 40, height = 10 },
+                            },
+                        },
+                        {
+                            name = "row", kind = "node", y = 50,
+                            children = {
+                                {
+                                    name = "one", kind = "area", tags = { "cell" }, width = 20,
+                                    height = 10,
+                                },
+                                { name = "label", kind = "text", text = "x" },
+                                {
+                                    name = "two", kind = "area", tags = { "cell" }, x = 30,
+                                    width = 20, height = 10,
+                                },
+                            },
+                        },
+                    },
+                }"##,
+            ),
+            (
+                "main.luau",
+                "screen = scene.load('screen.scene.luau')
+                list = ui.menu(screen:find('list'))
+                cells = ui.menu(screen:find('row'), { tag = 'cell', wrap = false, confirm = 'pick' })
+                input.bind('up', { 'Up' })
+                input.bind('down', { 'Down' })
+                input.bind('right', { 'Right' })
+                input.bind('confirm', { 'Z' })
+                input.bind('cancel', { 'X' })
+                input.bind('pick', { 'Space' })
+                -- What each menu said last, as `what item`.
+                said = {}
+                local function hear(name, happened, item)
+                    if happened then
+                        said[name] = `{happened} {item or ''}`
+                    end
+                end
+                function update()
+                    hear('list', list:update())
+                    hear('cells', cells:update())
+                end
+                function names(menu)
+                    local found = {}
+                    for _, item in menu:items() do
+                        table.insert(found, item:name())
+                    end
+                    return found
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    let said = |simulation: &mut Simulation<LuauGame>, menu: &str| -> Option<String> {
+        let said = simulation.eval(&format!("said.{menu}"));
+        simulation.exec(&format!("said.{menu} = nil"));
+        said
+    };
+    assert_eq!(
+        simulation.eval::<Vec<String>>("names(list)"),
+        ["a", "b", "c"],
+        "those shown"
+    );
+    assert_eq!(simulation.eval::<u32>("list:selected()"), 1);
+    simulation.tap(Key::Down);
+    assert_eq!(said(&mut simulation, "list").as_deref(), Some("moved 2"));
+    simulation.tap(Key::Down);
+    simulation.tap(Key::Down);
+    assert_eq!(
+        said(&mut simulation, "list").as_deref(),
+        Some("moved 1"),
+        "it wraps"
+    );
+
+    simulation.exec("list:set_enabled(2, false)");
+    assert!(!simulation.eval::<bool>("list:is_enabled(2)"));
+    simulation.tap(Key::Down);
+    assert_eq!(said(&mut simulation, "list").as_deref(), Some("moved 3"));
+    // The selection stays on its item as others come and go.
+    simulation.exec("screen:find('list/hidden'):set_visible(true)");
+    assert_eq!(simulation.eval::<u32>("list:selected()"), 4);
+    simulation.tap(Key::Z);
+    assert_eq!(said(&mut simulation, "list").as_deref(), Some("picked 4"));
+    simulation.tap(Key::X);
+    assert_eq!(said(&mut simulation, "list").as_deref(), Some("cancelled "));
+    simulation.exec("list:select(1)");
+    assert_eq!(simulation.eval::<u32>("list:selected()"), 1);
+
+    // The mouse moving onto an item selects it, and clicking one picks it.
+    simulation.move_mouse(20.0, 25.0);
+    simulation.step();
+    assert_eq!(
+        said(&mut simulation, "list"),
+        None,
+        "the second can't be picked"
+    );
+    simulation.exec("list:set_enabled(2, true)");
+    simulation.move_mouse(21.0, 25.0);
+    simulation.step();
+    assert_eq!(said(&mut simulation, "list").as_deref(), Some("moved 2"));
+    simulation.click(MouseButton::Left, 20.0, 15.0);
+    assert_eq!(said(&mut simulation, "list").as_deref(), Some("picked 1"));
+
+    // Items by tag, which needn't be a stack's, with actions of the game's.
+    assert_eq!(
+        simulation.eval::<Vec<String>>("names(cells)"),
+        ["one", "two"]
+    );
+    simulation.tap(Key::Right);
+    assert_eq!(said(&mut simulation, "cells").as_deref(), Some("moved 2"));
+    simulation.tap(Key::Right);
+    assert_eq!(said(&mut simulation, "cells"), None, "it doesn't wrap");
+    simulation.tap(Key::Z);
+    assert_eq!(said(&mut simulation, "cells"), None);
+    simulation.tap(Key::Space);
+    assert_eq!(said(&mut simulation, "cells").as_deref(), Some("picked 2"));
+
+    let err = simulation
+        .try_exec("ui.menu(screen, { colour = 'red' })")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("not `colour`"), "{err}");
+    let err = simulation
+        .try_exec("list:select(5)")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("the menu has no item 5: it has 4 shown"),
+        "{err}"
+    );
 }
 
 #[test]

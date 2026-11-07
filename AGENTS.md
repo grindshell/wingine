@@ -10,7 +10,8 @@ systems, and don't build more 3D features unless asked.
 Wingine has what its examples need: tilemaps and batched sprites, meshes and glTF models in 3D
 views picked by boxes, sprite animation, a camera, keyboard, mouse and gamepad input bound to
 actions, grid movement, physics with Rapier (collision in 2D; bodies and characters in 3D views), text, audio, saves, Luau scripting with tasks, native libraries written
-in Rust, scenes (levels, screens and rigged characters), egui interfaces, and an editor built on
+in Rust, scenes (levels, screens and rigged characters), menus over scenes' nodes, egui
+interfaces, and an editor built on
 the engine. Each feature is finished with a game or example that uses it, with tests.
 
 - Scenes are data: files of plain Luau values, with no calls or expressions, so tools write back
@@ -145,6 +146,14 @@ networking or 3D pipelines.
   `src/gamepads.rs` feeds it from gilrs, polled at the start of each of a window's frames (so a
   window that redraws on demand reads them only in frames that come anyway), and only while it's
   focused; a `Simulation` connects and pushes simulated ones.
+- `src/menu.rs`: `Menu`, a selection among `MenuItem`s (a rect and whether it's enabled) that
+  games drive: each `update` takes the items as they are now and the `Input`, and returns a
+  `MenuEvent` (moved, picked or cancelled). It holds no items, only the selected index and where
+  the cursor was, so the mouse selects only as it moves (`track_cursor` notes where it is as a
+  menu opens). Directions go by where items are (`neighbor`): those lined up across first, the
+  nearest whose middle is past the selected one's far edge, else wrapping to the farthest before
+  its near edge, and only then those not lined up, so lists, rows and grids, ragged ones too,
+  move as they look. Held keys move again by `Input::repeated`. Its unit tests don't need a GPU.
 - `src/graphics/`: `Gpu` (adapter + device), `WindowSurface` (presents to the window),
   `Renderer` (wgpu pipelines), `Screen` (applies the `Resolution`), and the public drawing API:
   `Canvas` (what games draw to each frame), `Camera`, `Resolution`, `Texture`, `Sprite`,
@@ -323,7 +332,11 @@ networking or 3D pipelines.
   save folder, and the native libraries to load, any of them optional (skipped if there's no such
   library, but an error if it's there and fails to load). `LuauGame`
   is the `Game` that runs one, and the engine's API for it is the global tables `graphics`,
-  `input`, `audio`, `tilemap`, `grid`, `physics`, `scene`, `save` and `window`, one file each. The close
+  `input`, `audio`, `tilemap`, `grid`, `physics`, `scene`, `ui`, `save` and `window`, one file
+  each. `ui.menu` hands out a `Menu` (`ui.rs`'s `ScriptMenu`), which holds the `Lent` to read
+  input, so it's documented with its table rather than in `src/lua.rs`: a `menu::Menu` over a
+  node's children or tagged descendants, found again each call (those shown, at
+  `Scene::extent`), keeping its selection by `NodeId` as they come and go. The close
   button asks the game's global `close_requested`, lent the context as `update` is, and closes
   unless it returns false; a game stopped by an error always closes. The module docs are the
   reference for script authors; the engine types those tables hand out (sprites, animations,
@@ -369,7 +382,8 @@ networking or 3D pipelines.
   places it in its parent's rectangle, and its stretch sizes it by it, where the root's is the
   scene's `size` (the canvas's: drawing sets it, and `scene.load` starts it there;
   `draw_with_size` draws it laid out for another canvas, as the editor's viewport does) and a plain
-  node passes its parent's on. So `transform`, `bounds` and `contains` walk down from the root.
+  node passes its parent's on. So `transform`, `bounds` and `contains` walk down from the root,
+  as does `extent`, the bounds of a node and what's shown inside it, where menus' items are.
   Stacks and panels (format 3; a panel is a stack that draws a fill and border or a sliced
   sprite) place their children themselves (`lay_out_stack`): one after another along their
   `direction` with a `gap`, inside their `padding`, each taking the space it covers as drawn,
@@ -497,15 +511,20 @@ networking or 3D pipelines.
   which fight when the player stands beside them; its messages and menus go through the dialogue
   box, and tests make its dice predictable by replacing `battle.roll`. `items.luau` holds things
   to use and gear, whose bonuses `items.stats` adds to the player's; `shop.luau` buys and sells
-  them, and `bag.luau` (the menu key) equips gear and uses items. `ui.luau` holds the panels'
-  shared look. `story.reached(stage)` compares quest stages, which run in the order of
+  them, and `bag.luau` (the menu key) equips gear and uses items. `look.luau` holds the panels'
+  shared look (named so it doesn't hide the engine's `ui`). `dialogue.ask` lays its choices out in
+  `dialogue.scene.luau`, a panel of rows copied from hidden ones, details in a column beside them
+  and the highlighted choice's note to their left, which a `ui.menu` made once the text is
+  revealed picks from; the box itself and its speaker are drawn in code, revealing the text glyph
+  by glyph. `story.reached(stage)` compares quest stages, which run in the order of
   `story.STAGES`. F1 shows `debug_panel.luau`, an egui window from the game's `gui` that sets hit
   points, coins, items and the quest's stage, and jumps between maps (`ARRIVALS` in `main.luau`).
-  Its panels show `frame.png`, a 5x5 frame with cut corners, sliced: `ui.panel` draws it with
-  `graphics.draw_sprite_sliced`, and the panels of `title.scene.luau` (the title's name and menu)
-  and `bag.scene.luau` (the bag's stats) show it, fitting rows that `title.luau` and `bag.luau`
-  copy from a hidden one with `node:add`. The game opens on `title.luau`, a title screen whose
-  woods are drawn in code, whose Continue (offered when there's a save) restores the save
+  Its panels show `frame.png`, a 5x5 frame with cut corners, sliced: `look.panel` draws it with
+  `graphics.draw_sprite_sliced`, and the panels of `title.scene.luau` (the title's name and menu),
+  `dialogue.scene.luau` and `bag.scene.luau` (the bag's stats) show it, fitting rows that
+  `title.luau`, `dialogue.luau` and `bag.luau` copy from a hidden one with `node:add`. The game
+  opens on `title.luau`, a title screen whose woods are drawn in code, whose menu is a `ui.menu`
+  of its panel's rows, and whose Continue (offered when there's a save) restores the save
   `progress`, which `progress.luau` writes after every event
   (`run_event`) once the title has closed: the player's state, where they are, and each visited
   level's beaten foes and found places (by cell). Continuing builds those levels afresh, marks
@@ -526,8 +545,10 @@ networking or 3D pipelines.
   coroutines the game resumes each update with `dt`, so the engine's `wait` works in them
   (`enemies.resume`, `enemies.frame`). `boss.luau` holds the spell cards, `stage.luau` the waves,
   `stress.luau` the stress test, which prints the limit it finds for runs without a window, and
-  `hud.luau` the panel and screens, laid out in `hud.scene.luau` (in canvas pixels, so the title
-  menu's items, areas in a stack, are hit-tested against the mouse; the panel's rows are stacks,
+  `hud.luau` the panel and screens, laid out in `hud.scene.luau` (in canvas pixels, so
+  `hud.menu`, a `ui.menu` of the title menu's items, areas in a stack, takes the mouse too; the
+  title shows from the start, so the menu has its items before the first draw; the panel's rows
+  are stacks,
   the play's hidden to show the stress test's), which it fills in from the game's state and draws
   each frame; `shmup.hud` is the scene's root, for tests, which check the file
   stays in the canonical layout. `shmup.start("boss")` is
@@ -651,7 +672,8 @@ networking or 3D pipelines.
 - `tests/gui.rs`: tests for egui over games, through `Simulation`: clicking widgets by label,
   typing into a focused field, input egui takes not reaching the game, and the debug key.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders,
-  their saves, their 3D views, models and picking, scenes' views and their nodes, in its
+  their saves, their 3D views, models and picking, scenes' views and their nodes, menus over
+  nodes, in its
   `physics` module (with the `physics` feature), physics worlds of their nodes, 2D and 3D (bodies
   falling, characters walking, fixed bodies following and placed by turned parents, models' triangles,
   and the errors), and in its
@@ -672,8 +694,8 @@ networking or 3D pipelines.
   plays a whole match and checks a hash of it, pinned, so CI checks it's the same to the bit on
   Windows and Linux; a change to how Pong plays changes the hash.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest, using
-  its debug panel, its title menu and bag's panels fitting what they hold, its scene files being
-  in the canonical layout, and continuing a saved game in a second simulation sharing the first's
+  its debug panel, its title menu and bag's panels fitting what they hold, questions answered by
+  mouse, its scene files being in the canonical layout, and continuing a saved game in a second simulation sharing the first's
   save folder. Its `simulation()` starts a new game from the title screen.
 - `tests/garden.rs`: tests for the `garden` example, the same way: walking, stopping at and
   sliding along what's solid and the ground's edges, its F1 view, and that its scene files are in

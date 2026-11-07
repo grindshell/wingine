@@ -1863,6 +1863,37 @@ impl Scene {
         rect.contains(inverse.apply(point))
     }
 
+    /// The smallest axis-aligned rectangle in the scene's coordinates around what the node and
+    /// the nodes inside it that are visible cover, if they cover anything, as [`Scene::bounds`]
+    /// finds for each: so for a plain node, what's in it. A 3D view's nodes count only as the
+    /// view does. Menus find their items with it.
+    pub fn extent(&self, id: NodeId) -> Option<Rect> {
+        self.extent_placed(id, &self.placed(id))
+    }
+
+    fn extent_placed(&self, id: NodeId, placed: &Placed) -> Option<Rect> {
+        let node = self.node(id);
+        let own = placed.rect.map(|rect| {
+            if node.kind.only_moves() {
+                Affine::from_translation(placed.transform.translation).bounds(rect)
+            } else {
+                placed.transform.bounds(rect)
+            }
+        });
+        if matches!(node.kind, Kind::View3d(_)) {
+            return own;
+        }
+        let children = self.children_placed(id, placed);
+        node.children
+            .iter()
+            .zip(&children)
+            .filter(|&(&child, _)| self.node(child).visible)
+            .filter_map(|(&child, placed)| self.extent_placed(child, placed))
+            .fold(own, |extent, rect| {
+                Some(extent.map_or(rect, |extent| union(extent, rect)))
+            })
+    }
+
     /// The 3D view a node placed in 3D is in, if it is.
     pub fn view_of(&self, id: NodeId) -> Option<NodeId> {
         let mut at = id;
@@ -1967,8 +1998,8 @@ impl Scene {
         hits.into_iter().map(|(_, id)| id).collect()
     }
 
-    /// Whether `id` and every node it's inside are visible.
-    fn is_shown(&self, id: NodeId) -> bool {
+    /// Whether `id` and every node it's inside are visible, so it's drawn.
+    pub fn is_shown(&self, id: NodeId) -> bool {
         let mut at = Some(id);
         while let Some(id) = at {
             let node = self.node(id);

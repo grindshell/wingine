@@ -30,28 +30,20 @@ local function node(path: string)
     return at
 end
 
--- The title menu's items, areas whose props say what they start, and what each is called.
+-- The title menu's items, areas whose props say what they start, and what each is called, and
+-- the menu that picks among them, by key and by mouse.
 hud.items = node("field/title/menu"):children()
 local item_names = {}
 for i, item in hud.items do
     item_names[i] = item:find("label"):text()
 end
+hud.menu = ui.menu(node("field/title/menu"))
 
 -- `n` with commas between groups of three digits, such as "1,234,567".
 function hud.number(n: number): string
     local digits = string.format("%d", math.floor(n))
     local grouped = digits:reverse():gsub("(%d%d%d)", "%1,"):reverse()
     return (grouped:gsub("^,", ""))
-end
-
--- The number of the menu item at `x`, `y` on the canvas, if there's one there.
-function hud.item_at(x: number, y: number): number?
-    for i, item in hud.items do
-        if item:contains(x, y) then
-            return i
-        end
-    end
-    return nil
 end
 
 -- Sets the value of the panel's row `path`, and its color if given.
@@ -144,7 +136,8 @@ local function fill_boss()
     end
 end
 
--- The title screen's menu, with the selected item pointed out.
+-- The title screen's menu, with the selected item pointed out. It's shown from the start, as the
+-- game opens on it, so `hud.menu` has its items before the first draw.
 local function fill_title()
     node("field/title"):set_visible(shmup.mode == "title")
     for i, item in hud.items do

@@ -5,7 +5,7 @@
 
 local dialogue = require("./dialogue")
 local items = require("./items")
-local ui = require("./ui")
+local look = require("./look")
 
 local bag = {}
 
@@ -135,7 +135,7 @@ function bag.draw()
     local stats = items.stats()
     local function show(key: string, value: string, raised: boolean?)
         lines[key]:set_text(value)
-        lines[key]:set_color(if raised then RAISED else ui.TEXT)
+        lines[key]:set_color(if raised then RAISED else look.TEXT)
     end
     show("hp", `{rpg.hp}/{stats.max_hp}`, stats.max_hp > rpg.stats.max_hp)
     show("attack", tostring(stats.attack), stats.attack > rpg.stats.attack)

@@ -1,11 +1,12 @@
 -- The title screen the game opens on: its name over the edge of the woods at night, and a menu to
 -- continue the saved game, if there is one, or start a new one. While it's open, `update` takes
--- the player's input: up and down highlight a choice, and the interact key picks it. The woods are
--- drawn here; the name and the menu are laid out in `title.scene.luau`, whose menu is a panel
--- that fits its choices, copies of its hidden `choice` row.
+-- the player's input: up and down, or the mouse, highlight a choice, and the interact key or a
+-- click picks it. The woods are drawn here; the name and the menu are laid out in
+-- `title.scene.luau`, whose menu is a panel that fits its choices, copies of its hidden `choice`
+-- row.
 
 local conf = require("./conf")
-local ui = require("./ui")
+local look = require("./look")
 local world = require("./world")
 
 local title = {}
@@ -45,8 +46,10 @@ local STARS = {
 }
 
 title.scene = scene.load("title.scene.luau")
-local menu = title.scene:find("menu")
-local template = menu:find("choice")
+local panel = title.scene:find("menu")
+local template = panel:find("choice")
+-- Picks among the panel's rows, those shown.
+local menu = ui.menu(panel, { confirm = "interact" })
 
 -- The choices, in order, while the title is open.
 title.choices = nil :: { string }?
@@ -64,11 +67,12 @@ function title.open(choices: { string })
     end
     rows = {}
     for i, choice in choices do
-        local row = menu:add(template, `choice_{i}`)
+        local row = panel:add(template, `choice_{i}`)
         row:set_visible(true)
         row:find("label"):set_text(choice)
         rows[i] = row
     end
+    menu:select(1)
 end
 
 function title.close()
@@ -85,12 +89,10 @@ function title.update(): string?
     if not choices then
         return nil
     end
-    if input.pressed("up") then
-        title.selected = (title.selected - 2) % #choices + 1
-    elseif input.pressed("down") then
-        title.selected = title.selected % #choices + 1
-    elseif input.pressed("interact") then
-        return choices[title.selected]
+    local happened, choice = menu:update()
+    title.selected = menu:selected() or 1
+    if happened == "picked" then
+        return choices[choice]
     end
     return nil
 end
@@ -116,7 +118,7 @@ function title.draw()
     for i, row in rows do
         local selected = i == title.selected
         row:find("pointer"):set_visible(selected)
-        row:find("label"):set_color(if selected then ui.TEXT else ui.DIM)
+        row:find("label"):set_color(if selected then look.TEXT else look.DIM)
     end
     graphics.draw_scene(title.scene)
 end

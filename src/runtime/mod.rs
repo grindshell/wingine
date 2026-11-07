@@ -53,7 +53,7 @@
 //! `require("./opponent")`. Files the engine loads, such as sounds and images, are relative to
 //! the game's folder.
 //!
-//! The engine's API is in nine global tables:
+//! The engine's API is in ten global tables:
 //!
 //! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.color`, `graphics.default_font`,
 //! `graphics.frame_stats`, `graphics.new_animation` and `graphics.hit_box` work anywhere,
@@ -201,6 +201,22 @@
 //!   `Clip`s by name, for posing nodes with `node:pose(clip, time, weight)`. A clip poses any node
 //!   whose nodes its tracks' paths lead to, such as each instance of the file.
 //!
+//! `ui`, for menus over scenes' nodes, at any time:
+//!
+//! - `ui.menu(node, options)` returns a `Menu` of `node`'s items: its children, such as a
+//!   stack's, or the nodes inside it tagged `options.tag`, those shown, where they're drawn (see
+//!   [`Scene::extent`](crate::scene::Scene::extent)), numbered from 1 in order. `options` may
+//!   also turn off `wrap` and `mouse`, and name the actions it answers to, `up`, `down`, `left`,
+//!   `right`, `confirm` and `cancel` by default. Items are found again each time it's used, and
+//!   the selection stays on its item while it's there. See [`menu`](crate::menu) for how it
+//!   moves.
+//! - `menu:update()`, while the game loads and in `update`, takes the player's input and returns
+//!   what they did, if anything, and to which item: `"moved"` the selection to it, `"picked"` it,
+//!   or `"cancelled"` the menu, with no item.
+//! - `menu:selected()` returns the selected item's number, `menu:select(item)` selects one,
+//!   `menu:items()` returns the items, and `menu:set_enabled(item, enabled)` and
+//!   `menu:is_enabled(item)` set and tell whether one can be picked.
+//!
 //! `input`, while the game loads and in `update`:
 //!
 //! - `input.bind(action, controls, gamepad)` binds an action, such as `"jump"`, to a list of
@@ -304,6 +320,7 @@ mod physics;
 mod save;
 mod scene;
 mod tilemap;
+mod ui;
 mod window;
 
 use std::{
@@ -546,6 +563,7 @@ impl LuauGame {
         globals.set("physics", physics::module(lua)?)?;
         let scene = scene::module(lua, &lent, folder.to_owned(), textures)?;
         globals.set("scene", scene)?;
+        globals.set("ui", ui::module(lua, &lent)?)?;
         globals.set("save", save::module(lua, ctx.saves())?)?;
         globals.set("window", window::module(lua, &lent)?)?;
         #[cfg(feature = "egui")]

@@ -77,7 +77,6 @@ return {
                 {
                     name = "title",
                     kind = "node",
-                    visible = false,
                     children = {
                         {
                             name = "heading",
