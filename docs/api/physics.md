@@ -245,8 +245,9 @@ world:step(dt: number)
 
 Moves the world on by `dt` seconds, a frame's `update` time: dynamic bodies fall, tumble, push
 each other and come to rest, moving their nodes, and kinematic bodies move to where their nodes
-are. Bodies first follow their nodes, if scripts have moved them. Steps longer than a sixtieth
-of a second are taken in equal parts, so bodies don't pass through each other; a game whose
+are. Bodies first follow their nodes, if scripts have moved them or the nodes they're in. Steps
+longer than a sixtieth of a second are taken in equal parts, so bodies don't pass through each
+other, and kinematic bodies go an equal part of the way in each; a game whose
 `conf.luau` sets an `update_rate` of 60 steps the same each update, so a run replays exactly.
 
 ### `world:walk`
@@ -258,8 +259,8 @@ world:walk(node: SceneNode, motion: vector): (vector, boolean)
 Walks the character `node` by up to `motion`, and returns how far it moved and whether it's on
 the ground. On the ground, and not rising, it walks across by `motion.x` and `motion.z`: up stairs
 no higher than its `step`, up and down slopes no steeper than its `slope`, staying on the ground
-as it goes down them, and sliding along walls and steeper slopes; or off a ledge, falling by
-`motion.y`. Off the ground, or rising, it moves as `motion` says, landing on what it can stand on,
+as it goes down them, and with what it stands on as that goes down, as a lift does, and sliding
+along walls and steeper slopes; or off a ledge, falling by `motion.y`. Off the ground, or rising, it moves as `motion` says, landing on what it can stand on,
 sliding down what's too steep, and stopping at ceilings. It stops a five-hundredth of a unit
 short of what it hits, and its own body isn't in its way.
 

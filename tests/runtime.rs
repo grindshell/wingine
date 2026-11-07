@@ -2653,7 +2653,8 @@ mod physics {
     }
 
     /// A 3D view of a pen: a floor whose top is at `y` 0, a wall across `x` from 2 to 2.5, a crate
-    /// half a unit across held up at 2, a turned group with a box in it, and a walker.
+    /// half a unit across held up at 2, a turned group with a box in it, a group at -4 with a
+    /// block half a unit across standing in it, and a walker.
     const PEN: &str = r##"return {
     format = 2,
     children = {
@@ -2668,6 +2669,12 @@ mod physics {
                     name = "turned", kind = "node", z = -3, yaw = 0.5,
                     children = {
                         { name = "box", kind = "mesh", shape = "cuboid", y = 0.25, size = { 0.5, 0.5, 0.5 } },
+                    },
+                },
+                {
+                    name = "group", kind = "node", x = -4,
+                    children = {
+                        { name = "block", kind = "mesh", shape = "cuboid", y = 0.25, size = { 0.5, 0.5, 0.5 } },
                     },
                 },
                 { name = "walker", kind = "node", y = 0.002 },
@@ -2748,6 +2755,31 @@ mod physics {
         let (x, y, z): (f32, f32, f32) =
             simulation.eval("crate:position_3d().x, crate:position_3d().y, crate:position_3d().z");
         assert!(x == 0.0 && y < 5.0 && y > 4.9 && z == 1.0, "{x}, {y}, {z}");
+    }
+
+    #[test]
+    fn bodies_that_move_follow_the_nodes_they_are_in() {
+        let mut simulation = pen("physics_3d_carried");
+        // A kinematic block, carried in front of the walker by the group it's in.
+        simulation.exec(
+            "world:add(view:find('group/block'), { body = 'kinematic' })
+            view:find('group'):set_position_3d(vector.create(1, 0, 0))",
+        );
+        let (feet, _) = walk(&mut simulation, "vector.create(0.05, -0.01, 0)", 60);
+        // Its side, at 0.2 from its middle, a hair from the block's at 0.75.
+        assert!(near(feet[0], 0.55) && feet[0] < 0.55, "{feet:?}");
+
+        // A dynamic one goes with its group too, staying where it is in it.
+        simulation.exec(
+            "world:add(view:find('group/block'), { body = 'dynamic', shape = 'box' })
+            for _ = 1, 10 do world:step(1 / 60) end
+            view:find('group'):set_position_3d(vector.create(-4, 0, 2))
+            world:step(1 / 60)",
+        );
+        let (x, z): (f32, f32) = simulation.eval(
+            "view:find('group/block'):position_3d().x, view:find('group/block'):position_3d().z",
+        );
+        assert!(near(x, 0.0) && near(z, 0.0), "{x}, {z}");
     }
 
     #[test]

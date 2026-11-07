@@ -248,13 +248,16 @@ networking or 3D pipelines.
   that dynamic bodies bump into and leave), each a `Shape3d` (triangles, which only fixed bodies
   have, a hull, a box, a ball or a character's upright cylinder) placed by a `Pose3d`, a position
   and yaw, pitch and roll as nodes have, turned to and from Rapier's quaternions with `libm`.
-  `step` takes steps longer than a sixtieth of a second in equal parts. `walk` walks a
-  `Character`, an upright cylinder with flat feet (a capsule's rounded bottom slides off stair
-  edges), by casts of its own as the 2D `slide` does: on the ground, along it first, up slopes no
-  steeper than its `slope` and along walls and steeper slopes as though upright, and only if that
-  hits something, over it as well (up a `step`, across, and down onto something to stand on),
-  keeping whichever went farther; then down to the ground by up to a step, or falling off a ledge;
-  off the ground, or rising, as it's told, landing on what it can stand on. It pushes the dynamic
+  `step` takes steps longer than a sixtieth of a second in equal parts, putting kinematic bodies
+  an equal part of the way along in each (Rapier would move one all the way in the first, then
+  hold it still). `walk` walks a `Character`, an upright cylinder with flat feet (a capsule's
+  rounded bottom slides off stair edges), by casts of its own as the 2D `slide` does: on the
+  ground (just below it, or as far as what's below sank by its velocity over the last step,
+  `sank`, which it follows down, as on a lift), along it first, up slopes no steeper than its
+  `slope` and along walls and steeper slopes as though upright, and only if that hits something,
+  over it as well (up a `step`, across, and down onto something to stand on), keeping whichever
+  went farther; then down to the ground by up to a step, or falling off a ledge; off the ground,
+  or rising, as it's told, landing on what it can stand on. It pushes the dynamic
   bodies it walks into at the height of their centers of mass, as a collision of its mass and
   theirs would, at the speed it walked over the last step's time. Its `true_normal` snaps GJK's
   normals, off by up to a hundredth of a radian, to a face of what it hit within a few degrees
@@ -269,7 +272,8 @@ networking or 3D pipelines.
   baked through the node's whole transform, composed with `libm`'s sines (`exact_transform`), and
   those that move placed by their node's position and turn, stretched by its scale, inside nodes
   that only move them (`parent_origin`). Before each walk and step it follows nodes scripts moved
-  (comparing their placements to what it last read or wrote) and drops those removed; after each
+  (comparing their placements, and for bodies that move, their parents' origins, to what it last
+  read or wrote) and drops those removed; after each
   step it moves dynamic bodies' nodes to them, leaving those at rest.
 - `src/headless.rs`: `Headless`, which renders a `Canvas` to an in-memory image without a window,
   and `Simulation`, which runs a whole `Game` without a window: fixed 60 fps frames, simulated

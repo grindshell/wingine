@@ -23,6 +23,9 @@ type Rotation = rapier3d::math::Rotation;
 /// standing on the ground isn't touching it, and walks along it without hitting it.
 const GAP: f32 = 0.002;
 
+/// How far below a character the ground may be for it to stand on it, unless the ground sank.
+const REACH: f32 = GAP * 4.0;
+
 /// The longest step the world takes at once, in seconds: longer ones are taken in parts.
 const STEP: f32 = 1.0 / 60.0;
 
@@ -415,15 +418,38 @@ impl World3d {
 
     /// Moves the world on by `dt` seconds: dynamic bodies fall, tumble and come to rest, and
     /// kinematic ones move where they've been put. Steps longer than a sixtieth of a second are
-    /// taken in equal parts, up to 16, so bodies don't pass through each other.
+    /// taken in equal parts, up to 16, so bodies don't pass through each other, and kinematic
+    /// bodies go an equal part of the way in each.
     pub fn step(&mut self, dt: f32) {
         if !(dt > 0.0 && dt.is_finite()) {
             return;
         }
         // A whole number of sixtieths, give or take a little, is that many.
-        let parts = (dt / STEP - 1.0e-3).ceil().clamp(1.0, MAX_STEPS as f32);
-        self.rapier.integration_parameters.dt = dt / parts;
-        for _ in 0..parts as u32 {
+        let parts = (dt / STEP - 1.0e-3).ceil().clamp(1.0, MAX_STEPS as f32) as u32;
+        self.rapier.integration_parameters.dt = dt / parts as f32;
+        // Rapier moves a kinematic body all the way to where it's been put in its next step, and
+        // keeps it still in the steps after, so in parts it would go too fast, then stop.
+        let moving: Vec<(RigidBodyHandle, Pose, Pose)> = if parts > 1 {
+            self.rapier
+                .bodies
+                .iter()
+                .filter(|(_, body)| body.is_kinematic() && body.position() != body.next_position())
+                .map(|(handle, body)| (handle, *body.position(), *body.next_position()))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for part in 1..=parts {
+            for &(handle, from, to) in &moving {
+                let pose = if part == parts {
+                    to
+                } else {
+                    between(from, to, part as f32 / parts as f32)
+                };
+                if let Some(body) = self.rapier.bodies.get_mut(handle) {
+                    body.set_next_kinematic_position(pose);
+                }
+            }
             self.rapier.step();
         }
         self.fresh.clear();
@@ -437,7 +463,8 @@ impl World3d {
     /// On the ground, and not rising, it walks across by the motion's `x` and `z`: up stairs no
     /// higher than its [`Character::step`], up and down slopes no steeper than its
     /// [`Character::slope`], sliding along walls and steeper slopes, and staying on the ground as
-    /// it goes down steps, unless it walks off a ledge, where it falls by the motion's `y`. Off
+    /// it goes down steps, and with what it stands on as that goes down, as a lift does, unless it
+    /// walks off a ledge, where it falls by the motion's `y`. Off
     /// the ground, or rising, it moves as `motion` says, landing on what it can stand on, sliding
     /// down what's too steep, and stopping at ceilings. Either way, it stops [`GAP`] short of
     /// what it hits.
@@ -460,15 +487,22 @@ impl World3d {
             middle: Vector::from(feet) + Vector::Y * (character.height / 2.0),
             walkable: libm::cosf(character.slope),
             own: own.map(|own| own.0),
+            last_step: self.last_step,
             pushes: Vec::new(),
         };
         let [x, y, z] = motion;
         let across = Vector::new(x, 0.0, z);
         let start = walk.middle;
-        let grounded = if y <= 0.0 && walk.on_ground() {
-            walk.walk_across(across, -y)
-        } else {
-            walk.slide(Vector::new(x, y, z), Slide::Free).landed
+        let ground = if y <= 0.0 { walk.ground() } else { None };
+        let grounded = match ground {
+            Some(below) => {
+                // Down with what it stands on, if that sank away from under it.
+                if below > REACH {
+                    walk.middle.y -= below - GAP;
+                }
+                walk.walk_across(across, -y)
+            }
+            None => walk.slide(Vector::new(x, y, z), Slide::Free).landed,
         };
         let moved = walk.middle - start;
         let pushes = std::mem::take(&mut walk.pushes);
@@ -527,6 +561,8 @@ struct Walk<'a> {
     /// The least a ground's normal points up, as the cosine of the steepest slope.
     walkable: f32,
     own: Option<RigidBodyHandle>,
+    /// How long the world's last step was, over which what it stands on may have sunk.
+    last_step: f32,
     pushes: Vec<Push>,
 }
 
@@ -564,10 +600,25 @@ impl Walk<'_> {
         })
     }
 
-    /// Whether the character stands on something it can stand on: just below it, a gap away.
-    fn on_ground(&self) -> bool {
-        self.cast(Vector::NEG_Y, GAP * 4.0)
-            .is_some_and(|hit| hit.normal.y >= self.walkable)
+    /// How far below the character the ground it stands on is, if it stands on something it can
+    /// stand on: just below it, a gap away, or as much farther as that sank in the last step,
+    /// as a lift going down does, up to a step.
+    fn ground(&self) -> Option<f32> {
+        if let Some(hit) = self.cast(Vector::NEG_Y, REACH) {
+            return (hit.normal.y >= self.walkable).then_some(hit.distance);
+        }
+        let hit = self.cast(Vector::NEG_Y, REACH + self.character.step)?;
+        let standing = hit.normal.y >= self.walkable;
+        (standing && hit.distance <= REACH + self.sank(&hit)).then_some(hit.distance)
+    }
+
+    /// How far down what `hit` hit moved where it was hit, in the last step.
+    fn sank(&self, hit: &Hit) -> f32 {
+        let Some(parent) = self.world.colliders[hit.collider].parent() else {
+            return 0.0;
+        };
+        let falling = -self.world.bodies[parent].velocity_at_point(hit.point).y;
+        falling.max(0.0) * self.last_step
     }
 
     /// Whether `hit` is a dynamic body's, and if so, notes that it was pushed.
@@ -773,6 +824,19 @@ fn true_normal(hit: &ShapeCastHit, collider: &Collider, cylinder: &Cylinder) -> 
         _ if level => -out / out.length(),
         _ => hit.normal1,
     }
+}
+
+/// The pose `t` of the way from `from` to `to`, turned along the way by normalizing the
+/// rotations' blend, which takes only a square root, so it gives the same bits everywhere.
+fn between(from: Pose, to: Pose, t: f32) -> Pose {
+    let translation = from.translation + (to.translation - from.translation) * t;
+    // Unturned, it stays exactly as it was, rather than as normalizing rounds it.
+    let rotation = if from.rotation == to.rotation {
+        from.rotation
+    } else {
+        from.rotation.lerp(to.rotation, t)
+    };
+    Pose::from_parts(translation, rotation)
 }
 
 /// `normal`, along the world's axis it's within rounding of, if it is: a face turned a quarter
@@ -1050,6 +1114,64 @@ mod tests {
         assert_eq!(world.pose(pusher).unwrap().position, [1.0, 0.0, 0.0]);
         // Shoved ahead of it.
         assert!(world.pose(pushed).unwrap().position[0] > 1.4);
+    }
+
+    #[test]
+    fn kinematic_bodies_go_evenly_through_steps_taken_in_parts() {
+        let mut world = ground();
+        let id = world
+            .add(&Body3d {
+                kind: BodyKind::Kinematic,
+                ..crate_at([0.0; 3])
+            })
+            .unwrap();
+        world.set_pose(id, Pose3d::at([1.0, 0.0, 0.0]));
+        // Across a unit in two sixtieths, taken in two parts: at 30 units a second throughout.
+        world.step(FRAME * 2.0);
+        assert_eq!(world.pose(id).unwrap().position, [1.0, 0.0, 0.0]);
+        let [vx, vy, vz] = world.velocity(id);
+        assert!(
+            (vx - 30.0).abs() < 1.0e-3 && vy == 0.0 && vz == 0.0,
+            "{vx}, {vy}, {vz}"
+        );
+        assert!(!world.is_resting(id));
+        // Turning as it goes, it ends turned as it was put.
+        let turned = Pose3d {
+            yaw: 1.0,
+            ..Pose3d::at([2.0, 0.0, 0.0])
+        };
+        world.set_pose(id, turned);
+        world.step(FRAME * 3.0);
+        let pose = world.pose(id).unwrap();
+        assert_eq!(pose.position, turned.position);
+        assert!((pose.yaw - 1.0).abs() < 1.0e-5, "{pose:?}");
+    }
+
+    #[test]
+    fn characters_go_down_with_what_they_stand_on() {
+        let mut world = ground();
+        // A lift whose top starts at 1, going down a unit a second.
+        let lift = world
+            .add(&Body3d {
+                kind: BodyKind::Kinematic,
+                shape: Shape3d::Box(bounds([-1.0, -0.2, -1.0], [1.0, 0.0, 1.0])),
+                pose: Pose3d::at([0.0, 1.0, 0.0]),
+                material: Material::default(),
+            })
+            .unwrap();
+        let mut feet = [0.0, 1.0 + GAP, 0.0];
+        for frame in 1..=30 {
+            world.set_pose(lift, Pose3d::at([0.0, 1.0 - frame as f32 / 60.0, 0.0]));
+            // Standing still, then walking, pulled down as a game's gravity reset on the
+            // ground pulls it.
+            let x = if frame <= 15 { 0.0 } else { 0.01 };
+            let walked = world.walk(&WALKER, feet, [x, -0.005, 0.0], None);
+            assert!(walked.grounded, "left the lift at frame {frame}: {feet:?}");
+            feet = add(feet, walked.moved);
+            world.step(FRAME);
+        }
+        // A gap above the lift's top as it was for the last walk, before the last step.
+        assert_near(feet, [0.15, 1.0 - 29.0 / 60.0 + GAP, 0.0], 1.0e-4);
     }
 
     #[test]

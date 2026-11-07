@@ -227,8 +227,9 @@ impl Shaped {
 enum Placed {
     /// A fixed body's node, by its transform from its own coordinates to the view's world's.
     Fixed(Affine3),
-    /// A body's that moves, in its parent.
-    Moving(Local),
+    /// A body's that moves: in its parent, and where the nodes it's in put its parent's origin,
+    /// so moving them moves the body too.
+    Moving { local: Local, origin: [f32; 3] },
 }
 
 /// Where a node is placed in 3D, in its parent: its position, how it's turned, and how much it's
@@ -510,7 +511,7 @@ fn place(scene: &Scene, id: NodeId, kind: BodyKind) -> Result<(Pose3d, Placed), 
         pitch: local.pitch,
         roll: local.roll,
     };
-    Ok((pose, Placed::Moving(local)))
+    Ok((pose, Placed::Moving { local, origin }))
 }
 
 /// The shape of a body of the node `id`, placed as `placed` says, shaped as `shaped` says, or a
@@ -564,7 +565,7 @@ fn shape(
             }
         }
         // In the body's own coordinates, stretched as the node is.
-        Placed::Moving(local) => {
+        Placed::Moving { local, .. } => {
             let stretch = |point: [f32; 3]| [0, 1, 2].map(|i| point[i] * local.scale[i]);
             match shaped {
                 Shaped::Triangles => Shape3d::Triangles {
@@ -669,7 +670,8 @@ impl PhysicsWorld3d {
         Ok(())
     }
 
-    /// Brings the bodies up to date with their nodes: moved, reshaped, or gone. A body whose
+    /// Brings the bodies up to date with their nodes: moved, by scripts or with the nodes
+    /// they're in, reshaped, or gone. A body whose
     /// node can no longer be placed, such as one whose parent has been turned since it was added,
     /// stays where it was.
     fn follow(&mut self, scene: &Scene) {
@@ -686,7 +688,9 @@ impl PhysicsWorld3d {
                 return true;
             }
             let reshaped = match (&placed, &bodied.placed) {
-                (Placed::Moving(now), Placed::Moving(was)) => now.scale != was.scale,
+                (Placed::Moving { local: now, .. }, Placed::Moving { local: was, .. }) => {
+                    now.scale != was.scale
+                }
                 _ => true,
             };
             if reshaped {
@@ -712,7 +716,7 @@ impl PhysicsWorld3d {
     /// Moves the nodes of dynamic bodies to where their bodies are.
     fn lead(&mut self, scene: &mut Scene) {
         for bodied in &mut self.bodies {
-            let Placed::Moving(local) = &mut bodied.placed else {
+            let Placed::Moving { local, origin: was } = &mut bodied.placed else {
                 continue;
             };
             if bodied.kind != BodyKind::Dynamic || self.world.is_resting(bodied.body) {
@@ -725,6 +729,7 @@ impl PhysicsWorld3d {
                 continue;
             };
             local.position = [0, 1, 2].map(|i| pose.position[i] - origin[i]);
+            *was = origin;
             local.yaw = pose.yaw;
             local.pitch = pose.pitch;
             local.roll = pose.roll;
