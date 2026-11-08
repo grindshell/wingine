@@ -6,8 +6,9 @@ use std::{
     path::Path,
     sync::{Condvar, Mutex, PoisonError, mpsc},
     thread::{self, ThreadId},
-    time::Instant,
 };
+
+use web_time::Instant;
 
 use crate::{
     Context, Error, Game, Result, WindowConfig,

@@ -12,6 +12,9 @@
 //! [`Simulation`](crate::headless::Simulation) without one keeps its saves in a temporary folder
 //! of its own, which goes when it does, so tests and scripted runs start with none and never
 //! touch the player's.
+//!
+//! On the web, there are no files: a save is kept in the browser's local storage for the page,
+//! under the key its file would have, `Wingine/<identity>/<name>.luau`.
 
 use std::{
     env,
@@ -82,6 +85,9 @@ impl Saves {
             is_name(identity),
             "`{identity}` can't name a game's saves: use only letters, digits, `_` and `-`"
         );
+        if cfg!(target_arch = "wasm32") {
+            return Self::in_folder(Path::new("Wingine").join(identity));
+        }
         match data_folder(|name| env::var_os(name)) {
             Some(data) => Self::in_folder(data.join("Wingine").join(identity)),
             None => Self {
@@ -110,8 +116,14 @@ impl Saves {
             let why = self.folder.as_ref().unwrap_err();
             return Err(error(format!("there's nowhere to keep saves: {why}")));
         };
-        let folder = path.parent().expect("saves are in a folder");
         let text = write_value(data).map_err(error)?;
+        if cfg!(target_arch = "wasm32") {
+            return web_storage::write(&path, &text).map_err(|source| Error::WriteFile {
+                path: path.clone(),
+                source,
+            });
+        }
+        let folder = path.parent().expect("saves are in a folder");
         fs::create_dir_all(folder).map_err(|source| Error::WriteFile {
             path: folder.to_owned(),
             source,
@@ -127,7 +139,12 @@ impl Saves {
         let Some(path) = self.path(name)? else {
             return Ok(None);
         };
-        let source = match fs::read_to_string(&path) {
+        let read = if cfg!(target_arch = "wasm32") {
+            web_storage::read(&path)
+        } else {
+            fs::read_to_string(&path)
+        };
+        let source = match read {
             Ok(source) => source,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(source) => return Err(Error::ReadFile { path, source }),
@@ -146,7 +163,12 @@ impl Saves {
         let Some(path) = self.path(name)? else {
             return Ok(());
         };
-        match fs::remove_file(&path) {
+        let removed = if cfg!(target_arch = "wasm32") {
+            web_storage::remove(&path)
+        } else {
+            fs::remove_file(&path)
+        };
+        match removed {
             Err(err) if err.kind() != io::ErrorKind::NotFound => {
                 Err(Error::WriteFile { path, source: err })
             }
@@ -159,6 +181,12 @@ impl Saves {
         let Ok(folder) = &self.folder else {
             return Ok(Vec::new());
         };
+        if cfg!(target_arch = "wasm32") {
+            return web_storage::list(folder).map_err(|source| Error::ReadFile {
+                path: folder.clone(),
+                source,
+            });
+        }
         let entries = match fs::read_dir(folder) {
             Ok(entries) => entries,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -228,6 +256,94 @@ fn write_synced(path: &Path, text: &str) -> io::Result<()> {
     let mut file = File::create(path)?;
     file.write_all(text.as_bytes())?;
     file.sync_all()
+}
+
+/// Off the web, there's no local storage, and saves are files.
+#[cfg(not(target_arch = "wasm32"))]
+mod web_storage {
+    use std::{io, path::Path};
+
+    fn unsupported() -> io::Error {
+        io::Error::new(io::ErrorKind::Unsupported, "only the web has local storage")
+    }
+
+    pub(super) fn write(_: &Path, _: &str) -> io::Result<()> {
+        Err(unsupported())
+    }
+
+    pub(super) fn read(_: &Path) -> io::Result<String> {
+        Err(unsupported())
+    }
+
+    pub(super) fn remove(_: &Path) -> io::Result<()> {
+        Err(unsupported())
+    }
+
+    pub(super) fn list(_: &Path) -> io::Result<Vec<String>> {
+        Err(unsupported())
+    }
+}
+
+/// Saves on the web, in the browser's local storage for the page, under the paths their files
+/// would have.
+#[cfg(target_arch = "wasm32")]
+mod web_storage {
+    use std::{io, path::Path};
+
+    /// The key the file at `path` is kept under.
+    fn key(path: &Path) -> String {
+        path.to_string_lossy().replace('\\', "/")
+    }
+
+    fn storage() -> io::Result<web_sys::Storage> {
+        let missing = || io::Error::other("the browser keeps no local storage for the page");
+        web_sys::window()
+            .ok_or_else(missing)?
+            .local_storage()
+            .map_err(browser_error)?
+            .ok_or_else(missing)
+    }
+
+    fn browser_error(err: impl std::fmt::Debug) -> io::Error {
+        io::Error::other(format!("local storage failed: {err:?}"))
+    }
+
+    pub(super) fn write(path: &Path, text: &str) -> io::Result<()> {
+        storage()?.set_item(&key(path), text).map_err(browser_error)
+    }
+
+    pub(super) fn read(path: &Path) -> io::Result<String> {
+        storage()?
+            .get_item(&key(path))
+            .map_err(browser_error)?
+            .ok_or_else(|| io::ErrorKind::NotFound.into())
+    }
+
+    pub(super) fn remove(path: &Path) -> io::Result<()> {
+        storage()?.remove_item(&key(path)).map_err(browser_error)
+    }
+
+    /// The names of the saves in `folder`, in order.
+    pub(super) fn list(folder: &Path) -> io::Result<Vec<String>> {
+        let storage = storage()?;
+        let prefix = format!("{}/", key(folder));
+        let mut names = Vec::new();
+        for index in 0..storage.length().map_err(browser_error)? {
+            let Some(key) = storage.key(index).map_err(browser_error)? else {
+                continue;
+            };
+            let name = key
+                .strip_prefix(&prefix)
+                .and_then(|file| file.strip_suffix(&format!(".{}", super::EXTENSION)));
+            if let Some(name) = name
+                && super::is_name(name)
+            {
+                names.push(name.to_owned());
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
 }
 
 /// The folder the system keeps applications' data in, given `var`, which looks up environment

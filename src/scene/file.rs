@@ -4,7 +4,7 @@
 //! first, then read into a [`SceneFile`] or a [`TilesetFile`]. Instances' overrides are checked
 //! by the same reading: the node they change, as plain values, with their fields put in.
 
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{collections::BTreeMap, path::Path};
 
 use super::{
     MAX_NODE_DEPTH,
@@ -661,7 +661,7 @@ impl TilesetFile {
 }
 
 fn read_file(path: &Path) -> Result<String> {
-    fs::read_to_string(path).map_err(|source| Error::ReadFile {
+    crate::files::read_to_string(path).map_err(|source| Error::ReadFile {
         path: path.to_owned(),
         source,
     })

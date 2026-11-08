@@ -2,12 +2,12 @@ use std::{
     fmt,
     path::PathBuf,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
+use web_time::Instant;
 use winit::{
     application::ApplicationHandler,
-    dpi::LogicalSize,
     event::{ElementState, Ime, KeyEvent, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{self, ModifiersState, NamedKey, PhysicalKey},
@@ -205,6 +205,7 @@ impl fmt::Debug for Waker {
 ///
 /// If `config` has an update rate that isn't above 0, or an identity that isn't letters, digits,
 /// `_` and `-`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run<G, F>(config: WindowConfig, init: F) -> Result<()>
 where
     G: Game,
@@ -214,23 +215,46 @@ where
         return crate::script::run(&config, init, std::path::Path::new(&script));
     }
 
+    let event_loop = event_loop()?;
+    let mut app = App::new(&event_loop, config, init);
+    event_loop
+        .run_app(&mut app)
+        .map_err(|err| Error::EventLoop(err.into()))?;
+    app.error.map_or(Ok(()), Err)
+}
+
+/// Starts a game in a canvas added to the page, and returns at once, as the browser runs the
+/// page's event loop and the game in it: the web's `run`. The canvas is as big as the page's
+/// styles make it, in place of the window's size, and the window's title is the page's.
+///
+/// `init` builds the game once the browser has given the canvas a GPU, after `run` has returned,
+/// so an error from it can't be returned: it's logged, and the game doesn't start.
+///
+/// # Panics
+///
+/// If `config` has an update rate that isn't above 0, or an identity that isn't letters, digits,
+/// `_` and `-`.
+#[cfg(target_arch = "wasm32")]
+pub fn run<G, F>(config: WindowConfig, init: F) -> Result<()>
+where
+    G: Game + 'static,
+    F: FnOnce(&mut Context) -> Result<G> + 'static,
+{
+    use winit::platform::web::EventLoopExtWebSys;
+
+    let event_loop = event_loop()?;
+    let app = App::new(&event_loop, config, init);
+    event_loop.spawn_app(app);
+    Ok(())
+}
+
+fn event_loop() -> Result<EventLoop<()>> {
     let event_loop = EventLoop::new().map_err(|err| Error::EventLoop(err.into()))?;
     // Frames are driven by requesting a redraw after each one, paced by vsync, or on demand.
     // Waiting (rather than polling) lets the loop sleep when no frame is wanted, e.g. while
     // minimized.
     event_loop.set_control_flow(ControlFlow::Wait);
-
-    let mut app = App {
-        proxy: event_loop.create_proxy(),
-        config,
-        init: Some(init),
-        state: None,
-        error: None,
-    };
-    event_loop
-        .run_app(&mut app)
-        .map_err(|err| Error::EventLoop(err.into()))?;
-    app.error.map_or(Ok(()), Err)
+    Ok(event_loop)
 }
 
 /// Runs one frame of `game`, as both the window and a [`Simulation`] do: updates it as `timestep`
@@ -343,6 +367,44 @@ struct App<G, F> {
     state: Option<State<G>>,
     /// A startup failure, returned from [`run`] after the event loop exits.
     error: Option<Error>,
+    /// The canvas on the web, while the browser finds it a GPU.
+    #[cfg(target_arch = "wasm32")]
+    starting: Option<Starting>,
+}
+
+/// A window on the web waiting for its GPU, which the browser gives asynchronously.
+#[cfg(target_arch = "wasm32")]
+struct Starting {
+    window: Arc<Window>,
+    /// The GPU and the window's surface, once they're ready, or why there are none.
+    gpu: std::rc::Rc<std::cell::RefCell<Option<Result<GpuFound>>>>,
+}
+
+/// A GPU, and the window's surface it presents to.
+#[cfg(target_arch = "wasm32")]
+type GpuFound = (Gpu, wgpu::Surface<'static>);
+
+impl<G, F> App<G, F> {
+    fn new(event_loop: &EventLoop<()>, config: WindowConfig, init: F) -> Self {
+        Self {
+            proxy: event_loop.create_proxy(),
+            config,
+            init: Some(init),
+            state: None,
+            error: None,
+            #[cfg(target_arch = "wasm32")]
+            starting: None,
+        }
+    }
+
+    /// Ends the game because it couldn't start.
+    fn fail(&mut self, event_loop: &ActiveEventLoop, err: Error) {
+        // On the web, `run` has returned already.
+        #[cfg(target_arch = "wasm32")]
+        log::error!("the game couldn't start: {err}");
+        self.error = Some(err);
+        event_loop.exit();
+    }
 }
 
 impl<G, F> ApplicationHandler for App<G, F>
@@ -350,19 +412,85 @@ where
     G: Game,
     F: FnOnce(&mut Context) -> Result<G>,
 {
+    #[cfg(not(target_arch = "wasm32"))]
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let Some(init) = self.init.take() else {
             return;
         };
-        match State::new(event_loop, &self.config, self.proxy.clone(), init) {
+        let state =
+            create_window(event_loop, &self.config).and_then(|(window, instance, surface)| {
+                let gpu = pollster::block_on(Gpu::new(instance, Some(&surface)))?;
+                State::new(
+                    event_loop,
+                    &self.config,
+                    self.proxy.clone(),
+                    window,
+                    surface,
+                    gpu,
+                    init,
+                )
+            });
+        match state {
             Ok(state) => {
                 state.window.request_redraw();
                 self.state = Some(state);
             }
-            Err(err) => {
-                self.error = Some(err);
-                event_loop.exit();
+            Err(err) => self.fail(event_loop, err),
+        }
+    }
+
+    /// Opens the canvas and asks the browser for a GPU, which [`App::user_event`] takes.
+    #[cfg(target_arch = "wasm32")]
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.init.is_none() || self.starting.is_some() {
+            return;
+        }
+        let (window, instance, surface) = match create_window(event_loop, &self.config) {
+            Ok(created) => created,
+            Err(err) => return self.fail(event_loop, err),
+        };
+        let gpu = std::rc::Rc::<std::cell::RefCell<Option<Result<GpuFound>>>>::default();
+        let ready = std::rc::Rc::clone(&gpu);
+        let proxy = self.proxy.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let found = Gpu::new(instance, Some(&surface)).await;
+            *ready.borrow_mut() = Some(found.map(|gpu| (gpu, surface)));
+            // It fails once the event loop has ended, when there's no game to start.
+            let _ = proxy.send_event(());
+        });
+        self.starting = Some(Starting { window, gpu });
+    }
+
+    /// Builds the game once the browser has given its canvas a GPU. Other events only wake the
+    /// loop to look at when a frame is due.
+    #[cfg(target_arch = "wasm32")]
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
+        let Some(gpu) = self
+            .starting
+            .as_ref()
+            .and_then(|s| s.gpu.borrow_mut().take())
+        else {
+            return;
+        };
+        let Starting { window, .. } = self.starting.take().expect("the canvas is starting");
+        let init = self.init.take().expect("the game is built once");
+        let state = gpu.and_then(|(gpu, surface)| {
+            State::new(
+                event_loop,
+                &self.config,
+                self.proxy.clone(),
+                window,
+                surface,
+                gpu,
+                init,
+            )
+        });
+        match state {
+            Ok(state) => {
+                state.window.request_redraw();
+                self.state = Some(state);
             }
+            Err(err) => self.fail(event_loop, err),
         }
     }
 
@@ -502,32 +630,54 @@ struct State<G> {
     gui_window: egui_winit::State,
 }
 
+/// Opens the game's window, or on the web its canvas, and a surface on it for a GPU to present
+/// frames to.
+fn create_window(
+    event_loop: &ActiveEventLoop,
+    config: &WindowConfig,
+) -> Result<(Arc<Window>, wgpu::Instance, wgpu::Surface<'static>)> {
+    let attributes = Window::default_attributes()
+        .with_title(&config.title)
+        .with_resizable(config.resizable);
+    #[cfg(not(target_arch = "wasm32"))]
+    let attributes =
+        attributes.with_inner_size(winit::dpi::LogicalSize::new(config.width, config.height));
+    // The page's styles size the canvas, which a size here would override.
+    #[cfg(target_arch = "wasm32")]
+    let attributes = {
+        use winit::platform::web::WindowAttributesExtWebSys;
+        attributes.with_append(true)
+    };
+    let window = event_loop
+        .create_window(attributes)
+        .map_err(|err| Error::CreateWindow(err.into()))?;
+    let window = Arc::new(window);
+    let instance = wgpu::Instance::new(
+        wgpu::InstanceDescriptor::new_with_display_handle(Box::new(
+            event_loop.owned_display_handle(),
+        ))
+        .with_env(),
+    );
+    let surface = instance
+        .create_surface(window.clone())
+        .map_err(|err| Error::CreateSurface(err.into()))?;
+    Ok((window, instance, surface))
+}
+
 impl<G: Game> State<G> {
+    /// Builds the game in `window`, which [`create_window`] opened with `surface`, once `gpu` has
+    /// been found for it. Only egui needs `event_loop`.
+    #[cfg_attr(not(feature = "egui"), expect(unused_variables))]
     fn new(
         event_loop: &ActiveEventLoop,
         config: &WindowConfig,
         proxy: EventLoopProxy<()>,
+        window: Arc<Window>,
+        surface: wgpu::Surface<'static>,
+        gpu: Gpu,
         init: impl FnOnce(&mut Context) -> Result<G>,
     ) -> Result<Self> {
         let timestep = Timestep::new(config.update_rate);
-        let attributes = Window::default_attributes()
-            .with_title(&config.title)
-            .with_inner_size(LogicalSize::new(config.width, config.height))
-            .with_resizable(config.resizable);
-        let window = event_loop
-            .create_window(attributes)
-            .map_err(|err| Error::CreateWindow(err.into()))?;
-        let window = Arc::new(window);
-        let instance = wgpu::Instance::new(
-            wgpu::InstanceDescriptor::new_with_display_handle(Box::new(
-                event_loop.owned_display_handle(),
-            ))
-            .with_env(),
-        );
-        let surface = instance
-            .create_surface(window.clone())
-            .map_err(|err| Error::CreateSurface(err.into()))?;
-        let gpu = pollster::block_on(Gpu::new(instance, Some(&surface)))?;
         let surface = WindowSurface::new(&gpu, window.clone(), surface, config.vsync);
         let renderer = Renderer::new(&gpu.device, &gpu.queue, surface.view_format());
         let mut ctx = Context::new(gpu, renderer, Audio::new());

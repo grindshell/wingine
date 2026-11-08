@@ -4,6 +4,7 @@ mod app;
 pub mod audio;
 mod context;
 mod error;
+pub mod files;
 mod gamepads;
 pub mod graphics;
 pub mod grid;

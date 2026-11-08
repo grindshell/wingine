@@ -189,7 +189,7 @@
 //!
 //! The engine re-exports [`mlua`], which games use to register functions and convert values.
 
-use std::{cell::RefCell, fmt, fs, path::Path, rc::Rc, str::FromStr};
+use std::{cell::RefCell, fmt, path::Path, rc::Rc, str::FromStr};
 
 pub use mlua;
 use mlua::{ErrorContext, FromLua, FromLuaMulti, IntoLua, IntoLuaMulti, thread::ThreadStatus};
@@ -323,7 +323,7 @@ impl Scripts {
     /// Runs the script file at `path`, which usually defines functions for later.
     pub fn load(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
-        let source = fs::read_to_string(path).map_err(|source| Error::ReadFile {
+        let source = crate::files::read_to_string(path).map_err(|source| Error::ReadFile {
             path: path.to_owned(),
             source,
         })?;
@@ -1692,7 +1692,7 @@ pub(crate) fn parse_hex(text: &str) -> Option<Color> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc};
+    use std::{cell::Cell, fs, rc::Rc};
 
     use super::*;
 

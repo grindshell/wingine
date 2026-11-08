@@ -163,12 +163,17 @@ impl Context {
     /// Loads a PNG file into a texture.
     pub fn load_texture(&mut self, path: impl AsRef<Path>) -> Result<Texture> {
         let path = path.as_ref();
-        let image = image::open(path)
-            .map_err(|source| Error::LoadImage {
-                path: path.to_owned(),
-                source,
-            })?
-            .into_rgba8();
+        let error = |source| Error::LoadImage {
+            path: path.to_owned(),
+            source,
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let image = image::open(path).map_err(error)?.into_rgba8();
+        #[cfg(target_arch = "wasm32")]
+        let image = {
+            let bytes = crate::files::read(path).map_err(|err| error(err.into()))?;
+            image::load_from_memory(&bytes).map_err(error)?.into_rgba8()
+        };
         Ok(self.renderer.create_texture(
             &self.gpu.device,
             &self.gpu.queue,
@@ -192,7 +197,7 @@ impl Context {
     #[cfg(feature = "models")]
     pub fn load_model(&mut self, path: impl AsRef<Path>) -> Result<Model> {
         let path = path.as_ref();
-        let bytes = std::fs::read(path).map_err(|source| Error::ReadFile {
+        let bytes = crate::files::read(path).map_err(|source| Error::ReadFile {
             path: path.to_owned(),
             source,
         })?;

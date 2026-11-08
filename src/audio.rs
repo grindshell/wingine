@@ -11,9 +11,17 @@
 //! Without a sound device, and always when running headless, audio is silent. The mixer still
 //! runs, in step with game time, so sounds start, play and finish as they would otherwise; only
 //! nothing is heard.
+//!
+//! On the web, where kira can't stream, music is decoded into memory when it starts, as a sound
+//! effect is, and sounds are read from the page's [files](crate::files).
 
 use std::{fmt, path::Path, time::Duration};
 
+#[cfg(not(target_arch = "wasm32"))]
+use kira::sound::{
+    FromFileError,
+    streaming::{StreamingSoundData, StreamingSoundHandle},
+};
 use kira::{
     AudioManager, AudioManagerSettings, Decibels, Tween,
     backend::{
@@ -21,14 +29,19 @@ use kira::{
         mock::{MockBackend, MockBackendSettings},
     },
     sound::{
-        FromFileError, PlaybackState,
+        PlaybackState,
         static_sound::{StaticSoundData, StaticSoundHandle},
-        streaming::{StreamingSoundData, StreamingSoundHandle},
     },
     track::{MainTrackHandle, TrackBuilder, TrackHandle},
 };
 
 use crate::{Error, Result};
+
+/// Music playing.
+#[cfg(not(target_arch = "wasm32"))]
+type MusicHandle = StreamingSoundHandle<FromFileError>;
+#[cfg(target_arch = "wasm32")]
+type MusicHandle = StaticSoundHandle;
 
 /// Samples per second of silent output. Nothing is heard, so it only needs to be high enough for
 /// sounds to keep time.
@@ -43,7 +56,7 @@ pub struct Audio {
     music_track: TrackHandle,
     /// Sound effects started and not yet known to have finished.
     sounds: Vec<StaticSoundHandle>,
-    music: Option<StreamingSoundHandle<FromFileError>>,
+    music: Option<MusicHandle>,
 }
 
 /// The managers are boxed because they're large, and differently so.
@@ -185,11 +198,14 @@ impl Audio {
     /// playing fades out over `fade` seconds as the new music fades in.
     pub fn play_music(&mut self, path: impl AsRef<Path>, fade: f32) -> Result<()> {
         let path = path.as_ref();
-        let data = StreamingSoundData::from_file(path)
-            .map_err(|source| Error::LoadAudio {
-                path: path.to_owned(),
-                source,
-            })?
+        #[cfg(not(target_arch = "wasm32"))]
+        let data = StreamingSoundData::from_file(path).map_err(|source| Error::LoadAudio {
+            path: path.to_owned(),
+            source,
+        })?;
+        #[cfg(target_arch = "wasm32")]
+        let data = Sound::load(path)?.data;
+        let data = data
             .loop_region(..)
             .fade_in_tween((fade > 0.0).then(|| tween(fade)));
         self.stop_music(fade);
@@ -275,10 +291,17 @@ impl Sound {
     /// Loads a WAV or OGG Vorbis file, decoding all of it.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let data = StaticSoundData::from_file(path).map_err(|source| Error::LoadAudio {
+        let error = |source| Error::LoadAudio {
             path: path.to_owned(),
             source,
-        })?;
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let data = StaticSoundData::from_file(path).map_err(error)?;
+        #[cfg(target_arch = "wasm32")]
+        let data = {
+            let bytes = crate::files::read(path).map_err(|err| error(err.into()))?;
+            StaticSoundData::from_cursor(std::io::Cursor::new(bytes)).map_err(error)?
+        };
         Ok(Self { data })
     }
 

@@ -39,8 +39,9 @@ physics = ["dep:rapier2d", "dep:rapier3d"]
 bytemuck = { version = "1.25.2", features = ["derive"] }
 egui = { version = "0.37.0", optional = true, default-features = false, features = ["default_fonts"] }
 egui-wgpu = { version = "0.37.0", optional = true, default-features = false }
-egui-winit = { version = "0.37.0", optional = true, default-features = false, features = ["clipboard", "wayland", "x11"] }
-# Gamepads: Windows Gaming Input on Windows, evdev (through libudev) on Linux, IOKit on macOS.
+egui-winit = { version = "0.37.0", optional = true, default-features = false }
+# Gamepads: Windows Gaming Input on Windows, evdev (through libudev) on Linux, IOKit on macOS, and
+# the Gamepad API on the web.
 gilrs = "0.11.2"
 # Without its `import` feature, which would bring a JPEG decoder: the engine reads buffers and
 # PNG textures itself.
@@ -48,12 +49,12 @@ gltf = { version = "1.4.1", optional = true, default-features = false, features 
 image ={ version = "0.25.10", default-features = false, features = ["png"] }
 # Only the formats the engine documents: WAV (PCM) and OGG Vorbis.
 kira = { version = "0.12.6", default-features = false, features = ["cpal", "ogg", "vorbis", "wav", "pcm"] }
-libloading = "0.8.9"
 # Luau's `exact` table: math in Rust, the same bits on every platform, unlike the C library's.
 libm = "0.2.16"
 log = "0.4.34"
-# `error-send` keeps `wingine::Error` `Send + Sync` when it wraps Lua errors.
-mlua = { version = "0.12.2", features = ["luau-jit", "error-send"] }
+# `error-send` keeps `wingine::Error` `Send + Sync` when it wraps Lua errors. mlua's master branch
+# builds Luau for the web, with WASI SDK: see `docs/web.md`.
+mlua = { git = "https://github.com/mlua-rs/mlua", rev = "a0ad4535fc72ba89967a931c5be57b162b5f0f3f", features = ["luau", "error-send"] }
 pollster = "1.0.1"
 # With `enhanced-determinism`, it moves things the same to the bit on every platform, as `exact`
 # does: without, its results differ between Windows and Linux.
@@ -61,8 +62,25 @@ rapier2d = { version = "0.36.1", optional = true, features = ["enhanced-determin
 rapier3d = { version = "0.36.1", optional = true, features = ["enhanced-determinism"] }
 thiserror = "2.0.21"
 wgpu = "30.0.1"
+# `Instant`: `std`'s, except on the web, where `std`'s panics.
+web-time = "1.1.0"
 wingine-abi = { path = "crates/wingine-abi" }
 winit = "0.30"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+egui-winit = { version = "0.37.0", optional = true, default-features = false, features = ["clipboard", "wayland", "x11"] }
+libloading = "0.8.9"
+# Luau's native code generation, which WebAssembly can't run.
+mlua = { git = "https://github.com/mlua-rs/mlua", rev = "a0ad4535fc72ba89967a931c5be57b162b5f0f3f", features = ["luau-jit"] }
+
+# On the web: a canvas in the page, WebGPU, and saves in the browser's local storage. The page
+# has one thread, so wgpu's types may claim to be `Send` and `Sync` there, as the engine's
+# statics need them to be.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { version = "30.0.1", features = ["fragile-send-sync-non-atomic-wasm"] }
+wasm-bindgen = "0.2.129"
+wasm-bindgen-futures = "0.4.79"
+web-sys = { version = "0.3.106", features = ["Storage", "Window"] }
 
 [dev-dependencies]
 env_logger = "0.11.11"

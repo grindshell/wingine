@@ -80,7 +80,7 @@ fn find(folder: &Path, name: &str) -> Result<Option<&'static Library>, String> {
         Some(_) => Source::Linked(name.to_owned()),
         None => {
             let path = library_path(folder, name);
-            match path.canonicalize() {
+            match crate::files::canonicalize(&path) {
                 Ok(path) => Source::File(path),
                 Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
                 Err(err) => return Err(format!("couldn't open {}: {err}", path.display())),
@@ -103,7 +103,19 @@ fn find(folder: &Path, name: &str) -> Result<Option<&'static Library>, String> {
 }
 
 /// Loads the library file at `path`, which stays loaded until the process ends, and returns how
+/// it describes itself. On the web, library files can't be loaded: games there have only the
+/// libraries linked into the program, with [`link_library`].
+#[cfg(target_arch = "wasm32")]
+fn open(path: &Path) -> Result<abi::Library, String> {
+    Err(format!(
+        "{} can't be loaded on the web, where only libraries linked into the program are",
+        path.display()
+    ))
+}
+
+/// Loads the library file at `path`, which stays loaded until the process ends, and returns how
 /// it describes itself.
+#[cfg(not(target_arch = "wasm32"))]
 fn open(path: &Path) -> Result<abi::Library, String> {
     // SAFETY: loading a library runs its initialization code, and calling its entry point trusts
     // that it follows the ABI. Games list the libraries they trust.

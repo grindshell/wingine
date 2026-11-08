@@ -317,6 +317,8 @@ mod gui;
 mod input;
 mod native;
 mod physics;
+#[cfg(target_arch = "wasm32")]
+mod require;
 mod save;
 mod scene;
 mod tilemap;
@@ -326,7 +328,6 @@ mod window;
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
-    fs,
     path::{Path, PathBuf},
     ptr,
     rc::Rc,
@@ -336,7 +337,11 @@ use wingine_abi::Phase;
 
 use native::Natives;
 pub use native::link_library;
+#[cfg(target_arch = "wasm32")]
+use require::FilesRequirer as FileRequirer;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::lua::mlua::luau::FsRequirer as FileRequirer;
 use crate::{
     Context, Error, Game, Result, WindowConfig,
     graphics::{Canvas, Color, Font, Model, Resolution, Texture},
@@ -344,7 +349,7 @@ use crate::{
         Scripts, mlua,
         mlua::{
             FromLuaMulti,
-            luau::{FsRequirer, NavigateError, Require},
+            luau::{NavigateError, Require},
         },
     },
 };
@@ -357,11 +362,14 @@ use crate::{
 pub const DEFINITIONS: &str = include_str!("wingine.d.luau");
 
 /// Runs the Luau game in `folder` until its window is closed. See the [module docs](self).
+///
+/// On the web, it starts the game in a canvas added to the page and returns at once, and an
+/// error loading the game is logged: see [`crate::run`].
 pub fn run(folder: impl AsRef<Path>) -> Result<()> {
-    let folder = folder.as_ref();
-    let config = config(folder)?;
-    crate::run(config.window.clone(), |ctx| {
-        LuauGame::load_with(ctx, folder, &config)
+    let folder = folder.as_ref().to_owned();
+    let config = config(&folder)?;
+    crate::run(config.window.clone(), move |ctx| {
+        LuauGame::load_with(ctx, &folder, &config)
     })
 }
 
@@ -400,10 +408,10 @@ pub fn config(folder: impl AsRef<Path>) -> Result<Config> {
         libraries: Vec::new(),
     };
     let path = folder.join("conf.luau");
-    if !path.is_file() {
+    if !crate::files::is_file(&path) {
         return Ok(config);
     }
-    let source = fs::read_to_string(&path).map_err(|source| Error::ReadFile {
+    let source = crate::files::read_to_string(&path).map_err(|source| Error::ReadFile {
         path: path.clone(),
         source,
     })?;
@@ -510,7 +518,7 @@ fn positive(size: u32) -> mlua::Result<u32> {
 }
 
 fn folder_name(folder: &Path) -> Option<String> {
-    let folder = folder.canonicalize().ok()?;
+    let folder = crate::files::canonicalize(folder).ok()?;
     Some(folder.file_name()?.to_string_lossy().into_owned())
 }
 
@@ -570,7 +578,7 @@ impl LuauGame {
         gui::register(lua, &lent)?;
         let main = folder.join("main.luau");
         let requirer = Requirer {
-            files: FsRequirer::new(),
+            files: FileRequirer::new(),
             main: format!("@{}", main.display()),
         };
         globals.set("require", lua.create_require_function(requirer)?)?;
@@ -751,7 +759,7 @@ fn draw_error(canvas: &mut Canvas, font: &Font, err: &Error) {
 /// relative to the script requiring them, but has chunks that aren't files, named `=name`, such as
 /// those tests run, require as the game's `main.luau` does, so they get the modules the game has.
 struct Requirer {
-    files: FsRequirer,
+    files: FileRequirer,
     /// The chunk name of the game's `main.luau`.
     main: String,
 }

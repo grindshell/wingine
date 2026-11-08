@@ -31,7 +31,7 @@ networking or 3D pipelines.
 | Rendering | `wgpu`  | All GPU work goes through wgpu           |
 | Windowing | `winit` | Window creation, event loop, raw input   |
 | Audio     | `kira`  | Music and sound effects                  |
-| Scripting | `mlua`  | Luau, with the `luau-jit` feature        |
+| Scripting | `mlua`  | Luau, with `luau-jit` off the web        |
 | Native libraries | `libloading` | Loads them, and never unloads them |
 | Interfaces | `egui` | With `egui-winit` and `egui-wgpu`, behind the default `egui` feature |
 | Gamepads | `gilrs` | Read by the window; simulated without one |
@@ -41,7 +41,10 @@ networking or 3D pipelines.
 - Rust edition 2024.
 - Licensed under MIT or Apache 2.0, at the user's option (`LICENSE-MIT`, `LICENSE-APACHE`), which
   every crate's manifest says with `license = "MIT OR Apache-2.0"`; new crates say so too.
-- Target platforms: desktop only (Windows, macOS, Linux).
+- Target platforms: desktop (Windows, macOS, Linux), and on the `wasm` branch, the web
+  (`wasm32-unknown-unknown`, with WebGPU), as `docs/web.md` describes. Code that differs on the
+  web is behind `cfg(target_arch = "wasm32")`, and files games load are read through
+  `crate::files`, never `std::fs`.
 - `wgpu`, `winit`, `mlua`, `kira` and `egui` change their APIs substantially between releases.
   Check the version pinned in `Cargo.toml` and that version's docs on docs.rs rather than relying
   on memory of older APIs. egui's crates must target the engine's wgpu and winit, so they're

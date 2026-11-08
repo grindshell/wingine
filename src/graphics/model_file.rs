@@ -435,7 +435,7 @@ fn load_uri(uri: &str, folder: &Path, files: &mut Vec<PathBuf>) -> Result<Vec<u8
         return Err(format!("`{uri}` isn't a file beside the model"));
     }
     let path = folder.join(percent_decoded(uri)?);
-    let data = std::fs::read(&path).map_err(|err| format!("{}: {err}", path.display()));
+    let data = crate::files::read(&path).map_err(|err| format!("{}: {err}", path.display()));
     if !files.contains(&path) {
         files.push(path);
     }
