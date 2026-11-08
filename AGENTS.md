@@ -41,10 +41,10 @@ networking or 3D pipelines.
 - Rust edition 2024.
 - Licensed under MIT or Apache 2.0, at the user's option (`LICENSE-MIT`, `LICENSE-APACHE`), which
   every crate's manifest says with `license = "MIT OR Apache-2.0"`; new crates say so too.
-- Target platforms: desktop (Windows, macOS, Linux), and on the `wasm` branch, the web
-  (`wasm32-unknown-unknown`, with WebGPU), as `docs/web.md` describes. Code that differs on the
-  web is behind `cfg(target_arch = "wasm32")`, and files games load are read through
-  `crate::files`, never `std::fs`.
+- Target platforms: desktop (Windows, macOS, Linux), and the web (`wasm32-unknown-unknown`, with
+  WebGPU), as `docs/web.md` describes; building for the web patches in mlua's master branch until
+  a release supports it. Code that differs on the web is behind `cfg(target_arch = "wasm32")`, and
+  files games load are read through `crate::files`, never `std::fs`.
 - `wgpu`, `winit`, `mlua`, `kira` and `egui` change their APIs substantially between releases.
   Check the version pinned in `Cargo.toml` and that version's docs on docs.rs rather than relying
   on memory of older APIs. egui's crates must target the engine's wgpu and winit, so they're

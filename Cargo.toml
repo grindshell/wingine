@@ -52,9 +52,9 @@ kira = { version = "0.12.6", default-features = false, features = ["cpal", "ogg"
 # Luau's `exact` table: math in Rust, the same bits on every platform, unlike the C library's.
 libm = "0.2.16"
 log = "0.4.34"
-# `error-send` keeps `wingine::Error` `Send + Sync` when it wraps Lua errors. mlua's master branch
-# builds Luau for the web, with WASI SDK: see `docs/web.md`.
-mlua = { git = "https://github.com/mlua-rs/mlua", rev = "a0ad4535fc72ba89967a931c5be57b162b5f0f3f", features = ["luau", "error-send"] }
+# `error-send` keeps `wingine::Error` `Send + Sync` when it wraps Lua errors. No release builds
+# Luau for the web yet, so a build for it patches in mlua's master branch: see `docs/web.md`.
+mlua = { version = "0.12.2", features = ["luau", "error-send"] }
 pollster = "1.0.1"
 # With `enhanced-determinism`, it moves things the same to the bit on every platform, as `exact`
 # does: without, its results differ between Windows and Linux.
@@ -71,7 +71,7 @@ winit = "0.30"
 egui-winit = { version = "0.37.0", optional = true, default-features = false, features = ["clipboard", "wayland", "x11"] }
 libloading = "0.8.9"
 # Luau's native code generation, which WebAssembly can't run.
-mlua = { git = "https://github.com/mlua-rs/mlua", rev = "a0ad4535fc72ba89967a931c5be57b162b5f0f3f", features = ["luau-jit"] }
+mlua = { version = "0.12.2", features = ["luau-jit"] }
 
 # On the web: a canvas in the page, WebGPU, and saves in the browser's local storage. The page
 # has one thread, so wgpu's types may claim to be `Send` and `Sync` there, as the engine's

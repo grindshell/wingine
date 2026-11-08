@@ -1,18 +1,29 @@
 # The web
 
-On this branch, the engine also builds for `wasm32-unknown-unknown`, and Luau games run in a
-browser, drawing with WebGPU in a canvas on the page. The RPG example runs this way in
-`wingine-wasm-test`, a repository checked out beside this one, which embeds a game's folder in a
-module and serves it with a page; its README has the steps to build and play it.
+The engine also builds for `wasm32-unknown-unknown`, and Luau games run in a browser, drawing with
+WebGPU in a canvas on the page. The RPG example runs this way in `wingine-wasm-test`, a repository
+checked out beside this one, which embeds a game's folder in a module and serves it with a page;
+its README has the steps to build and play it.
 
 ## Building
 
 Luau is C++, which Rust's `wasm32-unknown-unknown` target can't compile on its own. mlua's master
-branch (pinned in `Cargo.toml`) builds it with [WASI SDK](https://github.com/WebAssembly/wasi-sdk)
-34 or later, against WASI libc and libc++, with Wasm exceptions for Luau's errors: see mlua's
+branch builds it with [WASI SDK](https://github.com/WebAssembly/wasi-sdk) 34 or later, against
+WASI libc and libc++, with Wasm exceptions for Luau's errors: see mlua's
 [Compiling for WebAssembly](https://github.com/mlua-rs/mlua/blob/master/docs/wasm32.md). The
 compilers, flags and libraries to link are set through environment variables, as
 `wingine-wasm-test/scripts/wasm-env.ps1` sets them.
+
+No release of mlua does this yet, and Cargo can't take a dependency from crates.io for one target
+and from git for another, so the engine depends on mlua's release, and the workspace that builds
+for the web patches in its master branch:
+
+```toml
+[patch.crates-io]
+mlua = { git = "https://github.com/mlua-rs/mlua", rev = "a0ad4535fc72ba89967a931c5be57b162b5f0f3f" }
+```
+
+Once a release builds for the web, the engine can require it and the patch can go.
 
 Luau's native code generation (mlua's `luau-jit`) is only built off the web.
 
