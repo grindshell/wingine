@@ -1,0 +1,4 @@
+{
+    "globals": ["pong"],
+    "lint": { "BuiltinGlobalWrite": false }
+}

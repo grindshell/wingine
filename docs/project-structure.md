@@ -12,6 +12,7 @@ my-game/
 ├── enemies/
 │   └── bat.luau
 ├── level.scene.luau   scenes, laid out as data (see Scenes)
+├── player.test.luau   tests, which `wingine test` runs (see Running games)
 ├── sprites.png        images, sounds and music, wherever the game likes
 ├── sounds/
 │   ├── jump.wav

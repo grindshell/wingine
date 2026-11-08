@@ -340,6 +340,11 @@ impl<G: Game> Simulation<G> {
         &mut self.headless.ctx
     }
 
+    /// The game and the context at once, for lending the context to the game's scripts.
+    pub(crate) fn parts(&mut self) -> (&mut G, &mut Context) {
+        (&mut self.game, &mut self.headless.ctx)
+    }
+
     /// Name and backend of the GPU adapter rendering screenshots, for diagnostics.
     pub fn adapter_name(&self) -> String {
         self.headless.adapter_name()
@@ -687,12 +692,21 @@ impl<G: Game> Simulation<G> {
     ///
     /// If `action` isn't bound to a key, nor to a button of a connected gamepad.
     pub fn action_down(&mut self, action: &str) {
-        let pressed = self.action_control(action);
+        if let Err(message) = self.try_action_down(action) {
+            panic!("{message}");
+        }
+    }
+
+    /// Presses what `action` is bound to, as [`Simulation::action_down`] does, or says why it
+    /// can't.
+    pub(crate) fn try_action_down(&mut self, action: &str) -> std::result::Result<(), String> {
+        let pressed = self.action_control(action)?;
         match pressed {
             Pressed::Key(key) => self.key_down(key),
             Pressed::Button(gamepad, button) => self.button_down(gamepad, button),
         }
         self.actions_held.insert(action.to_owned(), pressed);
+        Ok(())
     }
 
     /// Releases what [`Simulation::action_down`] pressed for `action`, if it's holding it down,
@@ -724,18 +738,15 @@ impl<G: Game> Simulation<G> {
         self.action_up(action);
     }
 
-    /// What [`Simulation::action_down`] presses for `action`.
-    fn action_control(&self, action: &str) -> Pressed {
+    /// What [`Simulation::action_down`] presses for `action`, or why it can't.
+    fn action_control(&self, action: &str) -> std::result::Result<Pressed, String> {
         let input = &self.headless.ctx.input;
-        let Some((keys, buttons, gamepad)) = input.binding(action) else {
-            panic!("`{action}` isn't bound to anything");
-        };
+        let unbound = || format!("`{action}` isn't bound to anything");
+        let (keys, buttons, gamepad) = input.binding(action).ok_or_else(unbound)?;
         if let Some(&key) = keys.first() {
-            return Pressed::Key(key);
+            return Ok(Pressed::Key(key));
         }
-        let Some(&button) = buttons.first() else {
-            panic!("`{action}` isn't bound to anything");
-        };
+        let &button = buttons.first().ok_or_else(unbound)?;
         let connected = match gamepad {
             Some(gamepad) => input
                 .gamepad(gamepad)
@@ -744,14 +755,14 @@ impl<G: Game> Simulation<G> {
             None => input.gamepads().next().map(|(number, _)| number),
         };
         match (connected, gamepad) {
-            (Some(number), _) => Pressed::Button(number, button),
-            (None, Some(gamepad)) => panic!(
+            (Some(number), _) => Ok(Pressed::Button(number, button)),
+            (None, Some(gamepad)) => Err(format!(
                 "`{action}` is bound only to gamepad {gamepad}'s buttons, and it isn't connected"
-            ),
-            (None, None) => panic!(
+            )),
+            (None, None) => Err(format!(
                 "`{action}` is bound only to gamepads' buttons, and none is connected: connect one \
                  with `connect_gamepad`"
-            ),
+            )),
         }
     }
 

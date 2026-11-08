@@ -337,6 +337,8 @@ mod physics;
 mod require;
 mod save;
 mod scene;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod testing;
 mod tilemap;
 mod ui;
 mod window;

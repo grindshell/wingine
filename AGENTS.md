@@ -431,7 +431,28 @@ networking or 3D pipelines.
   `Context::create_mesh`, and `export!`. Libraries depend on it alone, never on `wingine`.
   Models stay out of the ABI.
 - `src/main.rs`: the `wingine` executable, which runs a Luau game: `cargo run -- examples/pong`,
-  or with `--watch`, reloading it as its files change.
+  or with `--watch`, reloading it as its files change; `wingine test [--update] <folder>
+  [filter]` runs its tests, printing them as `cargo test` does.
+- `src/runtime/testing.rs`: `runtime::testing`, Luau games' own tests, in `*.test.luau` files
+  anywhere in their folders (not hidden ones), whose module docs are the reference for writing
+  them. `run` runs each test against a fresh `Simulation` of the game (the first one loaded also
+  finds the file's tests; each after loads the game and the file again, checking the names come
+  out the same), reporting `Outcome`s as they come and a `Report`. A test file loads in the game's
+  VM with an environment of its own (`environment`): a table whose metatable reads and writes
+  through to the game's globals, and which, not being Luau's "safe" environment, makes the file's
+  global field reads look up each time rather than as imports resolved at load, so tests see the
+  game's state as it is. The test-only globals are raw fields of it: `test`, a Rust function, and
+  `sim`, `assert_equal` and `assert_near` from the Luau `PRELUDE`, where each of `sim`'s functions
+  (generated from `REQUESTS`) yields its request; the `Runner` resumes the test's coroutine lent
+  the context, carries requests out on the `Simulation` while it waits, and resumes it with `true`
+  and the results or `false` and a message the wrapper raises at the test's line. A bare yield,
+  as `wait` makes, runs a frame. Frames go one at a time, checking the game hasn't stopped and the
+  test's time limit (`Refusal::Fail`). Requests that would panic in Rust (an unbound action, a
+  gamepad not connected, a widget not there) are checked first (`Simulation::try_action_down`).
+  `matches_screenshot` compares with `Image::compare`, saving frames that don't match, and diffs,
+  in the game's `.test-output` folder, cleared as a run starts, or with `update_screenshots`,
+  over the reference. Failures name paths from the game's folder and leave out the prelude's
+  lines (`tidy`). Its unit tests check the definitions declare `sim`'s fields.
 - `src/watch.rs`: `Watcher`, a thread that hashes the paths, sizes and modified times of a
   folder's files that aren't hidden, eight folders deep, every so often, and sets a flag and wakes
   the game when the hash changes. Its first hash is taken before the thread starts, so a change
@@ -642,7 +663,9 @@ networking or 3D pipelines.
   or a gamepad, whose stick moves the paddle as fast as it's pushed (`input.axis`). Nothing in it
   is random, and its ball's angles come from `exact`, so the same inputs play the same match on
   every platform. Its `pong` table is plain data, which its `reloading` returns and the reloaded
-  game copies back over a fresh one, so the match carries on as it reloads. The sounds and music in
+  game copies back over a fresh one, so the match carries on as it reloads. Its own tests are in
+  Luau, `pong.test.luau`, one of them against `screenshots/ready.png`, and its `.luaurc` names
+  `pong` so luau-lsp checks them. The sounds and music in
   `examples/sounds/` were synthesized for `sprites`; `pong`, `rpg` and `shmup` have copies of
   the ones they use, and `rpg`, `shmup`, `garden` and `cellar` copies of the tileset.
   `kenney_prototype-kit/` is Kenney's Prototype Kit (CC0), models for 3D examples, which copy the
@@ -688,6 +711,10 @@ networking or 3D pipelines.
   editor. Check their examples by running them headlessly.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
+- `tests/testing.rs`: tests for `runtime::testing`, with small games and their tests written to
+  temporary folders: finding and reporting tests, each starting afresh, reading the game's state
+  as it is, waits and input, the game stopping and time limits, refused requests, files that don't
+  load, modules, filters, the interface, and screenshots matching, differing and updated.
 - `tests/gui.rs`: tests for egui over games, through `Simulation`: clicking widgets by label,
   typing into a focused field, input egui takes not reaching the game, and the debug key.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders,
@@ -711,7 +738,9 @@ networking or 3D pipelines.
   it from a file.
 - `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
   expressions such as `pong.ball.vx` (`Simulation::eval`), and play it with simulated keys, mouse
-  and gamepad, and reload it mid-match. One
+  and gamepad, and reload it mid-match; and run its Luau tests, `pong.test.luau`, through
+  `runtime::testing::run` (saving their reference screenshot again with `UPDATE_SCREENSHOTS=1`).
+  One
   plays a whole match and checks a hash of it, pinned, so CI checks it's the same to the bit on
   Windows and Linux; a change to how Pong plays changes the hash.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest, using
@@ -839,6 +868,7 @@ cargo run --example gui
 cargo run -p wingine-editor -- examples/garden
 cargo run -- examples/pong
 cargo run -- --watch examples/pong
+cargo run -- test examples/pong
 cargo run -- examples/rpg
 cargo run -- examples/garden
 cargo run -- examples/orchard
@@ -896,7 +926,9 @@ Check how a game behaves headlessly instead of opening a window and driving it b
 - **As tests:** drive the game with `Simulation` (`tap`, `hold`, `tap_action`, `click`,
   `run_for`, `game()`) and assert on its state, as `examples/sprites.rs` does. For a Luau game,
   evaluate Luau expressions against its state and set it up with `eval` and `exec`, as
-  `tests/pong.rs` does. Prefer this for anything worth keeping, so CI catches regressions.
+  `tests/pong.rs` does, or write its tests in Luau, in `*.test.luau` files that `cargo run --
+  test path/to/game` runs, as `examples/pong/pong.test.luau` is. Prefer this for anything worth
+  keeping, so CI catches regressions.
 
 Windowing itself (focus, minimizing, real resizes, DPI) still needs a real window. Audio in these
 runs is silent; `cargo test -- --ignored` runs a check that plays (muted) through the real sound

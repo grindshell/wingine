@@ -1,4 +1,6 @@
 /target
+# Screenshots of games' tests that didn't match, from `wingine test`.
+.test-output/
 # Written by `cargo about` for the release archives.
 /THIRD-PARTY-NOTICES.txt
 # Where the shmup loads the `danmaku` library from, once it's built and copied there.

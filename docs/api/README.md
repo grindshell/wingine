@@ -19,6 +19,7 @@ hand out, and the `Ui` a game's `gui` lays its interface out with:
 | [`rect`](rect.md) | Whether rectangles overlap, and whether one holds a point |
 | [`window`](window.md) | Quitting the game, asking before its window closes, and what it kept as it reloaded |
 | [`gui`](gui.md) | Interfaces over the game, such as debug tools, laid out with egui in the game's `gui` |
+| [Tests](testing.md) | What only tests have: `test`, `sim` to drive the game and run its frames, `assert_equal` and `assert_near` |
 | [`wingine-native`](native.md) | The Rust crate native libraries are written with |
 
 The engine's tables are read-only. Luau's standard library is there too, in its sandboxed form:

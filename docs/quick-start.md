@@ -133,7 +133,7 @@ The script has three parts, as most games do:
 
 - [Project structure](project-structure.md) explains how a game's folder is laid out and how
   `main.luau` runs, frame by frame.
-- [Running games](running-games.md) covers reloading as you work, errors, printing, and checking
-  a game without a window.
+- [Running games](running-games.md) covers reloading as you work, errors, printing, checking a
+  game without a window, and testing it.
 - The [API reference](api/README.md) lists everything scripts can do: sprites, animation,
   tilemaps, sound and more.

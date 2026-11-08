@@ -247,11 +247,101 @@ Mouse positions are canvas pixels, but screenshots are the size of the window. W
 resolution, divide a position in a screenshot by the scale, after taking away the black bars, to
 find the canvas pixel to click.
 
+## Testing a game in Luau
+
+For checks worth keeping, write tests in Luau, in files named `*.test.luau` anywhere in the game's
+folder, such as `pong.test.luau` beside `main.luau` or in a `tests` folder. Each declares its
+tests with [`test`](api/testing.md#test), drives the game with [`sim`](api/testing.md#sim), and
+checks its state with [`assert_equal`](api/testing.md#assert_equal), as Pong's do:
+
+```lua
+-- pong.test.luau
+test("missing the ball scores for the other side", function()
+    pong.ball = { x = 100, y = 20, vx = -200, vy = 0 }
+    pong.phase = "rally"
+    wait_until(function() return pong.phase ~= "rally" end)
+    assert_equal(pong.score, { left = 0, right = 1 })
+
+    -- The next serve goes to the player, who lost the point, a second later.
+    wait(1.1)
+    assert(pong.ball.vx < 0, "toward the player")
+end)
+```
+
+`wingine test` runs them without a window, and says how each went:
+
+```bash
+cargo run -- test path/to/game
+```
+
+```text
+running the tests of path/to/game
+test pong.test.luau: the ball waits for a serve ... ok
+test pong.test.luau: missing the ball scores for the other side ... FAILED
+
+failures:
+
+---- pong.test.luau: missing the ball scores for the other side ----
+pong.test.luau:6: expected { left = 0, right = 1 }, got { left = 1, right = 0 }
+stack traceback:
+	pong.test.luau:6: in function <pong.test.luau:2>
+
+test result: FAILED. 1 passed; 1 failed; 0 filtered out
+```
+
+It ends with a failing exit code if any test failed, so a CI job can run it. A word after the
+game's folder runs only the tests whose files and names contain it:
+`cargo run -- test path/to/game serve`.
+
+**Each test starts afresh.** Every test runs against a new copy of the game, as it is once its
+`main.luau` has run, before its first frame: its saves start empty and its audio is silent, and
+nothing one test changes reaches another. Test files run in the order of their paths, and their
+tests in the order they're declared.
+
+**Tests read the game as it is.** A test file runs in the game's own VM, so it reads and changes
+the game's globals directly, as they are at the time: `pong.ball.vx`, after any number of frames.
+Keep the game's state in a global, such as Pong's `pong`, so tests can reach it. Tests call the
+engine's functions too, such as `input.bind` or `scene.load`, and `require` the game's modules
+by their paths from the test file, getting the same ones the game has.
+
+**Time passes only when a test asks.** `sim.step` and `sim.run_for` run frames, at a fixed 60 a
+second, as do `sim.tap` and the rest that press and let go, and `wait` and `wait_until`, which work
+in tests as in tasks. A test that waits for what never happens fails at its time limit, 60 seconds
+of game time unless it says otherwise.
+
+**Failing.** A test fails when it raises an error, as a failed assertion does, with the line it
+failed at; when the game stops with an error; or past its time limit. A game or test file that
+fails to load fails once, for the file.
+
+**Screenshots.** [`sim.matches_screenshot`](api/testing.md#simmatches_screenshot) compares the
+latest frame with a PNG saved before, and returns `false` and what differs if it doesn't match:
+
+```lua
+test("the court before the first serve", function()
+    sim.step()
+    assert(sim.matches_screenshot("screenshots/ready.png"))
+end)
+```
+
+The first run fails, as there's nothing to compare with yet. `--update` saves the frame as the
+reference instead, and saves frames that don't match over theirs:
+
+```bash
+cargo run -- test --update path/to/game
+```
+
+Look at each one it saves before keeping it. A frame that doesn't match goes in the game's
+`.test-output` folder, with a picture of where it differs in magenta; leave that folder out of
+version control. Pixels may differ by 2 in each channel by default, so frames match on any GPU.
+
+From Rust, `wingine::runtime::testing::run` runs a game's tests and returns how they went, so
+`cargo test` can run them as Pong's are, in [`tests/pong.rs`](../tests/pong.rs).
+
 ## Testing a game from Rust
 
-For checks worth keeping, write them as Rust tests, as the engine's own are, so `cargo test` runs
-them with everything else. A test starts the game in a `wingine::headless::Simulation`, drives it
-with simulated input, and reads the game's state with Luau:
+Tests can be written in Rust too, as the engine's own are, so `cargo test` runs them with
+everything else. A test starts the game in a `wingine::headless::Simulation`, drives it with
+simulated input, and reads the game's state with Luau:
 
 ```rust
 use wingine::{

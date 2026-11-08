@@ -949,3 +949,90 @@ declare function wait(seconds: number?): ()
 --- Pauses the task until `condition()` returns true, checking once each update. Works only in
 --- tasks.
 declare function wait_until(condition: () -> boolean): ()
+
+-- What only tests have: the files named `*.test.luau` that `wingine test` runs.
+
+--- How a test runs.
+type TestOptions = {
+    --- Seconds of game time it may run before it fails, 60 by default.
+    time_limit: number?,
+}
+
+--- How a screenshot matches its reference.
+type ScreenshotOptions = {
+    --- How much a channel of a pixel may differ, from 0 to 255: 2 by default.
+    tolerance: number?,
+    --- How many pixels may differ by more: 0 by default.
+    pixels: number?,
+}
+
+--- Declares a test, which runs against a fresh copy of the game once the file has loaded. Only
+--- in tests, and only as their file loads.
+declare function test(name: string, run: () -> (), options: TestOptions?): ()
+
+--- Fails the test unless `actual` and `expected` are equal, tables by their fields, saying what
+--- each was. Only in tests.
+declare function assert_equal(actual: any, expected: any, message: string?): ()
+
+--- Fails the test unless `actual` is within `tolerance` (1e-6 by default) of `expected`. Only in
+--- tests.
+declare function assert_near(actual: number, expected: number, tolerance: number?, message: string?): ()
+
+--- Drives the game in a test, as a player would, and runs its frames. Only in tests.
+declare sim: {
+    --- Runs `frames` frames, 1 by default.
+    step: (frames: number?) -> (),
+    --- Runs `seconds` of game time, in whole frames of a sixtieth of a second.
+    run_for: (seconds: number) -> (),
+    --- Returns how many frames have run.
+    frame_count: () -> number,
+    --- Holds `key` down until `sim.release(key)`.
+    press: (key: Key) -> (),
+    release: (key: Key) -> (),
+    --- Presses `key`, runs a frame, and lets it go.
+    tap: (key: Key) -> (),
+    --- Holds `key` down for `seconds` of game time.
+    hold: (key: Key, seconds: number) -> (),
+    --- Types `text`, without pressing keys.
+    type_text: (text: string) -> (),
+    --- Holds down what the game bound `action` to: its first key, or else its first button of a
+    --- connected gamepad.
+    press_action: (action: string) -> (),
+    release_action: (action: string) -> (),
+    tap_action: (action: string) -> (),
+    hold_action: (action: string, seconds: number) -> (),
+    --- Moves the cursor to `x`, `y` in canvas pixels.
+    move_mouse: (x: number, y: number) -> (),
+    --- Holds a mouse button down, the left by default.
+    press_mouse: (button: MouseButton?) -> (),
+    release_mouse: (button: MouseButton?) -> (),
+    --- Moves the cursor to `x`, `y`, presses a mouse button (the left by default), runs a frame,
+    --- and lets it go.
+    click: (x: number, y: number, button: MouseButton?) -> (),
+    --- Connects a gamepad, and returns its number.
+    connect_gamepad: (name: string?) -> number,
+    disconnect_gamepad: (gamepad: number) -> (),
+    --- Pushes a gamepad's button `strength` of the way, from 0 to 1 (all the way by default).
+    press_button: (gamepad: number, button: GamepadButton, strength: number?) -> (),
+    release_button: (gamepad: number, button: GamepadButton) -> (),
+    tap_button: (gamepad: number, button: GamepadButton) -> (),
+    hold_button: (gamepad: number, button: GamepadButton, seconds: number) -> (),
+    --- Moves a gamepad's stick to `x`, `y`, each from -1 to 1, with `y` down.
+    move_stick: (gamepad: number, stick: "left" | "right", x: number, y: number) -> (),
+    --- Clicks the interface's widget labelled `label`, laid out in the frame before, and runs the
+    --- frames that complete the click.
+    click_gui: (label: string) -> (),
+    --- Returns where the interface's widget labelled `label` is, in canvas pixels, or nil.
+    gui_rect: (label: string) -> Rect?,
+    --- Resizes the window, in pixels.
+    resize: (width: number, height: number) -> (),
+    --- Presses the window's close button, and returns whether the window would close.
+    request_close: () -> boolean,
+    --- Returns whether the game called `window.quit`.
+    has_quit: () -> boolean,
+    --- Saves the latest frame as a PNG at `path`, relative to the test file.
+    screenshot: (path: string) -> (),
+    --- Returns whether the latest frame matches the PNG at `path`, relative to the test file, and
+    --- if not, what differs: `assert(sim.matches_screenshot(path))`.
+    matches_screenshot: (path: string, options: ScreenshotOptions?) -> (boolean, string?),
+}

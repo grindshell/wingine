@@ -26,7 +26,8 @@ Read these in order the first time:
 2. [Project structure](project-structure.md): what goes in a game's folder, how `main.luau` runs,
    the settings in `conf.luau`, and where native libraries go.
 3. [Running games](running-games.md): running a game, reloading it as you work, reading its errors
-   and output, checking it without a window, testing it from Rust, and measuring how fast it runs.
+   and output, checking it without a window, testing it in Luau or Rust, and measuring how fast it
+   runs.
 
 When a game's levels, screens or characters are laid out rather than coded:
 
@@ -46,7 +47,8 @@ When a game needs compiled code:
 And to look things up:
 
 8. [API reference](api/README.md): every table, function and type scripts use, the built-ins
-   such as `wait` and `spawn`, and the `wingine-native` crate for native libraries.
+   such as `wait` and `spawn`, what tests have, and the `wingine-native` crate for native
+   libraries.
 
 ## Examples
 
@@ -54,7 +56,7 @@ The repository's examples are complete games, and the best place to see how the 
 
 | Example | What it shows |
 |---|---|
-| [`examples/pong`](../examples/pong) | A small game in one script and a module: input, sound, music, text, a camera that shakes, and `exact` trig, so it plays the same everywhere |
+| [`examples/pong`](../examples/pong) | A small game in one script and a module: input, sound, music, text, a camera that shakes, and `exact` trig, so it plays the same everywhere, with tests in Luau, a screenshot among them |
 | [`examples/rpg`](../examples/rpg) | A top-down RPG: tilemaps, grid movement, animation, dialogue, menus, turn-based battles, and a title screen that continues a saved game |
 | [`examples/shmup`](../examples/shmup) | A bullet hell at a fixed update rate, with an optional native library for its bullets, and a HUD laid out in a scene, whose menu takes the mouse |
 | [`examples/garden`](../examples/garden) | A garden laid out in a scene file: nodes found by path and tag, turned together, solid in a physics world the player walks in, and areas for notes, which F1 outlines |

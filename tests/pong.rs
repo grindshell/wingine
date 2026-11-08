@@ -4,7 +4,7 @@
 use wingine::{
     headless::Simulation,
     input::{GamepadButton, Key, MouseButton, Stick},
-    runtime::{self, LuauGame},
+    runtime::{self, LuauGame, testing},
 };
 
 const GAME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/pong");
@@ -326,6 +326,19 @@ fn reloading_carries_the_match_on() {
         10.0,
         "pong.score.left + pong.score.right == 5"
     ));
+}
+
+/// Pong's own tests, in `pong.test.luau`, as `wingine test examples/pong` runs them. With
+/// `UPDATE_SCREENSHOTS=1`, their references are saved again.
+#[test]
+fn the_luau_tests_pass() {
+    let options = testing::Options {
+        update_screenshots: std::env::var_os("UPDATE_SCREENSHOTS").is_some(),
+        ..Default::default()
+    };
+    let report = testing::run(GAME, &options, |_| {}).expect("the tests run");
+    assert!(report.outcomes.len() >= 6, "{report}");
+    assert!(report.passed(), "{report}");
 }
 
 #[test]
