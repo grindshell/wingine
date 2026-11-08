@@ -156,6 +156,9 @@ type ColliderOptions = {
     --- Whether only the node's edges are solid, keeping what's inside in and what's outside out,
     --- rather than all of it. By default, false.
     edges: boolean?,
+    --- Makes it a sensor: an area nothing bumps into, which `world:inside` tells what's in. Not
+    --- with `edges`.
+    sensor: boolean?,
 }
 
 --- A 3D physics world, for `physics.world_3d`.
@@ -188,22 +191,37 @@ type BodyOptions = {
     sensor: boolean?,
 }
 
---- How `world:ray` looks.
+--- How `world:ray` looks, in 2D or 3D.
 type RayOptions = {
     --- How far it goes, in lengths of its direction. By default, as far as there is.
     distance: number?,
-    --- A node, or a list of them, whose bodies it goes through.
+    --- A node, or a list of them, whose colliders or bodies it goes through.
     except: (SceneNode | { SceneNode })?,
 }
 
---- How `world:overlap_ball` and `world:overlap_box` look.
+--- How a world's overlaps look: `overlap_circle`, `overlap_ball` and `overlap_box`.
 type OverlapOptions = {
-    --- A node, or a list of them, whose bodies don't count.
+    --- A node, or a list of them, whose colliders or bodies don't count.
     except: (SceneNode | { SceneNode })?,
 }
 
---- Where `world:ray` hit a body.
+--- Where a 2D world's `world:ray` hit a collider, in the scene's coordinates.
 type RayHit = {
+    --- The node whose collider it hit.
+    node: SceneNode,
+    --- How far along the ray, in lengths of its direction.
+    distance: number,
+    --- Where.
+    x: number,
+    y: number,
+    --- The way out of the collider there, of length 1, facing back along the ray, or zero if the
+    --- ray started inside the collider.
+    normal_x: number,
+    normal_y: number,
+}
+
+--- Where a 3D world's `world:ray` hit a body.
+type RayHit3d = {
     --- The node whose body it hit.
     node: SceneNode,
     --- How far along the ray, in lengths of its direction.
@@ -588,6 +606,16 @@ declare extern type PhysicsWorld with
     --- Moves `node` by up to `dx`, `dy` in the scene, as `box` around its position does, stopping
     --- at what's solid and sliding along it, and returns how far it moved.
     function move(self, node: SceneNode, dx: number, dy: number, box: Rect): (number, number)
+    --- Returns where a ray from `x`, `y` going `dx`, `dy` first hits a collider, or nil. Sensors
+    --- are never hit.
+    function ray(self, x: number, y: number, dx: number, dy: number, options: RayOptions?): RayHit?
+    --- Returns the nodes whose colliders touch a circle, in the order they were added.
+    function overlap_circle(self, x: number, y: number, radius: number, options: OverlapOptions?): { SceneNode }
+    --- Returns the nodes whose colliders touch a box in the scene, in the order they were added.
+    function overlap_box(self, box: Rect, options: OverlapOptions?): { SceneNode }
+    --- Returns the nodes whose colliders are in the sensor `sensor`'s, even partly, in the order
+    --- they were added.
+    function inside(self, sensor: SceneNode): { SceneNode }
 end
 
 --- Bodies of nodes of one 3D view, shaped like what they show, from `physics.world_3d()`: fixed
@@ -618,7 +646,7 @@ declare extern type PhysicsWorld3d with
     function is_resting(self, node: SceneNode): boolean
     --- Returns where a ray from `origin` going `direction` first hits a body, by its shape, or
     --- nil. Sensors are never hit.
-    function ray(self, origin: vector, direction: vector, options: RayOptions?): RayHit?
+    function ray(self, origin: vector, direction: vector, options: RayOptions?): RayHit3d?
     --- Returns the nodes whose bodies touch a ball, in the order they were added.
     function overlap_ball(self, center: vector, radius: number, options: OverlapOptions?): { SceneNode }
     --- Returns the nodes whose bodies touch a box along the world's axes, between two corners, in

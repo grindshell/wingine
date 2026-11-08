@@ -2804,6 +2804,193 @@ mod physics {
         assert!(near(dx, 7.0), "{dx}");
     }
 
+    /// A lot fenced in 100 by 60, a wall from 10 to 20 across and 0 to 40 down, a post 4 across
+    /// at 40, 20, a pad 20 across at 60, 10, and a walker 2 across at 2, 10.
+    const LOT: &str = r##"return {
+    format = 2,
+    children = {
+        { name = "fence", kind = "area", width = 100, height = 60 },
+        { name = "wall", kind = "area", x = 10, width = 10, height = 40 },
+        { name = "post", kind = "area", x = 40, y = 20, width = 4, height = 4 },
+        { name = "pad", kind = "area", x = 60, y = 10, width = 20, height = 20 },
+        { name = "walker", kind = "area", x = 2, y = 10, width = 2, height = 2 },
+    },
+}"##;
+
+    /// The lot, loaded as `lot`, with its fence's edges, its wall, its post and its walker in
+    /// `world`, in that order but for the pad, a sensor, added after the post, and `names`.
+    fn lot(test: &str) -> Simulation<LuauGame> {
+        let main = format!(
+            "lot = scene.load('lot.scene.luau')
+            walker = lot:find('walker')
+            world = physics.world()
+            world:add(lot:find('fence'), {{ edges = true }})
+            world:add(lot:find('wall'))
+            world:add(lot:find('post'))
+            world:add(lot:find('pad'), {{ sensor = true }})
+            world:add(walker)
+            {NAMES}"
+        );
+        let folder = game(test, &[("lot.scene.luau", LOT), ("main.luau", &main)]);
+        simulation(&folder)
+    }
+
+    /// Where `ray`, a Luau expression for a 2D ray's hit, hit: its node's name, distance, point and
+    /// normal; or `None` if it hit nothing.
+    fn hit_2d(simulation: &mut Simulation<LuauGame>, ray: &str) -> Option<(String, f32, [f32; 4])> {
+        let (name, distance, x, y, normal_x, normal_y): (Option<String>, f32, f32, f32, f32, f32) =
+            simulation.eval(&format!(
+                "(function()
+                    local hit = {ray}
+                    if hit == nil then
+                        return nil, 0, 0, 0, 0, 0
+                    end
+                    return hit.node:name(), hit.distance, hit.x, hit.y, hit.normal_x, hit.normal_y
+                end)()"
+            ));
+        name.map(|name| (name, distance, [x, y, normal_x, normal_y]))
+    }
+
+    fn near_4(actual: [f32; 4], expected: [f32; 4]) -> bool {
+        actual
+            .iter()
+            .zip(expected)
+            .all(|(&a, e)| (a - e).abs() < 1.0e-3)
+    }
+
+    #[test]
+    fn rays_hit_colliders_where_they_are() {
+        let mut simulation = lot("physics_rays");
+        let (name, distance, at) = hit_2d(&mut simulation, "world:ray(5, 5, 1, 0)").unwrap();
+        assert_eq!(name, "wall");
+        assert!(
+            near(distance, 5.0) && near_4(at, [10.0, 5.0, -1.0, 0.0]),
+            "{distance}, {at:?}"
+        );
+        // In lengths of the direction.
+        let (_, distance, _) = hit_2d(&mut simulation, "world:ray(5, 5, 2, 0)").unwrap();
+        assert!(near(distance, 2.5), "{distance}");
+        // Past the wall, through the pad, a sensor, to the fence, from inside it.
+        let past = "world:ray(5, 15, 1, 0, { except = lot:find('wall') })";
+        let (name, distance, at) = hit_2d(&mut simulation, past).unwrap();
+        assert_eq!(name, "fence");
+        assert!(
+            near(distance, 95.0) && near_4(at, [100.0, 15.0, -1.0, 0.0]),
+            "{at:?}"
+        );
+        let short = "world:ray(5, 5, 1, 0, { distance = 4 })";
+        assert_eq!(hit_2d(&mut simulation, short), None);
+        // From inside the walker, at once.
+        let (name, distance, at) = hit_2d(&mut simulation, "world:ray(3, 11, 1, 0)").unwrap();
+        assert_eq!(name, "walker");
+        assert!(distance == 0.0 && at[2..] == [0.0; 2], "{distance}, {at:?}");
+        let through = "world:ray(3, 11, 1, 0, { except = { walker, lot:find('wall') } })";
+        assert_eq!(hit_2d(&mut simulation, through).unwrap().0, "fence");
+        // Where scripts have put nodes since.
+        simulation.exec("lot:find('wall'):set_position(30, 0)");
+        let (_, distance, _) = hit_2d(&mut simulation, "world:ray(5, 5, 1, 0)").unwrap();
+        assert!(near(distance, 25.0), "{distance}");
+        // A world with no nodes hits nothing.
+        assert_eq!(
+            hit_2d(&mut simulation, "physics.world():ray(0, 0, 1, 0)"),
+            None
+        );
+    }
+
+    #[test]
+    fn overlaps_find_the_nodes_whose_colliders_they_touch() {
+        let mut simulation = lot("physics_overlaps");
+        let names = |simulation: &mut Simulation<LuauGame>, overlap: &str| -> String {
+            simulation.eval(&format!("names({overlap})"))
+        };
+        assert_eq!(
+            names(&mut simulation, "world:overlap_circle(42, 17, 4)"),
+            "post"
+        );
+        assert_eq!(
+            names(&mut simulation, "world:overlap_circle(42, 17, 2)"),
+            ""
+        );
+        // In the order they were added: the fence's corner, the wall and the walker.
+        let corner = "world:overlap_circle(5, 5, 6";
+        assert_eq!(
+            names(&mut simulation, &format!("{corner})")),
+            "fence wall walker"
+        );
+        let but = format!("{corner}, {{ except = {{ lot:find('fence'), walker }} }})");
+        assert_eq!(names(&mut simulation, &but), "wall");
+        // Boxes: the pad's, a sensor, doesn't count, and nor does the fence it's inside.
+        let pad = "world:overlap_box({ x = 55, y = 5, width = 30, height = 30 })";
+        assert_eq!(names(&mut simulation, pad), "");
+        let across = "world:overlap_box({ x = 90, y = 5, width = 20, height = 10 })";
+        assert_eq!(names(&mut simulation, across), "fence");
+    }
+
+    #[test]
+    fn sensors_in_2d_say_what_is_in_them_and_stop_nothing() {
+        let mut simulation = lot("physics_sensors");
+        let inside = |simulation: &mut Simulation<LuauGame>| -> String {
+            simulation.eval("names(world:inside(lot:find('pad')))")
+        };
+        assert_eq!(inside(&mut simulation), "");
+        simulation.exec("walker:set_position(65, 15)");
+        assert_eq!(inside(&mut simulation), "walker");
+        // Nothing stops the walker moving into it.
+        let walk = "world:move(walker, 25, 0, { x = 0, y = 0, width = 2, height = 2 })";
+        simulation.exec("walker:set_position(50, 15)");
+        let (dx, _): (f32, f32) = simulation.eval(walk);
+        assert_eq!(dx, 25.0);
+        assert_eq!(inside(&mut simulation), "walker");
+        // Made solid, the pad stops it, and nothing's in it.
+        simulation.exec(
+            "world:add(lot:find('pad'))
+            walker:set_position(50, 15)",
+        );
+        let (dx, _): (f32, f32) = simulation.eval(walk);
+        assert!(near(dx, 7.99), "{dx}");
+        let err = simulation
+            .try_exec("world:inside(lot:find('pad'))")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("isn't a sensor"), "{err}");
+    }
+
+    #[test]
+    fn queries_in_2d_say_what_is_wrong() {
+        let mut simulation = lot("physics_query_errors");
+        let error = |simulation: &mut Simulation<LuauGame>, code: &str| {
+            simulation.try_exec(code).unwrap_err().to_string()
+        };
+        let err = error(&mut simulation, "world:ray(0, 0, 0, 0)");
+        assert!(err.contains("can't be zero"), "{err}");
+        let err = error(&mut simulation, "world:ray(0, 0, 1, 0, { distance = -1 })");
+        assert!(err.contains("0 or more"), "{err}");
+        let err = error(
+            &mut simulation,
+            "world:ray(0, 0, 1, 0, { except = 'wall' })",
+        );
+        assert!(err.contains("a node or a list of nodes"), "{err}");
+        let err = error(&mut simulation, "world:overlap_circle(0, 0, 0)");
+        assert!(err.contains("more than 0"), "{err}");
+        let err = error(
+            &mut simulation,
+            "world:overlap_box({ x = 0, y = 0, width = 0, height = 2 })",
+        );
+        assert!(err.contains("wider and taller than 0"), "{err}");
+        let err = error(&mut simulation, "world:inside(lot:find('wall'))");
+        assert!(err.contains("isn't a sensor"), "{err}");
+        let err = error(
+            &mut simulation,
+            "world:inside(scene.load('lot.scene.luau'):find('pad'))",
+        );
+        assert!(err.contains("isn't in the physics world"), "{err}");
+        let err = error(
+            &mut simulation,
+            "world:add(lot:find('post'), { edges = true, sensor = true })",
+        );
+        assert!(err.contains("not both"), "{err}");
+    }
+
     /// A 3D view of a pen: a floor whose top is at `y` 0, a wall across `x` from 2 to 2.5, a crate
     /// half a unit across held up at 2, a turned group with a box in it, a group at -4 with a
     /// block half a unit across standing in it, and a walker.

@@ -174,7 +174,7 @@ pub struct BodyId(RigidBodyHandle);
 
 /// Where a ray hit a body: see [`World3d::cast_ray`].
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RayHit {
+pub struct RayHit3d {
     pub body: BodyId,
     /// How far along the ray it hit, in lengths of the ray's direction.
     pub distance: f32,
@@ -587,7 +587,7 @@ impl World3d {
         direction: [f32; 3],
         max_distance: f32,
         except: &[BodyId],
-    ) -> Option<RayHit> {
+    ) -> Option<RayHit3d> {
         self.refresh();
         let direction = Vector::from(direction);
         let ray = Ray::new(Vector::from(origin), direction);
@@ -607,7 +607,7 @@ impl World3d {
         } else {
             hit.normal
         };
-        Some(RayHit {
+        Some(RayHit3d {
             body: BodyId(body),
             distance: hit.time_of_impact,
             point: ray.point_at(hit.time_of_impact).into(),
@@ -1922,7 +1922,7 @@ mod tests {
         let hit = world.cast_ray([0.0; 3], [1.0, 0.0, 0.0], f32::MAX, &[]);
         assert_eq!(
             hit,
-            Some(RayHit {
+            Some(RayHit3d {
                 body: block,
                 distance: 0.0,
                 point: [0.0; 3],

@@ -166,29 +166,74 @@ fn the_edges_of_the_ground_keep_the_player_on_it() {
     );
 }
 
+fn flowers(simulation: &mut Simulation<LuauGame>) -> u32 {
+    simulation.eval("#garden.flowers:children()")
+}
+
+/// Where the flower the player planted `n`th is.
+fn planted(simulation: &mut Simulation<LuauGame>, n: u32) -> [f32; 2] {
+    let (x, y) = simulation.eval(&format!("garden.flowers:find('planted_{n}'):position()"));
+    [x, y]
+}
+
 #[test]
-fn space_plants_and_picks_flowers() {
+fn space_throws_seeds_that_grow_where_they_land() {
     let mut simulation = simulation();
-    let flowers = |simulation: &mut Simulation<LuauGame>| -> u32 {
-        simulation.eval("#garden.flowers:children()")
-    };
     assert_eq!(flowers(&mut simulation), 5);
 
+    // Facing right, as it starts, it throws one 24 ahead.
     simulation.exec("garden.player:set_position(160, 120)");
     simulation.tap(Key::Space);
     run_for(&mut simulation, 0.05);
     assert_eq!(flowers(&mut simulation), 6);
-    assert_eq!(
-        simulation.eval::<(f32, f32)>("garden.flowers:find('planted_1'):position()"),
-        (160.0, 120.0),
-        "at the player's feet"
-    );
+    assert_eq!(planted(&mut simulation, 1), [184.0, 120.0]);
     assert_eq!(
         simulation.eval::<(f32, f32)>("garden.flowers:find('planted_1/flower'):size()"),
         (16.0, 16.0)
     );
 
+    // The way it last walked: up.
+    simulation.hold(Key::Up, 0.1);
+    let [x, y] = player(&mut simulation);
+    simulation.tap(Key::Space);
+    run_for(&mut simulation, 0.05);
+    let [seed_x, seed_y] = planted(&mut simulation, 2);
+    assert!(
+        seed_x == x && (seed_y - (y - 24.0)).abs() < 1.0e-3,
+        "{seed_x}, {seed_y}"
+    );
+
+    // Against the bench, which covers 168 to 184 across and 80 to 96 down, there's no room for a
+    // flower.
+    simulation.exec("garden.player:set_position(176, 110)");
+    simulation.hold(Key::Up, 0.5);
+    let before = flowers(&mut simulation);
+    simulation.tap(Key::Space);
+    run_for(&mut simulation, 0.05);
+    assert_eq!(flowers(&mut simulation), before);
+
+    // Toward it from farther off, a seed lands short of it.
+    simulation.exec("garden.player:set_position(176, 110)");
+    simulation.hold(Key::Up, 0.05);
+    simulation.tap(Key::Space);
+    run_for(&mut simulation, 0.05);
+    let [seed_x, seed_y] = planted(&mut simulation, 3);
+    assert!(
+        seed_x == 176.0 && (seed_y - 102.0).abs() < 0.05,
+        "{seed_x}, {seed_y}"
+    );
+}
+
+#[test]
+fn space_picks_the_flower_the_player_stands_on() {
+    let mut simulation = simulation();
+    simulation.exec("garden.player:set_position(160, 120)");
+    simulation.tap(Key::Space);
+    run_for(&mut simulation, 0.05);
+    assert_eq!(flowers(&mut simulation), 6);
+
     // Standing on it, Space picks it.
+    simulation.exec("garden.player:set_position(184, 120)");
     simulation.tap(Key::Space);
     run_for(&mut simulation, 0.05);
     assert_eq!(flowers(&mut simulation), 5);

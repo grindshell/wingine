@@ -41,9 +41,9 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **Physics** with [Rapier](https://rapier.rs), the same to the bit on every platform: in 2D,
   scene nodes made solid where they're drawn, turned and stretched, or along their edges, and
   characters that walk among them, stopping at what's solid and sliding along it; in 3D views,
-  bodies shaped like the meshes and models nodes show, which fall, tumble and come to rest,
-  characters that walk up stairs and slopes among them, pushing what's in their way, and rays,
-  overlaps and sensors that tell where things are.
+  bodies shaped like the meshes and models nodes show, which fall, tumble and come to rest, and
+  characters that walk up stairs and slopes among them, pushing what's in their way; and in both,
+  rays, overlaps and sensors that tell where things are.
 - **Sprite animation**, such as walk cycles.
 - **Text** in a built-in pixel font, wrapped to a width and revealed a little at a time for
   dialogue.
@@ -234,12 +234,15 @@ leave it.
 ![The windmill's sails turning over the garden](docs/screenshots/garden.png)
 
 Walk with the arrow keys or WASD, and stand beside something to read about it. Press Space to
-plant a flower, or to pick the one you're standing on. The mill's sails are a node holding four
-arms and cloths, which turn together as the script turns the node; the birds circle the same way.
-The trees and flowers are instances of scenes of their own, each changed by overrides, and
-planting adds another. Things tagged `solid` are in the player's way, solid in a physics world
-that the player walks in and slides along them, and areas tagged `note` carry the text they show;
-F1 outlines them both, and circles what turns. See [Scenes](docs/scenes.md).
+throw a seed the way you face, which grows into a flower where it lands if there's room, or to
+pick the flower you're standing on. The mill's sails are a node holding four arms and cloths,
+which turn together as the script turns the node; the birds circle the same way. The trees and
+flowers are instances of scenes of their own, each changed by overrides, and planting adds
+another. Things tagged `solid` are in the player's way, solid in a physics world that the player
+walks in and slides along them, and areas tagged `note`, sensors in it, show their text when the
+player is in them; a ray finds where a seed lands, short of what's solid, and an overlap whether a
+flower has room. F1 outlines them, shows where a seed would land, and circles what turns. See
+[Scenes](docs/scenes.md).
 
 ### Orchard
 

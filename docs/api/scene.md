@@ -549,7 +549,7 @@ Returns the ray into the view's world through the point `x`, `y` in the scene's 
 it starts, on the camera's near plane, and the way it goes, of length 1, as
 [`graphics.ray`](graphics.md#graphicsray) does for a view drawn by hand; or nothing for a point
 outside the view. Everything that shows at that point lies along it, and a physics world's
-[`world:ray`](physics.md#worldray) finds what it hits first by the shapes of bodies, where
+[`world:ray`](physics.md#worldray-1) finds what it hits first by the shapes of bodies, where
 [`node:pick`](#nodepick) goes by the boxes around what shows:
 
 ```lua

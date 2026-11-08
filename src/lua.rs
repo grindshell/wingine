@@ -154,12 +154,20 @@
 //! - A `PhysicsWorld`, with the `physics` feature, is userdata for a [`crate::physics::World`] of
 //!   a scene's nodes, from `physics.world()`, whose nodes are all of one scene and none in a 3D
 //!   view. `world:add(node, options)` makes the node solid where it covers, as `node:contains`
-//!   tests, or with `options.edges`, only along its edges; adding it again changes which.
+//!   tests, or with `options.edges`, only along its edges, or with `options.sensor`, a sensor,
+//!   solid nowhere but telling what's in it; adding it again changes which.
 //!   Colliders follow their nodes as they move, and go when their nodes are removed.
 //!   `world:remove(node)` makes it solid nowhere. `world:move(node, dx, dy, box)` moves the node
 //!   by up to `dx`, `dy` in the scene, as the `Rect` `box` around its position slides, stopping
-//!   at what's solid and sliding along it, without its own collider in the way, and returns how
-//!   far it moved; `box` must be wider and taller than 0.
+//!   at what's solid and sliding along it, without its own collider or sensors in the way, and
+//!   returns how far it moved; `box` must be wider and taller than 0. Queries, in the scene's
+//!   coordinates, never find sensors, bring colliders up to date with their nodes first, and
+//!   return nodes in the order they were added: `world:ray(x, y, dx, dy, options)` returns where
+//!   the ray first hits a collider as `{ node, distance, x, y, normal_x, normal_y }`, as the 3D
+//!   world's does, or `nil`; `world:overlap_circle(x, y, radius, options)` and
+//!   `world:overlap_box(box, options)` return the nodes whose colliders they touch; and
+//!   `world:inside(sensor)`, the nodes whose colliders are in a sensor. Their `options` are the 3D
+//!   world's.
 //! - A `PhysicsWorld3d`, with the `physics` feature, is userdata for a
 //!   [`crate::physics::World3d`] of the nodes of one 3D view, from `physics.world_3d()`.
 //!   `world:add(node, options)` gives the node a body shaped like what it shows, or a new one:

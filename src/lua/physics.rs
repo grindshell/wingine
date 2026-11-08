@@ -1,6 +1,6 @@
 //! Physics worlds as scripts hold them, from `physics.world()` and `physics.world_3d()`: Rapier's
-//! colliders and bodies, each of a node, following the node as it moves, or moving it, and in 3D,
-//! asked where things are by rays, overlaps and sensors.
+//! colliders and bodies, each of a node, following the node as it moves, or moving it, and asked
+//! where things are by rays, overlaps and sensors.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -14,9 +14,66 @@ use crate::{
     scene::{Kind, Node, NodeId, Scene},
 };
 
+/// The nodes a query's `except` option names: a node, or a list of them.
+fn excepted(options: Option<&mlua::Table>) -> mlua::Result<Vec<mlua::UserDataRef<SceneNode>>> {
+    let Some(options) = options else {
+        return Ok(Vec::new());
+    };
+    let nodes: Vec<mlua::AnyUserData> = match options.get::<mlua::Value>("except")? {
+        mlua::Value::Nil => Vec::new(),
+        mlua::Value::UserData(node) => vec![node],
+        mlua::Value::Table(nodes) => nodes.sequence_values().collect::<mlua::Result<_>>()?,
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "`except` is a node or a list of nodes, not a {}",
+                other.type_name()
+            )));
+        }
+    };
+    nodes
+        .into_iter()
+        .map(|node| {
+            node.borrow::<SceneNode>().map_err(|_| {
+                mlua::Error::runtime("`except` is a node or a list of nodes, not other userdata")
+            })
+        })
+        .collect()
+}
+
+/// How far a query's ray goes, from its `distance` option: as far as there is, by default.
+fn ray_distance(options: Option<&mlua::Table>) -> mlua::Result<f32> {
+    let distance = match options {
+        Some(options) => options.get::<Option<f32>>("distance")?,
+        None => None,
+    };
+    let distance = distance.unwrap_or(f32::INFINITY);
+    if distance.is_nan() || distance < 0.0 {
+        let message = format!("a ray's distance must be 0 or more, not {distance}");
+        return Err(mlua::Error::runtime(message));
+    }
+    Ok(distance.min(f32::MAX))
+}
+
+/// Brings `world` up to date with its nodes with `follow` before a query, and returns their
+/// scene, or `None` if it has no nodes yet.
+fn followed(
+    scene: Option<&Rc<RefCell<Scene>>>,
+    follow: impl FnOnce(&Scene),
+) -> mlua::Result<Option<Rc<RefCell<Scene>>>> {
+    let Some(scene) = scene else {
+        return Ok(None);
+    };
+    let borrowed = scene
+        .try_borrow()
+        .map_err(|_| mlua::Error::runtime("the scene is being changed"))?;
+    follow(&borrowed);
+    Ok(Some(Rc::clone(scene)))
+}
+
 /// A [`World`] of a scene's nodes, as scripts hold it, from `physics.world()`: colliders that
-/// cover nodes as they're drawn, following them as they move and going when they do, and nodes
-/// moved among them.
+/// cover nodes as they're drawn, following them as they move and going when they do, nodes moved
+/// among them, and sensors. Queries (`ray`, `overlap_circle`, `overlap_box` and a sensor's
+/// `inside`) follow the nodes first, and return nodes, in the order they were added.
 #[derive(Default)]
 pub struct PhysicsWorld {
     world: World,
@@ -98,6 +155,57 @@ impl PhysicsWorld {
             true
         });
     }
+
+    /// Which of `covered` is `node`'s, if it's of this world's scene and has a collider.
+    fn covered_of(&self, node: &SceneNode) -> Option<usize> {
+        let scene = self.scene.as_ref()?;
+        if !Rc::ptr_eq(scene, &node.scene) {
+            return None;
+        }
+        self.covered
+            .iter()
+            .position(|covered| covered.node == node.id)
+    }
+
+    /// Brings the colliders up to date with their nodes before a query, and returns their
+    /// scene, or `None` if the world has no nodes yet.
+    fn followed(&mut self) -> mlua::Result<Option<Rc<RefCell<Scene>>>> {
+        let scene = self.scene.clone();
+        followed(scene.as_ref(), |scene| self.follow(scene))
+    }
+
+    /// The nodes of `found`, nodes of `scene`, in the order they were added to the world.
+    fn nodes(&self, scene: &Rc<RefCell<Scene>>, found: &[ColliderId]) -> Vec<SceneNode> {
+        self.covered
+            .iter()
+            .filter(|covered| found.contains(&covered.collider))
+            .map(|covered| SceneNode::new(Rc::clone(scene), covered.node))
+            .collect()
+    }
+
+    /// The colliders of the nodes a query's `except` option names. Nodes without colliders in
+    /// the world are in nothing's way already.
+    fn except(&self, options: Option<&mlua::Table>) -> mlua::Result<Vec<ColliderId>> {
+        let nodes = excepted(options)?;
+        let colliders = nodes.iter().filter_map(|node| self.covered_of(node));
+        Ok(colliders
+            .map(|index| self.covered[index].collider)
+            .collect())
+    }
+
+    /// The nodes whose colliders `query` finds, but those `options` excepts.
+    fn query_nodes(
+        &mut self,
+        options: Option<&mlua::Table>,
+        query: impl FnOnce(&mut World, &[ColliderId]) -> Vec<ColliderId>,
+    ) -> mlua::Result<Vec<SceneNode>> {
+        let except = self.except(options)?;
+        let Some(scene) = self.followed()? else {
+            return Ok(Vec::new());
+        };
+        let found = query(&mut self.world, &except);
+        Ok(self.nodes(&scene, &found))
+    }
 }
 
 impl mlua::UserData for PhysicsWorld {
@@ -105,11 +213,23 @@ impl mlua::UserData for PhysicsWorld {
         methods.add_method_mut(
             "add",
             |_, world, (node, options): (mlua::UserDataRef<SceneNode>, Option<mlua::Table>)| {
-                let edges = match options {
-                    Some(options) => options.get::<Option<bool>>("edges")?.unwrap_or(false),
-                    None => false,
+                let flag = |name: &str| -> mlua::Result<bool> {
+                    match &options {
+                        Some(options) => Ok(options.get::<Option<bool>>(name)?.unwrap_or(false)),
+                        None => Ok(false),
+                    }
                 };
-                let solid = if edges { Solid::Edges } else { Solid::Whole };
+                let solid = match (flag("edges")?, flag("sensor")?) {
+                    (true, true) => {
+                        return Err(mlua::Error::runtime(
+                            "a sensor is all of its area, not only its edges: give a node `edges` \
+                             or `sensor`, not both",
+                        ));
+                    }
+                    (true, false) => Solid::Edges,
+                    (false, true) => Solid::Sensor,
+                    (false, false) => Solid::Whole,
+                };
                 world.check(&node)?;
                 node.read(|scene, id| world.add(scene, id, solid))
             },
@@ -174,6 +294,81 @@ impl mlua::UserData for PhysicsWorld {
                 Ok((moved[0], moved[1]))
             },
         );
+        methods.add_method_mut(
+            "ray",
+            |lua, world, (x, y, dx, dy, options): (f32, f32, f32, f32, Option<mlua::Table>)| {
+                check_finite(&[x, y], "a ray's start")?;
+                check_finite(&[dx, dy], "a ray's direction")?;
+                if [dx, dy] == [0.0; 2] {
+                    return Err(mlua::Error::runtime("a ray's direction can't be zero"));
+                }
+                let distance = ray_distance(options.as_ref())?;
+                let except = world.except(options.as_ref())?;
+                let Some(scene) = world.followed()? else {
+                    return Ok(None);
+                };
+                let hit = world.world.cast_ray([x, y], [dx, dy], distance, &except);
+                let Some((hit, covered)) = hit.and_then(|hit| {
+                    let covered = world.covered.iter().find(|c| c.collider == hit.collider)?;
+                    Some((hit, covered))
+                }) else {
+                    return Ok(None);
+                };
+                let table = lua.create_table_with_capacity(0, 6)?;
+                table.raw_set("node", SceneNode::new(scene, covered.node))?;
+                table.raw_set("distance", hit.distance)?;
+                table.raw_set("x", hit.point[0])?;
+                table.raw_set("y", hit.point[1])?;
+                table.raw_set("normal_x", hit.normal[0])?;
+                table.raw_set("normal_y", hit.normal[1])?;
+                Ok(Some(table))
+            },
+        );
+        methods.add_method_mut(
+            "overlap_circle",
+            |_, world, (x, y, radius, options): (f32, f32, f32, Option<mlua::Table>)| {
+                check_finite(&[x, y], "a circle's middle")?;
+                if !(radius.is_finite() && radius > 0.0) {
+                    let message = format!("a circle's radius must be more than 0, not {radius}");
+                    return Err(mlua::Error::runtime(message));
+                }
+                world.query_nodes(options.as_ref(), |world, except| {
+                    world.overlapping_circle([x, y], radius, except)
+                })
+            },
+        );
+        methods.add_method_mut(
+            "overlap_box",
+            |_, world, (area, options): (Rect, Option<mlua::Table>)| {
+                check_finite(&[area.x, area.y, area.w, area.h], "a box")?;
+                if !(area.w > 0.0 && area.h > 0.0) {
+                    let message = format!(
+                        "a box must be wider and taller than 0, not {} by {}",
+                        area.w, area.h
+                    );
+                    return Err(mlua::Error::runtime(message));
+                }
+                world.query_nodes(options.as_ref(), |world, except| {
+                    world.overlapping(Affine::IDENTITY, area, except)
+                })
+            },
+        );
+        methods.add_method_mut("inside", |_, world, node: mlua::UserDataRef<SceneNode>| {
+            let Some(index) = world.covered_of(&node) else {
+                let described = node.read(Scene::describe)?;
+                return Err(mlua::Error::runtime(format!(
+                    "{described} isn't in the physics world: add it first"
+                )));
+            };
+            let collider = world.covered[index].collider;
+            if !world.world.is_sensor(collider) {
+                let described = node.read(Scene::describe)?;
+                return Err(mlua::Error::runtime(format!(
+                    "{described} isn't a sensor, so nothing's in it: add it with `sensor = true`"
+                )));
+            }
+            world.query_nodes(None, |world, _| world.inside(collider))
+        });
     }
 }
 
@@ -769,15 +964,8 @@ impl PhysicsWorld3d {
     /// Brings the bodies up to date with their nodes before a query, and returns their scene, or
     /// `None` if the world has no nodes yet.
     fn followed(&mut self) -> mlua::Result<Option<Rc<RefCell<Scene>>>> {
-        let Some((scene, _)) = self.view.clone() else {
-            return Ok(None);
-        };
-        let borrowed = scene
-            .try_borrow()
-            .map_err(|_| mlua::Error::runtime("the scene is being changed"))?;
-        self.follow(&borrowed);
-        drop(borrowed);
-        Ok(Some(scene))
+        let scene = self.view.as_ref().map(|(scene, _)| Rc::clone(scene));
+        followed(scene.as_ref(), |scene| self.follow(scene))
     }
 
     /// The nodes of `found`, nodes of `scene`, in the order they were added to the world.
@@ -792,30 +980,9 @@ impl PhysicsWorld3d {
     /// The bodies of the nodes a query's `except` option names: a node, or a list of them. Nodes
     /// without bodies in the world are in nothing's way already.
     fn except(&self, options: Option<&mlua::Table>) -> mlua::Result<Vec<BodyId>> {
-        let Some(options) = options else {
-            return Ok(Vec::new());
-        };
-        let nodes: Vec<mlua::AnyUserData> = match options.get::<mlua::Value>("except")? {
-            mlua::Value::Nil => Vec::new(),
-            mlua::Value::UserData(node) => vec![node],
-            mlua::Value::Table(nodes) => nodes.sequence_values().collect::<mlua::Result<_>>()?,
-            other => {
-                return Err(mlua::Error::runtime(format!(
-                    "`except` is a node or a list of nodes, not a {}",
-                    other.type_name()
-                )));
-            }
-        };
-        let mut except = Vec::new();
-        for node in nodes {
-            let node = node.borrow::<SceneNode>().map_err(|_| {
-                mlua::Error::runtime("`except` is a node or a list of nodes, not other userdata")
-            })?;
-            if let Some(index) = self.body_of(&node) {
-                except.push(self.bodies[index].body);
-            }
-        }
-        Ok(except)
+        let nodes = excepted(options)?;
+        let bodies = nodes.iter().filter_map(|node| self.body_of(node));
+        Ok(bodies.map(|index| self.bodies[index].body).collect())
     }
 
     /// The nodes whose bodies `shape` overlaps, but those `options` excepts.
@@ -978,22 +1145,12 @@ impl mlua::UserData for PhysicsWorld3d {
                 if direction == [0.0; 3] {
                     return Err(mlua::Error::runtime("a ray's direction can't be zero"));
                 }
-                let distance = match &options {
-                    Some(options) => options.get::<Option<f32>>("distance")?,
-                    None => None,
-                };
-                let distance = distance.unwrap_or(f32::INFINITY);
-                if distance.is_nan() || distance < 0.0 {
-                    let message = format!("a ray's distance must be 0 or more, not {distance}");
-                    return Err(mlua::Error::runtime(message));
-                }
+                let distance = ray_distance(options.as_ref())?;
                 let except = world.except(options.as_ref())?;
                 let Some(scene) = world.followed()? else {
                     return Ok(None);
                 };
-                let hit = world
-                    .world
-                    .cast_ray(origin, direction, distance.min(f32::MAX), &except);
+                let hit = world.world.cast_ray(origin, direction, distance, &except);
                 let Some((hit, bodied)) = hit.and_then(|hit| {
                     let bodied = world.bodies.iter().find(|bodied| bodied.body == hit.body)?;
                     Some((hit, bodied))

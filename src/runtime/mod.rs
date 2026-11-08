@@ -182,7 +182,8 @@
 //!
 //! - `physics.world()` returns an empty `PhysicsWorld`, which the first node given to it makes a
 //!   world of that node's scene: its colliders cover nodes as they're drawn, following them as
-//!   they move and going when they do, and `world:move` moves nodes among them.
+//!   they move and going when they do, `world:move` moves nodes among them, and rays, overlaps
+//!   and sensors ask it where things are.
 //! - `physics.world_3d(options)` returns an empty `PhysicsWorld3d`, whose dynamic bodies fall with
 //!   `options.gravity`, a vector (9.81 down by default), and which the first node given to it
 //!   makes a world of that node's 3D view: bodies shaped like what nodes show, which `world:step`

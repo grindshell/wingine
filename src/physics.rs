@@ -5,8 +5,10 @@
 //! scene node's is ([`Scene::placement`](crate::scene::Scene::placement)), so a collider can cover
 //! a node as it's drawn: turned, stretched and mirrored. All of a collider is solid
 //! ([`Solid::Whole`]), or only its edges ([`Solid::Edges`]), which keep what's inside in, as a
-//! fence around a field does. [`World::slide`] moves a box among them. Coordinates are whatever
-//! the colliders are placed in, such as a scene's, with `y` down.
+//! fence around a field does, or none of it, a sensor ([`Solid::Sensor`]), an area that tells
+//! what's in it. [`World::slide`] moves a box among them, and rays, overlaps and sensors tell
+//! where they are. Coordinates are whatever the colliders are placed in, such as a scene's, with
+//! `y` down.
 //!
 //! In 3D, a [`World3d`] holds bodies, fixed, dynamic or kinematic, which [`World3d::step`] moves
 //! through time, and [`World3d::walk`] walks characters among them, up stairs and slopes, pushing
@@ -18,15 +20,18 @@
 mod world3d;
 
 pub use world3d::{
-    Body3d, BodyId, BodyKind, Character, Material, Pose3d, RayHit, Shape3d, Walked, World3d,
+    Body3d, BodyId, BodyKind, Character, Material, Pose3d, RayHit3d, Shape3d, Walked, World3d,
 };
 
 use rapier2d::{
     parry::{
         query::ShapeCastOptions,
-        shape::{Cuboid, Shape},
+        shape::{Ball, Cuboid, Shape},
     },
-    prelude::{ColliderBuilder, ColliderHandle, PhysicsWorld, Pose, QueryFilter, SharedShape},
+    prelude::{
+        Collider, ColliderBuilder, ColliderHandle, PhysicsWorld, Pose, QueryFilter, Ray,
+        SharedShape,
+    },
 };
 
 use crate::math::{Affine, Rect};
@@ -50,11 +55,27 @@ pub enum Solid {
     Whole,
     /// Only its edges, lines with no thickness: what's inside stays in, and what's outside out.
     Edges,
+    /// None of it: a sensor, all of whose area boxes slide through, which [`World::inside`]
+    /// tells what's in. Rays and overlaps never find sensors.
+    Sensor,
 }
 
 /// A collider in a [`World`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ColliderId(ColliderHandle);
+
+/// Where a ray hit a collider: see [`World::cast_ray`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RayHit {
+    pub collider: ColliderId,
+    /// How far along the ray it hit, in lengths of the ray's direction.
+    pub distance: f32,
+    /// Where it hit.
+    pub point: [f32; 2],
+    /// The way out of the collider where it hit, a vector of length 1 facing back along the ray,
+    /// or zero if the ray started inside the collider.
+    pub normal: [f32; 2],
+}
 
 /// Fixed colliders, and boxes slid among them: see the [module docs](self).
 pub struct World {
@@ -79,9 +100,9 @@ impl World {
         }
     }
 
-    /// Adds a fixed collider of `rect` placed by `transform`, all of it solid or only its edges.
-    /// A rectangle squashed flat, with no area, is solid nowhere until [`World::set`] gives it
-    /// some.
+    /// Adds a fixed collider of `rect` placed by `transform`, all of it solid, only its edges, or
+    /// none of it, a sensor. A rectangle squashed flat, with no area, is nowhere until
+    /// [`World::set`] gives it some.
     pub fn add(&mut self, transform: Affine, rect: Rect, solid: Solid) -> ColliderId {
         // A stand-in shape until `set` shapes it.
         let collider = ColliderBuilder::new(SharedShape::ball(0.0)).enabled(false);
@@ -103,7 +124,125 @@ impl World {
             }
             None => collider.set_enabled(false),
         }
+        collider.set_sensor(solid == Solid::Sensor);
         self.stale = true;
+    }
+
+    /// Whether the collider `id` is a sensor: see [`Solid::Sensor`].
+    pub fn is_sensor(&self, id: ColliderId) -> bool {
+        self.rapier
+            .colliders
+            .get(id.0)
+            .is_some_and(Collider::is_sensor)
+    }
+
+    /// Brings Rapier up to date with the colliders changed since it last was, which it must be
+    /// before what it's asked about sees them.
+    fn catch_up(&mut self) {
+        if self.stale {
+            self.rapier.detect_collisions(&(), &());
+            self.stale = false;
+        }
+    }
+
+    /// Casts a ray from `origin` along `direction`, as far as `max_distance` lengths of it, and
+    /// returns where it first hits a collider, other than those in `except` and sensors, or
+    /// `None` if it hits nothing. A ray starting inside a collider solid all over hits it at 0,
+    /// and edges are hit from either side.
+    pub fn cast_ray(
+        &mut self,
+        origin: [f32; 2],
+        direction: [f32; 2],
+        max_distance: f32,
+        except: &[ColliderId],
+    ) -> Option<RayHit> {
+        self.catch_up();
+        let direction = Vector::from(direction);
+        let ray = Ray::new(Vector::from(origin), direction);
+        let excepted = |handle: ColliderHandle, _: &Collider| !except.contains(&ColliderId(handle));
+        let filter = QueryFilter::default()
+            .exclude_sensors()
+            .predicate(&excepted);
+        let queries = self.rapier.query_pipeline_with_filter(filter);
+        let (handle, hit) = queries.cast_ray_and_get_normal(&ray, max_distance, true)?;
+        // Rapier finds where a ray hits a polygon by iterating, as it does a box, so its normal
+        // is one of the polygon's sides' within a hair.
+        let normal = true_normal(hit.normal, queries.colliders[handle].shape());
+        // Back toward where the ray came from, whichever side of an edge it hit, and none from
+        // inside.
+        let normal = if hit.time_of_impact <= 0.0 {
+            Vector::ZERO
+        } else if normal.dot(direction) > 0.0 {
+            -normal
+        } else {
+            normal
+        };
+        Some(RayHit {
+            collider: ColliderId(handle),
+            distance: hit.time_of_impact,
+            point: ray.point_at(hit.time_of_impact).into(),
+            normal: normal.into(),
+        })
+    }
+
+    /// Returns the colliders that `rect` placed by `transform`, as [`World::add`] places one,
+    /// touches or overlaps, other than those in `except` and sensors, in no particular order:
+    /// none for a rectangle with no area. Edges count only where it touches them, not if it's
+    /// inside them.
+    pub fn overlapping(
+        &mut self,
+        transform: Affine,
+        rect: Rect,
+        except: &[ColliderId],
+    ) -> Vec<ColliderId> {
+        let Some(shape) = shape(transform, rect, Solid::Whole) else {
+            return Vec::new();
+        };
+        self.catch_up();
+        self.touching(Pose::IDENTITY, &*shape, except)
+    }
+
+    /// Returns the colliders that the circle around `center` touches or overlaps, other than
+    /// those in `except` and sensors, in no particular order: none for a radius that isn't more
+    /// than 0.
+    pub fn overlapping_circle(
+        &mut self,
+        center: [f32; 2],
+        radius: f32,
+        except: &[ColliderId],
+    ) -> Vec<ColliderId> {
+        if !(radius > 0.0 && radius.is_finite()) {
+            return Vec::new();
+        }
+        self.catch_up();
+        let at = Pose::from_translation(Vector::from(center));
+        self.touching(at, &Ball::new(radius), except)
+    }
+
+    /// Returns the colliders that overlap or touch the collider `id`, a sensor's or any other's,
+    /// other than sensors, in no particular order: for a sensor, what's in it.
+    pub fn inside(&mut self, id: ColliderId) -> Vec<ColliderId> {
+        self.catch_up();
+        let Some(collider) = self.rapier.colliders.get(id.0) else {
+            return Vec::new();
+        };
+        if !collider.is_enabled() {
+            return Vec::new();
+        }
+        self.touching(*collider.position(), collider.shape(), &[id])
+    }
+
+    /// The colliders `shape` at `pose` touches, other than those in `except` and sensors.
+    fn touching(&self, pose: Pose, shape: &dyn Shape, except: &[ColliderId]) -> Vec<ColliderId> {
+        let excepted = |handle: ColliderHandle, _: &Collider| !except.contains(&ColliderId(handle));
+        let filter = QueryFilter::default()
+            .exclude_sensors()
+            .predicate(&excepted);
+        let queries = self.rapier.query_pipeline_with_filter(filter);
+        queries
+            .intersect_shape(pose, shape)
+            .map(|(handle, _)| ColliderId(handle))
+            .collect()
     }
 
     /// Removes the collider `id`, if it hasn't been already.
@@ -126,23 +265,21 @@ impl World {
     /// all of `motion` unless it hits something solid, where it stops, then slides along what it
     /// hit as far as `motion` goes that way. It stops [`GAP`] short of what it hits. A box that
     /// starts inside something solid moves only out of it, or along it. The collider `except`,
-    /// if given, isn't in its way, as a character's own isn't.
+    /// if given, isn't in its way, as a character's own isn't, and nor are sensors.
     ///
     /// Rapier's own character controller does this for characters that walk on floors, but its
     /// casts keep their gap by rounding the box, which turns what it slides along a little, so a
     /// box pushed straight at a wall would creep along it. This casts the box as it is.
     pub fn slide(&mut self, rect: Rect, motion: [f32; 2], except: Option<ColliderId>) -> [f32; 2] {
-        if self.stale {
-            self.rapier.detect_collisions(&(), &());
-            self.stale = false;
-        }
+        self.catch_up();
         let half = Vector::new(rect.w / 2.0, rect.h / 2.0);
         let shape = Cuboid::new(half);
         let start = Vector::new(rect.x, rect.y) + half;
         let filter = match except {
             Some(id) => QueryFilter::default().exclude_collider(id.0),
             None => QueryFilter::default(),
-        };
+        }
+        .exclude_sensors();
         let queries = self.rapier.query_pipeline_with_filter(filter);
         let options = ShapeCastOptions {
             target_distance: 0.0,
@@ -216,7 +353,7 @@ fn shape(transform: Affine, rect: Rect, solid: Solid) -> Option<SharedShape> {
         return None;
     }
     match solid {
-        Solid::Whole => SharedShape::convex_hull(&corners),
+        Solid::Whole | Solid::Sensor => SharedShape::convex_hull(&corners),
         Solid::Edges => Some(SharedShape::polyline(
             corners.to_vec(),
             Some(vec![[0, 1], [1, 2], [2, 3], [3, 0]]),
@@ -448,6 +585,166 @@ mod tests {
         world.set(id, Affine::IDENTITY, rect, Solid::Whole);
         assert_near(
             world.slide(small_box(0.0, 0.0), [30.0, 0.0], None),
+            [8.0 - GAP, 0.0],
+        );
+    }
+
+    fn set(ids: Vec<ColliderId>) -> std::collections::HashSet<ColliderId> {
+        ids.into_iter().collect()
+    }
+
+    #[test]
+    fn rays_hit_the_nearest_collider() {
+        // Colliders added since anything was last asked, as these are, are where they are.
+        let mut world = World::new();
+        let wall = Rect::new(10.0, 0.0, 10.0, 100.0);
+        let near = world.add(Affine::IDENTITY, wall, Solid::Whole);
+        let far = world.add(
+            Affine::IDENTITY,
+            Rect::new(30.0, 0.0, 10.0, 100.0),
+            Solid::Whole,
+        );
+        // In lengths of its direction.
+        let hit = world.cast_ray([0.0, 50.0], [2.0, 0.0], f32::MAX, &[]);
+        let hit = hit.expect("the ray hit the wall");
+        assert_eq!(hit.collider, near);
+        assert!((hit.distance - 5.0).abs() < 1.0e-3, "{hit:?}");
+        assert_near(hit.point, [10.0, 50.0]);
+        assert_eq!(hit.normal, [-1.0, 0.0]);
+        // Past it, or not as far as it.
+        let hit = world.cast_ray([0.0, 50.0], [1.0, 0.0], f32::MAX, &[near]);
+        assert_eq!(hit.map(|hit| hit.collider), Some(far));
+        assert_eq!(world.cast_ray([0.0, 50.0], [1.0, 0.0], 9.0, &[]), None);
+        assert_eq!(
+            world.cast_ray([0.0, 50.0], [-1.0, 0.0], f32::MAX, &[]),
+            None
+        );
+        // From inside, at once, with no normal.
+        let hit = world
+            .cast_ray([15.0, 50.0], [1.0, 0.0], f32::MAX, &[])
+            .unwrap();
+        assert_eq!(
+            (hit.collider, hit.distance, hit.normal),
+            (near, 0.0, [0.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn rays_hit_turned_colliders_on_their_turned_sides_and_edges_from_inside() {
+        // A square 10 wide turned to a diamond, its corners 7.07 from its middle at 50, 50.
+        let mut world = World::new();
+        let turned = Affine::from_parts([50.0, 50.0], std::f32::consts::FRAC_PI_4, [1.0, 1.0]);
+        world.add(turned, Rect::new(-5.0, -5.0, 10.0, 10.0), Solid::Whole);
+        // Above its left corner, onto its upper left side.
+        let hit = world
+            .cast_ray([0.0, 48.0], [1.0, 0.0], f32::MAX, &[])
+            .unwrap();
+        let half = std::f32::consts::FRAC_1_SQRT_2;
+        assert!(
+            (hit.distance - (50.0 - 10.0 * half + 2.0)).abs() < 1.0e-3,
+            "{hit:?}"
+        );
+        let [x, y] = hit.normal;
+        assert!(
+            (x + half).abs() < 1.0e-5 && (y.abs() - half).abs() < 1.0e-5,
+            "{hit:?}"
+        );
+
+        // A fence, hit from inside it, facing back in.
+        let mut world = World::new();
+        let field = Rect::new(0.0, 0.0, 100.0, 50.0);
+        world.add(Affine::IDENTITY, field, Solid::Edges);
+        let hit = world
+            .cast_ray([50.0, 25.0], [0.0, 1.0], f32::MAX, &[])
+            .unwrap();
+        assert_eq!((hit.distance, hit.normal), (25.0, [0.0, -1.0]));
+    }
+
+    #[test]
+    fn rays_go_through_sensors_and_flat_colliders() {
+        let mut world = walled();
+        let area = Rect::new(4.0, 0.0, 2.0, 100.0);
+        world.add(Affine::IDENTITY, area, Solid::Sensor);
+        let flat = Affine::from_parts([0.0, 0.0], 0.0, [0.0, 1.0]);
+        world.add(flat, Rect::new(7.0, 0.0, 2.0, 100.0), Solid::Whole);
+        let hit = world
+            .cast_ray([0.0, 50.0], [1.0, 0.0], f32::MAX, &[])
+            .unwrap();
+        assert!((hit.distance - 10.0).abs() < 1.0e-3, "{hit:?}");
+    }
+
+    #[test]
+    fn overlaps_find_what_they_touch() {
+        let mut world = walled();
+        let wall = ColliderId(world.rapier.colliders.iter().next().unwrap().0);
+        let fence = world.add(
+            Affine::IDENTITY,
+            Rect::new(-50.0, -50.0, 100.0, 200.0),
+            Solid::Edges,
+        );
+        world.add(
+            Affine::IDENTITY,
+            Rect::new(0.0, 0.0, 9.0, 9.0),
+            Solid::Sensor,
+        );
+        // Reaching the wall's side at 10, and short of it; the sensor it's in doesn't count, nor
+        // the fence around it.
+        let reaching = world.overlapping_circle([7.0, 5.0], 3.5, &[]);
+        assert_eq!(reaching, vec![wall]);
+        assert_eq!(world.overlapping_circle([7.0, 5.0], 2.5, &[]), vec![]);
+        // The wall's top, at 0, and the fence's edge, at -50.
+        let both = world.overlapping_circle([10.0, -25.0], 26.0, &[]);
+        assert_eq!(set(both), set(vec![wall, fence]));
+        let but = world.overlapping_circle([10.0, -25.0], 26.0, &[wall]);
+        assert_eq!(but, vec![fence]);
+        // A rectangle turned a quarter turn about its corner, reaching into the wall.
+        let turned = Affine::from_parts([15.0, 60.0], std::f32::consts::FRAC_PI_2, [1.0, 1.0]);
+        let found = world.overlapping(turned, Rect::new(0.0, 0.0, 4.0, 10.0), &[]);
+        assert_eq!(found, vec![wall]);
+        let flat = Rect::new(0.0, 60.0, 15.0, 0.0);
+        assert_eq!(world.overlapping(Affine::IDENTITY, flat, &[]), vec![]);
+        assert_eq!(world.overlapping_circle([12.0, 5.0], 0.0, &[]), vec![]);
+    }
+
+    #[test]
+    fn sensors_tell_what_is_in_them_and_stop_nothing() {
+        let mut world = World::new();
+        let area = Rect::new(0.0, 0.0, 20.0, 20.0);
+        let sensor = world.add(Affine::IDENTITY, area, Solid::Sensor);
+        assert!(world.is_sensor(sensor));
+        // A box slides through it.
+        assert_eq!(
+            world.slide(small_box(-10.0, 5.0), [40.0, 0.0], None),
+            [40.0, 0.0]
+        );
+        assert_eq!(world.inside(sensor), vec![]);
+        // What's in it, even partly, other than sensors.
+        let crate_in = world.add(Affine::IDENTITY, small_box(19.0, 5.0), Solid::Whole);
+        assert!(!world.is_sensor(crate_in));
+        world.add(Affine::IDENTITY, small_box(5.0, 5.0), Solid::Sensor);
+        world.add(Affine::IDENTITY, small_box(30.0, 5.0), Solid::Whole);
+        assert_eq!(world.inside(sensor), vec![crate_in]);
+        // Moved away, the crate isn't; set again, the sensor stays one.
+        world.set(
+            crate_in,
+            Affine::from_translation([10.0, 0.0]),
+            small_box(19.0, 5.0),
+            Solid::Whole,
+        );
+        assert_eq!(world.inside(sensor), vec![]);
+        world.set(
+            sensor,
+            Affine::IDENTITY,
+            Rect::new(0.0, 0.0, 40.0, 20.0),
+            Solid::Sensor,
+        );
+        assert!(world.is_sensor(sensor));
+        assert_eq!(world.inside(sensor).len(), 2);
+        // A collider made solid again is in the way.
+        world.set(sensor, Affine::IDENTITY, area, Solid::Whole);
+        assert!(!world.is_sensor(sensor));
+        assert_near(
+            world.slide(small_box(-10.0, 5.0), [40.0, 0.0], None),
             [8.0 - GAP, 0.0],
         );
     }

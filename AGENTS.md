@@ -245,18 +245,25 @@ networking or 3D pipelines.
   game calls `update`, then `step` when the mover is idle; a step carries over time left from the
   one before, so continuous walking keeps an even pace.
 - `src/physics.rs`: `World`, collision by Rapier (the `physics` feature): fixed colliders without
-  bodies, each a `Rect` placed by an `Affine` as `Scene::placement` places a node's, solid all over
-  or only along its edges (`Solid`), and `slide`, which moves a box by up to a motion, stopping a
+  bodies, each a `Rect` placed by an `Affine` as `Scene::placement` places a node's, solid all over,
+  only along its edges, or nowhere, a sensor (`Solid`), and `slide`, which moves a box by up to a
+  motion, passing through sensors and stopping a
   hundredth of a unit (`GAP`) short of what's solid and sliding along it. It casts the box through
   Rapier's queries itself, not with Rapier's `KinematicCharacterController`, which is for
   characters on floors and keeps its gap by rounding the box, so the normals it slides along come
   back a little turned and a box pushed at a wall creeps along it; and it snaps the normals GJK
   finds to the sides of the box or of what it hit, within a hair (`true_normal`). Rapier catches
-  up with changed colliders (`detect_collisions`) before the next slide. Its unit tests don't need
-  a GPU. Luau's `physics.world()` returns a `lua::PhysicsWorld`, colliders of one scene's nodes,
-  which before each move re-reads every node's placement to follow it and drops those of removed
-  nodes, and whose `move` slides a box around a node's position, without the node's own collider
-  in the way, then moves the node within its parent.
+  up with changed colliders (`detect_collisions`, `catch_up`) before the next slide or query.
+  Queries, as 3D's, never find sensors: `cast_ray` (a `RayHit`, its normal snapped by
+  `true_normal` too and turned to face back along the ray), `overlapping` (a rectangle placed by an
+  `Affine`), `overlapping_circle`, and `inside` (what overlaps a collider, for a sensor what's in
+  it). Its unit tests don't need a GPU. Luau's `physics.world()` returns a `lua::PhysicsWorld`,
+  colliders of one scene's nodes, which before each move or query re-reads every node's placement
+  to follow it and drops those of removed nodes, and whose `move` slides a box around a node's
+  position, without the node's own collider in the way, then moves the node within its parent.
+  Its queries, `ray`, `overlap_circle`, `overlap_box` and a sensor's `inside`, in the scene's
+  coordinates, give back nodes in the order they were added, reading `except` as 3D's do
+  (`excepted`, `followed` and `ray_distance` are shared by the two worlds).
 - `src/physics/world3d.rs`: `World3d`, physics in 3D views by Rapier: bodies (`Body3d`), fixed,
   dynamic or kinematic (`BodyKind`, kinematic ones never asleep, since Rapier doesn't wake one
   that dynamic bodies bump into and leave), each a `Shape3d` (triangles, which only fixed bodies
@@ -279,7 +286,7 @@ networking or 3D pipelines.
   to the cylinder's flat ends or its side. Rapier's `detect_collisions` would catch up with
   bodies added or moved since the last step, but it forgets new bodies as the step that follows
   looks for them, so they're never simulated: `refresh` puts those colliders in the query tree
-  itself (`set_aabb`). Queries refresh first too: `cast_ray` (a `RayHit`, by Rapier's ray casts,
+  itself (`set_aabb`). Queries refresh first too: `cast_ray` (a `RayHit3d`, by Rapier's ray casts,
   solid, its normal turned to face back along the ray), `overlapping` (a `Shape3d` in the world,
   made by `collider`) and `inside` (what overlaps a body), never finding sensors (`Body3d::sensor`),
   whose colliders are Rapier's sensors with no active collision types, so steps leave them alone
@@ -629,11 +636,15 @@ networking or 3D pipelines.
   `main.luau` loads and plays: it turns the mill's sails and a flock of birds (nodes whose
   children turn with them), walks the player, which waddles and mirrors about its feet, in a
   physics world (`garden.world`) of the nodes tagged `solid` and the ground's edges, which a strip
-  across its feet (`FEET`) slides along, and shows the `text` of areas tagged `note`. Its trees
-  and flowers are
-  instances of `tree.scene.luau` and `flower.scene.luau`, changed by overrides, and Space plants
-  a flower (`add`) or picks one (`remove`). F1 draws a debug view over it (`garden.debug`):
-  outlines of the solid nodes and note areas, the player's feet, and the turning nodes' circles.
+  across its feet (`FEET`) slides along, and shows the `text` of areas tagged `note`, sensors in
+  the world, when the player is in one (`world:inside`): the player is in the world too, covered
+  where it's drawn. Its trees and flowers are
+  instances of `tree.scene.luau` and `flower.scene.luau`, changed by overrides, and Space picks the
+  flower under the player's feet (`remove`), or throws a seed the way it last walked
+  (`garden.facing`): a ray finds where it lands, `THROW` ahead or `SHORT` of what's solid, and a
+  flower grows there (`add`) if `world:overlap_circle` finds nothing solid within `ROOM`
+  (`seed_landing`). F1 draws a debug view over it (`garden.debug`): outlines of the solid nodes and
+  note areas, the player's feet, where a seed would land, and the turning nodes' circles.
   The scene files are in the canonical layout, as an
   editor would write them, and `tests/garden.rs` checks they stay so: after editing one, write it
   again with `SceneFile::write`. The game's state is the global `garden`.
@@ -777,8 +788,9 @@ networking or 3D pipelines.
   mouse, its scene files being in the canonical layout, and continuing a saved game in a second simulation sharing the first's
   save folder. Its `simulation()` starts a new game from the title screen.
 - `tests/garden.rs`: tests for the `garden` example, the same way: walking, stopping at and
-  sliding along what's solid and the ground's edges, its F1 view, and that its scene files are in
-  the canonical layout.
+  sliding along what's solid and the ground's edges, seeds thrown the way the player faces and
+  landing short of what's solid, or not growing without room, picking flowers, notes, its F1
+  view, and that its scene files are in the canonical layout.
 - `tests/orchard.rs`: tests for the `orchard` example, the same way: its clips, the picker's walk
   easing in and out, catching and missing apples, the reactions, the end of the day and the
   camera's close-up, and that its scene files are in the canonical layout.
