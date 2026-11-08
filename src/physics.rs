@@ -18,7 +18,7 @@
 mod world3d;
 
 pub use world3d::{
-    Body3d, BodyId, BodyKind, Character, Material, Pose3d, Shape3d, Walked, World3d,
+    Body3d, BodyId, BodyKind, Character, Material, Pose3d, RayHit, Shape3d, Walked, World3d,
 };
 
 use rapier2d::{

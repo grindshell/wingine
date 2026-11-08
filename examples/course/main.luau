@@ -13,8 +13,12 @@
 -- - The player is a character: an upright cylinder the size of its model, which `world:walk`
 --   walks across the ground, up the stairs and the slope, along the walls, and into the crates,
 --   pushing them. This script keeps how fast it's falling, and jumps.
+-- - Under the course, `fall` is a sensor, an area nothing bumps into: the player in it has fallen
+--   off, and starts again, and crates in it are gone.
 --
--- The coins aren't bodies: they spin, and the player picks one up by coming near it.
+-- The world tells where things are, too. A ray straight down from the player puts its shadow on
+-- whatever is below, so a jump shows where it lands. The coins aren't bodies: they spin, and the
+-- player picks one up by coming near it, into a ball around it.
 --
 -- Run with `cargo run -- examples/course`. The models are Kenney's Prototype Kit
 -- (<https://kenney.nl/assets/prototype-kit>, CC0). The game's state is in the global table
@@ -23,6 +27,8 @@
 local level = scene.load("course.scene.luau")
 local view = level:find("view") :: SceneNode
 local player = view:find("player") :: SceneNode
+local shadow = view:find("shadow") :: SceneNode
+local fall = view:find("fall") :: SceneNode
 
 input.bind("left", { "Left", "A", "DPadLeft", "LeftStickLeft" })
 input.bind("right", { "Right", "D", "DPadRight", "LeftStickRight" })
@@ -36,13 +42,13 @@ local JUMP = 5.5
 -- How fast the player's falling speeds up, each second: faster than the crates fall, as games'
 -- characters do, so jumps are quick.
 local GRAVITY = 18
--- Below this, the player has fallen off, and starts again.
-local FALLEN = -4
--- Below this, a crate has fallen off, and is gone.
-local LOST = -10
--- How near the player's middle a coin must come to be picked up, and how high its middle is.
-local REACH = 0.45
+-- How near the player a coin must come to be picked up: how far a ball around the coin reaches.
+local REACH = 0.25
+-- How high the player's middle is over its feet, where its shadow's ray starts.
 local MIDDLE = 0.35
+-- How far above what's below the shadow lies, so it isn't hidden in it.
+local SHADOW_LIFT = 0.01
+local DOWN = vector.create(0, -1, 0)
 -- How fast the coins spin, in radians a second, and how far and fast they bob.
 local SPIN = 3
 local BOB = 0.05
@@ -64,6 +70,9 @@ end
 world:add(player, {
     character = { radius = 0.2, height = 0.7, step = 0.3, slope = 0.9, mass = 1 },
 })
+world:add(fall, { sensor = true, shape = "box" })
+-- The shadow's ray goes through the player.
+local SHADOW_RAY = { except = player }
 
 type Coin = { node: SceneNode, home: vector, found: boolean }
 local coins: { Coin } = {}
@@ -76,6 +85,8 @@ course = {
     view = view,
     world = world,
     player = player,
+    shadow = shadow,
+    fall = fall,
     start = player:position_3d(),
     -- How fast the player is rising, or falling if it's negative, in units a second.
     rising = 0,
@@ -134,15 +145,20 @@ local function walk(dt: number)
     end
     local waddle = if grounded then math.sin(course.walk_time * WADDLE_SPEED) * WADDLE else 0
     player:set_orientation(course.facing, 0, waddle)
-    if course.feet().y < FALLEN then
-        player:set_position_3d(course.start)
-        course.rising = 0
+end
+
+-- Whether `nodes` has the player among them.
+local function has_player(nodes: { SceneNode }): boolean
+    for _, node in nodes do
+        if node == player then
+            return true
+        end
     end
+    return false
 end
 
 -- Spins the coins and picks up those the player comes near.
 local function collect()
-    local middle = course.feet() + vector.create(0, MIDDLE, 0)
     for i, coin in coins do
         if coin.found then
             continue
@@ -150,7 +166,7 @@ local function collect()
         local bob = math.sin(course.time * 2 + i) * BOB
         coin.node:set_position_3d(coin.home + vector.create(0, bob, 0))
         coin.node:set_orientation(course.time * SPIN + i)
-        if vector.magnitude(coin.home - middle) < REACH then
+        if has_player(world:overlap_ball(coin.home, REACH)) then
             coin.found = true
             coin.node:set_visible(false)
             course.found += 1
@@ -159,14 +175,34 @@ local function collect()
     end
 end
 
--- Takes away the crates that have fallen off the course.
-local function lose_fallen()
-    for i = #course.crates, 1, -1 do
-        local crate = course.crates[i]
-        if crate:position_3d().y < LOST then
-            crate:remove()
-            table.remove(course.crates, i)
+-- Starts the player again if it has fallen off the course, into `fall`, and takes away crates
+-- that have.
+local function catch_fallen()
+    for _, node in world:inside(fall) do
+        if node == player then
+            player:set_position_3d(course.start)
+            course.rising = 0
+            continue
         end
+        for i, crate in course.crates do
+            if crate == node then
+                crate:remove()
+                table.remove(course.crates, i)
+                break
+            end
+        end
+    end
+end
+
+-- Puts the shadow on whatever is below the player, tilted as that is, or hides it over nothing.
+local function cast_shadow()
+    local hit = world:ray(course.feet() + vector.create(0, MIDDLE, 0), DOWN, SHADOW_RAY)
+    shadow:set_visible(hit ~= nil)
+    if hit then
+        shadow:set_position_3d(hit.point + hit.normal * SHADOW_LIFT)
+        -- Rolled, then pitched, so its up is the normal.
+        local normal = hit.normal
+        shadow:set_orientation(0, math.atan2(normal.z, normal.y), math.asin(-normal.x))
     end
 end
 
@@ -174,8 +210,9 @@ function update(dt: number)
     course.time += dt
     walk(dt)
     world:step(dt)
-    lose_fallen()
+    catch_fallen()
     collect()
+    cast_shadow()
 end
 
 local font = graphics.default_font()

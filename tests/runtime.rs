@@ -3106,6 +3106,237 @@ mod physics {
             "{feet:?}, {near_side}"
         );
     }
+
+    /// Defines `names(nodes)`, the names of nodes, a space between each.
+    const NAMES: &str = "function names(nodes)
+        local found = {}
+        for _, node in nodes do
+            table.insert(found, node:name())
+        end
+        return table.concat(found, ' ')
+    end";
+
+    /// Where `ray`, a Luau expression for a ray's hit, hit: its node's name, distance, point and
+    /// normal; or `None` if it hit nothing.
+    fn hit(simulation: &mut Simulation<LuauGame>, ray: &str) -> Option<(String, f32, [f32; 6])> {
+        let (name, distance, px, py, pz, nx, ny, nz): (
+            Option<String>,
+            f32,
+            f32,
+            f32,
+            f32,
+            f32,
+            f32,
+            f32,
+        ) = simulation.eval(&format!(
+            "(function()
+                local hit = {ray}
+                if hit == nil then
+                    return nil, 0, 0, 0, 0, 0, 0, 0
+                end
+                local p, n = hit.point, hit.normal
+                return hit.node:name(), hit.distance, p.x, p.y, p.z, n.x, n.y, n.z
+            end)()"
+        ));
+        name.map(|name| (name, distance, [px, py, pz, nx, ny, nz]))
+    }
+
+    fn near_all(actual: [f32; 6], expected: [f32; 6]) -> bool {
+        actual
+            .iter()
+            .zip(expected)
+            .all(|(&a, e)| (a - e).abs() < 1.0e-4)
+    }
+
+    #[test]
+    fn rays_hit_bodies_by_their_shapes() {
+        let mut simulation = pen("physics_3d_rays");
+        let down = "world:ray(vector.create(0, 5, 0), vector.create(0, -1, 0))";
+        let (name, distance, at) = hit(&mut simulation, down).expect("it hit the walker");
+        // The walker's cylinder, standing a hair over the floor, is a unit tall.
+        assert_eq!(name, "walker");
+        assert!(near(distance, 3.998), "{distance}");
+        assert!(near_all(at, [0.0, 1.002, 0.0, 0.0, 1.0, 0.0]), "{at:?}");
+        let past =
+            "world:ray(vector.create(0, 5, 0), vector.create(0, -1, 0), { except = walker })";
+        let (name, distance, at) = hit(&mut simulation, past).expect("it hit the floor");
+        assert_eq!(name, "floor");
+        assert!(near(distance, 5.0), "{distance}");
+        assert!(near_all(at, [0.0, 0.0, 0.0, 0.0, 1.0, 0.0]), "{at:?}");
+        // The crate, held up at 2, half a unit across, from above; in lengths of the direction.
+        let crate_ray = "world:ray(vector.create(-2, 5, 0), vector.create(0, -2, 0))";
+        let (name, distance, _) = hit(&mut simulation, crate_ray).expect("it hit the crate");
+        assert_eq!(name, "crate");
+        assert!(near(distance, 1.375), "{distance}");
+
+        // Across to the wall's side, at 2, from inside the walker, which it starts in.
+        let across = "world:ray(vector.create(0, 0.5, 0), vector.create(1, 0, 0)";
+        let (name, distance, at) = hit(&mut simulation, &format!("{across})")).unwrap();
+        assert_eq!(name, "walker");
+        assert!(distance == 0.0 && at[3..] == [0.0; 3], "{distance}, {at:?}");
+        let except = format!("{across}, {{ except = {{ walker }} }})");
+        let (name, distance, at) = hit(&mut simulation, &except).expect("it hit the wall");
+        assert_eq!(name, "wall");
+        assert!(near(distance, 2.0), "{distance}");
+        assert!(near_all(at, [2.0, 0.5, 0.0, -1.0, 0.0, 0.0]), "{at:?}");
+        // Not as far as it, or past what it goes through.
+        let short = format!("{across}, {{ except = walker, distance = 1.5 }})");
+        assert_eq!(hit(&mut simulation, &short), None);
+        let through = format!("{across}, {{ except = {{ walker, view:find('wall') }} }})");
+        assert_eq!(hit(&mut simulation, &through), None);
+
+        // A world with no nodes hits nothing.
+        let empty = "physics.world_3d():ray(vector.zero, vector.create(0, -1, 0))";
+        assert_eq!(hit(&mut simulation, empty), None);
+    }
+
+    #[test]
+    fn overlaps_find_the_nodes_whose_bodies_they_touch() {
+        let mut simulation = pen("physics_3d_overlaps");
+        simulation.exec(NAMES);
+        let names = |simulation: &mut Simulation<LuauGame>, overlap: &str| -> String {
+            simulation.eval(&format!("names({overlap})"))
+        };
+        let around_crate = "world:overlap_ball(vector.create(-2, 2, 0), 0.5)";
+        assert_eq!(names(&mut simulation, around_crate), "crate");
+        // In the order they were added.
+        let wide = "world:overlap_ball(vector.create(0, 0.5, 0), 3";
+        assert_eq!(
+            names(&mut simulation, &format!("{wide})")),
+            "floor wall crate walker"
+        );
+        let but = format!("{wide}, {{ except = {{ view:find('floor'), walker }} }})");
+        assert_eq!(names(&mut simulation, &but), "wall crate");
+        // A box, its corners either way round.
+        let across_wall =
+            "world:overlap_box(vector.create(3, 0.5, 1), vector.create(1.5, 1.5, -1))";
+        assert_eq!(names(&mut simulation, across_wall), "wall");
+        let over = "world:overlap_box(vector.create(-1, 3, -1), vector.create(1, 4, 1))";
+        assert_eq!(names(&mut simulation, over), "");
+
+        // They see nodes where scripts have put them since the last step.
+        simulation.exec("crate:set_position_3d(vector.create(5, 5, 5))");
+        let moved = "world:overlap_ball(vector.create(5, 5, 5), 0.1)";
+        assert_eq!(names(&mut simulation, moved), "crate");
+    }
+
+    #[test]
+    fn sensors_say_what_is_in_them_and_stop_nothing() {
+        let mut simulation = pen("physics_3d_sensors");
+        simulation.exec(NAMES);
+        // A kinematic sensor carried by the group, held up in the air.
+        simulation.exec(
+            "block = view:find('group/block')
+            view:find('group'):set_position_3d(vector.create(-4, 1, 0))
+            world:add(block, { sensor = true, body = 'kinematic', shape = 'box' })",
+        );
+        assert_eq!(simulation.eval::<String>("names(world:inside(block))"), "");
+        // The walker put in it is in it at once.
+        simulation.exec("walker:set_position_3d(vector.create(-4, 0.5, 0))");
+        assert_eq!(
+            simulation.eval::<String>("names(world:inside(block))"),
+            "walker"
+        );
+        // Carried around the crate, which then falls through it to the floor.
+        simulation.exec("view:find('group'):set_position_3d(vector.create(-2, 1.75, 0))");
+        assert_eq!(
+            simulation.eval::<String>("names(world:inside(block))"),
+            "crate"
+        );
+        simulation.exec("for _ = 1, 90 do world:step(1 / 60) end");
+        assert!(near(simulation.eval("crate:position_3d().y"), 0.25));
+        assert_eq!(simulation.eval::<String>("names(world:inside(block))"), "");
+        // Rays and overlaps don't find it.
+        let down = "world:ray(vector.create(-2, 5, 0), vector.create(0, -1, 0))";
+        let (name, _, _) = hit(&mut simulation, down).unwrap();
+        assert_eq!(name, "crate");
+        let around = "names(world:overlap_ball(vector.create(-2, 2, 0), 0.1))";
+        assert_eq!(simulation.eval::<String>(around), "");
+
+        // A fixed one is a hull by default, and the walker walks into it, past where the wall
+        // stopped it.
+        simulation.exec(
+            "world:add(view:find('wall'), { sensor = true })
+            walker:set_position_3d(vector.create(0, 0.002, 0))",
+        );
+        let (feet, _) = walk(&mut simulation, "vector.create(0.05, -0.01, 0)", 50);
+        assert!(near(feet[0], 2.5), "{feet:?}");
+        // The floor it stands on touches it too.
+        assert_eq!(
+            simulation.eval::<String>("names(world:inside(view:find('wall')))"),
+            "floor walker"
+        );
+    }
+
+    #[test]
+    fn queries_say_what_is_wrong() {
+        let mut simulation = pen("physics_3d_query_errors");
+        let error = |simulation: &mut Simulation<LuauGame>, code: &str| {
+            simulation.try_exec(code).unwrap_err().to_string()
+        };
+        let down = "vector.create(0, -1, 0)";
+        let err = error(&mut simulation, "world:ray(vector.zero, vector.zero)");
+        assert!(err.contains("can't be zero"), "{err}");
+        let err = error(
+            &mut simulation,
+            &format!("world:ray(vector.zero, {down}, {{ distance = -1 }})"),
+        );
+        assert!(err.contains("0 or more"), "{err}");
+        let err = error(
+            &mut simulation,
+            &format!("world:ray(vector.zero, {down}, {{ except = 5 }})"),
+        );
+        assert!(err.contains("a node or a list of nodes"), "{err}");
+        let err = error(&mut simulation, "world:overlap_ball(vector.zero, 0)");
+        assert!(err.contains("more than 0"), "{err}");
+        let err = error(&mut simulation, "world:inside(crate)");
+        assert!(err.contains("isn't a sensor"), "{err}");
+        let err = error(
+            &mut simulation,
+            "world:add(view:find('group/block'), { sensor = true, body = 'dynamic' })",
+        );
+        assert!(err.contains("doesn't fall"), "{err}");
+        let err = error(
+            &mut simulation,
+            "world:add(view:find('wall'), { sensor = true, shape = 'triangles' })",
+        );
+        assert!(err.contains("triangles aren't"), "{err}");
+        let err = error(
+            &mut simulation,
+            "world:add(walker, { sensor = true, character = { radius = 0.2, height = 1 } })",
+        );
+        assert!(err.contains("can't be a sensor"), "{err}");
+    }
+
+    #[test]
+    fn views_cast_rays_through_points_of_the_scene() {
+        let mut simulation = pen("physics_3d_view_rays");
+        // Through the middle of the canvas, which the view fills, to the camera's target.
+        simulation.exec(
+            "local width, height = graphics.size()
+            middle_x, middle_y = width / 2, height / 2
+            origin, direction = view:ray(middle_x, middle_y)",
+        );
+        let (x, y, z): (f32, f32, f32) = simulation.eval("direction.x, direction.y, direction.z");
+        let length = 5.0_f32.sqrt();
+        assert!(
+            near(x, 0.0) && near(y, -1.0 / length) && near(z, -2.0 / length),
+            "{x}, {y}, {z}"
+        );
+        // Where it meets the floor is what's picked there.
+        let ray = "world:ray(origin, direction, { except = walker })";
+        let (name, _, at) = hit(&mut simulation, ray).expect("it hit the floor");
+        assert_eq!(name, "floor");
+        assert!(near_all(at, [0.0, 0.0, 0.0, 0.0, 1.0, 0.0]), "{at:?}");
+        assert!(simulation.eval::<bool>("view:pick(middle_x, middle_y)[1] == view:find('floor')"));
+        // Nothing outside the view, and only views cast them.
+        assert!(simulation.eval::<bool>("view:ray(-10, -10) == nil"));
+        let err = simulation
+            .try_exec("walker:ray(0, 0)")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("which has no camera"), "{err}");
+    }
 }
 
 /// Interfaces Luau games lay out in `gui(ui)`, driven by clicking their widgets by label.

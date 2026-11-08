@@ -279,7 +279,13 @@ networking or 3D pipelines.
   to the cylinder's flat ends or its side. Rapier's `detect_collisions` would catch up with
   bodies added or moved since the last step, but it forgets new bodies as the step that follows
   looks for them, so they're never simulated: `refresh` puts those colliders in the query tree
-  itself (`set_aabb`). Its unit tests, which pin a hash of a pile of bodies and a walk so CI checks
+  itself (`set_aabb`). Queries refresh first too: `cast_ray` (a `RayHit`, by Rapier's ray casts,
+  solid, its normal turned to face back along the ray), `overlapping` (a `Shape3d` in the world,
+  made by `collider`) and `inside` (what overlaps a body), never finding sensors (`Body3d::sensor`),
+  whose colliders are Rapier's sensors with no active collision types, so steps leave them alone
+  and nothing bumps into them; what's in one is asked for on demand. Sensors are fixed or
+  kinematic and not triangles, and `set_pose` puts a kinematic one at once, since it pushes
+  nothing. Its unit tests, which pin a hash of a pile of bodies and a walk so CI checks
   it's the same on Windows and Linux, don't need a GPU. Luau's `physics.world_3d()` returns a
   `lua::PhysicsWorld3d` (`src/lua/physics.rs`, with the 2D world), bodies of one view's nodes,
   shaped like the mesh or model they show (`geometry`, a model's parts placed in it): fixed ones
@@ -290,7 +296,10 @@ networking or 3D pipelines.
   read or wrote) and drops those removed: a character's body goes where it walked over the next
   step, pushing what's in its way, and anywhere else a script puts its node, at once
   (`World3d::put`, `Bodied::walked`). After each step it moves dynamic bodies' nodes to them,
-  leaving those at rest.
+  leaving those at rest. Its queries, `ray`, `overlap_ball`, `overlap_box` and a sensor's
+  `inside`, follow the nodes first (`followed`) and give back nodes in the order they were added
+  (`nodes`), skipping those their `except` option names; a 3D view node's `ray` (`Scene::ray`)
+  starts one where the mouse is.
 - `src/headless.rs`: `Headless`, which renders a `Canvas` to an in-memory image without a window,
   and `Simulation`, which runs a whole `Game` without a window: fixed 60 fps frames, simulated
   keys, mouse and gamepads, and screenshots on demand. Held keys repeat as a system repeats them,
@@ -662,9 +671,12 @@ networking or 3D pipelines.
   and stacked; coins tagged `coin`; and the player, a figurine, a character. `main.luau` keeps how
   fast the player is rising (`course.rising`, with gravity of its own, quicker than the
   crates'), walks it with `world:walk`, jumping only from the ground, faces it the way it walks
-  (`exact.atan2`) and waddles it, starts it again when it falls off, and takes away crates that
-  fall off. The coins aren't bodies: they spin and bob, and the player picks one up by coming
-  near it. The camera follows the player from above and behind (`course.camera()`). The scene
+  (`exact.atan2`) and waddles it, and starts it again when it falls off into `fall`, a hidden
+  box under the course made a sensor, which takes away crates that fall off too. A ray straight
+  down from the player's middle puts `shadow`, a dark sphere squashed flat, on whatever is below,
+  tilted to it, so a jump shows where it lands. The coins aren't bodies: they spin and bob, and
+  the player picks one up by coming near it, into `world:overlap_ball` around it. The camera
+  follows the player from above and behind (`course.camera()`). The scene
   file is in the canonical layout, and `tests/course.rs` checks it stays so. The game's state is
   the global `course`, its physics world `course.world`.
 - `src/math.rs`: geometry types: `Rect`, `Affine` and `Affine3`, 2D and 3D transforms that
@@ -739,7 +751,7 @@ networking or 3D pipelines.
   nodes, in its
   `physics` module (with the `physics` feature), physics worlds of their nodes, 2D and 3D (bodies
   falling, characters walking, fixed bodies following and placed by turned parents, models' triangles,
-  and the errors), and in its
+  rays, overlaps, sensors and views' rays, and the errors), and in its
   `gui` module (with the `egui` feature), their interfaces, clicked by label, and in its
   `reload` module, reloading: changed scripts and assets, what `reloading` keeps, what's reset,
   failures, settings, and a watching game reloading in real time. A hash of what
@@ -777,7 +789,8 @@ networking or 3D pipelines.
 - `tests/course.rs`: tests for the `course` example, the same way: crates settling, walls
   stopping the player without its creeping along them, climbing the stairs, walking down the
   slope on the ground all the way, jumping onto the block, pushing crates off the platform and
-  toppling the stack, falling off and starting again, and finding every coin. One plays a run and
+  toppling the stack, falling off and starting again, finding every coin, and the shadow under
+  the player, on the ground, the slope and the block, and hidden off the course. One plays a run and
   checks a hash of every crate's pose and the player's feet, pinned, so CI checks physics is the
   same to the bit on Windows and Linux; a change to how the course plays changes it.
 - `tests/shmup.rs`: tests for the `shmup` example, the same way: the title menu by key and by

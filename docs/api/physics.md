@@ -3,9 +3,9 @@
 Physics among a scene's nodes, by [Rapier](https://rapier.rs): in 2D, nodes made solid where
 they're drawn, and characters that walk among them, stopping at what's solid and sliding along
 it, as the player walks around the [garden](../../examples/garden); and in [3D views](scene.md),
-bodies that fall, tumble and come to rest, and characters that walk up stairs and slopes among
-them, pushing what's in their way, as the player runs around the [course](../../examples/course).
-Everything here works any time.
+bodies that fall, tumble and come to rest, characters that walk up stairs and slopes among them,
+pushing what's in their way, and rays, overlaps and sensors that tell where things are, as the
+player runs around the [course](../../examples/course). Everything here works any time.
 
 Physics is the same to the bit on every platform, so a game that replays inputs, as
 [`exact`](exact.md) lets one, plays out the same everywhere.
@@ -133,6 +133,48 @@ A dynamic body's node, and a kinematic one's, may be inside nodes that move it, 
 turn or stretch it, so a body that moves is placed only by where it is and how it's turned. Fixed
 bodies can be anywhere.
 
+### Where things are
+
+The world answers questions about where things are, by bodies' shapes, a mesh's or a model's
+triangles where they are, so the ground under a character on a staircase is the step it's over,
+not the box around the stairs:
+
+- [`world:ray`](#worldray) finds what a ray hits first, for line of sight, shooting, or what's
+  under something or the mouse ([`view:ray`](scene.md#noderay) starts one there).
+- [`world:overlap_ball`](#worldoverlap_ball) and [`world:overlap_box`](#worldoverlap_box) find
+  what an area touches, for a blast or a pickup.
+- A **sensor** is a body nothing bumps into, an area such as a doorway or a pit, which
+  [`world:inside`](#worldinside) tells what's in. Dynamic bodies fall through it, and characters
+  walk through it.
+
+Queries find bodies where their nodes are now, moved by scripts since the last step too, but a
+kinematic body that isn't a sensor, a character's among them, is where the last step took it
+until the next takes it to its node. They never find sensors, and return nodes in the order they
+were added to the world.
+
+```lua
+local DOWN = vector.create(0, -1, 0)
+local pit = view:find("pit")
+world:add(pit, { sensor = true, shape = "box" })
+
+function update(dt: number)
+    -- ... walking the player, then:
+    world:step(dt)
+    -- The player's shadow, on whatever is below it.
+    local hit = world:ray(player:position_3d() + vector.create(0, 0.5, 0), DOWN, { except = player })
+    shadow:set_visible(hit ~= nil)
+    if hit then
+        shadow:set_position_3d(hit.point + hit.normal * 0.01)
+    end
+    -- Into the pit, the player starts again.
+    for _, node in world:inside(pit) do
+        if node == player then
+            player:set_position_3d(start)
+        end
+    end
+end
+```
+
 ## Functions
 
 ### `physics.world`
@@ -217,6 +259,7 @@ Gives `node` a body, or a new one in place of the one it has. `options`, all of 
 | `friction` | How much it grips what slides along it, from 0 for ice: 0.5 by default. |
 | `bounce` | How much it bounces, from 0, not at all, the default, to 1, as fast as it hit. |
 | `character` | Makes it a character, which `world:walk` walks, of a kinematic body: a table of how it's sized and walks, below. |
+| `sensor` | Makes it a sensor when `true`: an area nothing bumps into, which [`world:inside`](#worldinside) tells what's in. A sensor is fixed or kinematic, not dynamic, and solid all through, so its shape is `"hull"` by default, or `"box"` or `"ball"`, but not `"triangles"`. A kinematic sensor goes where its node is put at once, since it pushes nothing. |
 
 A character's table, all of it optional:
 
@@ -304,5 +347,72 @@ Returns whether `node`'s body is at rest: always for a fixed body, for a kinemat
 isn't moving or turning, and for a dynamic one once it has been still for a couple of seconds, after which
 the world leaves it alone until something touches it.
 
-Using `velocity`, `set_velocity`, `push`, `is_resting` or `walk` on a node with no body in the
-world is an error, as is walking a node that isn't a character.
+### `world:ray`
+
+```lua
+world:ray(origin: vector, direction: vector, options: RayOptions?): RayHit?
+```
+
+Casts a ray from `origin` going `direction`, and returns where it first hits a body, or `nil` if
+it hits nothing:
+
+| Field | |
+|---|---|
+| `node` | The node whose body it hit. |
+| `distance` | How far along the ray, in lengths of `direction`, so in world units for a direction of length 1, as [`view:ray`](scene.md#noderay) gives. |
+| `point` | Where it hit, in the view's world. |
+| `normal` | The way out of the body there, of length 1, facing back along the ray. |
+
+It hits a body by its shape: triangles where they are, from either side, and a hull, a box or a
+ball anywhere on or inside it, so a ray that starts inside one hits it at once, at a `distance` of
+0, with a `normal` of zero. `options`, both optional:
+
+| Option | |
+|---|---|
+| `distance` | How far it goes, in lengths of `direction`: as far as there is, by default. |
+| `except` | A node, or a list of them, whose bodies it goes through, such as the one looking. |
+
+`direction` can't be zero. Sensors are never hit.
+
+### `world:overlap_ball`
+
+```lua
+world:overlap_ball(center: vector, radius: number, options: { except: (SceneNode | { SceneNode })? }?): { SceneNode }
+```
+
+Returns the nodes whose bodies the ball around `center` touches, even by an edge, in the order they
+were added, but those `except` names and sensors. Triangles count only where the ball touches
+them, not if it's inside what they're around. `radius` must be more than 0.
+
+```lua
+-- A blast, pushing every crate near it away.
+for _, node in world:overlap_ball(at, 2) do
+    if node:has_tag("crate") then
+        world:push(node, vector.normalize(node:position_3d() - at) * 3)
+    end
+end
+```
+
+### `world:overlap_box`
+
+```lua
+world:overlap_box(min: vector, max: vector, options: { except: (SceneNode | { SceneNode })? }?): { SceneNode }
+```
+
+Returns the nodes whose bodies the box between the corners `min` and `max` touches, along the
+world's axes, as [`world:overlap_ball`](#worldoverlap_ball) does. The corners can be given either
+way round.
+
+### `world:inside`
+
+```lua
+world:inside(sensor: SceneNode): { SceneNode }
+```
+
+Returns the nodes whose bodies are in the sensor `sensor`'s, even partly, other than sensors, in
+the order they were added. It's asked when it's called, so a node put in a sensor by a script is
+in it at once, and one that passed through it between two calls never was.
+
+Using `velocity`, `set_velocity`, `push`, `is_resting`, `walk` or `inside` on a node with no body
+in the world is an error, as is walking a node that isn't a character, and asking what's inside
+a body that isn't a sensor.

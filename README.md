@@ -41,8 +41,9 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **Physics** with [Rapier](https://rapier.rs), the same to the bit on every platform: in 2D,
   scene nodes made solid where they're drawn, turned and stretched, or along their edges, and
   characters that walk among them, stopping at what's solid and sliding along it; in 3D views,
-  bodies shaped like the meshes and models nodes show, which fall, tumble and come to rest, and
-  characters that walk up stairs and slopes among them, pushing what's in their way.
+  bodies shaped like the meshes and models nodes show, which fall, tumble and come to rest,
+  characters that walk up stairs and slopes among them, pushing what's in their way, and rays,
+  overlaps and sensors that tell where things are.
 - **Sprite animation**, such as walk cycles.
 - **Text** in a built-in pixel font, wrapped to a width and revealed a little at a time for
   dialogue.
@@ -278,11 +279,13 @@ models from Kenney's [Prototype Kit](https://kenney.nl/assets/prototype-kit) (CC
 [physics world](docs/api/physics.md#in-3d) makes solid: the stairs and the slope by their
 triangles, and the crates as boxes that fall and tumble.
 
-![The figurine running past the crates, toward the block and its coin](docs/screenshots/course.png)
+![The figurine jumping toward the block and its coin, its shadow on the ground below](docs/screenshots/course.png)
 
 Walk with the arrow keys, WASD or a gamepad's stick, and jump with Space. The player is a
 character that walks up the stairs and the slope, along the walls, and into the crates, pushing
-them: off the platform, or into the stack, which topples.
+them: off the platform, or into the stack, which topples. A ray straight down puts its shadow on
+whatever is below, so a jump shows where it lands, and a sensor under the course catches what
+falls off.
 
 ### Sprites
 

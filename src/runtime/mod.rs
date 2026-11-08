@@ -186,7 +186,8 @@
 //! - `physics.world_3d(options)` returns an empty `PhysicsWorld3d`, whose dynamic bodies fall with
 //!   `options.gravity`, a vector (9.81 down by default), and which the first node given to it
 //!   makes a world of that node's 3D view: bodies shaped like what nodes show, which `world:step`
-//!   moves on through time, and characters `world:walk` walks among them.
+//!   moves on through time, characters `world:walk` walks among them, and sensors; rays and
+//!   overlaps ask it where things are.
 //!
 //! See [`physics`](crate::physics) for how. An engine built without its `physics` feature fails to
 //! make either.

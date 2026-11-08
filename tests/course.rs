@@ -229,6 +229,76 @@ fn finding_every_coin_finishes_the_course() {
     assert!(simulation.eval::<bool>("course.done"));
 }
 
+/// Where the player's shadow is, how it's pitched and rolled, and whether it shows.
+fn shadow(simulation: &mut Simulation<LuauGame>) -> ([f32; 3], [f32; 2], bool) {
+    let (x, y, z, pitch, roll, shown) = simulation.eval(
+        "(function()
+            local at = course.shadow:position_3d()
+            local _, pitch, roll = course.shadow:orientation()
+            return at.x, at.y, at.z, pitch, roll, course.shadow:is_visible()
+        end)()",
+    );
+    ([x, y, z], [pitch, roll], shown)
+}
+
+#[test]
+fn the_shadow_is_on_the_ground_under_the_player() {
+    let mut simulation = simulation();
+    hold(&mut simulation, &[Key::Left, Key::Up], 0.5);
+    let [x, _, z] = feet(&mut simulation);
+    let ([shadow_x, y, shadow_z], [pitch, roll], shown) = shadow(&mut simulation);
+    assert!(shown);
+    // A hair over the ground's top, at 0.
+    assert!(
+        near(shadow_x, x, 1.0e-4) && near(shadow_z, z, 1.0e-4),
+        "{shadow_x}, {shadow_z}"
+    );
+    assert!(near(y, 0.01, 0.002), "{y}");
+    assert!(
+        pitch.abs() < 1.0e-4 && roll.abs() < 1.0e-4,
+        "{pitch}, {roll}"
+    );
+}
+
+#[test]
+fn the_shadow_shows_where_the_player_lands() {
+    let mut simulation = simulation();
+    // In the air over the block, whose top is at 0.6.
+    place(&mut simulation, [3.5, 2.0, 1.5]);
+    simulation.step();
+    check(&simulation);
+    assert!(!simulation.eval::<bool>("course.grounded"));
+    let ([x, y, z], _, shown) = shadow(&mut simulation);
+    assert!(shown);
+    assert!(near(x, 3.5, 1.0e-4) && near(y, 0.61, 0.005) && near(z, 1.5, 1.0e-4));
+}
+
+#[test]
+fn the_shadow_lies_along_the_slope() {
+    let mut simulation = simulation();
+    // Over the middle of the slope, which rises by 1 across 2 toward the platform.
+    place(&mut simulation, [-5.0, 1.5, -0.8]);
+    simulation.step();
+    check(&simulation);
+    let ([_, y, _], [pitch, roll], shown) = shadow(&mut simulation);
+    assert!(shown);
+    assert!(near(y, 0.51, 0.01), "{y}");
+    assert!(
+        near(pitch, 0.5_f32.atan(), 0.01) && roll.abs() < 1.0e-3,
+        "{pitch}, {roll}"
+    );
+}
+
+#[test]
+fn the_shadow_is_hidden_off_the_course() {
+    let mut simulation = simulation();
+    place(&mut simulation, [0.0, 1.0, 8.0]);
+    simulation.step();
+    check(&simulation);
+    let (_, _, shown) = shadow(&mut simulation);
+    assert!(!shown);
+}
+
 /// A hash of the bits of every crate's position and turn, and the player's feet.
 fn hash_of_the_course(simulation: &mut Simulation<LuauGame>) -> u64 {
     let numbers: Vec<f32> = simulation.eval(

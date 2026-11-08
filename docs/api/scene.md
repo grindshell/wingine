@@ -25,7 +25,7 @@ the files.
   [`bounds_3d`](#nodebounds_3d)
 - [3D views](#3d-views): [`camera`](#nodecamera), [`set_camera`](#nodeset_camera),
   [`lighting`](#nodelighting), [`set_lighting`](#nodeset_lighting), [`pick`](#nodepick),
-  [`project`](#nodeproject)
+  [`project`](#nodeproject), [`ray`](#noderay)
 - [Posing](#posing): [`pose`](#nodepose), [`Clip`](#clip)
 - [Adding and removing nodes](#adding-and-removing-nodes): [`add`](#nodeadd),
   [`remove`](#noderemove), [`is_removed`](#nodeis_removed)
@@ -538,6 +538,34 @@ node:project(point: vector): (number?, number?)
 Returns where `point` in the view's world shows in the scene, or nothing if it's behind the camera
 or beyond what it sees, as [`graphics.project`](graphics.md#graphicsproject) does for a view
 drawn by hand.
+
+### `node:ray`
+
+```lua
+node:ray(x: number, y: number): (vector?, vector?)
+```
+
+Returns the ray into the view's world through the point `x`, `y` in the scene's coordinates: where
+it starts, on the camera's near plane, and the way it goes, of length 1, as
+[`graphics.ray`](graphics.md#graphicsray) does for a view drawn by hand; or nothing for a point
+outside the view. Everything that shows at that point lies along it, and a physics world's
+[`world:ray`](physics.md#worldray) finds what it hits first by the shapes of bodies, where
+[`node:pick`](#nodepick) goes by the boxes around what shows:
+
+```lua
+-- A click kicks the crate under the mouse.
+local x, y = input.mouse_position()
+local origin, direction
+if x and y then
+    origin, direction = view:ray(x, y)
+end
+if origin and direction and input.pressed("click") then
+    local hit = world:ray(origin, direction)
+    if hit and hit.node:has_tag("crate") then
+        world:push(hit.node, direction * 2)
+    end
+end
+```
 
 ## Posing
 

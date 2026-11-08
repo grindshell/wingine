@@ -183,6 +183,36 @@ type BodyOptions = {
     bounce: number?,
     --- Makes it a character, which `world:walk` walks: an upright cylinder, kinematic.
     character: CharacterOptions?,
+    --- Makes it a sensor: an area nothing bumps into, which `world:inside` tells what's in.
+    --- Fixed or kinematic, and shaped as a hull (by default), a box or a ball.
+    sensor: boolean?,
+}
+
+--- How `world:ray` looks.
+type RayOptions = {
+    --- How far it goes, in lengths of its direction. By default, as far as there is.
+    distance: number?,
+    --- A node, or a list of them, whose bodies it goes through.
+    except: (SceneNode | { SceneNode })?,
+}
+
+--- How `world:overlap_ball` and `world:overlap_box` look.
+type OverlapOptions = {
+    --- A node, or a list of them, whose bodies don't count.
+    except: (SceneNode | { SceneNode })?,
+}
+
+--- Where `world:ray` hit a body.
+type RayHit = {
+    --- The node whose body it hit.
+    node: SceneNode,
+    --- How far along the ray, in lengths of its direction.
+    distance: number,
+    --- Where, in the view's world.
+    point: vector,
+    --- The way out of the body there, of length 1, facing back along the ray, or zero if the ray
+    --- started inside the body.
+    normal: vector,
 }
 
 --- A character's size and how it walks, for `BodyOptions.character`.
@@ -483,6 +513,9 @@ declare extern type SceneNode with
     --- Returns where a point in a 3D view's world shows in the scene, or nothing if it's behind
     --- the camera.
     function project(self, point: vector): (number?, number?)
+    --- Returns the ray into a 3D view's world through a point in the scene's coordinates: where it
+    --- starts and the way it goes, of length 1, or nothing outside the view.
+    function ray(self, x: number, y: number): (vector?, vector?)
     --- Returns how much it's stretched along its own axes. Negative scales mirror it.
     function scale(self): (number, number)
     --- Stretches it by `x` and `y`, or by `x` both ways.
@@ -583,6 +616,17 @@ declare extern type PhysicsWorld3d with
     --- Returns whether `node`'s body is at rest: always for a fixed body, and for a dynamic one
     --- once it has stopped.
     function is_resting(self, node: SceneNode): boolean
+    --- Returns where a ray from `origin` going `direction` first hits a body, by its shape, or
+    --- nil. Sensors are never hit.
+    function ray(self, origin: vector, direction: vector, options: RayOptions?): RayHit?
+    --- Returns the nodes whose bodies touch a ball, in the order they were added.
+    function overlap_ball(self, center: vector, radius: number, options: OverlapOptions?): { SceneNode }
+    --- Returns the nodes whose bodies touch a box along the world's axes, between two corners, in
+    --- the order they were added.
+    function overlap_box(self, min: vector, max: vector, options: OverlapOptions?): { SceneNode }
+    --- Returns the nodes whose bodies are in the sensor `sensor`'s, even partly, in the order they
+    --- were added.
+    function inside(self, sensor: SceneNode): { SceneNode }
 end
 
 --- A selection among a node's items, its children or the nodes inside it with a tag, those shown,

@@ -1,5 +1,6 @@
 //! Physics worlds as scripts hold them, from `physics.world()` and `physics.world_3d()`: Rapier's
-//! colliders and bodies, each of a node, following the node as it moves, or moving it.
+//! colliders and bodies, each of a node, following the node as it moves, or moving it, and in 3D,
+//! asked where things are by rays, overlaps and sensors.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -179,7 +180,9 @@ impl mlua::UserData for PhysicsWorld {
 /// A [`World3d`] of the nodes of a 3D view, as scripts hold it, from `physics.world_3d()`: a body
 /// for each node given to it, shaped like what the node shows. Fixed and kinematic bodies follow
 /// their nodes as they move, dynamic bodies move their nodes as the world steps, and characters
-/// walk their nodes among them. Bodies go when their nodes do.
+/// walk their nodes among them. Bodies go when their nodes do. Queries (`ray`, `overlap_ball`,
+/// `overlap_box` and a sensor's `inside`) follow the nodes first, and return nodes, in the order
+/// they were added.
 ///
 /// Its arithmetic gives the same bits on every platform, as Rapier's does: where it places a
 /// fixed body, it turns its node's yaw, pitch and roll into a transform with `libm`, not as the
@@ -377,6 +380,7 @@ struct Asked {
     shaped: Shaped,
     material: Material,
     character: Option<Character>,
+    sensor: bool,
 }
 
 impl Asked {
@@ -388,12 +392,19 @@ impl Asked {
                 shaped: Shaped::Triangles,
                 material: Material::default(),
                 character: None,
+                sensor: false,
             });
         };
         let character = match options.get::<Option<mlua::Table>>("character")? {
             Some(character) => Some(read_character(&character, scene, id)?),
             None => None,
         };
+        let sensor = options.get::<Option<bool>>("sensor")?.unwrap_or(false);
+        if sensor && character.is_some() {
+            return Err(mlua::Error::runtime(
+                "a character can't be a sensor: it walks into what's solid",
+            ));
+        }
         let kind = match options.get::<Option<String>>("body")?.as_deref() {
             None if character.is_some() => BodyKind::Kinematic,
             None | Some("fixed") => BodyKind::Fixed,
@@ -411,7 +422,8 @@ impl Asked {
             ));
         }
         let shaped = match options.get::<Option<String>>("shape")? {
-            None if kind == BodyKind::Fixed => Shaped::Triangles,
+            // A sensor is solid all through.
+            None if kind == BodyKind::Fixed && !sensor => Shaped::Triangles,
             None => Shaped::Hull,
             Some(name) => Shaped::NAMES
                 .iter()
@@ -438,6 +450,7 @@ impl Asked {
             shaped,
             material,
             character,
+            sensor,
         })
     }
 }
@@ -646,6 +659,7 @@ impl PhysicsWorld3d {
             shape,
             pose,
             material: asked.material,
+            sensor: asked.sensor,
         })?;
         let bodied = Bodied {
             node: id,
@@ -750,6 +764,75 @@ impl PhysicsWorld3d {
             return None;
         }
         self.bodies.iter().position(|bodied| bodied.node == node.id)
+    }
+
+    /// Brings the bodies up to date with their nodes before a query, and returns their scene, or
+    /// `None` if the world has no nodes yet.
+    fn followed(&mut self) -> mlua::Result<Option<Rc<RefCell<Scene>>>> {
+        let Some((scene, _)) = self.view.clone() else {
+            return Ok(None);
+        };
+        let borrowed = scene
+            .try_borrow()
+            .map_err(|_| mlua::Error::runtime("the scene is being changed"))?;
+        self.follow(&borrowed);
+        drop(borrowed);
+        Ok(Some(scene))
+    }
+
+    /// The nodes of `found`, nodes of `scene`, in the order they were added to the world.
+    fn nodes(&self, scene: &Rc<RefCell<Scene>>, found: &[BodyId]) -> Vec<SceneNode> {
+        self.bodies
+            .iter()
+            .filter(|bodied| found.contains(&bodied.body))
+            .map(|bodied| SceneNode::new(Rc::clone(scene), bodied.node))
+            .collect()
+    }
+
+    /// The bodies of the nodes a query's `except` option names: a node, or a list of them. Nodes
+    /// without bodies in the world are in nothing's way already.
+    fn except(&self, options: Option<&mlua::Table>) -> mlua::Result<Vec<BodyId>> {
+        let Some(options) = options else {
+            return Ok(Vec::new());
+        };
+        let nodes: Vec<mlua::AnyUserData> = match options.get::<mlua::Value>("except")? {
+            mlua::Value::Nil => Vec::new(),
+            mlua::Value::UserData(node) => vec![node],
+            mlua::Value::Table(nodes) => nodes.sequence_values().collect::<mlua::Result<_>>()?,
+            other => {
+                return Err(mlua::Error::runtime(format!(
+                    "`except` is a node or a list of nodes, not a {}",
+                    other.type_name()
+                )));
+            }
+        };
+        let mut except = Vec::new();
+        for node in nodes {
+            let node = node.borrow::<SceneNode>().map_err(|_| {
+                mlua::Error::runtime("`except` is a node or a list of nodes, not other userdata")
+            })?;
+            if let Some(index) = self.body_of(&node) {
+                except.push(self.bodies[index].body);
+            }
+        }
+        Ok(except)
+    }
+
+    /// The nodes whose bodies `shape` overlaps, but those `options` excepts.
+    fn overlapping(
+        &mut self,
+        shape: &Shape3d,
+        options: Option<&mlua::Table>,
+    ) -> mlua::Result<Vec<SceneNode>> {
+        let except = self.except(options)?;
+        let Some(scene) = self.followed()? else {
+            return Ok(Vec::new());
+        };
+        let found = self
+            .world
+            .overlapping(shape, &except)
+            .map_err(mlua::Error::runtime)?;
+        Ok(self.nodes(&scene, &found))
     }
 
     /// The body of `node`, or an error saying it has none.
@@ -884,5 +967,86 @@ impl mlua::UserData for PhysicsWorld3d {
                 Ok(world.world.is_resting(body))
             },
         );
+        methods.add_method_mut(
+            "ray",
+            |lua,
+             world,
+             (origin, direction, options): (mlua::Vector, mlua::Vector, Option<mlua::Table>)| {
+                let (origin, direction) = (vector3(origin), vector3(direction));
+                check_finite(&origin, "a ray's start")?;
+                check_finite(&direction, "a ray's direction")?;
+                if direction == [0.0; 3] {
+                    return Err(mlua::Error::runtime("a ray's direction can't be zero"));
+                }
+                let distance = match &options {
+                    Some(options) => options.get::<Option<f32>>("distance")?,
+                    None => None,
+                };
+                let distance = distance.unwrap_or(f32::INFINITY);
+                if distance.is_nan() || distance < 0.0 {
+                    let message = format!("a ray's distance must be 0 or more, not {distance}");
+                    return Err(mlua::Error::runtime(message));
+                }
+                let except = world.except(options.as_ref())?;
+                let Some(scene) = world.followed()? else {
+                    return Ok(None);
+                };
+                let hit = world
+                    .world
+                    .cast_ray(origin, direction, distance.min(f32::MAX), &except);
+                let Some((hit, bodied)) = hit.and_then(|hit| {
+                    let bodied = world.bodies.iter().find(|bodied| bodied.body == hit.body)?;
+                    Some((hit, bodied))
+                }) else {
+                    return Ok(None);
+                };
+                let table = lua.create_table_with_capacity(0, 4)?;
+                table.raw_set("node", SceneNode::new(scene, bodied.node))?;
+                table.raw_set("distance", hit.distance)?;
+                table.raw_set("point", vector(hit.point))?;
+                table.raw_set("normal", vector(hit.normal))?;
+                Ok(Some(table))
+            },
+        );
+        methods.add_method_mut(
+            "overlap_ball",
+            |_, world, (center, radius, options): (mlua::Vector, f32, Option<mlua::Table>)| {
+                let center = vector3(center);
+                check_finite(&center, "a ball's middle")?;
+                if !(radius.is_finite() && radius > 0.0) {
+                    let message = format!("a ball's radius must be more than 0, not {radius}");
+                    return Err(mlua::Error::runtime(message));
+                }
+                world.overlapping(&Shape3d::Ball { center, radius }, options.as_ref())
+            },
+        );
+        methods.add_method_mut(
+            "overlap_box",
+            |_, world, (a, b, options): (mlua::Vector, mlua::Vector, Option<mlua::Table>)| {
+                let (a, b) = (vector3(a), vector3(b));
+                check_finite(&a, "a box's corner")?;
+                check_finite(&b, "a box's corner")?;
+                // Its corners either way round.
+                let bounds = Bounds3 {
+                    min: [0, 1, 2].map(|i| a[i].min(b[i])),
+                    max: [0, 1, 2].map(|i| a[i].max(b[i])),
+                };
+                world.overlapping(&Shape3d::Box(bounds), options.as_ref())
+            },
+        );
+        methods.add_method_mut("inside", |_, world, node: mlua::UserDataRef<SceneNode>| {
+            let body = world.body(&node)?.body;
+            if !world.world.is_sensor(body) {
+                let described = node.read(Scene::describe)?;
+                return Err(mlua::Error::runtime(format!(
+                    "{described} isn't a sensor, so nothing's in it: add it with `sensor = true`"
+                )));
+            }
+            let Some(scene) = world.followed()? else {
+                return Ok(Vec::new());
+            };
+            let found = world.world.inside(body);
+            Ok(world.nodes(&scene, &found))
+        });
     }
 }

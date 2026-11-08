@@ -1,15 +1,16 @@
 //! Physics in 3D, by Rapier: bodies that fall, tumble and rest on each other, stepped through
-//! time, and characters walking among them. See [`World3d`].
+//! time, characters walking among them, and what's where: rays, overlaps and sensors. See
+//! [`World3d`].
 
 use rapier3d::{
     parry::{
         bounding_volume::Aabb,
-        query::{ShapeCastHit, ShapeCastOptions},
-        shape::{Cylinder, FeatureId, TriMeshFlags},
+        query::{Ray, ShapeCastHit, ShapeCastOptions},
+        shape::{Cylinder, FeatureId, Shape, TriMeshFlags},
     },
     prelude::{
-        Collider, ColliderBuilder, ColliderHandle, PhysicsWorld, Pose, QueryFilter,
-        RigidBodyBuilder, RigidBodyHandle, SharedShape,
+        ActiveCollisionTypes, Collider, ColliderBuilder, ColliderHandle, PhysicsWorld, Pose,
+        QueryFilter, RigidBodyBuilder, RigidBodyHandle, SharedShape,
     },
 };
 
@@ -162,11 +163,27 @@ pub struct Body3d {
     pub shape: Shape3d,
     pub pose: Pose3d,
     pub material: Material,
+    /// Whether it's a sensor: an area that nothing bumps into, which [`World3d::inside`] tells
+    /// what's in. A sensor is fixed or kinematic, and solid all through, so not triangles.
+    pub sensor: bool,
 }
 
 /// A body in a [`World3d`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BodyId(RigidBodyHandle);
+
+/// Where a ray hit a body: see [`World3d::cast_ray`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RayHit {
+    pub body: BodyId,
+    /// How far along the ray it hit, in lengths of the ray's direction.
+    pub distance: f32,
+    /// Where it hit, in the world.
+    pub point: [f32; 3],
+    /// The way out of the body where it hit, a vector of length 1 facing back along the ray, or
+    /// zero if the ray started inside the body.
+    pub normal: [f32; 3],
+}
 
 /// A character walking with [`World3d::walk`]: an upright cylinder, standing on its flat feet, so
 /// it stands on the edge of a step as a box would.
@@ -209,6 +226,12 @@ pub struct Walked {
 /// and sliding along it, stepping up onto stairs, walking up and down slopes, and pushing dynamic
 /// bodies out of the way.
 ///
+/// Scripts ask where things are by rays ([`World3d::cast_ray`]), by shapes overlapping bodies
+/// ([`World3d::overlapping`]), and by sensors ([`Body3d::sensor`]), areas nothing bumps into that
+/// [`World3d::inside`] tells what's in. They find bodies where they are now, added or moved since
+/// the last step too, but kinematic bodies that are going somewhere over the next step where they
+/// are until then. Sensors are never hit or overlapped.
+///
 /// Rapier is built with its `enhanced-determinism`, and poses are turned to rotations with
 /// `libm`, so the same bodies, steps and walks give the same results to the bit on every
 /// platform.
@@ -249,14 +272,19 @@ impl World3d {
     }
 
     /// Adds `body`, or fails if its shape can't be made, or its material isn't one: triangles on
-    /// a body that moves, a hull or triangles with nothing inside, sizes that aren't finite, a
-    /// density, friction or bounce less than 0, or a dynamic body with a density of 0.
+    /// a body that moves or a sensor, a hull or triangles with nothing inside, sizes that aren't
+    /// finite, a density, friction or bounce less than 0, a dynamic body with a density of 0, or a
+    /// dynamic sensor.
     pub fn add(&mut self, body: &Body3d) -> Result<BodyId, String> {
         check_material(&body.material, body.kind)?;
+        if body.sensor {
+            check_sensor(body.kind, &body.shape)?;
+        }
         let collider = collider(&body.shape, body.kind)?
             .density(body.material.density)
             .friction(body.material.friction)
             .restitution(body.material.bounce);
+        let collider = sensed(collider, body.sensor);
         let builder = match body.kind {
             BodyKind::Fixed => RigidBodyBuilder::fixed(),
             BodyKind::Dynamic => RigidBodyBuilder::dynamic(),
@@ -271,12 +299,16 @@ impl World3d {
         Ok(BodyId(handle))
     }
 
-    /// Reshapes the body `id`, keeping its material, as [`World3d::add`] shapes one. Does nothing
-    /// to one that's been removed.
+    /// Reshapes the body `id`, keeping its material, and if it's a sensor, keeping it one, as
+    /// [`World3d::add`] shapes one. Does nothing to one that's been removed.
     pub fn set_shape(&mut self, id: BodyId, shape: &Shape3d) -> Result<(), String> {
         let Some(kind) = self.kind(id) else {
             return Ok(());
         };
+        let sensor = self.is_sensor(id);
+        if sensor {
+            check_sensor(kind, shape)?;
+        }
         let made = collider(shape, kind)?;
         let old = self.rapier.bodies[id.0].colliders().to_vec();
         let material = old.first().map_or_else(Material::default, |&handle| {
@@ -294,7 +326,9 @@ impl World3d {
             .density(material.density)
             .friction(material.friction)
             .restitution(material.bounce);
-        let collider = self.rapier.insert_collider(made, Some(id.0));
+        let collider = self
+            .rapier
+            .insert_collider(sensed(made, sensor), Some(id.0));
         self.fresh.push(collider);
         Ok(())
     }
@@ -311,6 +345,15 @@ impl World3d {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Whether the body `id` is a sensor: see [`Body3d::sensor`].
+    pub fn is_sensor(&self, id: BodyId) -> bool {
+        self.rapier
+            .bodies
+            .get(id.0)
+            .and_then(|body| body.colliders().first())
+            .is_some_and(|&collider| self.rapier.colliders[collider].is_sensor())
     }
 
     pub fn kind(&self, id: BodyId) -> Option<BodyKind> {
@@ -331,12 +374,14 @@ impl World3d {
         ))
     }
 
-    /// Puts the body `id` at `pose`: a fixed or dynamic body at once, keeping a dynamic one's
-    /// velocity, and a kinematic one over the next step, pushing what's in its way. See
-    /// [`World3d::put`] for putting a kinematic one there at once.
+    /// Puts the body `id` at `pose`: a fixed or dynamic body, or a sensor, at once, keeping a
+    /// dynamic one's velocity, and a kinematic one over the next step, pushing what's in its way.
+    /// See [`World3d::put`] for putting a kinematic one there at once.
     pub fn set_pose(&mut self, id: BodyId, pose: Pose3d) {
+        // A sensor pushes nothing, so it needn't sweep there.
+        let sensor = self.is_sensor(id);
         match self.rapier.bodies.get_mut(id.0) {
-            Some(body) if body.is_kinematic() => {
+            Some(body) if body.is_kinematic() && !sensor => {
                 body.set_next_kinematic_position(pose.to_rapier());
                 self.wake(id.0);
             }
@@ -530,6 +575,95 @@ impl World3d {
             moved: moved.into(),
             grounded,
         }
+    }
+
+    /// Casts a ray from `origin` along `direction`, as far as `max_distance` lengths of it, and
+    /// returns where it first hits a body, other than those in `except` and sensors, or `None`
+    /// if it hits nothing. It hits bodies by their shapes: triangles where they are, and a box,
+    /// a hull or a ball anywhere on or inside it, so one starting inside a body hits it at 0.
+    pub fn cast_ray(
+        &mut self,
+        origin: [f32; 3],
+        direction: [f32; 3],
+        max_distance: f32,
+        except: &[BodyId],
+    ) -> Option<RayHit> {
+        self.refresh();
+        let direction = Vector::from(direction);
+        let ray = Ray::new(Vector::from(origin), direction);
+        let excepted = |_: ColliderHandle, collider: &Collider| !excepts(except, collider);
+        let filter = QueryFilter::default()
+            .exclude_sensors()
+            .predicate(&excepted);
+        let queries = self.rapier.query_pipeline_with_filter(filter);
+        let (collider, hit) = queries.cast_ray_and_get_normal(&ray, max_distance, true)?;
+        let body = self.rapier.colliders[collider].parent()?;
+        // Back toward where the ray came from, whichever side of a triangle it hit; and none from
+        // inside, where Rapier gives boxes none but some shapes one.
+        let normal = if hit.time_of_impact <= 0.0 {
+            Vector::ZERO
+        } else if hit.normal.dot(direction) > 0.0 {
+            -hit.normal
+        } else {
+            hit.normal
+        };
+        Some(RayHit {
+            body: BodyId(body),
+            distance: hit.time_of_impact,
+            point: ray.point_at(hit.time_of_impact).into(),
+            normal: square(normal).into(),
+        })
+    }
+
+    /// Returns the bodies that `shape`, in the world's coordinates, touches or overlaps, other
+    /// than those in `except` and sensors, in no particular order, or fails if the shape can't be
+    /// made, as [`World3d::add`] fails. Triangles touch only what touches them, not what they're
+    /// around.
+    pub fn overlapping(
+        &mut self,
+        shape: &Shape3d,
+        except: &[BodyId],
+    ) -> Result<Vec<BodyId>, String> {
+        let made = collider(shape, BodyKind::Fixed)?;
+        self.refresh();
+        Ok(self.touching(made.position, &*made.shape, except))
+    }
+
+    /// Returns the bodies that overlap or touch the body `id`, a sensor's or any other's, other
+    /// than sensors, in no particular order: for a sensor, what's in it.
+    pub fn inside(&mut self, id: BodyId) -> Vec<BodyId> {
+        self.refresh();
+        let Some(body) = self.rapier.bodies.get(id.0) else {
+            return Vec::new();
+        };
+        let mut found = Vec::new();
+        for &handle in body.colliders() {
+            let collider = &self.rapier.colliders[handle];
+            for touched in self.touching(*collider.position(), collider.shape(), &[id]) {
+                if !found.contains(&touched) {
+                    found.push(touched);
+                }
+            }
+        }
+        found
+    }
+
+    /// The bodies `shape` at `pose` touches, other than those in `except` and sensors.
+    fn touching(&self, pose: Pose, shape: &dyn Shape, except: &[BodyId]) -> Vec<BodyId> {
+        let excepted = |_: ColliderHandle, collider: &Collider| !excepts(except, collider);
+        let filter = QueryFilter::default()
+            .exclude_sensors()
+            .predicate(&excepted);
+        let queries = self.rapier.query_pipeline_with_filter(filter);
+        let mut found = Vec::new();
+        for (_, collider) in queries.intersect_shape(pose, shape) {
+            if let Some(body) = collider.parent().map(BodyId)
+                && !found.contains(&body)
+            {
+                found.push(body);
+            }
+        }
+        found
     }
 
     /// Pushes what a character walking at `velocity` walked into, as a collision of the two
@@ -865,6 +999,41 @@ fn square(normal: Vector) -> Vector {
         .unwrap_or(normal)
 }
 
+/// Whether `collider` is of one of the bodies `except`.
+fn excepts(except: &[BodyId], collider: &Collider) -> bool {
+    collider
+        .parent()
+        .is_some_and(|body| except.contains(&BodyId(body)))
+}
+
+/// Fails unless a sensor can be of `kind` and `shape`: an area doesn't fall, and is solid all
+/// through, which triangles aren't.
+fn check_sensor(kind: BodyKind, shape: &Shape3d) -> Result<(), String> {
+    if kind == BodyKind::Dynamic {
+        return Err("a sensor doesn't fall: make it fixed or kinematic".into());
+    }
+    if matches!(shape, Shape3d::Triangles { .. }) {
+        return Err(
+            "a sensor is an area, solid all through, which triangles aren't: give it a hull, a \
+             box or a ball"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// `collider`, made a sensor if `sensor` says so: one that nothing bumps into, and that the
+/// world's steps leave alone, since what's in it is asked for when it's wanted.
+fn sensed(collider: ColliderBuilder, sensor: bool) -> ColliderBuilder {
+    if sensor {
+        collider
+            .sensor(true)
+            .active_collision_types(ActiveCollisionTypes::empty())
+    } else {
+        collider
+    }
+}
+
 /// Fails unless `material` is one a body of `kind` can be of: what falls must weigh something.
 fn check_material(material: &Material, kind: BodyKind) -> Result<(), String> {
     let Material {
@@ -1003,6 +1172,7 @@ mod tests {
             shape,
             pose: Pose3d::default(),
             material: Material::default(),
+            sensor: false,
         }
     }
 
@@ -1021,6 +1191,7 @@ mod tests {
             shape: Shape3d::Box(bounds([-0.25, 0.0, -0.25], [0.25, 0.5, 0.25])),
             pose: Pose3d::at(position),
             material: Material::default(),
+            sensor: false,
         }
     }
 
@@ -1269,6 +1440,7 @@ mod tests {
                 shape: Shape3d::Box(bounds([-1.0, -0.2, -1.0], [1.0, 0.0, 1.0])),
                 pose: Pose3d::at([0.0, 1.0, 0.0]),
                 material: Material::default(),
+                sensor: false,
             })
             .unwrap();
         let mut feet = [0.0, 1.0 + GAP, 0.0];
@@ -1605,6 +1777,7 @@ mod tests {
                 },
                 pose: Pose3d::at([0.0, GAP, 0.0]),
                 material: Material::default(),
+                sensor: false,
             })
             .unwrap();
         let walked = world.walk(&WALKER, [0.0, GAP, 0.0], [0.5, 0.0, 0.0], Some(own));
@@ -1616,5 +1789,272 @@ mod tests {
             [1.0 - 2.0 * WALKER.radius - GAP, 0.0, 0.0],
             1.0e-3,
         );
+    }
+
+    /// A world with ground whose top is at `y` 0, as [`ground`] makes, and the ground's body.
+    fn with_ground() -> (World3d, BodyId) {
+        let mut world = World3d::new();
+        let ground = bounds([-50.0, -1.0, -50.0], [50.0, 0.0, 50.0]);
+        let id = world.add(&fixed(Shape3d::Box(ground))).unwrap();
+        (world, id)
+    }
+
+    fn sensor_body(kind: BodyKind, shape: Shape3d) -> Body3d {
+        Body3d {
+            kind,
+            sensor: true,
+            ..fixed(shape)
+        }
+    }
+
+    fn set(bodies: Vec<BodyId>) -> std::collections::HashSet<BodyId> {
+        bodies.into_iter().collect()
+    }
+
+    #[test]
+    fn rays_hit_the_nearest_body_where_it_is() {
+        // Bodies added since the last step, as these are, are where they are.
+        let (mut world, ground) = with_ground();
+        let block = world
+            .add(&fixed(Shape3d::Box(bounds(
+                [2.0, 0.0, -1.0],
+                [3.0, 1.0, 1.0],
+            ))))
+            .unwrap();
+        let hit = world.cast_ray([0.0, 5.0, 0.0], [0.0, -1.0, 0.0], f32::MAX, &[]);
+        let hit = hit.expect("the ray hit the ground");
+        assert_eq!(hit.body, ground);
+        assert_near(hit.point, [0.0, 0.0, 0.0], 1.0e-5);
+        assert!((hit.distance - 5.0).abs() < 1.0e-5, "{hit:?}");
+        assert_eq!(hit.normal, [0.0, 1.0, 0.0]);
+        // Across to the block, in lengths of the direction.
+        let hit = world.cast_ray([0.0, 0.5, 0.0], [2.0, 0.0, 0.0], f32::MAX, &[]);
+        let hit = hit.expect("the ray hit the block");
+        assert_eq!(hit.body, block);
+        assert!((hit.distance - 1.0).abs() < 1.0e-5, "{hit:?}");
+        assert_eq!(hit.normal, [-1.0, 0.0, 0.0]);
+        // Not as far as it, or up into nothing.
+        assert_eq!(
+            world.cast_ray([0.0, 0.5, 0.0], [1.0, 0.0, 0.0], 1.5, &[]),
+            None
+        );
+        assert_eq!(
+            world.cast_ray([0.0, 0.5, 0.0], [0.0, 1.0, 0.0], f32::MAX, &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn rays_hit_triangles_where_they_are_not_the_box_around_them() {
+        // A slope of two triangles, rising from 0 at `x` 0 to 1 at `x` 1.
+        let mut world = World3d::new();
+        let points = vec![
+            [0.0, 0.0, -5.0],
+            [0.0, 0.0, 5.0],
+            [1.0, 1.0, 5.0],
+            [1.0, 1.0, -5.0],
+        ];
+        let triangles = vec![[0, 1, 2], [0, 2, 3]];
+        world
+            .add(&fixed(Shape3d::Triangles { points, triangles }))
+            .unwrap();
+        let hit = world.cast_ray([0.25, 5.0, 0.0], [0.0, -1.0, 0.0], f32::MAX, &[]);
+        let hit = hit.expect("the ray hit the slope");
+        assert_near(hit.point, [0.25, 0.25, 0.0], 1.0e-5);
+        let half = std::f32::consts::FRAC_1_SQRT_2;
+        assert_near(hit.normal, [-half, half, 0.0], 1.0e-5);
+        // From under it, it faces back down along the ray.
+        let hit = world.cast_ray([0.75, -1.0, 0.0], [0.0, 1.0, 0.0], f32::MAX, &[]);
+        let hit = hit.expect("the ray hit the slope from below");
+        assert_near(hit.point, [0.75, 0.75, 0.0], 1.0e-5);
+        assert_near(hit.normal, [half, -half, 0.0], 1.0e-5);
+    }
+
+    #[test]
+    fn turned_bodies_are_hit_on_their_turned_faces() {
+        // A wall turned a twelfth of a turn about the origin.
+        let mut world = World3d::new();
+        let turned = Body3d {
+            pose: Pose3d {
+                yaw: FRAC_PI_6,
+                ..Pose3d::default()
+            },
+            ..fixed(Shape3d::Box(bounds([1.0, 0.0, -5.0], [1.5, 2.0, 5.0])))
+        };
+        world.add(&turned).unwrap();
+        let hit = world.cast_ray([0.0, 1.0, 0.0], [1.0, 0.0, 0.0], f32::MAX, &[]);
+        let hit = hit.expect("the ray hit the wall");
+        // Its face's normal, -x turned by the yaw, and the face a unit from the origin.
+        let (sin, cos) = FRAC_PI_6.sin_cos();
+        assert_near(hit.normal, [-cos, 0.0, sin], 1.0e-5);
+        assert!((hit.distance - 1.0 / cos).abs() < 1.0e-4, "{hit:?}");
+    }
+
+    #[test]
+    fn rays_go_through_what_they_are_told_to_and_sensors() {
+        let (mut world, ground) = with_ground();
+        let block = world
+            .add(&fixed(Shape3d::Box(bounds(
+                [-1.0, 1.0, -1.0],
+                [1.0, 2.0, 1.0],
+            ))))
+            .unwrap();
+        let area = bounds([-1.0, 3.0, -1.0], [1.0, 4.0, 1.0]);
+        world
+            .add(&sensor_body(BodyKind::Fixed, Shape3d::Box(area)))
+            .unwrap();
+        let down = |world: &mut World3d, except: &[BodyId]| {
+            world.cast_ray([0.0, 5.0, 0.0], [0.0, -1.0, 0.0], f32::MAX, except)
+        };
+        let hit = down(&mut world, &[]).unwrap();
+        assert_eq!(hit.body, block);
+        assert!((hit.distance - 3.0).abs() < 1.0e-5, "{hit:?}");
+        assert_eq!(down(&mut world, &[block]).unwrap().body, ground);
+        assert_eq!(down(&mut world, &[block, ground]), None);
+    }
+
+    #[test]
+    fn rays_starting_inside_a_body_hit_it_at_once() {
+        let mut world = World3d::new();
+        let block = world
+            .add(&fixed(Shape3d::Box(bounds([-1.0; 3], [1.0; 3]))))
+            .unwrap();
+        let hit = world.cast_ray([0.0; 3], [1.0, 0.0, 0.0], f32::MAX, &[]);
+        assert_eq!(
+            hit,
+            Some(RayHit {
+                body: block,
+                distance: 0.0,
+                point: [0.0; 3],
+                normal: [0.0; 3],
+            })
+        );
+        // A cylinder too, whose normal Rapier would make up.
+        let cylinder = Shape3d::Cylinder {
+            radius: 0.5,
+            height: 1.0,
+        };
+        let upright = world
+            .add(&Body3d {
+                pose: Pose3d::at([5.0, 0.0, 0.0]),
+                ..fixed(cylinder)
+            })
+            .unwrap();
+        let hit = world.cast_ray([5.0, 0.5, 0.0], [1.0, 0.0, 0.0], f32::MAX, &[]);
+        let hit = hit.expect("the ray hit the cylinder");
+        assert_eq!(hit.body, upright);
+        assert_eq!((hit.distance, hit.normal), (0.0, [0.0; 3]));
+    }
+
+    #[test]
+    fn overlaps_find_what_a_shape_touches() {
+        let (mut world, ground) = with_ground();
+        let near = world.add(&crate_at([0.0, 0.0, 0.0])).unwrap();
+        let far = world
+            .add(&fixed(Shape3d::Box(bounds(
+                [2.0, 0.0, -0.5],
+                [3.0, 1.0, 0.5],
+            ))))
+            .unwrap();
+        let area = bounds([-0.1, 0.6, -0.1], [0.1, 0.7, 0.1]);
+        world
+            .add(&sensor_body(BodyKind::Fixed, Shape3d::Box(area)))
+            .unwrap();
+        let ball = |center, radius| Shape3d::Ball { center, radius };
+        // Just over the crate's top, at 0.5, and just short of it, not counting the sensor.
+        let over = world.overlapping(&ball([0.0, 0.75, 0.0], 0.3), &[]);
+        assert_eq!(over.unwrap(), vec![near]);
+        let short = world.overlapping(&ball([0.0, 0.75, 0.0], 0.2), &[]);
+        assert_eq!(short.unwrap(), vec![]);
+        // Everything, the ground too, or all but what it's told.
+        let all = world
+            .overlapping(&ball([1.0, 0.25, 0.0], 1.1), &[])
+            .unwrap();
+        assert_eq!(set(all), set(vec![ground, near, far]));
+        let all_but = world
+            .overlapping(&ball([1.0, 0.25, 0.0], 1.1), &[ground, near])
+            .unwrap();
+        assert_eq!(all_but, vec![far]);
+        // A box.
+        let around = Shape3d::Box(bounds([1.5, 0.1, -1.0], [2.5, 2.0, 1.0]));
+        assert_eq!(world.overlapping(&around, &[]).unwrap(), vec![far]);
+        let flat = Shape3d::Ball {
+            center: [0.0; 3],
+            radius: 0.0,
+        };
+        assert!(world.overlapping(&flat, &[]).is_err());
+    }
+
+    #[test]
+    fn sensors_tell_what_is_in_them_and_stop_nothing() {
+        let mut world = ground();
+        let area = bounds([-1.0, 1.0, -1.0], [1.0, 2.0, 1.0]);
+        let sensor = world
+            .add(&sensor_body(BodyKind::Fixed, Shape3d::Box(area)))
+            .unwrap();
+        assert!(world.is_sensor(sensor));
+        let falling = world.add(&crate_at([0.0, 3.0, 0.0])).unwrap();
+        assert!(!world.is_sensor(falling));
+        // The crate falls through it, in it on the way, and comes to rest on the ground.
+        let mut was_in = false;
+        for _ in 0..180 {
+            world.step(FRAME);
+            was_in |= world.inside(sensor) == vec![falling];
+        }
+        assert!(was_in);
+        assert!(world.pose(falling).unwrap().position[1].abs() < 0.02);
+        assert_eq!(world.inside(sensor), vec![]);
+
+        // A character walks through one.
+        let mut world = ground();
+        let area = bounds([0.5, 0.0, -1.0], [1.0, 2.0, 1.0]);
+        world
+            .add(&sensor_body(BodyKind::Fixed, Shape3d::Box(area)))
+            .unwrap();
+        let (feet, _) = walk_for(&mut world, [0.0, GAP, 0.0], [0.05, -0.01, 0.0], 60);
+        assert_near(feet, [3.0, GAP, 0.0], 1.0e-3);
+    }
+
+    #[test]
+    fn kinematic_sensors_are_put_at_once() {
+        let mut world = World3d::new();
+        let ball = Shape3d::Ball {
+            center: [0.0; 3],
+            radius: 0.5,
+        };
+        let sensor = world.add(&sensor_body(BodyKind::Kinematic, ball)).unwrap();
+        let block = world
+            .add(&fixed(Shape3d::Box(bounds(
+                [4.8, -1.0, -1.0],
+                [6.0, 1.0, 1.0],
+            ))))
+            .unwrap();
+        assert_eq!(world.inside(sensor), vec![]);
+        world.set_pose(sensor, Pose3d::at([5.0, 0.0, 0.0]));
+        assert_eq!(world.pose(sensor), Some(Pose3d::at([5.0, 0.0, 0.0])));
+        assert_eq!(world.inside(sensor), vec![block]);
+    }
+
+    #[test]
+    fn sensors_that_cant_be_say_why() {
+        let mut world = World3d::new();
+        let ball = Shape3d::Ball {
+            center: [0.0; 3],
+            radius: 0.5,
+        };
+        let falling = world.add(&sensor_body(BodyKind::Dynamic, ball.clone()));
+        assert!(falling.unwrap_err().contains("doesn't fall"));
+        let triangles = Shape3d::Triangles {
+            points: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            triangles: vec![[0, 1, 2]],
+        };
+        let surface = world.add(&sensor_body(BodyKind::Fixed, triangles.clone()));
+        assert!(surface.unwrap_err().contains("triangles"));
+        // Reshaped, it stays a sensor, and can't become triangles.
+        let id = world.add(&sensor_body(BodyKind::Fixed, ball)).unwrap();
+        let cube = Shape3d::Box(bounds([-1.0; 3], [1.0; 3]));
+        world.set_shape(id, &cube).unwrap();
+        assert!(world.is_sensor(id));
+        assert!(world.set_shape(id, &triangles).is_err());
     }
 }

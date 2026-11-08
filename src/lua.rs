@@ -122,8 +122,9 @@
 //!   box around what a mesh, model or billboard shows, or nothing). A view has `node:camera()`,
 //!   `node:set_camera(camera)`, `node:lighting()` (its colors numbers),
 //!   `node:set_lighting(lighting)`, `node:pick(x, y)` (its nodes under a point of the scene,
-//!   nearest first) and `node:project(point)` (where a point of its world shows in the scene, or
-//!   nothing). What they cover: `node:size()` (before stretching with its parent, or a
+//!   nearest first), `node:project(point)` (where a point of its world shows in the scene, or
+//!   nothing) and `node:ray(x, y)` (where the ray into its world through a point of the scene
+//!   starts and the way it goes, of length 1, or nothing outside the view). What they cover: `node:size()` (before stretching with its parent, or a
 //!   billboard's; a stack's or a panel's fits what it holds along the axes it has no size of its
 //!   own), `node:set_size(width, height)` (sprites, rects, areas, stacks, panels, views and
 //!   billboards; a stack or a panel then has a size of its own both ways),
@@ -166,7 +167,9 @@
 //!   `"triangles"` (fixed bodies' default, and only theirs), `"hull"` (the rest's), `"box"` or
 //!   `"ball"`; `options.density`, `friction` and `bounce` are its material; and
 //!   `options.character`, `{ radius, height, step, slope, mass }`, any of them left out, makes it
-//!   a character, a kinematic cylinder. Fixed bodies are placed by their node's whole transform,
+//!   a character, a kinematic cylinder; `options.sensor` makes it a sensor, an area nothing bumps
+//!   into, fixed or kinematic and not triangles (its default shape is `"hull"`), which a kinematic
+//!   node moving puts at once. Fixed bodies are placed by their node's whole transform,
 //!   with sines from `libm`; bodies that move, by where the node is and how it's turned, so the
 //!   nodes around them may move them but not turn or stretch them. `world:remove(node)` takes the
 //!   body away, as removing the node does. `world:step(dt)` brings bodies up to date with nodes
@@ -175,7 +178,16 @@
 //!   a vector, and whether it's on the ground; a character's node moved otherwise puts its body
 //!   there at once. `world:velocity(node)`,
 //!   `world:set_velocity(node, velocity)`, `world:push(node, impulse)` and
-//!   `world:is_resting(node)` read and change a body's motion.
+//!   `world:is_resting(node)` read and change a body's motion. Queries, which never find sensors,
+//!   bring bodies up to date with their nodes first and return nodes in the order they were
+//!   added: `world:ray(origin, direction, options)` returns where the ray first hits a body, by
+//!   its shape, as `{ node, distance, point, normal }` (`distance` in lengths of `direction`,
+//!   `normal` facing back along the ray, zero for a ray starting inside a body), or `nil`;
+//!   `world:overlap_ball(center, radius, options)` and `world:overlap_box(min, max, options)`
+//!   (along the world's axes, its corners either way round) return the nodes whose bodies they
+//!   touch; and `world:inside(sensor)`, the nodes whose bodies are in a sensor, even partly.
+//!   Their `options` may have `except`, a node or a list of them whose bodies are in nothing's
+//!   way, and a ray's, `distance`, how far it goes.
 //! - A [`Clip`] is userdata for a clip of a scene file, from `scene.clips`. Like an animation, it
 //!   doesn't keep time: scripts keep how long it has played and pose nodes with it. Its methods
 //!   are `clip:duration()`, `clip:is_looping()` and `clip:is_finished(time)` (whether one that
@@ -1334,6 +1346,15 @@ impl mlua::UserData for SceneNode {
                     None => (None, None),
                 },
             )
+        });
+        methods.add_method("ray", |_, node, (x, y): (f32, f32)| {
+            node.read_kind("camera", |kind| {
+                matches!(kind, Kind::View3d(_)).then_some(())
+            })?;
+            Ok(match node.read(|scene, id| scene.ray(id, [x, y]))? {
+                Some(ray) => (Some(vector(ray.origin)), Some(vector(ray.direction))),
+                None => (None, None),
+            })
         });
         methods.add_method("world_position", |_, node, ()| {
             node.check_2d(
