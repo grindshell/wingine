@@ -692,6 +692,27 @@ fn libraries_run_in_the_order_games_list_them() {
     );
 }
 
+#[test]
+fn reloading_a_game_gives_its_libraries_new_state() {
+    runtime::link_library("north", wingine_native::library::<Tracer<0>>());
+    let folder = game("reload", &[("conf.luau", &conf(&[])), ("main.luau", "")]);
+    TRACE.take();
+    let mut simulation = simulation(&folder);
+
+    // A library listed by the time the game reloads loads.
+    fs::write(folder.join("conf.luau"), conf(&["north"])).unwrap();
+    simulation.reload();
+    assert!(simulation.game().error().is_none());
+    assert!(simulation.eval::<bool>("north ~= nil"));
+    assert_eq!(TRACE.take().join(" "), "north:new");
+
+    // The new game's state is made before the old game's goes.
+    simulation.reload();
+    assert_eq!(TRACE.take().join(" "), "north:new north:drop");
+    drop(simulation);
+    assert_eq!(TRACE.take().join(" "), "north:drop");
+}
+
 /// A library that fails as a game loads it.
 struct Failing;
 

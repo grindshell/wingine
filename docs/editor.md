@@ -303,7 +303,10 @@ editor turns that warning off, and a `.luaurc` can too, with `"FunctionUnused": 
   its scene has unsaved changes, and closing it, the editor or the game asks first. What fails to
   save stays open, and Output says why.
 - **F5**, or **Play**, saves every scene and script and plays the game in a window of its own, as
-  `cargo run -- path/to/game` would. What it prints shows in Output. **F8**, or **Stop**, ends it.
+  `cargo run -- --watch path/to/game` would, so it
+  [reloads](running-games.md#reloading-as-you-work) whenever a file changes: save a scene or a
+  script while it plays and the game starts again with it. What it prints shows in Output. **F8**,
+  or **Stop**, ends it.
 
 The editor writes scene files in the canonical layout, as
 [`SceneFile::to_luau`](scenes.md) does. A file already in it changes only where the scene did, but

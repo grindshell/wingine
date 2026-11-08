@@ -43,6 +43,13 @@ cargo run -- ../hello
 A window opens with "Hello world" in white in its top-left corner. Close the window to stop the
 game.
 
+To see changes as soon as they're saved, run it with `--watch`, and the game reloads whenever a
+file in its folder changes:
+
+```bash
+cargo run -- --watch ../hello
+```
+
 The engine calls the global function `draw` every frame, after clearing the canvas to black.
 `graphics.draw_text` draws text in a font, here the engine's built-in pixel font, with its
 top-left corner at `x`, `y` in pixels, in a color written as a hex string.
@@ -109,7 +116,8 @@ function draw()
 end
 ```
 
-Run it again, and move the text with the arrow keys or WASD.
+Run it again, or save it with the game running with `--watch`, and move the text with the arrow
+keys or WASD.
 
 The script has three parts, as most games do:
 
@@ -125,7 +133,7 @@ The script has three parts, as most games do:
 
 - [Project structure](project-structure.md) explains how a game's folder is laid out and how
   `main.luau` runs, frame by frame.
-- [Running games](running-games.md) covers errors, printing, and checking a game without a
-  window.
+- [Running games](running-games.md) covers reloading as you work, errors, printing, and checking
+  a game without a window.
 - The [API reference](api/README.md) lists everything scripts can do: sprites, animation,
   tilemaps, sound and more.

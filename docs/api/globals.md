@@ -52,6 +52,29 @@ Optional: without it, the close button closes the window.
 An error in any of these functions stops the game and shows the error in the window. A stopped
 game's window closes when asked.
 
+### `reloading`
+
+```lua
+function reloading(): any
+```
+
+Defined by the game, and called by the engine just before the game
+[reloads](../running-games.md#reloading-as-you-work), as it does when it's run with `--watch` and
+a file in its folder changes. What it returns, plain data as [`save.write`](save.md#savewrite)
+takes, the reloaded game gets from [`window.reloaded`](window.md#windowreloaded), so it can carry
+on where it was. What works in `update` works here too, and it's called even when an error has
+stopped the game, so a fix doesn't lose the game's state. Optional: without it, or if it returns
+nil, the game reloads as it starts.
+
+```lua
+function reloading()
+    return { level = level.name, x = player.x, y = player.y, coins = coins }
+end
+```
+
+An error in `reloading`, or data that isn't plain, such as a function, is logged, and the game
+reloads keeping nothing.
+
 ## Tasks
 
 A task is a function that runs alongside the game across many frames, pausing with `wait` or

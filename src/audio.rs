@@ -250,6 +250,16 @@ impl Audio {
             .set_volume(decibels(volume), Tween::default());
     }
 
+    /// Stops every sound effect and the music at once, and sets every volume back to 1, as for a
+    /// game starting again in the same window.
+    pub(crate) fn reset(&mut self) {
+        self.stop_sounds(0.0);
+        self.stop_music(0.0);
+        self.set_volume(1.0);
+        self.set_sound_volume(1.0);
+        self.set_music_volume(1.0);
+    }
+
     /// Called once a frame: renders `dt` seconds of silent output, and forgets sound effects
     /// that have finished. A sound device renders on its own thread instead.
     pub(crate) fn advance(&mut self, dt: f32) {

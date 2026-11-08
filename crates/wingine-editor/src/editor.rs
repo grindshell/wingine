@@ -17,6 +17,7 @@ use wingine::{
     gui::egui::{self, Key, KeyboardShortcut, Modifiers},
     math::Affine,
     scene::{KindDef, NodeDef, Placement3, SceneFile},
+    watch::Watcher,
 };
 
 use crate::{
@@ -31,7 +32,7 @@ use crate::{
     document::{Document, Reloaded},
     edit::{self, NodePath},
     play::Play,
-    project::{AssetCache, Project, Watcher},
+    project::{self, AssetCache, Project},
     script_editor::{self, ScriptEditor},
     theme,
     viewport::{self, Tool, Viewport},
@@ -163,7 +164,7 @@ impl Editor {
         self.current = 0;
         self.cache = AssetCache::default();
         self.scripts.set_project(Some(project.folder.clone()));
-        self.watcher = Some(Watcher::new(project.folder.clone(), self.waker.clone()));
+        self.watcher = Some(project::watch(project.folder.clone(), self.waker.clone()));
         let message = format!("Opened {}", project.name);
         if let Err(err) = &project.config {
             self.output.push(Level::Error, format!("conf.luau: {err}"));

@@ -278,11 +278,13 @@
 //! - `save.remove(name)` removes the save `name`, if there is one.
 //! - `save.list()` returns the names of the game's saves, in order.
 //!
-//! `window`, for the game's window, while the game loads, in `update`, `gui` and
-//! `close_requested`:
+//! `window`, for the game's window:
 //!
-//! - `window.quit()` closes the window once the frame has drawn, which ends the game. A game that
-//!   saves on the way out writes its save first.
+//! - `window.quit()`, while the game loads, in `update`, `gui` and `close_requested`, closes the
+//!   window once the frame has drawn, which ends the game. A game that saves on the way out writes
+//!   its save first.
+//! - `window.reloaded()`, at any time, returns a copy of what the game before this one returned
+//!   from `reloading`, if it was reloaded (see below), or nil.
 //!
 //! A game may also define a global `gui(ui)`, which the engine calls once a frame, after the
 //! updates and before `draw`, with a `Ui` covering the window, to lay out an interface over the
@@ -308,6 +310,20 @@
 //! `draw` or `close_requested` stops the game and shows the error in the window, and a stopped
 //! game's window closes when asked. A task that fails stops and logs its
 //! error, and the other tasks carry on.
+//!
+//! Run with [`run_watching`] (`wingine --watch path/to/game`), a game reloads whenever a file in
+//! its folder changes, as the editor's Play runs games. Its window stays open, and a new VM runs
+//! `main.luau` from the top, reading every script, scene, image, sound and model again. First, the
+//! engine calls the game's global `reloading()`, if it has one, lending it what `update` is lent:
+//! what it returns, plain data as `save.write` takes, the reloaded game gets from
+//! `window.reloaded()`, so it can carry on where it was, even after stopping with an error. An
+//! error in `reloading`, or data that isn't plain, is logged, and the game reloads keeping
+//! nothing. Sound effects and music stop, volumes go back to 1, and actions are unbound, but
+//! saves stay. `conf.luau` is read again for its `libraries`, but the window's settings change
+//! only when the game starts again. Native libraries aren't loaded again, since they never
+//! unload, but each reload gives them new state. A game that fails to load, as it starts or as it
+//! reloads, shows the error in the window and loads again at the next change, keeping for it what
+//! `reloading` returned before.
 
 mod audio;
 mod graphics;
@@ -325,6 +341,8 @@ mod tilemap;
 mod ui;
 mod window;
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -342,6 +360,8 @@ use require::FilesRequirer as FileRequirer;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::lua::mlua::luau::FsRequirer as FileRequirer;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::watch::Watcher;
 use crate::{
     Context, Error, Game, Result, WindowConfig,
     graphics::{Canvas, Color, Font, Model, Resolution, Texture},
@@ -352,7 +372,12 @@ use crate::{
             luau::{NavigateError, Require},
         },
     },
+    scene::{Value, plain},
 };
+
+/// How often a game [watching](LuauGame::load_watching) its folder looks at the files in it.
+#[cfg(not(target_arch = "wasm32"))]
+const WATCH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The types of the engine's API for Luau games, as a definitions file for
 /// [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp): the global tables and built-ins, the
@@ -370,6 +395,19 @@ pub fn run(folder: impl AsRef<Path>) -> Result<()> {
     let config = config(&folder)?;
     crate::run(config.window.clone(), move |ctx| {
         LuauGame::load_with(ctx, &folder, &config)
+    })
+}
+
+/// Runs the Luau game in `folder` until its window is closed, as [`run`] does, but reloading it
+/// whenever a file in the folder changes, as [`LuauGame::load_watching`] does. Only an error
+/// reading its `conf.luau` as it starts ends it with that error: one loading the game shows in the
+/// window until the next change.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_watching(folder: impl AsRef<Path>) -> Result<()> {
+    let folder = folder.as_ref().to_owned();
+    let config = config(&folder)?;
+    crate::run(config.window.clone(), move |ctx| {
+        LuauGame::load_watching(ctx, &folder, &config)
     })
 }
 
@@ -535,6 +573,7 @@ fn identity(name: &str) -> String {
 
 /// A game written in Luau, loaded from its folder.
 pub struct LuauGame {
+    // The VM goes before the libraries' state, which its values may hold.
     scripts: Scripts,
     natives: Natives,
     lent: Lent,
@@ -542,6 +581,15 @@ pub struct LuauGame {
     font: Font,
     /// The error that stopped the game, if one has.
     error: Option<Error>,
+    /// Where the game is, and its settings as the window has them, for loading it again.
+    folder: PathBuf,
+    config: Config,
+    /// What the game before this one returned from `reloading`, kept while this one failed to
+    /// load, for the next.
+    kept: Option<Value>,
+    /// Watching the game's folder, to reload it as it changes.
+    #[cfg(not(target_arch = "wasm32"))]
+    watcher: Option<Watcher>,
 }
 
 impl LuauGame {
@@ -555,7 +603,118 @@ impl LuauGame {
     /// Loads the game in `folder` with its settings, `config`, read already: the native
     /// libraries they list, then its `main.luau`.
     pub fn load_with(ctx: &mut Context, folder: impl AsRef<Path>, config: &Config) -> Result<Self> {
+        Self::load_keeping(ctx, folder.as_ref(), config, None)
+    }
+
+    /// Loads the game in `folder` as [`LuauGame::load_with`] does, then [reloads](Self::reload)
+    /// it whenever a file in the folder changes, looking every quarter second. An error loading
+    /// it, now or as it reloads, shows in the window, as one that stops it as it plays does, until
+    /// the next change loads it again.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn load_watching(
+        ctx: &mut Context,
+        folder: impl AsRef<Path>,
+        config: &Config,
+    ) -> Result<Self> {
         let folder = folder.as_ref();
+        let mut game = match Self::load_with(ctx, folder, config) {
+            Ok(game) => game,
+            Err(err) => Self::stopped(ctx, folder, config, err)?,
+        };
+        let watcher = Watcher::new(folder.to_owned(), WATCH_INTERVAL, ctx.waker());
+        game.watcher = Some(watcher);
+        Ok(game)
+    }
+
+    /// Loads the game again from its folder, in its place, as a game [watching its
+    /// folder](Self::load_watching) does when a file changes: first calling its global
+    /// `reloading`, if it has one, for the data the new game gets from `window.reloaded()`, then
+    /// stopping its sounds and music, unbinding its actions, and running its `main.luau` from the
+    /// top in a new VM, which reads every script and asset again. `conf.luau` is read again for its
+    /// libraries; its window settings change only when the game starts again. An error loading it
+    /// stops it, showing the error, with an empty VM.
+    pub fn reload(&mut self, ctx: &mut Context) {
+        let kept = self.keep(ctx).or_else(|| self.kept.take());
+        let config = config(&self.folder).map(|mut config| {
+            if config.window != self.config.window {
+                log::warn!("conf.luau's window settings change when the game starts again");
+                config.window = self.config.window.clone();
+            }
+            config
+        });
+        ctx.audio.reset();
+        ctx.input.clear_bindings();
+        #[cfg(feature = "egui")]
+        {
+            // Frames ask the new game for an interface.
+            ctx.gui.game_has_gui = true;
+        }
+        let loaded =
+            config.and_then(|config| Self::load_keeping(ctx, &self.folder, &config, kept.clone()));
+        let mut game = match loaded {
+            Ok(game) => game,
+            Err(err) => match Self::stopped(ctx, &self.folder, &self.config, err) {
+                Ok(game) => Self { kept, ..game },
+                Err(err) => {
+                    // Without a VM to stand in for it, the old game stays, stopped.
+                    self.stop(err);
+                    return;
+                }
+            },
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            game.watcher = self.watcher.take();
+        }
+        // The old game goes as any does, VM first.
+        *self = game;
+    }
+
+    /// What the game's `reloading` returns, as plain data, for the game loaded in its place:
+    /// nothing if it has no `reloading`, or that returns nil or fails.
+    fn keep(&self, ctx: &mut Context) -> Option<Value> {
+        let reloading = self.scripts.lua().globals().get::<mlua::Value>("reloading");
+        if reloading.is_ok_and(|reloading| reloading.is_nil()) {
+            return None;
+        }
+        let lent = self.lent.clone();
+        let state = lent.lend(ctx, || self.scripts.call::<mlua::Value>("reloading", ()));
+        let kept = match state {
+            Ok(mlua::Value::Nil) => return None,
+            Ok(state) => plain(state, "what `reloading` returned"),
+            Err(err) => Err(err.to_string()),
+        };
+        kept.inspect_err(|err| log::warn!("the game reloads keeping nothing: {err}"))
+            .ok()
+    }
+
+    /// A game in `folder` stopped by `err` before its `main.luau` could run, which shows the
+    /// error.
+    fn stopped(ctx: &Context, folder: &Path, config: &Config, err: Error) -> Result<Self> {
+        let mut game = Self {
+            scripts: Scripts::new()?,
+            natives: Natives::default(),
+            lent: Lent::default(),
+            font: ctx.default_font().clone(),
+            error: None,
+            folder: folder.to_owned(),
+            config: config.clone(),
+            kept: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            watcher: None,
+        };
+        game.stop(err);
+        Ok(game)
+    }
+
+    /// Loads the game in `folder` with its settings, `config`: the native libraries they list,
+    /// then its `main.luau`, whose `window.reloaded()` returns `kept`.
+    fn load_keeping(
+        ctx: &mut Context,
+        folder: &Path,
+        config: &Config,
+        kept: Option<Value>,
+    ) -> Result<Self> {
         let scripts = Scripts::new()?;
         let lua = scripts.lua();
         let lent = Lent::default();
@@ -573,7 +732,7 @@ impl LuauGame {
         globals.set("scene", scene)?;
         globals.set("ui", ui::module(lua, &lent)?)?;
         globals.set("save", save::module(lua, ctx.saves())?)?;
-        globals.set("window", window::module(lua, &lent)?)?;
+        globals.set("window", window::module(lua, &lent, kept)?)?;
         #[cfg(feature = "egui")]
         gui::register(lua, &lent)?;
         let main = folder.join("main.luau");
@@ -590,6 +749,11 @@ impl LuauGame {
             lent,
             font,
             error: None,
+            folder: folder.to_owned(),
+            config: config.clone(),
+            kept: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            watcher: None,
         })
     }
 
@@ -639,6 +803,11 @@ impl LuauGame {
 
 impl Game for LuauGame {
     fn update(&mut self, ctx: &mut Context, dt: f32) {
+        // A game stopped by an error reloads too, as that's how it's fixed.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.watcher.as_ref().is_some_and(Watcher::take_changed) {
+            self.reload(ctx);
+        }
         if self.error.is_some() {
             return;
         }

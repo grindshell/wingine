@@ -43,7 +43,8 @@ interface:
 `update`, `gui` and `draw` are global functions the script defines. All are optional: a game that
 only draws needs no `update`, and most games need no `gui`. A game that wants to ask before its
 window closes defines a fifth, [`close_requested`](api/globals.md#close_requested), which the
-engine calls when the player presses the close button.
+engine calls when the player presses the close button, and one that carries on where it was as it
+[reloads](running-games.md#reloading-as-you-work) defines [`reloading`](api/globals.md#reloading).
 
 ```lua
 local player = require("./player")
@@ -101,11 +102,11 @@ another time raises an error saying so:
 | Playing sound and music: `audio` (apart from `audio.load`) | ✓ | ✓ | ✓ | |
 | Quitting: `window.quit` | ✓ | ✓ | ✓ | |
 | `graphics.size` | ✓ | ✓ | ✓ | ✓ |
-| Everything else: `audio.load`, `tilemap`, `grid`, `save`, fonts, animations, `graphics.color`, `graphics.frame_stats` | ✓ | ✓ | ✓ | ✓ |
+| Everything else: `audio.load`, `tilemap`, `grid`, `save`, `window.reloaded`, fonts, animations, `graphics.color`, `graphics.frame_stats` | ✓ | ✓ | ✓ | ✓ |
 
 So read input and change the game's state in `update`, and only draw in `draw`. By the time `gui`
 runs, the frame's updates have seen its key presses, so `input.pressed` is false there.
-`close_requested`, which runs between frames, can use what `update` can.
+`close_requested` and `reloading`, which run between frames, can use what `update` can.
 
 ### Tasks
 

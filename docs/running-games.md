@@ -36,6 +36,64 @@ The window closes, and the game ends, when the player closes it, unless the game
 [`close_requested`](api/globals.md#close_requested) asks first, or when a script calls
 [`window.quit`](api/window.md#windowquit).
 
+## Reloading as you work
+
+With `--watch` before the game's folder, the game reloads whenever a file in its folder changes,
+so changes show as soon as they're saved:
+
+```bash
+cargo run -- --watch path/to/game
+```
+
+```bash
+wingine --watch path/to/game
+```
+
+The window stays open, and the game starts again in it: `main.luau` runs from the top in a new
+VM, reading every script, scene, image, sound and model again. The editor's Play runs games this
+way too, so saving a scene in the editor shows it in the game playing. The engine looks at the
+folder's files four times a second, but not at hidden ones, whose names start with `.`.
+
+A reload starts the game afresh: sound effects and music stop, volumes go back to 1, actions are
+unbound, and tasks end. Saves stay, since they're files outside the game's folder. `conf.luau` is
+read again for its [`libraries`](project-structure.md#libraries), but the window's settings, its
+size, resolution, update rate and the rest, change only when the game starts again.
+
+**Carrying on where it was.** Before reloading, the engine calls the game's
+[`reloading`](api/globals.md#reloading), if it has one, and the reloaded game gets what it returned
+from [`window.reloaded`](api/window.md#windowreloaded). Return plain data, as saves hold: a
+boolean, number, string, or table of them. Pong keeps its match this way, so changing how the
+computer plays changes it mid-rally:
+
+```lua
+pong = { score = { left = 0, right = 0 }, phase = "ready" --[[ and the rest ]] }
+
+function reloading()
+    return pong
+end
+
+local kept = window.reloaded()
+if kept then
+    for key, value in kept do
+        pong[key] = value
+    end
+end
+```
+
+Copying what was kept over the fresh state keeps fields the new version adds. Sprites, sounds,
+scene nodes and the like aren't plain data: keep what they're made from, such as which level the
+player is on, and make them again.
+
+**When it fails.** A game that stops with an error reloads too, so fixing the script brings it
+back, and `reloading` is called even then, so it carries on with what it had. A game that fails to
+load, as it starts or as it reloads, shows the error in the window, and loads again at the next
+change, getting what `reloading` returned before it failed. Only an error reading `conf.luau` as
+the game starts ends it, since the window needs its settings.
+
+[Native libraries](native-libraries.md) aren't loaded again, since a library stays loaded until
+the program ends, so rebuilding one needs the game to start again. Each reload gives them new
+state, as a new game would.
+
 ## Errors and output
 
 The engine writes to standard error, so what a game prints shows in the terminal it was started
@@ -70,7 +128,8 @@ missing or fails to load.
 
 **An error in `update` or `draw`** stops the game where it is and shows the error in the window,
 in place of the game, with a traceback. The error is logged too. Close the window, fix the
-script, and run the game again: the engine doesn't reload scripts while it runs.
+script, and run the game again, or run it with `--watch` and save the fix: it
+[reloads](#reloading-as-you-work).
 
 **An error in a task** stops that task, and logs the error. The game and its other tasks carry
 on.

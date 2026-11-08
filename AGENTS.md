@@ -341,7 +341,16 @@ networking or 3D pipelines.
   node's children or tagged descendants, found again each call (those shown, at
   `Scene::extent`), keeping its selection by `NodeId` as they come and go. The close
   button asks the game's global `close_requested`, lent the context as `update` is, and closes
-  unless it returns false; a game stopped by an error always closes. The module docs are the
+  unless it returns false; a game stopped by an error always closes. `LuauGame::reload` loads the
+  game again in its place, a whole new `LuauGame` (VM, caches and libraries' state, made before
+  the old one drops), after calling the old one's global `reloading`, lent the context, for plain
+  data (`scene::plain`) the new one's `window.reloaded()` returns, and resetting what the game set
+  in the `Context` (`Audio::reset`, `Input::clear_bindings`); it rereads `conf.luau` for its
+  libraries, keeping the window's settings as they were. One that fails to load becomes a stopped
+  game with an empty VM (`LuauGame::stopped`), holding the kept data for the next reload.
+  `load_watching` (`run_watching`, `wingine --watch`) starts one stopped rather than failing, and
+  reloads it in `update` when its `Watcher` sees the folder change, before the stopped game's
+  early return; tests call `Simulation::reload`. The module docs are the
   reference for script authors; the engine types those tables hand out (sprites, animations,
   meshes, tilemaps, grid movers, text layouts, scene nodes, physics worlds) are userdata, documented with their
   methods in `src/lua.rs`. Sprite sheets, scenes and `graphics.load_model` share one cache of
@@ -421,7 +430,12 @@ networking or 3D pipelines.
   result conversions (`Mesh` and `Vec3` among them), the 3D calls on `Canvas` and
   `Context::create_mesh`, and `export!`. Libraries depend on it alone, never on `wingine`.
   Models stay out of the ABI.
-- `src/main.rs`: the `wingine` executable, which runs a Luau game: `cargo run -- examples/pong`.
+- `src/main.rs`: the `wingine` executable, which runs a Luau game: `cargo run -- examples/pong`,
+  or with `--watch`, reloading it as its files change.
+- `src/watch.rs`: `Watcher`, a thread that hashes the paths, sizes and modified times of a
+  folder's files that aren't hidden, eight folders deep, every so often, and sets a flag and wakes
+  the game when the hash changes. Its first hash is taken before the thread starts, so a change
+  right after counts. Games watching their folders and the editor use it; not on wasm32.
 - `crates/wingine-editor/`: the editor, a library and the `wingine-editor` executable
   (`cargo run -p wingine-editor -- examples/garden`). `Editor` is a `Game` whose `gui` is the whole
   interface, laid out like Godot's: the top bar (menus, the main screens, Play), the Scene dock
@@ -490,11 +504,12 @@ networking or 3D pipelines.
   whole each time they change (`send_changes`, before any request about them), and positions
   convert between characters and UTF-16 columns. Without luau-lsp, scripts are edited unchecked.
   Play
-  (`play.rs`) runs the editor's own executable with `--run`, which runs the game, so it's a
-  process of its own; tests point it at the built executable with `set_runner`. The editor
+  (`play.rs`) runs the editor's own executable with `--run`, which runs the game watching its
+  folder (`runtime::run_watching`), so it's a process of its own that reloads as the editor
+  saves; tests point it at the built executable with `set_runner`. The editor
   redraws on demand: threads that read the game played and luau-lsp wake it with a `Waker` when
-  they have something, as does `project::Watcher`, a thread that hashes the folder's files' sizes
-  and modified times every second, so the editor reads the folder again only when it's changed;
+  they have something, as does the engine's `Watcher` (`project::watch`), looking every second,
+  so the editor reads the folder again only when it's changed;
   the Animation panel asks for frames while a clip plays. Its tests
   (`tests/editor.rs`) drive it through `Simulation`, clicking widgets by label, and copy example
   games to change them; those of luau-lsp, Play and the watcher wait in real time, running frames
@@ -626,7 +641,8 @@ networking or 3D pipelines.
   entirely in Luau, with its computer opponent in `opponent.luau`, played with the keys, the mouse
   or a gamepad, whose stick moves the paddle as fast as it's pushed (`input.axis`). Nothing in it
   is random, and its ball's angles come from `exact`, so the same inputs play the same match on
-  every platform. The sounds and music in
+  every platform. Its `pong` table is plain data, which its `reloading` returns and the reloaded
+  game copies back over a fresh one, so the match carries on as it reloads. The sounds and music in
   `examples/sounds/` were synthesized for `sprites`; `pong`, `rpg` and `shmup` have copies of
   the ones they use, and `rpg`, `shmup`, `garden` and `cellar` copies of the tileset.
   `kenney_prototype-kit/` is Kenney's Prototype Kit (CC0), models for 3D examples, which copy the
@@ -680,7 +696,9 @@ networking or 3D pipelines.
   `physics` module (with the `physics` feature), physics worlds of their nodes, 2D and 3D (bodies
   falling, characters walking, fixed bodies following and placed by turned parents, models' triangles,
   and the errors), and in its
-  `gui` module (with the `egui` feature), their interfaces, clicked by label. A hash of what
+  `gui` module (with the `egui` feature), their interfaces, clicked by label, and in its
+  `reload` module, reloading: changed scripts and assets, what `reloading` keeps, what's reset,
+  failures, settings, and a watching game reloading in real time. A hash of what
   `exact` gives for spreads of arguments is pinned, so CI checks it's the same on Windows and
   Linux.
 - `tests/scene.rs`: tests for scenes loaded to play: finding nodes, transforms, hit testing,
@@ -693,7 +711,7 @@ networking or 3D pipelines.
   it from a file.
 - `tests/pong.rs`: tests for the `pong` example, which check its Luau state by evaluating
   expressions such as `pong.ball.vx` (`Simulation::eval`), and play it with simulated keys, mouse
-  and gamepad. One
+  and gamepad, and reload it mid-match. One
   plays a whole match and checks a hash of it, pinned, so CI checks it's the same to the bit on
   Windows and Linux; a change to how Pong plays changes the hash.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest, using
@@ -820,6 +838,7 @@ cargo run --example sprites
 cargo run --example gui
 cargo run -p wingine-editor -- examples/garden
 cargo run -- examples/pong
+cargo run -- --watch examples/pong
 cargo run -- examples/rpg
 cargo run -- examples/garden
 cargo run -- examples/orchard

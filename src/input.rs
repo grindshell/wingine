@@ -118,6 +118,13 @@ impl Input {
         self.actions.insert(action, binding);
     }
 
+    /// Forgets every action's binding and lets go of any input method, as for a game starting
+    /// again in the same window. What's held stays held.
+    pub(crate) fn clear_bindings(&mut self) {
+        self.actions.clear();
+        self.set_input_method(None);
+    }
+
     /// Whether `key` is down.
     pub fn key_held(&self, key: Key) -> bool {
         self.keys.held.contains(&key)

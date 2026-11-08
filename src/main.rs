@@ -1,10 +1,11 @@
 //! The `wingine` executable, which runs a game written in Luau from its folder:
 //!
 //! ```text
-//! wingine path/to/game
+//! wingine [--watch] path/to/game
 //! ```
 //!
-//! See the `runtime` module for what the folder holds.
+//! With `--watch`, the game reloads whenever a file in its folder changes. See the `runtime`
+//! module for what the folder holds.
 
 use std::process::ExitCode;
 
@@ -13,12 +14,16 @@ fn main() -> ExitCode {
     log::set_logger(&LOGGER).expect("nothing else sets a logger");
     log::set_max_level(log::LevelFilter::Info);
 
-    let mut args = std::env::args_os().skip(1);
-    let (Some(folder), None) = (args.next(), args.next()) else {
-        eprintln!("usage: wingine <game folder>");
-        return ExitCode::FAILURE;
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let result = match args.as_slice() {
+        [flag, folder] if flag == "--watch" => wingine::runtime::run_watching(folder),
+        [folder] if folder != "--watch" => wingine::runtime::run(folder),
+        _ => {
+            eprintln!("usage: wingine [--watch] <game folder>");
+            return ExitCode::FAILURE;
+        }
     };
-    match wingine::runtime::run(folder) {
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("error: {err}");

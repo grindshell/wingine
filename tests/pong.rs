@@ -298,6 +298,37 @@ fn a_match_plays_out_the_same_on_every_platform() {
 }
 
 #[test]
+fn reloading_carries_the_match_on() {
+    let mut simulation = simulation();
+    simulation.tap(Key::Space);
+    simulation.run_for(0.5);
+    simulation.exec("pong.score = { left = 3, right = 1 }");
+    let state = |simulation: &mut Simulation<LuauGame>| {
+        let paddles: (f64, f64) = simulation.eval("pong.left.y, pong.right.y");
+        (
+            ball(simulation),
+            score(simulation),
+            phase(simulation),
+            paddles,
+        )
+    };
+    let before = state(&mut simulation);
+
+    simulation.reload();
+    assert!(simulation.game().error().is_none());
+    assert_eq!(state(&mut simulation), before);
+    // It plays on from there, the computer with it, to the next point.
+    simulation.step();
+    assert_ne!(ball(&mut simulation), before.0, "the ball moves on");
+    assert!(simulation.context().audio().music_playing());
+    assert!(run_until(
+        &mut simulation,
+        10.0,
+        "pong.score.left + pong.score.right == 5"
+    ));
+}
+
+#[test]
 fn music_plays_from_the_start() {
     let mut simulation = simulation();
     simulation.run_for(0.5);

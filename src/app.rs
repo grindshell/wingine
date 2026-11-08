@@ -59,7 +59,7 @@ pub trait Game {
 }
 
 /// Settings for the game window.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WindowConfig {
     pub title: String,
     /// Initial width in logical pixels.

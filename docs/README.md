@@ -25,8 +25,8 @@ Read these in order the first time:
 1. [Quick start](quick-start.md): a game that draws "Hello world", then one that moves.
 2. [Project structure](project-structure.md): what goes in a game's folder, how `main.luau` runs,
    the settings in `conf.luau`, and where native libraries go.
-3. [Running games](running-games.md): running a game, reading its errors and output, checking it
-   without a window, testing it from Rust, and measuring how fast it runs.
+3. [Running games](running-games.md): running a game, reloading it as you work, reading its errors
+   and output, checking it without a window, testing it from Rust, and measuring how fast it runs.
 
 When a game's levels, screens or characters are laid out rather than coded:
 

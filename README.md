@@ -219,7 +219,9 @@ first to 5 points wins.
 Move your paddle, on the left, with W and S, the arrow keys, a gamepad or the mouse. Press Space,
 click, or press a gamepad's A to serve. Hits get faster and blip higher as a rally goes on, and
 sounds pan to where they happen. Nothing in it is random, and its ball's angles come from
-[`exact`](docs/api/exact.md), so the same inputs play the same match on every platform.
+[`exact`](docs/api/exact.md), so the same inputs play the same match on every platform. Run with
+`--watch`, it keeps the match as it reloads, so changing how the computer plays changes it
+mid-rally.
 
 ### Garden
 
@@ -386,7 +388,9 @@ function draw()
 end
 ```
 
-Run it with `cargo run -- path/to/folder`. The engine's API is the global tables `graphics`,
+Run it with `cargo run -- path/to/folder`, or with `cargo run -- --watch path/to/folder` to
+reload it whenever a file in the folder changes, carrying on with whatever the game's `reloading`
+returns. The engine's API is the global tables `graphics`,
 `input`, `audio`, `tilemap`, `grid`, `physics`, `scene`, `ui`, `save` and `window`. [The docs](docs/README.md) cover making a game in
 Luau, from a quick start to native libraries, with a reference to every function and type scripts
 use.

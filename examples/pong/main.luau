@@ -12,7 +12,9 @@
 -- `math`'s, so it plays the same on every platform too. The shake is only for show, so it uses
 -- `math`'s, which are quicker.
 --
--- Run with `cargo run -- examples/pong`.
+-- Run with `cargo run -- examples/pong`. Run with `cargo run -- --watch examples/pong` and the
+-- game reloads whenever its files change, carrying the match on, so changing how the computer
+-- plays in `opponent.luau` changes it mid-rally.
 
 local opponent = require("./opponent")
 local conf = require("./conf")
@@ -186,6 +188,19 @@ pong = {
     shake = 0,
     time = 0,
 }
+
+-- `pong` is plain data, so it's what the game keeps as it reloads. Copying what was kept over the
+-- fresh state keeps fields this version adds that the last didn't have.
+function reloading()
+    return pong
+end
+
+local kept = window.reloaded()
+if kept then
+    for key, value in kept do
+        pong[key] = value
+    end
+end
 
 spawn(opponent.play, pong, WIDTH, HEIGHT)
 

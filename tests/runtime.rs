@@ -3389,3 +3389,243 @@ mod gui {
         assert!(err.contains("destructed"), "{err}");
     }
 }
+
+/// Games reloading in place, as they do watching their folders when a file changes.
+mod reload {
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use super::*;
+
+    /// A scene whose root's props have a `title`.
+    fn titled(title: &str) -> String {
+        format!("return {{ format = 1, props = {{ title = '{title}' }} }}")
+    }
+
+    #[test]
+    fn reloading_runs_the_changed_scripts_and_reads_assets_again() {
+        let folder = game(
+            "reload_changes",
+            &[
+                (
+                    "main.luau",
+                    "value = require('./module').value
+                    room = scene.load('room.scene.luau')",
+                ),
+                ("module.luau", "return { value = 1 }"),
+                ("room.scene.luau", &titled("Old")),
+            ],
+        );
+        let mut simulation = simulation(&folder);
+        simulation.step();
+        assert_eq!(simulation.eval::<f64>("value"), 1.0);
+        assert_eq!(simulation.eval::<String>("room:props().title"), "Old");
+
+        fs::write(folder.join("module.luau"), "return { value = 2 }").unwrap();
+        fs::write(folder.join("room.scene.luau"), titled("New")).unwrap();
+        simulation.reload();
+        assert!(simulation.game().error().is_none());
+        assert_eq!(simulation.eval::<f64>("value"), 2.0);
+        assert_eq!(simulation.eval::<String>("room:props().title"), "New");
+    }
+
+    #[test]
+    fn what_reloading_returns_the_reloaded_game_gets() {
+        let folder = game(
+            "reload_kept",
+            &[(
+                "main.luau",
+                "count = 0
+                started = window.reloaded()
+                function update() count += 1 end
+                function reloading()
+                    return { count = count, name = 'kept', list = { 1, 2 } }
+                end",
+            )],
+        );
+        let mut simulation = simulation(&folder);
+        assert!(
+            simulation.eval::<bool>("started == nil"),
+            "it started fresh"
+        );
+        simulation.run_frames(3);
+
+        simulation.reload();
+        assert_eq!(
+            simulation.eval::<(f64, String, f64, f64)>(
+                "started.count, started.name, started.list[2], count"
+            ),
+            (3.0, "kept".into(), 2.0, 0.0)
+        );
+        // Each call returns a copy of its own.
+        simulation.exec("window.reloaded().count = 99");
+        assert_eq!(simulation.eval::<f64>("window.reloaded().count"), 3.0);
+
+        // A game without `reloading` keeps nothing.
+        fs::write(folder.join("main.luau"), "started = window.reloaded()").unwrap();
+        simulation.reload();
+        simulation.reload();
+        assert!(simulation.eval::<bool>("started == nil"));
+    }
+
+    #[test]
+    fn a_failing_reloading_keeps_nothing() {
+        let folder = game(
+            "reload_failing",
+            &[("main.luau", "function reloading() error('no state') end")],
+        );
+        let mut simulation = simulation(&folder);
+        // Its own `reloading` fails, then the next game's gives what saves can't hold.
+        fs::write(
+            folder.join("main.luau"),
+            "started = window.reloaded()
+            function reloading() return { act = function() end } end",
+        )
+        .unwrap();
+        simulation.reload();
+        assert!(simulation.game().error().is_none());
+        assert!(simulation.eval::<bool>("started == nil"));
+        simulation.reload();
+        assert!(simulation.game().error().is_none());
+        assert!(simulation.eval::<bool>("started == nil"));
+    }
+
+    #[test]
+    fn reloaded_games_start_with_no_sounds_or_bindings() {
+        let folder = game(
+            "reload_reset",
+            &[(
+                "main.luau",
+                "input.bind('jump', { 'Space' })
+                audio.play(audio.load('sounds/blip.wav'))
+                audio.play_music('sounds/blip.wav')",
+            )],
+        );
+        let sounds = folder.join("sounds");
+        fs::create_dir_all(&sounds).unwrap();
+        let blip = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/sounds/blip.wav");
+        fs::copy(blip, sounds.join("blip.wav")).unwrap();
+        let mut simulation = simulation(&folder);
+        simulation.step();
+        assert_eq!(simulation.context().audio().sounds_playing(), 1);
+        assert!(simulation.context().audio().music_playing());
+
+        fs::write(
+            folder.join("main.luau"),
+            "function update() jumping = input.held('jump') end",
+        )
+        .unwrap();
+        simulation.reload();
+        simulation.step();
+        assert_eq!(simulation.context().audio().sounds_playing(), 0);
+        assert!(!simulation.context().audio().music_playing());
+        simulation.hold(Key::Space, 0.1);
+        assert!(!simulation.eval::<bool>("jumping"), "the action is unbound");
+    }
+
+    #[test]
+    fn a_game_stopped_by_an_error_reloads_once_fixed_keeping_its_state() {
+        let folder = game(
+            "reload_fixed",
+            &[(
+                "main.luau",
+                "count = 5
+                function reloading() return { count = count } end
+                function update() error('broken') end",
+            )],
+        );
+        let mut simulation = simulation(&folder);
+        simulation.step();
+        assert!(stopped_with(&simulation).contains("broken"));
+
+        fs::write(
+            folder.join("main.luau"),
+            "count = window.reloaded().count
+            function update() count += 1 end",
+        )
+        .unwrap();
+        simulation.reload();
+        assert!(simulation.game().error().is_none());
+        simulation.step();
+        assert_eq!(simulation.eval::<f64>("count"), 6.0);
+    }
+
+    #[test]
+    fn a_failed_reload_shows_its_error_and_keeps_the_state_for_the_next() {
+        let folder = game(
+            "reload_broken",
+            &[(
+                "main.luau",
+                "count = 7
+                function reloading() return { count = count } end",
+            )],
+        );
+        let mut simulation = simulation(&folder);
+
+        fs::write(folder.join("main.luau"), "count = = 1").unwrap();
+        simulation.reload();
+        let err = stopped_with(&simulation);
+        assert!(err.contains("main.luau"), "{err}");
+        // The old game went with its VM.
+        assert!(simulation.eval::<bool>("count == nil"));
+        simulation.step();
+
+        fs::write(folder.join("main.luau"), "kept = window.reloaded()").unwrap();
+        simulation.reload();
+        assert!(simulation.game().error().is_none());
+        assert_eq!(simulation.eval::<f64>("kept.count"), 7.0);
+    }
+
+    #[test]
+    fn settings_are_read_again_but_the_window_keeps_its_own() {
+        let folder = game(
+            "reload_settings",
+            &[("conf.luau", SMALL_WINDOW), ("main.luau", "")],
+        );
+        let mut simulation = simulation(&folder);
+        fs::write(
+            folder.join("conf.luau"),
+            "return { title = 'Bigger', resolution = { width = 40, height = 40 } }",
+        )
+        .unwrap();
+        simulation.reload();
+        assert!(simulation.game().error().is_none());
+        assert_eq!(
+            simulation.eval::<(f32, f32)>("graphics.size()"),
+            (20.0, 20.0)
+        );
+
+        fs::write(folder.join("conf.luau"), "return { colour = 'red' }").unwrap();
+        simulation.reload();
+        let err = stopped_with(&simulation);
+        assert!(err.contains("conf.luau") && err.contains("colour"), "{err}");
+    }
+
+    #[test]
+    fn watching_games_start_stopped_by_errors_and_reload_as_files_change() {
+        let folder = game(
+            "reload_watching",
+            &[("main.luau", "error('broken at start')")],
+        );
+        let config = runtime::config(&folder).unwrap();
+        let mut simulation = Simulation::new(&config.window, |ctx| {
+            LuauGame::load_watching(ctx, &folder, &config)
+        })
+        .expect("a game that fails to load still starts");
+        assert!(stopped_with(&simulation).contains("broken at start"));
+
+        fs::write(folder.join("main.luau"), "fixed = true").unwrap();
+        let start = Instant::now();
+        while simulation.game().error().is_some() {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "the game never reloaded"
+            );
+            thread::sleep(Duration::from_millis(20));
+            simulation.step();
+        }
+        assert!(simulation.eval::<bool>("fixed"));
+    }
+}

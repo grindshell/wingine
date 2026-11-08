@@ -3,15 +3,8 @@
 use std::{
     collections::HashMap,
     fs,
-    hash::{DefaultHasher, Hash, Hasher},
     path::{Path, PathBuf},
     rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc::{self, RecvTimeoutError, Sender},
-    },
-    thread,
     time::{Duration, SystemTime},
 };
 
@@ -20,11 +13,12 @@ use wingine::{
     graphics::{Mesh, Model, Resolution, Texture},
     runtime::{self, Config},
     scene::{self, Assets, SceneFile, Shape, TilesetFile},
+    watch::Watcher,
 };
 
-/// How deep into the folder's folders the file tree looks.
+/// How deep into the folder's folders the file tree looks, as deep as a [`Watcher`] looks.
 const MAX_DEPTH: usize = 8;
-/// How often a [`Watcher`] looks at the folder's files.
+/// How often the editor's [`Watcher`] looks at the folder's files.
 const WATCH_INTERVAL: Duration = Duration::from_secs(1);
 /// How many meshes of shapes an [`AssetCache`] keeps.
 const MAX_MESHES: usize = 64;
@@ -170,70 +164,11 @@ fn scan(root: &Path, path: &str, depth: usize) -> Vec<Entry> {
 }
 
 /// Watches a game's folder for files changed, added or removed, by the editor or anything else,
-/// from a thread that looks at the files the file tree shows every second, and wakes the editor
-/// when they've changed. So the editor reads the folder again only when it's changed, and
-/// needn't run frames to find out.
-pub struct Watcher {
-    changed: Arc<AtomicBool>,
-    /// Dropped with the watcher, which ends its thread.
-    _stop: Sender<()>,
-}
-
-impl Watcher {
-    /// Watches `folder`, waking the editor with `waker` when it changes.
-    pub fn new(folder: PathBuf, waker: Waker) -> Self {
-        let changed = Arc::new(AtomicBool::new(false));
-        let (stop, stopped) = mpsc::channel();
-        let flag = Arc::clone(&changed);
-        thread::spawn(move || {
-            let mut last = fingerprint(&folder);
-            while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(WATCH_INTERVAL) {
-                let now = fingerprint(&folder);
-                if now != last {
-                    last = now;
-                    flag.store(true, Ordering::Relaxed);
-                    waker.wake();
-                }
-            }
-        });
-        Self {
-            changed,
-            _stop: stop,
-        }
-    }
-
-    /// Whether the folder has changed since this was last asked.
-    pub fn take_changed(&self) -> bool {
-        self.changed.swap(false, Ordering::Relaxed)
-    }
-}
-
-/// A hash of the paths, sizes and modified times of the files and folders the file tree of
-/// `folder` shows, which changes when any of them does.
-fn fingerprint(folder: &Path) -> u64 {
-    fn visit(path: &Path, depth: usize, hasher: &mut DefaultHasher) {
-        let Ok(read) = fs::read_dir(path) else {
-            return;
-        };
-        let mut entries: Vec<_> = read
-            .filter_map(Result::ok)
-            .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
-            .collect();
-        entries.sort_by_key(fs::DirEntry::file_name);
-        for entry in entries {
-            let Ok(meta) = entry.metadata() else {
-                continue;
-            };
-            (depth, entry.file_name()).hash(hasher);
-            (meta.is_dir(), meta.len(), meta.modified().ok()).hash(hasher);
-            if meta.is_dir() && depth < MAX_DEPTH {
-                visit(&entry.path(), depth + 1, hasher);
-            }
-        }
-    }
-    let mut hasher = DefaultHasher::new();
-    visit(folder, 0, &mut hasher);
-    hasher.finish()
+/// looking at the files the file tree shows every second, and waking the editor when they've
+/// changed. So the editor reads the folder again only when it's changed, and needn't run frames
+/// to find out.
+pub fn watch(folder: PathBuf, waker: Waker) -> Watcher {
+    Watcher::new(folder, WATCH_INTERVAL, waker)
 }
 
 /// The images, scene files, tileset files and model files scenes use, each read once and again

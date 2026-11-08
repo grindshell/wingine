@@ -1,6 +1,6 @@
 //! Playing the game being edited, in a process of its own, so a game that fails or hangs can't
 //! take the editor with it. The process is the editor's own executable run with `--run`, which
-//! runs the game as the `wingine` executable would.
+//! runs the game as `wingine --watch` would, so it reloads as the editor saves its files.
 
 use std::{
     ffi::OsStr,

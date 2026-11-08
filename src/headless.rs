@@ -966,6 +966,13 @@ impl Simulation<LuauGame> {
         let source = format!("return {expression}");
         self.game.run_chunk(&mut self.headless.ctx, &source)
     }
+
+    /// Loads the game again from its folder, in its place, as a game watching its folder does
+    /// when a file changes: see [`LuauGame::reload`]. An error loading it stops it, which
+    /// [`LuauGame::error`] tells.
+    pub fn reload(&mut self) {
+        self.game.reload(&mut self.headless.ctx);
+    }
 }
 
 /// A control a [`Simulation`] pressed for an action.

@@ -4,8 +4,9 @@
 //! wingine-editor [path/to/game]
 //! ```
 //!
-//! With `--run path/to/game`, it runs the game instead, as the `wingine` executable does: that's
-//! how the editor's Play runs a game, in a process of its own.
+//! With `--run path/to/game`, it runs the game instead, as `wingine --watch` does, reloading it
+//! whenever a file in its folder changes: that's how the editor's Play runs a game, in a process
+//! of its own, so saving in the editor reloads it.
 
 use std::{path::PathBuf, process::ExitCode};
 
@@ -19,7 +20,7 @@ fn main() -> ExitCode {
 
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let result = match args.as_slice() {
-        [flag, folder] if flag == "--run" => wingine::runtime::run(folder),
+        [flag, folder] if flag == "--run" => wingine::runtime::run_watching(folder),
         [] => run(None),
         [folder] => run(Some(PathBuf::from(folder))),
         _ => {
