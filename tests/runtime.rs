@@ -3604,6 +3604,22 @@ mod reload {
     }
 
     #[test]
+    fn games_showing_errors_start_stopped_by_them() {
+        let folder = game(
+            "showing_errors",
+            &[("main.luau", "error('broken at start')")],
+        );
+        let config = runtime::config(&folder).unwrap();
+        let mut simulation = Simulation::new(&config.window, |ctx| {
+            LuauGame::load_showing_errors(ctx, &folder, &config)
+        })
+        .expect("a game that fails to load still starts");
+        assert!(stopped_with(&simulation).contains("broken at start"));
+        simulation.step();
+        assert!(stopped_with(&simulation).contains("broken at start"));
+    }
+
+    #[test]
     fn watching_games_start_stopped_by_errors_and_reload_as_files_change() {
         let folder = game(
             "reload_watching",

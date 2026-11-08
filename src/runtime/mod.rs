@@ -324,8 +324,15 @@
 //! unload, but each reload gives them new state. A game that fails to load, as it starts or as it
 //! reloads, shows the error in the window and loads again at the next change, keeping for it what
 //! `reloading` returned before.
+//!
+//! A game ships as the folder [`export`] makes: the executable, named for the game, beside the
+//! game's folder, called `game`. Started without a folder, as a double-click starts it, the
+//! executable runs that one ([`shipped_game`], [`run_shipped`]), and shows any error loading it,
+//! or reading its `conf.luau`, in its window, since players have no console to read it in.
 
 mod audio;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod export;
 mod graphics;
 mod grid;
 #[cfg(feature = "egui")]
@@ -410,6 +417,52 @@ pub fn run_watching(folder: impl AsRef<Path>) -> Result<()> {
     let config = config(&folder)?;
     crate::run(config.window.clone(), move |ctx| {
         LuauGame::load_watching(ctx, &folder, &config)
+    })
+}
+
+/// The folder beside the executable that it runs when it's started without one: see
+/// [`shipped_game`].
+pub const SHIPPED_FOLDER: &str = "game";
+
+/// The game shipped with the running executable, as [`export`] lays it out: the folder called
+/// `game` beside it, whatever the executable is called, if there's one.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn shipped_game() -> Option<PathBuf> {
+    game_beside(&std::env::current_exe().ok()?)
+}
+
+/// The folder called `game` beside `executable`, if there's one.
+#[cfg(not(target_arch = "wasm32"))]
+fn game_beside(executable: &Path) -> Option<PathBuf> {
+    let folder = executable.parent()?.join(SHIPPED_FOLDER);
+    folder.is_dir().then_some(folder)
+}
+
+/// Runs the Luau game in `folder` until its window is closed, as a game shipped to players runs,
+/// started without a console to print to: an error loading it shows in its window, as
+/// [`LuauGame::load_showing_errors`] shows it, and so does one reading its `conf.luau`, in a
+/// window with the default settings.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_shipped(folder: impl AsRef<Path>) -> Result<()> {
+    let folder = folder.as_ref().to_owned();
+    let (config, problem) = match config(&folder) {
+        Ok(config) => (config, None),
+        Err(err) => {
+            let mut window = WindowConfig::default();
+            if let Some(name) = folder_name(&folder) {
+                window.identity = identity(&name);
+                window.title = name;
+            }
+            let config = Config {
+                window,
+                libraries: Vec::new(),
+            };
+            (config, Some(err))
+        }
+    };
+    crate::run(config.window.clone(), move |ctx| match problem {
+        Some(err) => LuauGame::stopped(ctx, &folder, &config, err),
+        None => LuauGame::load_showing_errors(ctx, &folder, &config),
     })
 }
 
@@ -608,6 +661,18 @@ impl LuauGame {
         Self::load_keeping(ctx, folder.as_ref(), config, None)
     }
 
+    /// Loads the game in `folder` as [`LuauGame::load_with`] does, but if that fails, returns a
+    /// game stopped by the error, which shows it in the window, as one stopped as it plays does.
+    /// Only failing to make a VM at all is an error.
+    pub fn load_showing_errors(
+        ctx: &mut Context,
+        folder: impl AsRef<Path>,
+        config: &Config,
+    ) -> Result<Self> {
+        let folder = folder.as_ref();
+        Self::load_with(ctx, folder, config).or_else(|err| Self::stopped(ctx, folder, config, err))
+    }
+
     /// Loads the game in `folder` as [`LuauGame::load_with`] does, then [reloads](Self::reload)
     /// it whenever a file in the folder changes, looking every quarter second. An error loading
     /// it, now or as it reloads, shows in the window, as one that stops it as it plays does, until
@@ -619,10 +684,7 @@ impl LuauGame {
         config: &Config,
     ) -> Result<Self> {
         let folder = folder.as_ref();
-        let mut game = match Self::load_with(ctx, folder, config) {
-            Ok(game) => game,
-            Err(err) => Self::stopped(ctx, folder, config, err)?,
-        };
+        let mut game = Self::load_showing_errors(ctx, folder, config)?;
         let watcher = Watcher::new(folder.to_owned(), WATCH_INTERVAL, ctx.waker());
         game.watcher = Some(watcher);
         Ok(game)

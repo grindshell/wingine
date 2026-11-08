@@ -391,8 +391,9 @@ end
 Run it with `cargo run -- path/to/folder`, or with `cargo run -- --watch path/to/folder` to
 reload it whenever a file in the folder changes, carrying on with whatever the game's `reloading`
 returns. Tests in files named `*.test.luau` drive the game as a player would and check its state
-and screenshots, which `cargo run -- test path/to/folder` runs without a window. The engine's API
-is the global tables `graphics`,
+and screenshots, which `cargo run -- test path/to/folder` runs without a window, and
+`cargo run --release -- export path/to/folder dist/game` makes a folder to ship, which players
+start by double-clicking its executable. The engine's API is the global tables `graphics`,
 `input`, `audio`, `tilemap`, `grid`, `physics`, `scene`, `ui`, `save` and `window`. [The docs](docs/README.md) cover making a game in
 Luau, from a quick start to native libraries, with a reference to every function and type scripts
 use.

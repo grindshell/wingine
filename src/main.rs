@@ -1,21 +1,27 @@
-//! The `wingine` executable, which runs a game written in Luau from its folder, or its tests:
+//! The `wingine` executable, which runs a game written in Luau from its folder, its tests, or
+//! exports it to ship:
 //!
 //! ```text
 //! wingine [--watch] path/to/game
 //! wingine test [--update] path/to/game [filter]
+//! wingine export path/to/game path/to/out
+//! wingine
 //! ```
 //!
 //! With `--watch`, the game reloads whenever a file in its folder changes. `test` runs the tests
 //! in its `*.test.luau` files, or those whose files and names contain `filter`, and with
-//! `--update`, saves screenshots that don't match as their references. See the `runtime` module
-//! for what the folder holds, and `runtime::testing` for tests.
+//! `--update`, saves screenshots that don't match as their references. `export` makes a folder to
+//! ship, whose executable, a copy of this one, runs the game beside it when it's started with
+//! nothing, as by double-clicking. See the `runtime` module for what the folder holds,
+//! `runtime::testing` for tests, and `runtime::export` for exports.
 
 use std::{ffi::OsString, path::Path, process::ExitCode};
 
-use wingine::runtime::testing;
+use wingine::runtime::{self, testing};
 
-const USAGE: &str =
-    "usage: wingine [--watch] <game folder>\n       wingine test [--update] <game folder> [filter]";
+const USAGE: &str = "usage: wingine [--watch] <game folder>
+       wingine test [--update] <game folder> [filter]
+       wingine export <game folder> <out folder>";
 
 fn main() -> ExitCode {
     static LOGGER: Logger = Logger;
@@ -24,10 +30,19 @@ fn main() -> ExitCode {
 
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let result = match args.as_slice() {
-        // A game in a folder called `test` runs as `wingine ./test`.
+        // As a game shipped to players starts, by double-clicking it.
+        [] => match runtime::shipped_game() {
+            Some(game) => runtime::run_shipped(game),
+            None => {
+                eprintln!("{USAGE}");
+                return ExitCode::FAILURE;
+            }
+        },
+        // A game in a folder called `test` or `export` runs as `wingine ./test`.
         [command, rest @ ..] if command == "test" && !rest.is_empty() => return test(rest),
-        [flag, folder] if flag == "--watch" => wingine::runtime::run_watching(folder),
-        [folder] if folder != "--watch" => wingine::runtime::run(folder),
+        [command, game, out] if command == "export" => return export(game, out),
+        [flag, folder] if flag == "--watch" => runtime::run_watching(folder),
+        [folder] if folder != "--watch" => runtime::run(folder),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::FAILURE;
@@ -35,6 +50,35 @@ fn main() -> ExitCode {
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("error: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Exports the game in `game` to the folder `out` with this executable, as `wingine export`
+/// does, saying what it made and what might be wrong with it.
+fn export(game: &OsString, out: &OsString) -> ExitCode {
+    let exported = std::env::current_exe()
+        .map_err(|err| format!("can't find this executable to copy: {err}"))
+        .and_then(|executable| {
+            runtime::export::export(game, out, executable).map_err(|err| err.to_string())
+        });
+    match exported {
+        Ok(exported) => {
+            for warning in &exported.warnings {
+                eprintln!("warning: {warning}");
+            }
+            println!(
+                "exported {} to {}, {} files of the game: players start {}",
+                Path::new(game).display(),
+                exported.folder.display(),
+                exported.files,
+                exported.executable.display()
+            );
+            ExitCode::SUCCESS
+        }
         Err(err) => {
             eprintln!("error: {err}");
             ExitCode::FAILURE

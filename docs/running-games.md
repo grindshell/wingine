@@ -27,10 +27,7 @@ cargo install --path .
 wingine path/to/game
 ```
 
-To ship a game, build the executable with `cargo build --release`, which leaves it in
-`target/release/` as `wingine.exe` on Windows and `wingine` elsewhere, and ship it with the game's
-folder. Start it with the folder's path, such as from a shortcut or a small launch script. Build
-the executable, and any native libraries, on each platform the game runs on.
+To ship a game to players, export it: see [Shipping a game](#shipping-a-game).
 
 The window closes, and the game ends, when the player closes it, unless the game's
 [`close_requested`](api/globals.md#close_requested) asks first, or when a script calls
@@ -474,3 +471,40 @@ than recording the sprite it draws, so:
   texture into one draw call.
 - For tens of thousands of sprites, draw them from a [native library](native-libraries.md), which
   can hand the engine all of them in one call.
+
+## Shipping a game
+
+`wingine export` makes a folder to ship, which players open by double-clicking one file, for the
+platform it runs on. Export with a release build, since a debug build runs games far slower:
+
+```bash
+cargo run --release -- export path/to/game dist/my-game
+```
+
+```text
+dist/my-game/
+├── my-game.exe     wingine, named by the game's identity (no .exe on Linux)
+├── game/           the game's folder, without its tests (*.test.luau) or
+│                   hidden files and folders (.luaurc, .test-output)
+└── licenses/       wingine's licenses, and those of the crates it's built of
+```
+
+The executable, started without a game's folder, as a double-click starts it, runs the folder
+called `game` beside it. Players see any error loading the game in its window rather than in a
+console, which they don't have: one in `main.luau`, or in `conf.luau`, shown in a window with the
+default settings. On Windows the exported executable opens no console window behind the game,
+and prints nothing; the `wingine` you run in a terminal still does.
+
+Zip the folder and ship it. It runs on the platform it was exported on, so export on each one the
+game ships for, with any [native libraries](native-libraries.md) the game loads built there in
+its `native` folder; `export` warns about a library the game needs that isn't. An export goes into
+a new or empty folder, never over anything.
+
+`licenses/` holds wingine's licenses, which a game built on it ships, and
+`THIRD-PARTY-NOTICES.txt`, those of the crates wingine is built of, copied from beside the
+executable. The [release archives](https://github.com/grindshell/wingine/releases) have it there;
+for a wingine built from
+source, `export` warns that it isn't, and the repository's `.github/workflows/release.yml` shows
+how `cargo about` makes it.
+
+On macOS, an export is the same folder, not an app bundle.

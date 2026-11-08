@@ -432,7 +432,20 @@ networking or 3D pipelines.
   Models stay out of the ABI.
 - `src/main.rs`: the `wingine` executable, which runs a Luau game: `cargo run -- examples/pong`,
   or with `--watch`, reloading it as its files change; `wingine test [--update] <folder>
-  [filter]` runs its tests, printing them as `cargo test` does.
+  [filter]` runs its tests, printing them as `cargo test` does; `wingine export <folder> <out>`
+  exports it; and with no arguments, it runs the `game` folder beside it
+  (`runtime::shipped_game`) with `runtime::run_shipped`, which shows errors loading the game, or
+  reading its `conf.luau` (in a window of the default settings), in its window
+  (`LuauGame::load_showing_errors`, which `load_watching` uses too).
+- `src/runtime/export.rs`: `runtime::export`, a folder to ship: the given executable (the CLI's
+  own) copied as the game's identity, beside the game's folder copied as `game/` without hidden
+  entries or `*.test.luau` (skipping the output folder if it's inside), and `licenses/` (the
+  engine's two, built in with `include_str!`, and `THIRD-PARTY-NOTICES.txt` if it's beside the
+  executable). On Windows the copy's PE header is patched to the GUI subsystem
+  (`gui_subsystem`), so it opens no console. It refuses a game with no `main.luau` or settings that
+  don't read, and an output folder that isn't empty, and warns of a debug build, missing notices
+  and native libraries the game needs that aren't built. Its unit tests export a game with the
+  test executable; `tests/export.rs` runs the exported executable end to end.
 - `src/runtime/testing.rs`: `runtime::testing`, Luau games' own tests, in `*.test.luau` files
   anywhere in their folders (not hidden ones), whose module docs are the reference for writing
   them. `run` runs each test against a fresh `Simulation` of the game (the first one loaded also
@@ -711,6 +724,10 @@ networking or 3D pipelines.
   editor. Check their examples by running them headlessly.
 - `tests/screenshots.rs`: screenshot tests, with reference images in `tests/screenshots/`.
 - `tests/simulation.rs`: tests for `Simulation` and scripted runs.
+- `tests/export.rs`: tests for exports, end to end: `wingine export` of a small game, then the
+  exported executable started with no arguments and `WINGINE_SCRIPT` set, checking from its
+  screenshot that it found and ran the game beside it, or showed the error loading it or its
+  settings; and an output folder in use refused.
 - `tests/testing.rs`: tests for `runtime::testing`, with small games and their tests written to
   temporary folders: finding and reporting tests, each starting afresh, reading the game's state
   as it is, waits and input, the game stopping and time limits, refused requests, files that don't
@@ -869,6 +886,7 @@ cargo run -p wingine-editor -- examples/garden
 cargo run -- examples/pong
 cargo run -- --watch examples/pong
 cargo run -- test examples/pong
+cargo run --release -- export examples/pong target/export/pong
 cargo run -- examples/rpg
 cargo run -- examples/garden
 cargo run -- examples/orchard

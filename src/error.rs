@@ -74,6 +74,9 @@ pub enum Error {
     /// A native library failed to load, or one of its hooks failed.
     #[error("native library `{name}`: {message}")]
     NativeLibrary { name: String, message: String },
+    /// A game couldn't be exported to ship.
+    #[error("can't export {}: {message}", .game.display())]
+    Export { game: PathBuf, message: String },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

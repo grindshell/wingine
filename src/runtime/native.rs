@@ -62,7 +62,7 @@ pub fn link_library(name: &str, library: abi::Library) {
 }
 
 /// Where the game in `folder` keeps the library `name`.
-fn library_path(folder: &Path, name: &str) -> PathBuf {
+pub(super) fn library_path(folder: &Path, name: &str) -> PathBuf {
     folder
         .join("native")
         .join(format!("{DLL_PREFIX}{name}{DLL_SUFFIX}"))
