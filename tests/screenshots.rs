@@ -16,7 +16,7 @@ use wingine::{
     Context,
     graphics::{
         Camera, Camera3d, Canvas, Color, Lighting, Mesh, MeshData, MeshVertex, Model, Resolution,
-        SpriteSheet, Texture, View3d,
+        Scaling, SpriteSheet, Texture, View3d,
     },
     headless::{Comparison, Headless, Image},
     math::{Affine, Affine3, Rect},
@@ -766,6 +766,63 @@ fn fixed_resolution() {
         })
         .unwrap();
     assert_screenshot(&headless.adapter_name(), "fixed_resolution", frame);
+}
+
+/// What the scaled fixed resolutions draw on their 30x15 canvas: single texels, which show how
+/// each is scaled, along its edges and in a checkerboard.
+fn draw_scaled(canvas: &mut Canvas) {
+    assert_eq!((canvas.width(), canvas.height()), (30.0, 15.0));
+    canvas.clear(Color::rgb8(0x20, 0x30, 0x60));
+    for x in (0..30).step_by(2) {
+        canvas.fill_rect(Rect::new(x as f32, 0.0, 1.0, 1.0), Color::WHITE);
+    }
+    canvas.fill_rect(
+        Rect::new(0.0, 14.0, 30.0, 1.0),
+        Color::rgb8(0xf0, 0xc0, 0x30),
+    );
+    canvas.fill_rect(
+        Rect::new(29.0, 0.0, 1.0, 15.0),
+        Color::rgb8(0x30, 0xa0, 0xf0),
+    );
+    for y in 4..10 {
+        for x in (6 + y % 2..14).step_by(2) {
+            canvas.fill_rect(Rect::new(x as f32, y as f32, 1.0, 1.0), Color::RED);
+        }
+    }
+}
+
+/// A fixed resolution fitted to the frame keeping its shape, by any scale: 7/3 fills a 70x60
+/// frame across, between bars above and below, its texels 2 and 3 pixels square. Scales whose
+/// fractions have odd denominators put no pixel's middle on the edge between texels, where GPUs
+/// would pick either.
+#[test]
+fn fixed_resolution_fit() {
+    let mut headless = headless();
+    headless.set_resolution(Resolution::Fixed {
+        width: 30,
+        height: 15,
+    });
+    headless.context().set_scaling(Scaling::Fit);
+    let frame = headless.render(70, 60, draw_scaled).unwrap();
+    assert_screenshot(&headless.adapter_name(), "fixed_resolution_fit", frame);
+}
+
+/// A fixed resolution stretched to fill the frame both ways: 7/3 across and 8/3 down a 70x40
+/// frame, with no bars.
+#[test]
+fn fixed_resolution_stretched() {
+    let mut headless = headless();
+    headless.set_resolution(Resolution::Fixed {
+        width: 30,
+        height: 15,
+    });
+    headless.context().set_scaling(Scaling::Stretch);
+    let frame = headless.render(70, 40, draw_scaled).unwrap();
+    assert_screenshot(
+        &headless.adapter_name(),
+        "fixed_resolution_stretched",
+        frame,
+    );
 }
 
 /// World drawing through a zoomed camera held inside its bounds, then a HUD in canvas pixels.

@@ -7,8 +7,8 @@ use std::{
 };
 
 use wingine::{
-    Error,
-    graphics::Resolution,
+    Error, Fullscreen,
+    graphics::{Resolution, Scaling},
     headless::Simulation,
     input::{GamepadButton, Key, MouseButton, Stick},
     runtime::{self, LibraryConfig, LuauGame},
@@ -60,7 +60,9 @@ fn settings_come_from_conf_luau() {
                 width = 640,
                 height = 480,
                 resizable = false,
+                fullscreen = 'exclusive',
                 resolution = { width = 160, height = 120 },
+                scaling = 'stretch',
                 vsync = false,
                 update_rate = 60,
                 debug_key = 'F3',
@@ -74,6 +76,8 @@ fn settings_come_from_conf_luau() {
     assert_eq!(window.title, "Settings");
     assert_eq!([window.width, window.height], [640, 480]);
     assert!(!window.resizable);
+    assert_eq!(window.fullscreen, Fullscreen::Exclusive);
+    assert_eq!(window.scaling, Scaling::Stretch);
     assert!(!window.vsync);
     assert_eq!(window.update_rate, Some(60.0));
     assert_eq!(window.debug_key, Some(Key::F3));
@@ -102,6 +106,8 @@ fn without_settings_the_title_is_the_folders_name() {
     assert_eq!(config.window.title, "untitled");
     assert_eq!(config.window.identity, "untitled");
     assert_eq!(config.window.resolution, Resolution::Window);
+    assert_eq!(config.window.fullscreen, Fullscreen::Off);
+    assert_eq!(config.window.scaling, Scaling::Whole);
     assert!(config.window.vsync);
     assert_eq!(config.window.update_rate, None);
     assert!(config.libraries.is_empty());
@@ -111,6 +117,69 @@ fn without_settings_the_title_is_the_folders_name() {
     let config = runtime::config(&folder).unwrap();
     assert_eq!(config.window.title, "Café Quest 2!");
     assert_eq!(config.window.identity, "Caf__Quest_2_");
+}
+
+#[test]
+fn games_cover_the_screen_and_scale_as_they_say() {
+    let folder = game(
+        "fullscreen",
+        &[
+            (
+                "conf.luau",
+                "return { fullscreen = 'borderless', resolution = { width = 20, height = 20 } }",
+            ),
+            (
+                "main.luau",
+                "opened = { window.fullscreen(), window.scaling() }
+                function draw()
+                    local _, err = pcall(window.set_fullscreen, 'exclusive')
+                    drawing = tostring(err)
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    assert_eq!(
+        simulation.eval::<(String, String)>("opened[1], opened[2]"),
+        ("borderless".into(), "whole".into())
+    );
+    simulation.exec("window.set_fullscreen('exclusive')");
+    assert_eq!(simulation.context().fullscreen(), Fullscreen::Exclusive);
+    assert_eq!(
+        simulation.eval::<String>("window.fullscreen()"),
+        "exclusive"
+    );
+    simulation.exec("window.set_fullscreen(nil)");
+    assert_eq!(simulation.context().fullscreen(), Fullscreen::Off);
+    assert!(simulation.eval::<bool>("window.fullscreen() == nil"));
+    simulation.exec("window.set_fullscreen('borderless') window.set_fullscreen(false)");
+    assert_eq!(simulation.context().fullscreen(), Fullscreen::Off);
+
+    simulation.exec("window.set_scaling('fit')");
+    assert_eq!(simulation.context().scaling(), Scaling::Fit);
+    assert_eq!(simulation.eval::<String>("window.scaling()"), "fit");
+
+    // Not while the game draws, and only as there are.
+    simulation.step();
+    let drawing: String = simulation.eval("drawing");
+    assert!(drawing.contains("not in `draw`"), "{drawing}");
+    assert_eq!(simulation.context().fullscreen(), Fullscreen::Off);
+    let err = simulation
+        .try_exec("window.set_scaling('smooth')")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains(r#"expected "whole", "fit" or "stretch""#),
+        "{err}"
+    );
+    let err = simulation
+        .try_exec("window.set_fullscreen('windowed')")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains(r#"expected "borderless", "exclusive" or nil"#),
+        "{err}"
+    );
 }
 
 #[test]
@@ -214,6 +283,21 @@ fn unknown_or_invalid_settings_are_errors() {
             "identity",
             "return { identity = '../elsewhere' }",
             "`identity`: runtime error: use only letters, digits",
+        ),
+        (
+            "fullscreen",
+            "return { fullscreen = true }",
+            r#"expected "borderless", "exclusive" or nil"#,
+        ),
+        (
+            "scaling_name",
+            "return { resolution = { width = 10, height = 10 }, scaling = 'pixel' }",
+            r#"expected "whole", "fit" or "stretch""#,
+        ),
+        (
+            "scaling_without_resolution",
+            "return { scaling = 'fit' }",
+            "`scaling`: it scales a fixed `resolution`, and there's none",
         ),
     ] {
         let folder = game(test, &[("conf.luau", conf)]);

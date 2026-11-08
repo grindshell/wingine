@@ -31,6 +31,16 @@ type GamepadButton = string
 --- A direction on the grid.
 type Direction = "up" | "down" | "left" | "right"
 
+--- How a window covers the screen: `"borderless"`, a window without borders covering it, or
+--- `"exclusive"`, the screen given over to the game at a video mode of its own. Nil where these
+--- take one is a window of its own size.
+type Fullscreen = "borderless" | "exclusive"
+
+--- How a fixed resolution fills the window: `"whole"`, scaled up by the largest whole number that
+--- fits, with black bars; `"fit"`, as large as fits keeping its shape, filling the window's height
+--- or width; or `"stretch"`, filling it both ways.
+type Scaling = "whole" | "fit" | "stretch"
+
 --- How `audio.play` plays a sound.
 type PlaySettings = {
     --- Linear volume: 1 is as recorded. By default, 1.
@@ -975,6 +985,22 @@ declare window: {
     --- Returns a copy of what the game before this one returned from its `reloading`, if the
     --- game was reloaded, or nil. Works at any time.
     reloaded: () -> any,
+    --- Returns how the window covers the screen, or nil if it's a window of its own size: as it
+    --- opened, as the game last set it, or as the player changed it through the system. A window
+    --- that couldn't be exclusive is borderless. Works while the game loads, in `update`, `gui`
+    --- and `close_requested`.
+    fullscreen: () -> Fullscreen?,
+    --- Makes the window cover the screen as `mode` says, or a window of its own size again for
+    --- nil, once the frame has drawn. Works while the game loads, in `update`, `gui` and
+    --- `close_requested`.
+    set_fullscreen: (mode: Fullscreen?) -> (),
+    --- Returns how a fixed resolution fills the window. Works while the game loads, in `update`,
+    --- `gui` and `close_requested`.
+    scaling: () -> Scaling,
+    --- Scales a fixed resolution to the window by `scaling`, from the frame that draws next. It
+    --- changes nothing without one. Works while the game loads, in `update`, `gui` and
+    --- `close_requested`.
+    set_scaling: (scaling: Scaling) -> (),
 }
 
 --- Math functions that give the same bits on every platform, unlike `math`'s, which come from the

@@ -11,6 +11,7 @@ use winit::{
     event::{ElementState, Ime, KeyEvent, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{self, ModifiersState, NamedKey, PhysicalKey},
+    monitor::{MonitorHandle, VideoModeHandle},
     window::{Window, WindowId},
 };
 
@@ -19,10 +20,9 @@ use crate::{
     audio::Audio,
     gamepads::Gamepads,
     graphics::{
-        Canvas, Resolution,
+        Canvas, Resolution, Scaling,
         gpu::Gpu,
         renderer::Renderer,
-        screen::Screen,
         surface::{Acquired, WindowSurface},
     },
     input::{Key, MouseButton},
@@ -67,8 +67,15 @@ pub struct WindowConfig {
     /// Initial height in logical pixels.
     pub height: u32,
     pub resizable: bool,
+    /// Whether the window opens covering the screen. The game changes it with
+    /// [`Context::set_fullscreen`].
+    pub fullscreen: Fullscreen,
     /// The size of the canvas the game draws on.
     pub resolution: Resolution,
+    /// How a fixed resolution fills the window, and the screen when the window covers it. The
+    /// game changes it with [`Context::set_scaling`]. Without a fixed resolution, it changes
+    /// nothing.
+    pub scaling: Scaling,
     /// Whether frames wait for the display's refresh. Without vsync, frames come as fast as the
     /// game can make them (and may tear), which shows how much time a frame really takes.
     pub vsync: bool,
@@ -100,13 +107,44 @@ impl Default for WindowConfig {
             width: 1280,
             height: 720,
             resizable: true,
+            fullscreen: Fullscreen::Off,
             resolution: Resolution::Window,
+            scaling: Scaling::Whole,
             vsync: true,
             update_rate: None,
             debug_key: None,
             redraw: Redraw::Continuously,
             identity: "wingine".into(),
             save_folder: None,
+        }
+    }
+}
+
+/// Whether a window covers the screen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Fullscreen {
+    /// A window of its own size, with the system's title bar and borders.
+    #[default]
+    Off,
+    /// A window without borders covering the screen it's on, at the screen's own resolution.
+    /// The system goes on showing other windows and notifications over it, and switches away
+    /// from it at once, so it's what players mostly want.
+    Borderless,
+    /// The screen given over to the game, as old games had it, at a video mode of the screen's:
+    /// its own size and refresh rate, if it has a mode of them, or else the largest and fastest.
+    /// Switching to it and away from it can take a moment, as the display changes mode. Where
+    /// the system has no such thing, as on Wayland and the web, it's borderless.
+    Exclusive,
+}
+
+impl Fullscreen {
+    /// The mode's name in Luau and in `conf.luau`: `"borderless"` or `"exclusive"`, or none
+    /// for a window of its own size, which is nil there.
+    pub fn name(self) -> Option<&'static str> {
+        match self {
+            Self::Off => None,
+            Self::Borderless => Some("borderless"),
+            Self::Exclusive => Some("exclusive"),
         }
     }
 }
@@ -515,6 +553,10 @@ where
             }
             WindowEvent::Resized(size) => {
                 state.surface.resize(&state.ctx.gpu, size);
+                // Covering the screen or leaving it resizes the window, whether the game asked
+                // for it or the player did, through the system.
+                state.fullscreen = from_winit(state.window.fullscreen());
+                state.ctx.fullscreen = state.fullscreen;
                 state.window.request_redraw();
             }
             WindowEvent::KeyboardInput {
@@ -559,6 +601,8 @@ where
                 state.frame();
                 if state.ctx.quit {
                     event_loop.exit();
+                } else if state.ctx.fullscreen != state.fullscreen {
+                    state.set_fullscreen(state.ctx.fullscreen);
                 }
             }
             _ => {}
@@ -602,8 +646,12 @@ fn changes_frame(event: &WindowEvent) -> bool {
 
 struct State<G> {
     window: Arc<Window>,
+    /// Whether the window covers the screen, as it was last made to or last said it did after a
+    /// resize. The game's wish, [`Context::fullscreen`], is compared with it after each frame.
+    fullscreen: Fullscreen,
+    /// Whether the system can give the screen over to the game, for [`Fullscreen::Exclusive`].
+    exclusive: bool,
     surface: WindowSurface,
-    screen: Screen,
     ctx: Context,
     canvas: Canvas,
     game: G,
@@ -638,7 +686,8 @@ fn create_window(
 ) -> Result<(Arc<Window>, wgpu::Instance, wgpu::Surface<'static>)> {
     let attributes = Window::default_attributes()
         .with_title(&config.title)
-        .with_resizable(config.resizable);
+        .with_resizable(config.resizable)
+        .with_fullscreen(opening_fullscreen(event_loop, config));
     #[cfg(not(target_arch = "wasm32"))]
     let attributes =
         attributes.with_inner_size(winit::dpi::LogicalSize::new(config.width, config.height));
@@ -664,10 +713,117 @@ fn create_window(
     Ok((window, instance, surface))
 }
 
+/// How the game's window covers the screen as it opens, on the main screen, as winit has it.
+fn opening_fullscreen(
+    event_loop: &ActiveEventLoop,
+    config: &WindowConfig,
+) -> Option<winit::window::Fullscreen> {
+    to_winit(
+        config.fullscreen,
+        event_loop.primary_monitor(),
+        has_exclusive_fullscreen(event_loop),
+    )
+}
+
+/// Whether the system can give the screen over to a game: Wayland can't.
+#[cfg(all(
+    unix,
+    not(target_vendor = "apple"),
+    not(target_os = "android"),
+    not(target_os = "emscripten"),
+    not(target_os = "redox")
+))]
+fn has_exclusive_fullscreen(event_loop: &ActiveEventLoop) -> bool {
+    use winit::platform::wayland::ActiveEventLoopExtWayland;
+    !event_loop.is_wayland()
+}
+
+/// Whether the system can give the screen over to a game. Where it can't, as on the web, its
+/// screens have no video modes.
+#[cfg(not(all(
+    unix,
+    not(target_vendor = "apple"),
+    not(target_os = "android"),
+    not(target_os = "emscripten"),
+    not(target_os = "redox")
+)))]
+fn has_exclusive_fullscreen(_: &ActiveEventLoop) -> bool {
+    true
+}
+
+/// `fullscreen` as winit has it, on `monitor`: exclusive at the [video mode](video_mode) it picks,
+/// if the system has `exclusive` fullscreen and the monitor a mode, or else borderless.
+fn to_winit(
+    fullscreen: Fullscreen,
+    monitor: Option<MonitorHandle>,
+    exclusive: bool,
+) -> Option<winit::window::Fullscreen> {
+    use winit::window::Fullscreen as Winit;
+    match fullscreen {
+        Fullscreen::Off => None,
+        Fullscreen::Borderless => Some(Winit::Borderless(monitor)),
+        Fullscreen::Exclusive => {
+            let mode = monitor.as_ref().filter(|_| exclusive).and_then(video_mode);
+            Some(mode.map_or(Winit::Borderless(monitor), Winit::Exclusive))
+        }
+    }
+}
+
+/// How winit says a window covers the screen.
+fn from_winit(fullscreen: Option<winit::window::Fullscreen>) -> Fullscreen {
+    match fullscreen {
+        None => Fullscreen::Off,
+        Some(winit::window::Fullscreen::Borderless(_)) => Fullscreen::Borderless,
+        Some(winit::window::Fullscreen::Exclusive(_)) => Fullscreen::Exclusive,
+    }
+}
+
+/// The video mode of `monitor` that exclusive fullscreen uses, as [`best_video_mode`] picks it.
+fn video_mode(monitor: &MonitorHandle) -> Option<VideoModeHandle> {
+    let modes: Vec<VideoModeHandle> = monitor.video_modes().collect();
+    let size = monitor.size();
+    let best = best_video_mode(
+        modes.iter().map(|mode| {
+            let size = mode.size();
+            (
+                [size.width, size.height],
+                mode.refresh_rate_millihertz(),
+                mode.bit_depth(),
+            )
+        }),
+        [size.width, size.height],
+        monitor.refresh_rate_millihertz(),
+    )?;
+    modes.into_iter().nth(best)
+}
+
+/// Which of a screen's video modes exclusive fullscreen uses, given each mode's size, refresh rate
+/// in millihertz and bits a pixel: one of the screen's own `size`, and its `refresh` rate, as far
+/// as it has them, so the display changes as little as it can; then the largest, the fastest and
+/// the deepest.
+fn best_video_mode(
+    modes: impl IntoIterator<Item = ([u32; 2], u32, u16)>,
+    size: [u32; 2],
+    refresh: Option<u32>,
+) -> Option<usize> {
+    modes
+        .into_iter()
+        .enumerate()
+        .max_by_key(|&(_, (mode_size, mode_refresh, depth))| {
+            (
+                mode_size == size,
+                Some(mode_refresh) == refresh,
+                u64::from(mode_size[0]) * u64::from(mode_size[1]),
+                mode_refresh,
+                depth,
+            )
+        })
+        .map(|(index, _)| index)
+}
+
 impl<G: Game> State<G> {
     /// Builds the game in `window`, which [`create_window`] opened with `surface`, once `gpu` has
-    /// been found for it. Only egui needs `event_loop`.
-    #[cfg_attr(not(feature = "egui"), expect(unused_variables))]
+    /// been found for it.
     fn new(
         event_loop: &ActiveEventLoop,
         config: &WindowConfig,
@@ -688,10 +844,16 @@ impl<G: Game> State<G> {
         if config.redraw == Redraw::OnDemand {
             *lock(&ctx.redraws.proxy) = Some(proxy);
         }
+        // As the window opened, falling back from exclusive as it did.
+        let fullscreen = from_winit(opening_fullscreen(event_loop, config));
+        ctx.fullscreen = fullscreen;
         // The game is built knowing the canvas size, as it is in a `Simulation`.
-        let screen = Screen::new(config.resolution);
+        ctx.screen.set_resolution(config.resolution);
+        ctx.screen.set_scaling(config.scaling);
         let size = window.inner_size();
-        ctx.canvas_size = screen.canvas_size([size.width, size.height], window.scale_factor());
+        ctx.canvas_size = ctx
+            .screen
+            .canvas_size([size.width, size.height], window.scale_factor());
         #[cfg(feature = "egui")]
         let gui_window = {
             ctx.gui.debug_key = config.debug_key;
@@ -710,8 +872,9 @@ impl<G: Game> State<G> {
         Ok(Self {
             focused: window.has_focus(),
             window,
+            fullscreen,
+            exclusive: has_exclusive_fullscreen(event_loop),
             surface,
-            screen,
             ctx,
             canvas: Canvas::new(),
             game,
@@ -794,7 +957,7 @@ impl<G: Game> State<G> {
         let scale_factor = self.window.scale_factor();
         let pixels_per_point = self.ctx.gui.egui.pixels_per_point();
         let to_points = |point: [f32; 2]| {
-            let [x, y] = self.screen.to_output(point, size, scale_factor);
+            let [x, y] = self.ctx.screen.to_output(point, size, scale_factor);
             egui::pos2(x as f32, y as f32) / pixels_per_point
         };
         let rect = egui::Rect::from_two_pos(
@@ -822,15 +985,28 @@ impl<G: Game> State<G> {
         self.input_method = area;
         if let Some(area) = area {
             let scale_factor = self.window.scale_factor();
-            let [x, y] = self.screen.to_output([area.x, area.y], size, scale_factor);
+            let screen = &self.ctx.screen;
+            let [x, y] = screen.to_output([area.x, area.y], size, scale_factor);
             let [right, bottom] =
-                self.screen
-                    .to_output([area.x + area.w, area.y + area.h], size, scale_factor);
+                screen.to_output([area.x + area.w, area.y + area.h], size, scale_factor);
             self.window.set_ime_cursor_area(
                 winit::dpi::PhysicalPosition::new(x, y),
                 winit::dpi::PhysicalSize::new(right - x, bottom - y),
             );
         }
+    }
+
+    /// Makes the window cover the screen it's on, or not, as `fullscreen` says, noting what it
+    /// became: borderless where it couldn't be exclusive.
+    fn set_fullscreen(&mut self, fullscreen: Fullscreen) {
+        let monitor = self
+            .window
+            .current_monitor()
+            .or_else(|| self.window.primary_monitor());
+        let winit = to_winit(fullscreen, monitor, self.exclusive);
+        self.fullscreen = from_winit(winit.clone());
+        self.ctx.fullscreen = self.fullscreen;
+        self.window.set_fullscreen(winit);
     }
 
     fn frame(&mut self) {
@@ -846,12 +1022,12 @@ impl<G: Game> State<G> {
         // Mapped every frame, since resizing moves the canvas under a still cursor.
         let mouse_position = self
             .cursor
-            .map(|cursor| self.screen.to_canvas(cursor, output, scale_factor));
+            .map(|cursor| self.ctx.screen.to_canvas(cursor, output, scale_factor));
         self.ctx.input.set_mouse_position(mouse_position);
         if let Some(gamepads) = &mut self.gamepads {
             gamepads.poll(&mut self.ctx.input, self.focused);
         }
-        let canvas_size = self.screen.canvas_size(output, scale_factor);
+        let canvas_size = self.ctx.screen.canvas_size(output, scale_factor);
 
         let now = Instant::now();
         let elapsed = (now - self.last_frame).as_secs_f32();
@@ -885,6 +1061,7 @@ impl<G: Game> State<G> {
         let Context {
             gpu,
             renderer,
+            screen,
             #[cfg(feature = "egui")]
             gui,
             ..
@@ -897,7 +1074,7 @@ impl<G: Game> State<G> {
                 });
                 let output_size = [frame.texture.width(), frame.texture.height()];
                 let start = Instant::now();
-                self.screen.render(
+                screen.render(
                     &gpu.device,
                     &gpu.queue,
                     renderer,
@@ -972,5 +1149,41 @@ mod tests {
     #[test]
     fn a_stall_updates_for_a_quarter_second_at_most() {
         assert_eq!(updates(60.0, [10.0]), [15]);
+    }
+
+    #[test]
+    fn exclusive_fullscreen_keeps_the_screens_own_mode_where_it_can() {
+        let modes = [
+            ([1280, 720], 60_000, 32),
+            ([1920, 1080], 144_000, 32),
+            ([1920, 1080], 60_000, 32),
+            ([1920, 1080], 60_000, 16),
+            ([2560, 1440], 60_000, 32),
+        ];
+        // Its own size and refresh rate, the deepest.
+        assert_eq!(best_video_mode(modes, [1920, 1080], Some(60_000)), Some(2));
+        // Its own size, the fastest, without its refresh rate.
+        assert_eq!(best_video_mode(modes, [1920, 1080], None), Some(1));
+        assert_eq!(best_video_mode(modes, [1920, 1080], Some(75_000)), Some(1));
+        // The largest, without its own size.
+        assert_eq!(best_video_mode(modes, [3840, 2160], Some(60_000)), Some(4));
+        assert_eq!(best_video_mode([], [1920, 1080], Some(60_000)), None);
+    }
+
+    #[test]
+    fn exclusive_fullscreen_is_borderless_without_a_mode() {
+        // Without a screen, or where the system has no exclusive fullscreen.
+        assert_eq!(
+            from_winit(to_winit(Fullscreen::Exclusive, None, true)),
+            Fullscreen::Borderless
+        );
+        assert_eq!(
+            from_winit(to_winit(Fullscreen::Off, None, true)),
+            Fullscreen::Off
+        );
+        assert_eq!(
+            from_winit(to_winit(Fullscreen::Borderless, None, false)),
+            Fullscreen::Borderless
+        );
     }
 }

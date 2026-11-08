@@ -54,7 +54,8 @@ folder's files four times a second, but not at hidden ones, whose names start wi
 A reload starts the game afresh: sound effects and music stop, volumes go back to 1, actions are
 unbound, and tasks end. Saves stay, since they're files outside the game's folder. `conf.luau` is
 read again for its [`libraries`](project-structure.md#libraries), but the window's settings, its
-size, resolution, update rate and the rest, change only when the game starts again.
+size, resolution, update rate and the rest, change only when the game starts again, and the
+window stays covering the screen, or not, and scaled as the game left it.
 
 **Carrying on where it was.** Before reloading, the engine calls the game's
 [`reloading`](api/globals.md#reloading), if it has one, and the reloaded game gets what it returned

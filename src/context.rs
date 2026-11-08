@@ -1,10 +1,13 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
 use crate::{
-    Error, Result, Waker,
+    Error, Fullscreen, Result, Waker,
     app::Redraws,
     audio::Audio,
-    graphics::{Font, Mesh, MeshData, Texture, gpu::Gpu, renderer::Renderer},
+    graphics::{
+        Font, Mesh, MeshData, Resolution, Scaling, Texture, gpu::Gpu, renderer::Renderer,
+        screen::Screen,
+    },
     input::Input,
     save::Saves,
 };
@@ -23,6 +26,10 @@ pub struct Context {
     pub(crate) audio: Audio,
     pub(crate) saves: Saves,
     pub(crate) canvas_size: [f32; 2],
+    /// Draws the canvas onto the window, or a headless frame, at its resolution and scaling.
+    pub(crate) screen: Screen,
+    /// Whether the window covers the screen, or is to once the frame is done.
+    pub(crate) fullscreen: Fullscreen,
     pub(crate) frame_stats: FrameStats,
     /// Whether the game has asked to close its window.
     pub(crate) quit: bool,
@@ -80,6 +87,8 @@ impl Context {
             audio,
             saves: Saves::default(),
             canvas_size: [0.0, 0.0],
+            screen: Screen::new(Resolution::Window),
+            fullscreen: Fullscreen::Off,
             frame_stats: FrameStats::default(),
             quit: false,
             redraws,
@@ -92,6 +101,38 @@ impl Context {
     /// [`Simulation::has_quit`](crate::headless::Simulation::has_quit).
     pub fn quit(&mut self) {
         self.quit = true;
+    }
+
+    /// Whether the window covers the screen: as it opened ([`WindowConfig::fullscreen`]), as
+    /// the game last set it, or as the player changed it through the system, such as with
+    /// macOS's green button or a browser's Escape. A window that couldn't be exclusive is
+    /// [borderless](Fullscreen::Borderless).
+    ///
+    /// [`WindowConfig::fullscreen`]: crate::WindowConfig::fullscreen
+    pub fn fullscreen(&self) -> Fullscreen {
+        self.fullscreen
+    }
+
+    /// Makes the window cover the screen, or a window of its own size again, once this frame is
+    /// done. The canvas changes size with it, unless it has a fixed resolution, which is
+    /// [scaled](Context::set_scaling) to the screen. A
+    /// [`Simulation`](crate::headless::Simulation) only notes it, keeping its frames' size.
+    pub fn set_fullscreen(&mut self, fullscreen: Fullscreen) {
+        self.fullscreen = fullscreen;
+    }
+
+    /// How a fixed resolution fills the window: as it opened ([`WindowConfig::scaling`]), or
+    /// as the game last set it.
+    ///
+    /// [`WindowConfig::scaling`]: crate::WindowConfig::scaling
+    pub fn scaling(&self) -> Scaling {
+        self.screen.scaling()
+    }
+
+    /// Scales a fixed resolution to fill the window by `scaling`, from the frame this one draws.
+    /// It changes nothing without a fixed resolution, since the canvas is the window.
+    pub fn set_scaling(&mut self, scaling: Scaling) {
+        self.screen.set_scaling(scaling);
     }
 
     /// Asks for another frame after this one, for a game that [redraws on

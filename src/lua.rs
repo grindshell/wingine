@@ -47,6 +47,8 @@
 //! Engine types convert to and from Lua values:
 //!
 //! - A [`Direction`] is one of the strings `"up"`, `"down"`, `"left"` or `"right"`.
+//! - [`Fullscreen`] is `"borderless"` or `"exclusive"`, or nil (or false) for a window of its own
+//!   size, and [`Scaling`] `"whole"`, `"fit"` or `"stretch"`.
 //! - A [`Key`] or [`MouseButton`] is its name, such as `"Space"` or `"left"`, in any case.
 //! - A [`Color`] is a hex string such as `"#f2c14e"`, with an optional alpha byte
 //!   (`"#00000080"`), a table `{ r, g, b, a }` of components from 0 to 1, where `a` defaults to
@@ -215,11 +217,11 @@ pub use mlua;
 use mlua::{ErrorContext, FromLua, FromLuaMulti, IntoLua, IntoLuaMulti, thread::ThreadStatus};
 
 use crate::{
-    Error, Result,
+    Error, Fullscreen, Result,
     audio::{PlaySettings, Sound},
     graphics::{
-        Animation, Camera3d, Color, Font, Lighting, Mesh, Model, Projection, Sprite, SpriteSheet,
-        TextLayout,
+        Animation, Camera3d, Color, Font, Lighting, Mesh, Model, Projection, Scaling, Sprite,
+        SpriteSheet, TextLayout,
     },
     grid::{Direction, GridMover},
     input::{Control, GamepadButton, Key, MouseButton},
@@ -572,6 +574,54 @@ impl FromLua for Direction {
                 from: value.type_name(),
                 to: "Direction".into(),
                 message: Some(r#"expected "up", "down", "left" or "right""#.into()),
+            })
+    }
+}
+
+impl IntoLua for Fullscreen {
+    fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
+        self.name().into_lua(lua)
+    }
+}
+
+impl FromLua for Fullscreen {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        let fullscreen = match &value {
+            mlua::Value::Nil | mlua::Value::Boolean(false) => Some(Fullscreen::Off),
+            mlua::Value::String(name) => match &*name.to_str()? {
+                "borderless" => Some(Fullscreen::Borderless),
+                "exclusive" => Some(Fullscreen::Exclusive),
+                _ => None,
+            },
+            _ => None,
+        };
+        fullscreen.ok_or_else(|| mlua::Error::FromLuaConversionError {
+            from: value.type_name(),
+            to: "Fullscreen".into(),
+            message: Some(r#"expected "borderless", "exclusive" or nil"#.into()),
+        })
+    }
+}
+
+impl IntoLua for Scaling {
+    fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
+        self.name().into_lua(lua)
+    }
+}
+
+impl FromLua for Scaling {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        let name = match &value {
+            mlua::Value::String(name) => name.to_str()?.to_owned(),
+            _ => String::new(),
+        };
+        Scaling::ALL
+            .into_iter()
+            .find(|scaling| scaling.name() == name)
+            .ok_or_else(|| mlua::Error::FromLuaConversionError {
+                from: value.type_name(),
+                to: "Scaling".into(),
+                message: Some(r#"expected "whole", "fit" or "stretch""#.into()),
             })
     }
 }

@@ -71,8 +71,9 @@ return {
 ```
 
 Now the canvas is 320 by 180 pixels, shown four times as large in the 1280x720 window, and the
-window's title is "Hello". [Project structure](project-structure.md#confluau) lists every
-setting.
+window's title is "Hello". A window of another shape has black bars around the canvas, unless
+[`scaling`](project-structure.md#scaling) says to scale it by fractions too.
+[Project structure](project-structure.md#confluau) lists every setting.
 
 ## Make it move
 

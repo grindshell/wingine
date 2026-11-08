@@ -218,7 +218,9 @@ return {
     width = 1280,
     height = 720,
     resizable = true,
+    fullscreen = "borderless",
     resolution = { width = 320, height = 180 },
+    scaling = "fit",
     vsync = true,
     update_rate = 60,
     debug_key = "F3",
@@ -243,6 +245,14 @@ logical pixels wide is 1920 physical pixels wide. By default, 1280 by 720.
 
 Whether the player can resize the window. By default, `true`.
 
+### `fullscreen`
+
+Whether the window opens covering the screen: `"borderless"`, a window without borders as big as
+the screen, or `"exclusive"`, the screen given over to the game at a video mode of its own. By
+default, `false`, a window of its `width` and `height`. The game changes it as it plays with
+[`window.set_fullscreen`](api/window.md#windowset_fullscreen), which
+[Covering the screen](api/window.md#covering-the-screen) tells more of.
+
 ### `resolution`
 
 The size of the canvas the game draws on, as `{ width = ..., height = ... }`.
@@ -250,11 +260,27 @@ The size of the canvas the game draws on, as `{ width = ..., height = ... }`.
 Without it, the canvas is the window's size in logical pixels, and it changes size when the
 window does: call `graphics.size()` for its size this frame, and lay the game out to fit.
 
-With it, the canvas is always that size, and the engine scales it up to the window by the
-largest whole number that fits, filling the space left over with black bars. A 320x180 canvas
-fills a 1280x720 window four times over, and 1920x1080 six times over. This is the choice for
-pixel art: pixels stay square and crisp, and every player sees the same area. A window smaller
-than the canvas shows it scaled down to fit.
+With it, the canvas is always that size, and the engine scales it to the window as
+[`scaling`](#scaling) says: by default, up by the largest whole number that fits, filling the
+space left over with black bars. A 320x180 canvas fills a 1280x720 window four times over, and
+1920x1080 six times over. This is the choice for pixel art: pixels stay square and crisp, and
+every player sees the same area. A window smaller than the canvas shows it scaled down to fit.
+
+### `scaling`
+
+How a fixed [`resolution`](#resolution) fills the window, and the screen when the window covers
+it: `"whole"`, the default, by the largest whole number that fits, with black bars; `"fit"`, as
+large as fits keeping its shape, by fractions too; or `"stretch"`, filling it both ways, its
+texels no longer square:
+
+```lua
+return { resolution = { width = 320, height = 180 }, scaling = "fit" }
+```
+
+It's an error without a fixed resolution, since the canvas is then the window. The game changes it
+as it plays with [`window.set_scaling`](api/window.md#windowset_scaling), and
+[Scaling a fixed resolution](api/window.md#scaling-a-fixed-resolution) says how each fills
+screens of different shapes.
 
 ### `vsync`
 

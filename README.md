@@ -14,7 +14,8 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 
 - **Rendering** with [wgpu](https://wgpu.rs): sprites, rotated or not, sprite sheets, and
   rectangles, lines and circles, filled or outlined, batched by texture. A fixed resolution, such as 320x180, scales up by whole numbers for
-  crisp pixel art.
+  crisp pixel art, or as far as fits, or stretched to fill the window, which can cover the screen,
+  borderless or exclusive.
 - **Timing**: games update once a frame by the frame's time, or at a fixed rate, such as 60 times
   a second, so they play the same at any frame rate. Frame stats and a headless benchmark show
   where each frame's time goes.
@@ -219,7 +220,9 @@ first to 5 points wins.
 
 Move your paddle, on the left, with W and S, the arrow keys, a gamepad or the mouse. Press Space,
 click, or press a gamepad's A to serve. Hits get faster and blip higher as a rally goes on, and
-sounds pan to where they happen. Nothing in it is random, and its ball's angles come from
+sounds pan to where they happen. F11 covers the screen, and the court is scaled to fit whatever
+its shape, by fractions where whole numbers leave bars. Nothing in it is random, and its ball's
+angles come from
 [`exact`](docs/api/exact.md), so the same inputs play the same match on every platform. Run with
 `--watch`, it keeps the match as it reloads, so changing how the computer plays changes it
 mid-rally. Its tests are in Luau, in `pong.test.luau`: `cargo run -- test examples/pong`.

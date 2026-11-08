@@ -27,7 +27,7 @@ pub use color::Color;
 pub use font::{Align, Font, TextLayout};
 pub use mesh::{Mesh, MeshData, MeshVertex};
 pub use model::{Model, ModelPart};
-pub use screen::Resolution;
+pub use screen::{Resolution, Scaling};
 pub use sprite::{Sprite, SpriteSheet};
 pub use texture::Texture;
 #[cfg(feature = "egui")]

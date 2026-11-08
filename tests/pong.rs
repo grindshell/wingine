@@ -328,6 +328,45 @@ fn reloading_carries_the_match_on() {
     ));
 }
 
+/// Whether `pixel` is `color`, give or take what rendering rounds.
+fn is_color(pixel: [u8; 4], color: [u8; 3]) -> bool {
+    pixel[..3]
+        .iter()
+        .zip(color)
+        .all(|(&channel, expected)| channel.abs_diff(expected) <= 2)
+}
+
+#[test]
+fn the_court_fits_a_screen_of_another_shape_and_stretches_to_fill_it() {
+    const BACKGROUND: [u8; 3] = [0x14, 0x18, 0x2c];
+    const BAR: [u8; 3] = [0, 0, 0];
+    let mut simulation = simulation();
+    // A 4:3 screen, which the 320x180 court fills across, 3.2 times over, with bars of 96 pixels
+    // above and below it.
+    simulation.resize(1024, 768);
+    let image = simulation.screenshot().unwrap();
+    assert!(is_color(image.pixel(512, 95), BAR), "the bar above");
+    assert!(
+        is_color(image.pixel(1, 97), BACKGROUND),
+        "the court's corner"
+    );
+    assert!(
+        is_color(image.pixel(1022, 670), BACKGROUND),
+        "and the far one"
+    );
+    assert!(is_color(image.pixel(512, 672), BAR), "the bar below");
+
+    simulation.exec("window.set_scaling('stretch')");
+    assert_eq!(simulation.eval::<String>("window.scaling()"), "stretch");
+    let image = simulation.screenshot().unwrap();
+    for [x, y] in [[300, 1], [1, 1], [1022, 766]] {
+        assert!(
+            is_color(image.pixel(x, y), BACKGROUND),
+            "no bars at {x}, {y}"
+        );
+    }
+}
+
 /// Pong's own tests, in `pong.test.luau`, as `wingine test examples/pong` runs them. With
 /// `UPDATE_SCREENSHOTS=1`, their references are saved again.
 #[test]

@@ -90,6 +90,12 @@ networking or 3D pipelines.
   quarter step after frames at the rate end, so jitter doesn't move updates between frames.
   After the updates, `run_frame` runs the egui pass (`Game::gui`), then `draw`. The window's close
   button asks `Game::close_requested`, and `Context::quit` closes the window after the frame.
+  Windows cover the screen (`Fullscreen`, `WindowConfig::fullscreen`) as they open and as
+  `Context::set_fullscreen` asks after a frame, when it differs from what the window was last made
+  (`State::fullscreen`), borderless or exclusive at a video mode `best_video_mode` picks (the
+  screen's own where it can), which falls back to borderless where there's none, as on Wayland
+  (`has_exclusive_fullscreen`) and the web; each resize reads back what the window is, so the
+  context follows changes the player makes through the system.
   Frames come one after another, or with `Redraw::OnDemand` (`WindowConfig::redraw`, for tools),
   only when something may have changed: the window's events request a redraw, and `Redraws`
   (shared by the `Context`, `Waker`s and egui's repaint callback) holds when the next frame is
@@ -175,7 +181,9 @@ networking or 3D pipelines.
   bytes, their colors sRGB bytes that the vertex shader converts to linear space, and every quad
   shares one static index buffer, which grows only when a frame has more quads than ever. A fixed
   resolution renders the canvas to an offscreen texture, then draws that texture scaled onto the
-  output with the same pipeline. Shaders are WGSL files next to the code that loads them. Sprites
+  output with the same pipeline, as its `Scaling` says (`viewport`): by whole numbers, as far as
+  fits, or stretched. The `Screen` doing it is the `Context`'s, so games change the scaling as
+  they play (`Context::set_scaling`). Shaders are WGSL files next to the code that loads them. Sprites
   aren't instanced: rendering is a fifth of the shmup's frame with its bullets in Rust, so it
   isn't what limits it.
 - 3D (`camera3d.rs`, `mesh.rs`, `view3d.rs`, `mesh.wgsl`): `Canvas::begin_3d` takes a `View3d`
@@ -362,7 +370,8 @@ networking or 3D pipelines.
   the old one drops), after calling the old one's global `reloading`, lent the context, for plain
   data (`scene::plain`) the new one's `window.reloaded()` returns, and resetting what the game set
   in the `Context` (`Audio::reset`, `Input::clear_bindings`); it rereads `conf.luau` for its
-  libraries, keeping the window's settings as they were. One that fails to load becomes a stopped
+  libraries, keeping the window's settings as they were, and the window's fullscreen and scaling
+  as the game left them. One that fails to load becomes a stopped
   game with an empty VM (`LuauGame::stopped`), holding the kept data for the next reload.
   `load_watching` (`run_watching`, `wingine --watch`) starts one stopped rather than failing, and
   reloads it in `update` when its `Watcher` sees the folder change, before the stopped game's
@@ -696,7 +705,9 @@ networking or 3D pipelines.
   `sprites` has tests (enabled with `test = true` in `Cargo.toml`) that drive it with
   `Simulation`, and its events and NPC are scripted in `sprites.luau`. `pong/` is a game written
   entirely in Luau, with its computer opponent in `opponent.luau`, played with the keys, the mouse
-  or a gamepad, whose stick moves the paddle as fast as it's pushed (`input.axis`). Nothing in it
+  or a gamepad, whose stick moves the paddle as fast as it's pushed (`input.axis`). F11 covers the
+  screen (`window.set_fullscreen`), and its court is scaled to fit (`scaling = "fit"`), which
+  `tests/pong.rs` checks on a 4:3 screen, stretched too. Nothing in it
   is random, and its ball's angles come from `exact`, so the same inputs play the same match on
   every platform. Its `pong` table is plain data, which its `reloading` returns and the reloaded
   game copies back over a fresh one, so the match carries on as it reloads. Its own tests are in
@@ -758,7 +769,8 @@ networking or 3D pipelines.
 - `tests/gui.rs`: tests for egui over games, through `Simulation`: clicking widgets by label,
   typing into a focused field, input egui takes not reaching the game, and the debug key.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders,
-  their saves, their 3D views, models and picking, scenes' views and their nodes, menus over
+  their settings, covering the screen and scaling, their saves, their 3D views, models and
+  picking, scenes' views and their nodes, menus over
   nodes, in its
   `physics` module (with the `physics` feature), physics worlds of their nodes, 2D and 3D (bodies
   falling, characters walking, fixed bodies following and placed by turned parents, models' triangles,
@@ -826,7 +838,8 @@ networking or 3D pipelines.
 
 - Drawing coordinates are canvas pixels with the origin at the top-left and `y` pointing down.
   The canvas is the window's size in logical pixels (`Resolution::Window`), or a fixed size scaled
-  up by whole numbers with black bars (`Resolution::Fixed`, the choice for pixel art).
+  up by whole numbers with black bars (`Resolution::Fixed`, the choice for pixel art), or by
+  `Scaling::Fit` or `Stretch`, by fractions.
 - `Canvas::set_camera` switches drawing to world coordinates; the camera's translation and zoom
   are applied on the CPU as quads are recorded, so switching costs nothing. Draw the world with a
   camera, then call `set_camera(None)` and draw the HUD in canvas pixels.

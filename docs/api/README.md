@@ -17,7 +17,7 @@ hand out, and the `Ui` a game's `gui` lays its interface out with:
 | [`save`](save.md) | Data kept between runs of the game, such as progress |
 | [`exact`](exact.md) | Math that gives the same bits on every platform, for games that replay |
 | [`rect`](rect.md) | Whether rectangles overlap, and whether one holds a point |
-| [`window`](window.md) | Quitting the game, asking before its window closes, and what it kept as it reloaded |
+| [`window`](window.md) | Quitting the game, asking before its window closes, covering the screen, scaling a fixed resolution, and what it kept as it reloaded |
 | [`gui`](gui.md) | Interfaces over the game, such as debug tools, laid out with egui in the game's `gui` |
 | [Tests](testing.md) | What only tests have: `test`, `sim` to drive the game and run its frames, `assert_equal` and `assert_near` |
 | [`wingine-native`](native.md) | The Rust crate native libraries are written with |
@@ -67,7 +67,7 @@ time raises an error saying when it works.
   everything in `input`, and everything in `audio` but `audio.load`. So do
   `graphics.load_sprite_sheet`, `graphics.load_model`, the functions that make meshes
   (`graphics.new_cube`, `new_cuboid`, `new_plane`, `new_sphere` and `new_mesh`), `scene.load`,
-  `menu:update` and `window.quit`, and all
+  `menu:update` and the rest of `window` but `window.reloaded`, and all
   of them work in `close_requested` and `reloading` too. `graphics.project` and `graphics.ray` work then and in
   `draw`.
 - **Interfaces** are laid out only in `gui`, with the `Ui` it's passed.

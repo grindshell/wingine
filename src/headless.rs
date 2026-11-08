@@ -14,7 +14,7 @@ use crate::{
     Context, Error, Game, Result, WindowConfig,
     app::{Timestep, run_frame},
     audio::Audio,
-    graphics::{Canvas, Resolution, gpu::Gpu, renderer::Renderer, screen::Screen},
+    graphics::{Canvas, Resolution, gpu::Gpu, renderer::Renderer},
     input::{Axis, GamepadButton, Key, MouseButton, Stick},
     lua::mlua::FromLuaMulti,
     runtime::LuauGame,
@@ -36,7 +36,6 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// reliable.
 pub struct Headless {
     ctx: Context,
-    screen: Screen,
     canvas: Canvas,
     /// What frames render to when they aren't read back, kept while frames stay the same size.
     target: Option<(wgpu::Texture, wgpu::TextureView)>,
@@ -55,7 +54,6 @@ impl Headless {
         ctx.gui.set_predictable();
         Ok(Self {
             ctx,
-            screen: Screen::new(Resolution::Window),
             canvas: Canvas::new(),
             target: None,
             _lease: lease,
@@ -63,10 +61,11 @@ impl Headless {
     }
 
     /// Sets the canvas size for later frames, as [`WindowConfig::resolution`] does for a window.
+    /// [`Context::set_scaling`] scales a fixed one.
     ///
     /// [`WindowConfig::resolution`]: crate::WindowConfig::resolution
     pub fn set_resolution(&mut self, resolution: Resolution) {
-        self.screen = Screen::new(resolution);
+        self.ctx.screen.set_resolution(resolution);
     }
 
     /// Engine services, for loading the assets a frame draws.
@@ -97,7 +96,7 @@ impl Headless {
 
     /// Records a frame on the canvas, sized for an `output`-sized frame.
     fn draw(&mut self, output: [u32; 2], draw: impl FnOnce(&mut Canvas)) {
-        let [width, height] = self.screen.canvas_size(output, 1.0);
+        let [width, height] = self.ctx.screen.canvas_size(output, 1.0);
         self.canvas.begin(width, height);
         draw(&mut self.canvas);
     }
@@ -108,13 +107,14 @@ impl Headless {
         let Context {
             gpu,
             renderer,
+            screen,
             #[cfg(feature = "egui")]
             gui,
             ..
         } = &mut self.ctx;
         let texture = create_frame(gpu, output);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.screen.render(
+        screen.render(
             &gpu.device,
             &gpu.queue,
             renderer,
@@ -133,6 +133,7 @@ impl Headless {
         let Context {
             gpu,
             renderer,
+            screen,
             #[cfg(feature = "egui")]
             gui,
             ..
@@ -147,7 +148,7 @@ impl Headless {
         }
         let (texture, view) = self.target.as_ref().expect("created above");
         let start = Instant::now();
-        self.screen.render(
+        screen.render(
             &gpu.device,
             &gpu.queue,
             renderer,
@@ -302,8 +303,11 @@ impl<G: Game> Simulation<G> {
             }
         };
         headless.set_resolution(config.resolution);
+        headless.ctx.set_scaling(config.scaling);
+        // Noted, as the game sets it: frames keep the window's size.
+        headless.ctx.fullscreen = config.fullscreen;
         let output = [config.width, config.height];
-        headless.ctx.canvas_size = headless.screen.canvas_size(output, 1.0);
+        headless.ctx.canvas_size = headless.ctx.screen.canvas_size(output, 1.0);
         #[cfg(feature = "egui")]
         {
             headless.ctx.gui.debug_key = config.debug_key;
@@ -465,7 +469,7 @@ impl<G: Game> Simulation<G> {
             output,
             ..
         } = self;
-        let canvas_size = headless.screen.canvas_size(*output, 1.0);
+        let canvas_size = headless.ctx.screen.canvas_size(*output, 1.0);
         let mut stats = run_frame(
             game,
             &mut headless.ctx,
@@ -590,7 +594,7 @@ impl<G: Game> Simulation<G> {
         self.headless.ctx.input.set_mouse_position(Some([x, y]));
         #[cfg(feature = "egui")]
         {
-            let [x, y] = self.headless.screen.to_output([x, y], self.output, 1.0);
+            let [x, y] = self.headless.ctx.screen.to_output([x, y], self.output, 1.0);
             let pixels_per_point = self.headless.ctx.gui.egui.pixels_per_point();
             self.gui_input
                 .move_pointer(egui::pos2(x as f32, y as f32) / pixels_per_point);
@@ -824,6 +828,7 @@ impl<G: Game> Simulation<G> {
         let to_canvas = |pos: egui::Pos2| {
             let pos = pos * pixels_per_point;
             self.headless
+                .ctx
                 .screen
                 .to_canvas([pos.x.into(), pos.y.into()], self.output, 1.0)
         };

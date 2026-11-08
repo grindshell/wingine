@@ -1,7 +1,8 @@
 -- Pong against the computer, written entirely in Luau. Move your paddle, on the left, with W and
 -- S or the arrow keys, a gamepad's left stick or D-pad, or the mouse, and press Space, click, or
 -- press a gamepad's A or Start to serve. The stick moves the paddle as fast as it's pushed. The
--- first to 5 points wins.
+-- first to 5 points wins. F11 covers the screen, or stops covering it, and `conf.luau` scales the
+-- field to fit it.
 --
 -- The computer's play is in `opponent.luau`. Hits blip, higher as a rally speeds up, and shake
 -- the field; walls thud and points chime, each panned to where it happened, and music loops in
@@ -144,6 +145,7 @@ end
 input.bind("up", { "W", "Up", "DPadUp", "LeftStickUp" })
 input.bind("down", { "S", "Down", "DPadDown", "LeftStickDown" })
 input.bind("serve", { "Space", "Enter", "South", "Start" })
+input.bind("fullscreen", { "F11" })
 
 local sounds = {
     hit = audio.load("sounds/blip.wav"),
@@ -296,6 +298,11 @@ local function advance_ball(dt: number): Side?
 end
 
 function update(dt: number)
+    if input.pressed("fullscreen") and window.fullscreen() then
+        window.set_fullscreen(nil)
+    elseif input.pressed("fullscreen") then
+        window.set_fullscreen("borderless")
+    end
     pong.time += dt
     pong.shake = math.max(pong.shake - dt, 0)
     move_opponent(dt)

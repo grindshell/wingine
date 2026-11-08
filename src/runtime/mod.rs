@@ -23,8 +23,15 @@
 //!     width = 1280, -- the window's initial size in logical pixels
 //!     height = 720,
 //!     resizable = true,
-//!     -- A fixed canvas size, scaled up by whole numbers. By default, the canvas is the window.
+//!     -- Whether the window opens covering the screen: "borderless", or "exclusive", the screen
+//!     -- given over to the game at a video mode of its own. By default, it doesn't.
+//!     fullscreen = "borderless",
+//!     -- A fixed canvas size. By default, the canvas is the window.
 //!     resolution = { width = 320, height = 180 },
+//!     -- How a fixed resolution fills the window: "whole", scaled up by the largest whole number
+//!     -- that fits, with black bars, the default; "fit", as large as fits keeping its shape; or
+//!     -- "stretch", filling it both ways.
+//!     scaling = "fit",
 //!     -- Whether frames wait for the display's refresh (true by default). Turning it off shows
 //!     -- how long frames really take.
 //!     vsync = false,
@@ -287,6 +294,22 @@
 //!   its save first.
 //! - `window.reloaded()`, at any time, returns a copy of what the game before this one returned
 //!   from `reloading`, if it was reloaded (see below), or nil.
+//! - `window.fullscreen()` returns whether the window covers the screen: `"borderless"`, a
+//!   window without borders covering it, `"exclusive"`, the screen given over to the game at a
+//!   video mode of its own, or nil, a window of its own size. It's as the window opened, as the
+//!   game last set it, or as the player changed it through the system, such as with a browser's
+//!   Escape. A window that couldn't be exclusive, as on Wayland and the web, is borderless.
+//! - `window.set_fullscreen(mode)` makes the window cover the screen as `mode` says, or a window
+//!   of its own size again for nil, once the frame has drawn. A game binds a key to it itself.
+//! - `window.scaling()` returns how a fixed resolution fills the window: `"whole"`, by the
+//!   largest whole number that fits, with black bars, `"fit"`, as large as fits keeping its shape,
+//!   or `"stretch"`, filling it both ways.
+//! - `window.set_scaling(scaling)` scales a fixed resolution by `scaling` from the frame that
+//!   draws next. It changes nothing without one.
+//!
+//! These four work while the game loads, in `update`, `gui` and `close_requested`. A
+//! [`Simulation`](crate::headless::Simulation) notes the window's fullscreen without changing its
+//! frames' size, and scales them.
 //!
 //! A game may also define a global `gui(ui)`, which the engine calls once a frame, after the
 //! updates and before `draw`, with a `Ui` covering the window, to lay out an interface over the
@@ -523,6 +546,12 @@ pub fn config(folder: impl AsRef<Path>) -> Result<Config> {
             message: format!("`{name}`: {err}"),
         })?;
     }
+    if settings.contains_key("scaling")? && config.window.resolution == Resolution::Window {
+        return Err(Error::Script {
+            path,
+            message: "`scaling`: it scales a fixed `resolution`, and there's none".into(),
+        });
+    }
     Ok(config)
 }
 
@@ -538,6 +567,8 @@ fn apply_setting(
         "width" => window.width = positive(lua.unpack(value)?)?,
         "height" => window.height = positive(lua.unpack(value)?)?,
         "resizable" => window.resizable = lua.unpack(value)?,
+        "fullscreen" => window.fullscreen = lua.unpack(value)?,
+        "scaling" => window.scaling = lua.unpack(value)?,
         "vsync" => window.vsync = lua.unpack(value)?,
         "debug_key" => window.debug_key = Some(lua.unpack(value)?),
         "identity" => {

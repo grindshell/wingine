@@ -25,6 +25,6 @@ pub mod tilemap;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod watch;
 
-pub use app::{Game, Redraw, Waker, WindowConfig, run};
+pub use app::{Fullscreen, Game, Redraw, Waker, WindowConfig, run};
 pub use context::{Context, FrameStats};
 pub use error::{BoxedError, Error, Result};
