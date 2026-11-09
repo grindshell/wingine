@@ -1,7 +1,8 @@
 -- A course to run around in 3D, written entirely in Luau: up the stairs onto the platform, down
 -- the slope, onto the block, and around the crates, picking up the coins. Walk with the arrow keys,
 -- WASD or a gamepad's stick, and jump with Space or the gamepad's bottom button. Push the crates:
--- off the platform, or into the stack, which topples.
+-- off the platform, or into the stack, which topples. The mouse wheel brings the camera closer, or
+-- takes it farther away.
 --
 -- The course is a scene, `course.scene.luau`, which the editor edits: a 3D view of models from
 -- Kenney's Prototype Kit. This script makes it physical with `physics.world_3d()`:
@@ -55,6 +56,11 @@ local BOB = 0.05
 -- Where the camera is from the point it looks at, a little over the player's feet.
 local CAMERA_OFFSET = vector.create(0, 4.5, 5.5)
 local LOOK_ABOVE = vector.create(0, 0.4, 0)
+-- How much nearer each notch of the mouse wheel turned away brings the camera, and how near and
+-- far it goes, as fractions of `CAMERA_OFFSET`.
+local ZOOM_STEP = 0.85
+local NEAREST = 0.4
+local FARTHEST = 2
 -- How far the player waddles each way as it walks, in radians, and how quickly.
 local WADDLE = 0.15
 local WADDLE_SPEED = 14
@@ -94,6 +100,8 @@ course = {
     grounded = true,
     -- Which way the player faces, in radians about `y`, from facing the camera.
     facing = 0,
+    -- How far the camera is from the player, as a fraction of `CAMERA_OFFSET`.
+    zoom = 1,
     -- Seconds the player has been walking without stopping, for its waddle.
     walk_time = 0,
     crates = crates,
@@ -112,7 +120,14 @@ end
 -- The view's camera, following the player.
 function course.camera()
     local target = course.feet() + LOOK_ABOVE
-    return { position = target + CAMERA_OFFSET, target = target }
+    return { position = target + CAMERA_OFFSET * course.zoom, target = target }
+end
+
+-- Brings the camera nearer as the mouse wheel turns away from the player, and takes it farther as
+-- it turns toward them.
+local function zoom()
+    local _, turned = input.wheel()
+    course.zoom = math.clamp(course.zoom * ZOOM_STEP ^ turned, NEAREST, FARTHEST)
 end
 
 -- Walks the player by the keys held, as fast diagonally as straight, falling unless it's on the
@@ -208,6 +223,7 @@ end
 
 function update(dt: number)
     course.time += dt
+    zoom()
     walk(dt)
     world:step(dt)
     catch_fallen()

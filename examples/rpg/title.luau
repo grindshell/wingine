@@ -1,9 +1,9 @@
 -- The title screen the game opens on: its name over the edge of the woods at night, and a menu to
--- continue the saved game, if there is one, or start a new one. While it's open, `update` takes
--- the player's input: up and down, or the mouse, highlight a choice, and the interact key or a
--- click picks it. The woods are drawn here; the name and the menu are laid out in
--- `title.scene.luau`, whose menu is a panel that fits its choices, copies of its hidden `choice`
--- row.
+-- continue the saved game, if there is one, start a new one, or choose the controls. While it's
+-- open, `update` takes the player's input: up and down, or the mouse, highlight a choice, and the
+-- interact key or a click picks it. The woods are drawn here, behind the controls' screen too;
+-- the name and the menu are laid out in `title.scene.luau`, whose menu is a panel that fits its
+-- choices, copies of its hidden `choice` row.
 
 local conf = require("./conf")
 local look = require("./look")
@@ -97,7 +97,9 @@ function title.update(): string?
     return nil
 end
 
-function title.draw()
+-- Draws the title screen, with its name and menu unless `woods_only`, as behind the controls'
+-- screen.
+function title.draw(woods_only: boolean?)
     local choices = title.choices
     if not choices then
         return
@@ -113,6 +115,9 @@ function title.draw()
     end
     local player = rpg.player
     graphics.draw_sprite(player.sprite, (WIDTH - TILE) / 2, GROUND_TOP - TILE + 6, player.tint)
+    if woods_only then
+        return
+    end
 
     -- The highlighted choice is pointed out, as the dialogue box's are.
     for i, row in rows do

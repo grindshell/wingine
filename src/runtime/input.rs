@@ -18,6 +18,34 @@ pub(super) fn module(lua: &Lua, lent: &Lent) -> mlua::Result<Table> {
             },
         )?
     })?;
+    input.set("bindings", {
+        let lent = lent.clone();
+        lua.create_function(move |_, action: mlua::LuaString| {
+            let action = action.to_str()?;
+            lent.context(|ctx| {
+                let input = ctx.input();
+                (
+                    input.bindings(&action).to_vec(),
+                    input.bound_gamepad(&action),
+                )
+            })
+        })?
+    })?;
+    input.set("pressed_controls", {
+        let lent = lent.clone();
+        lua.create_function(move |_, ()| {
+            lent.context(|ctx| ctx.input().pressed_controls().to_vec())
+        })?
+    })?;
+    input.set("wheel", {
+        let lent = lent.clone();
+        lua.create_function(move |_, ()| {
+            lent.context(|ctx| {
+                let [x, y] = ctx.input().wheel();
+                (x, y)
+            })
+        })?
+    })?;
     input.set("held", action_query(lua, lent, Input::held)?)?;
     input.set("pressed", action_query(lua, lent, Input::pressed)?)?;
     input.set("released", action_query(lua, lent, Input::released)?)?;

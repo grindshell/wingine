@@ -21,6 +21,8 @@ struct Panel {
     f3_repeats: u32,
     /// What the game was typed.
     typed: String,
+    /// How far the game saw the mouse wheel turn, in all.
+    turned: [f32; 2],
     /// egui's context, which other threads can ask to repaint.
     egui: Option<egui::Context>,
 }
@@ -33,6 +35,9 @@ impl Game for Panel {
         self.f3_presses += u32::from(input.key_pressed(Key::F3));
         self.f3_repeats += u32::from(input.key_repeated(Key::F3));
         self.typed.push_str(input.text());
+        let [x, y] = input.wheel();
+        self.turned[0] += x;
+        self.turned[1] += y;
     }
 
     fn gui(&mut self, _ctx: &mut Context, ui: &mut egui::Ui) {
@@ -86,6 +91,23 @@ fn clicks_away_from_the_interface_reach_the_game() {
     let panel = simulation.game();
     assert_eq!(panel.game_clicks, 1);
     assert_eq!(panel.button_clicks, 0);
+}
+
+#[test]
+fn the_wheel_turns_for_the_game_away_from_the_interface_only() {
+    let mut simulation = simulation(config());
+    let button = simulation.gui_rect("Press me").unwrap();
+    simulation.move_mouse(button.x + button.w / 2.0, button.y + button.h / 2.0);
+    simulation.scroll(0.0, 2.0);
+    simulation.step();
+    assert_eq!(simulation.game().turned, [0.0, 0.0]);
+
+    simulation.move_mouse(300.0, 250.0);
+    simulation.scroll(0.0, 2.0);
+    simulation.scroll(-0.5, 0.0);
+    simulation.step();
+    simulation.step();
+    assert_eq!(simulation.game().turned, [-0.5, 2.0]);
 }
 
 #[test]

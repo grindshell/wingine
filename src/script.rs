@@ -21,6 +21,7 @@
 //! mouse-up Left
 //! click 120 64           # move the cursor, press Left, run one frame, release
 //! click Right            # the same with another button, where the cursor already is
+//! scroll 0 -2            # turn the mouse wheel 2 notches toward you; x tilts it right
 //! click-gui Go to town   # click the interface's first widget labelled the rest of the line
 //! pad-down 1 South       # hold gamepad 1's button down (names as in `GamepadButton`)
 //! pad-up 1 South         # let it go
@@ -95,6 +96,7 @@ enum Command {
     MouseDown(MouseButton),
     MouseUp(MouseButton),
     Click(MouseButton, Option<[f32; 2]>),
+    Scroll([f32; 2]),
     #[cfg(feature = "egui")]
     ClickGui(String),
     PadDown(u32, GamepadButton),
@@ -176,6 +178,7 @@ pub fn run<G: Game>(
                 }
                 simulation.tap_mouse(button);
             }
+            Command::Scroll([x, y]) => simulation.scroll(x, y),
             #[cfg(feature = "egui")]
             Command::ClickGui(label) => {
                 if simulation.gui_rect(&label).is_none() {
@@ -381,6 +384,7 @@ fn parse_command(name: &str, args: &[&str]) -> Result<Command, String> {
         ("click", [button, x, y]) => {
             Command::Click(by_name(button)?, Some([number(x)?, number(y)?]))
         }
+        ("scroll", [x, y]) => Command::Scroll([number(x)?, number(y)?]),
         ("pad-down", [gamepad, button]) => Command::PadDown(size(gamepad)?, by_name(button)?),
         ("pad-up", [gamepad, button]) => Command::PadUp(size(gamepad)?, by_name(button)?),
         ("pad-tap", [gamepad, button]) => Command::PadTap(size(gamepad)?, by_name(button)?),
@@ -403,8 +407,8 @@ fn parse_command(name: &str, args: &[&str]) -> Result<Command, String> {
         }
         (
             "wait" | "press" | "release" | "tap" | "hold" | "mouse" | "mouse-down" | "mouse-up"
-            | "click" | "pad-down" | "pad-up" | "pad-tap" | "pad-hold" | "stick" | "key-repeat"
-            | "resize" | "screenshot" | "benchmark",
+            | "click" | "scroll" | "pad-down" | "pad-up" | "pad-tap" | "pad-hold" | "stick"
+            | "key-repeat" | "resize" | "screenshot" | "benchmark",
             _,
         ) => return Err(format!("wrong arguments for `{name}`")),
         _ => return Err(format!("unknown command `{name}`")),
@@ -495,6 +499,7 @@ mod tests {
             click right
             click 3 4
             click middle 3 4
+            scroll 0.5 -2
             pad-down 1 south
             pad-up 1 South
             pad-tap 2 Start
@@ -527,6 +532,7 @@ mod tests {
                 Command::Click(MouseButton::Right, None),
                 Command::Click(MouseButton::Left, Some([3.0, 4.0])),
                 Command::Click(MouseButton::Middle, Some([3.0, 4.0])),
+                Command::Scroll([0.5, -2.0]),
                 Command::PadDown(1, GamepadButton::South),
                 Command::PadUp(1, GamepadButton::South),
                 Command::PadTap(2, GamepadButton::Start),

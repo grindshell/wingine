@@ -232,6 +232,12 @@
 //!   keys and gamepad buttons, such as `{ "Space", "W", "South" }`, replacing any it had. A
 //!   gamepad's buttons include its sticks' directions, such as `"LeftStickLeft"`. With
 //!   `gamepad`, a number from 1, only that gamepad's buttons count; without, any gamepad's do.
+//! - `input.bindings(action)` returns what an action is bound to, a list of names in the order
+//!   they were bound, empty if it isn't, and the gamepad it was bound to, if one, so a game shows
+//!   the player its first: "Space: Examine".
+//! - `input.pressed_controls()` returns the keys and gamepad buttons pressed this frame, in the
+//!   order they were pressed, named as `input.bind` takes them, as a screen that lets players
+//!   choose their controls asks which they pressed. Gamepad buttons are any gamepad's.
 //! - `input.held(action)`, `input.pressed(action)` and `input.released(action)` tell whether any
 //!   of the action's controls is held, or was pressed or released this frame.
 //! - `input.strength(action)` tells how far it's pushed, from 0 to 1: 1 for a key, and for a
@@ -257,6 +263,9 @@
 //!   cursor is outside the window.
 //! - `input.mouse_held(button)`, `input.mouse_pressed(button)` and
 //!   `input.mouse_released(button)` do the same for a mouse button.
+//! - `input.wheel()` returns how far the mouse wheel turned this frame, in notches, as `x, y`:
+//!   `y` is positive turned away from the player, as to scroll up, and `x` positive tilted
+//!   right. A touchpad scrolls by fractions of a notch. Turns over the interface are its own.
 //! - `input.gamepads()` returns the connected gamepads' numbers, which count from 1 in the order
 //!   gamepads first connect, and `input.gamepad_name(gamepad)` a gamepad's name.
 //! - `input.button_held(button, gamepad)`, `input.button_pressed(button, gamepad)`,

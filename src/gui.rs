@@ -589,10 +589,10 @@ impl SimulatedInput {
         self.events.push(egui::Event::Text(text.to_owned()));
     }
 
-    /// Scrolls by `delta` points.
-    pub fn scroll(&mut self, delta: egui::Vec2) {
+    /// Turns the mouse wheel by `delta` notches, which egui calls lines.
+    pub fn scroll_lines(&mut self, delta: egui::Vec2) {
         self.events.push(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
+            unit: egui::MouseWheelUnit::Line,
             delta,
             phase: egui::TouchPhase::Move,
             source: egui::MouseWheelSource::Wheel,

@@ -15,7 +15,7 @@ use crate::{
     app::{Timestep, run_frame},
     audio::Audio,
     graphics::{Canvas, Resolution, gpu::Gpu, renderer::Renderer},
-    input::{Axis, GamepadButton, Key, MouseButton, Stick},
+    input::{Axis, Control, GamepadButton, Key, MouseButton, Stick},
     lua::mlua::FromLuaMulti,
     runtime::LuauGame,
     save::{Saves, TemporaryFolder},
@@ -746,11 +746,20 @@ impl<G: Game> Simulation<G> {
     fn action_control(&self, action: &str) -> std::result::Result<Pressed, String> {
         let input = &self.headless.ctx.input;
         let unbound = || format!("`{action}` isn't bound to anything");
-        let (keys, buttons, gamepad) = input.binding(action).ok_or_else(unbound)?;
-        if let Some(&key) = keys.first() {
+        let controls = input.bindings(action);
+        let key = controls.iter().find_map(|&control| match control {
+            Control::Key(key) => Some(key),
+            Control::Button(_) => None,
+        });
+        if let Some(key) = key {
             return Ok(Pressed::Key(key));
         }
-        let &button = buttons.first().ok_or_else(unbound)?;
+        let button = controls.iter().find_map(|&control| match control {
+            Control::Key(_) => None,
+            Control::Button(button) => Some(button),
+        });
+        let button = button.ok_or_else(unbound)?;
+        let gamepad = input.bound_gamepad(action);
         let connected = match gamepad {
             Some(gamepad) => input
                 .gamepad(gamepad)
@@ -809,12 +818,27 @@ impl<G: Game> Simulation<G> {
         self.headless.ctx.input.compose(text);
     }
 
-    /// Turns the mouse wheel by `x`, `y` points of the interface, where it scrolls whatever is
-    /// under the cursor. Positive `y` scrolls up, as turning the wheel away does.
-    #[cfg(feature = "egui")]
+    /// Turns the mouse wheel by `x`, `y` notches where the cursor is, as
+    /// [`Input::wheel`](crate::input::Input::wheel) has them: positive `y` turns it away from the
+    /// player, as to scroll up, and positive `x` tilts it right. The game sees it unless the
+    /// interface wants it, as when the cursor is over one of its windows, which scrolls what's
+    /// under the cursor.
     pub fn scroll(&mut self, x: f32, y: f32) {
         self.wake();
-        self.gui_input.scroll(egui::vec2(x, y));
+        #[cfg(feature = "egui")]
+        {
+            // egui has winit's way round: positive `x` is tilting left.
+            self.gui_input.scroll_lines(egui::vec2(-x, y));
+            let gui = &self.headless.ctx.gui;
+            if self
+                .gui_input
+                .pointer()
+                .is_some_and(|pos| gui.wants_pointer_at(pos))
+            {
+                return;
+            }
+        }
+        self.headless.ctx.input.turn_wheel([x, y]);
     }
 
     /// Where the widgets of the interface labelled `label` were in the last frame, in canvas

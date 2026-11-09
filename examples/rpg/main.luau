@@ -1,7 +1,8 @@
 -- A top-down RPG, written entirely in Luau. Walk with the arrow keys or WASD; holding a direction
 -- keeps walking. Press Space, Enter or E to examine whatever is in front of you, or to talk, and
--- Tab or I to open your bag. Escape or Backspace backs out of menus. F1 shows a window of tools
--- for trying the game out, in `debug_panel.luau`.
+-- Tab or I to open your bag. Escape or Backspace backs out of menus. Those are the defaults: the
+-- title screen's Controls chooses others, as `controls.luau` describes. F1 shows a window of
+-- tools for trying the game out, in `debug_panel.luau`.
 --
 -- The elder of Mossbrook asks you to check on the Stone Shrine, on the hill north of the
 -- village. What you find there sets creatures loose on the hill, and you fight them one on one,
@@ -24,6 +25,7 @@
 local bag = require("./bag")
 local battle = require("./battle")
 local characters = require("./characters")
+local controls = require("./controls")
 local debug_panel = require("./debug_panel")
 local dialogue = require("./dialogue")
 local items = require("./items")
@@ -83,6 +85,7 @@ local SHOW_STATS = "hunt"
 -- The title screen's choices.
 local CONTINUE = "Continue"
 local NEW_GAME = "New Game"
+local CONTROLS = "Controls"
 
 local BACKGROUND = "#101418"
 local HERO = "#f2d3ab"
@@ -92,13 +95,8 @@ local SHADE = "#000000"
 local TEXT = "#f4f0e8"
 local ALERT = "#f2c14e"
 
-input.bind("up", { "Up", "W" })
-input.bind("down", { "Down", "S" })
-input.bind("left", { "Left", "A" })
-input.bind("right", { "Right", "D" })
-input.bind("interact", { "Space", "Enter", "E" })
-input.bind("cancel", { "Escape", "Backspace" })
-input.bind("menu", { "Tab", "I" })
+-- The actions, bound as the player chose, or to their defaults.
+controls.load()
 
 local bump = audio.load("sounds/bump.wav")
 local blip = audio.load("sounds/blip.wav")
@@ -147,6 +145,7 @@ rpg = {
     battle = battle,
     bag = bag,
     title = title,
+    controls = controls,
     -- Whether the debug panel shows: F1 shows and hides it.
     debugging = false,
 }
@@ -390,6 +389,9 @@ local function update_title(dt: number)
         return
     elseif rpg.busy > 0 then
         return
+    elseif controls.is_open() then
+        controls.update()
+        return
     end
     local picked = title.update()
     if picked == CONTINUE then
@@ -398,6 +400,8 @@ local function update_title(dt: number)
         run_event(start_over)
     elseif picked == NEW_GAME then
         new_game()
+    elseif picked == CONTROLS then
+        controls.open()
     end
 end
 
@@ -491,7 +495,8 @@ local function draw_hud()
 
     local action = if rpg.busy == 0 and not dialogue.is_open() then interaction() else nil
     if action then
-        local prompt = `Space: {action}`
+        -- Named by the key the player chose for it.
+        local prompt = `{controls.first("interact")}: {action}`
         local width, height = font:measure(prompt)
         label(prompt, math.round((WIDTH - width) / 2), HEIGHT - height - 4, TEXT)
     end
@@ -523,7 +528,8 @@ end
 
 function draw()
     if title.is_open() then
-        title.draw()
+        title.draw(controls.is_open())
+        controls.draw()
         dialogue.draw()
         return
     end
@@ -561,4 +567,4 @@ function gui(ui: Ui)
     end
 end
 
-title.open(if progress.load() then { CONTINUE, NEW_GAME } else { NEW_GAME })
+title.open(if progress.load() then { CONTINUE, NEW_GAME, CONTROLS } else { NEW_GAME, CONTROLS })

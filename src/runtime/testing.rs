@@ -54,7 +54,8 @@
 //!   `sim.hold_action(action, seconds)`.
 //! - The mouse, in canvas pixels: `sim.move_mouse(x, y)`, `sim.press_mouse(button)`,
 //!   `sim.release_mouse(button)`, and `sim.click(x, y, button)`, which moves there, presses,
-//!   runs a frame and lets go.
+//!   runs a frame and lets go; and `sim.scroll(x, y)`, which turns the wheel `y` notches away
+//!   from the player, and tilts it `x` right.
 //! - Gamepads: `sim.connect_gamepad(name)` connects one and returns its number;
 //!   `sim.disconnect_gamepad(gamepad)`; `sim.press_button(gamepad, button, strength)` (1 by
 //!   default), `sim.release_button(gamepad, button)`, `sim.tap_button(gamepad, button)` and
@@ -127,6 +128,7 @@ const REQUESTS: &[&str] = &[
     "press_mouse",
     "release_mouse",
     "click",
+    "scroll",
     "connect_gamepad",
     "disconnect_gamepad",
     "press_button",
@@ -829,6 +831,10 @@ impl Runner<'_> {
                 let ran = self.frames(simulation, 1);
                 simulation.mouse_up(button);
                 ran.and(nothing)
+            }
+            "scroll" => {
+                simulation.scroll(args.get(0)?, args.get(1)?);
+                nothing
             }
             "connect_gamepad" => {
                 let name = args.optional::<String>(0)?;

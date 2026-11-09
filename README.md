@@ -49,7 +49,8 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **Text** in a built-in pixel font, wrapped to a width and revealed a little at a time for
   dialogue.
 - **Input** from the keyboard, mouse and gamepads, with keys and buttons bound to named actions,
-  and sticks and triggers read as far as they're pushed.
+  which players can choose for themselves, sticks and triggers read as far as they're pushed, and
+  the mouse wheel.
 - **Audio** with [kira](https://github.com/tesselode/kira): sound effects, and music that loops
   and crossfades.
 - **Luau scripting** with [mlua](https://github.com/mlua-rs/mlua): sandboxed scripts, with tasks
@@ -117,7 +118,9 @@ battle and trip between maps, and its title screen continues from there.
 
 Walk with the arrow keys or WASD. Press Space, Enter or E to talk or to examine what's in front
 of you, Tab or I to open your bag, and Escape or Backspace to back out of menus, whose choices
-the mouse can point at and click too. F1 shows a debug
+the mouse can point at and click too. Those are the defaults: Controls, on the title screen, lets
+you pick an action and press the key or gamepad button you'd rather it had, and remembers it. F1
+shows a debug
 window, laid out with egui from Luau, to set your hit points, coins, items and quest, and jump
 between maps.
 
@@ -287,7 +290,8 @@ triangles, and the crates as boxes that fall and tumble.
 
 ![The figurine jumping toward the block and its coin, its shadow on the ground below](docs/screenshots/course.png)
 
-Walk with the arrow keys, WASD or a gamepad's stick, and jump with Space. The player is a
+Walk with the arrow keys, WASD or a gamepad's stick, jump with Space, and bring the camera nearer
+or farther with the mouse wheel. The player is a
 character that walks up the stairs and the slope, along the walls, and into the crates, pushing
 them: off the platform, or into the stack, which topples. A ray straight down puts its shadow on
 whatever is below, so a jump shows where it lands, and a sensor under the course catches what

@@ -22,6 +22,9 @@ const STICK_DEAD_ZONE: f32 = 0.15;
 /// How far a stick must move from its middle to count as pushed all the way, since many don't
 /// reach their edges, least of all on the diagonals.
 const STICK_FULL: f32 = 0.95;
+/// How many logical pixels a touchpad scrolls for a notch of a mouse wheel: what egui scrolls for
+/// a line, by its authors' consensus.
+const PIXELS_PER_NOTCH: f64 = 40.0;
 
 /// Keyboard, mouse and gamepad state for the current frame, available from
 /// [`Context::input`](crate::Context::input).
@@ -42,14 +45,23 @@ const STICK_FULL: f32 = 0.95;
 /// Keys are physical, the same wherever the player's layout puts their letters. What they type
 /// is [`Input::text`], the characters the player's layout made of them: Shift and the key a US
 /// layout has `.` on type `>`, but on a German one, `:`.
+///
+/// A screen that lets players choose their own controls asks [`Input::pressed_controls`] what
+/// they pressed, and binds it, showing what an action is bound to from [`Input::bindings`].
 #[derive(Debug, Default)]
 pub struct Input {
     keys: Buttons<Key>,
     mouse_buttons: Buttons<MouseButton>,
     mouse_position: Option<[f32; 2]>,
+    /// How far the mouse wheel turned since the last update, in notches: `x` to the right, `y`
+    /// away from the player.
+    wheel: [f32; 2],
     /// Every gamepad connected since the game started, by number: gamepad 1 is first. Those
     /// disconnected keep their number, for when they come back.
     gamepads: Vec<Gamepad>,
+    /// The keys and gamepad buttons pressed since the last update, in the order they were, each
+    /// once.
+    pressed_controls: Vec<Control>,
     actions: HashMap<String, Binding>,
     /// What was typed since the last update.
     text: String,
@@ -62,10 +74,26 @@ pub struct Input {
 /// What an action is bound to.
 #[derive(Debug)]
 struct Binding {
-    keys: Vec<Key>,
-    buttons: Vec<GamepadButton>,
+    /// Its keys and gamepad buttons, in the order they were bound.
+    controls: Vec<Control>,
     /// The gamepad whose buttons count, or `None` for any gamepad's.
     gamepad: Option<u32>,
+}
+
+impl Binding {
+    fn keys(&self) -> impl Iterator<Item = Key> + '_ {
+        self.controls.iter().filter_map(|&control| match control {
+            Control::Key(key) => Some(key),
+            Control::Button(_) => None,
+        })
+    }
+
+    fn buttons(&self) -> impl Iterator<Item = GamepadButton> + '_ {
+        self.controls.iter().filter_map(|&control| match control {
+            Control::Key(_) => None,
+            Control::Button(button) => Some(button),
+        })
+    }
 }
 
 impl Input {
@@ -104,18 +132,25 @@ impl Input {
         controls: impl IntoIterator<Item = Control>,
         gamepad: Option<u32>,
     ) {
-        let mut binding = Binding {
-            keys: Vec::new(),
-            buttons: Vec::new(),
+        let binding = Binding {
+            controls: controls.into_iter().collect(),
             gamepad,
         };
-        for control in controls {
-            match control {
-                Control::Key(key) => binding.keys.push(key),
-                Control::Button(button) => binding.buttons.push(button),
-            }
-        }
         self.actions.insert(action, binding);
+    }
+
+    /// What `action` is bound to: its keys and gamepad buttons, in the order they were bound, so
+    /// the first is the one to show the player. Nothing, for an action that isn't bound.
+    pub fn bindings(&self, action: &str) -> &[Control] {
+        self.actions
+            .get(action)
+            .map_or(&[], |binding| &binding.controls)
+    }
+
+    /// The gamepad whose buttons count for `action`, if it was bound to one gamepad's with
+    /// [`Input::bind_gamepad`].
+    pub fn bound_gamepad(&self, action: &str) -> Option<u32> {
+        self.actions.get(action)?.gamepad
     }
 
     /// Forgets every action's binding and lets go of any input method, as for a game starting
@@ -216,16 +251,11 @@ impl Input {
         let Some(binding) = self.actions.get(action) else {
             return 0.0;
         };
-        if binding.keys.iter().any(|&key| self.key_held(key)) {
+        if binding.keys().any(|key| self.key_held(key)) {
             return 1.0;
         }
         self.matching_gamepads(binding.gamepad)
-            .flat_map(|gamepad| {
-                binding
-                    .buttons
-                    .iter()
-                    .map(|&button| gamepad.strength(button))
-            })
+            .flat_map(|gamepad| binding.buttons().map(|button| gamepad.strength(button)))
             .fold(0.0, f32::max)
     }
 
@@ -282,11 +312,20 @@ impl Input {
             .map(|(_, gamepad)| gamepad)
     }
 
-    /// What `action` is bound to: its keys, its gamepad buttons, and the gamepad whose buttons
-    /// count, or `None` for any gamepad's.
-    pub(crate) fn binding(&self, action: &str) -> Option<(&[Key], &[GamepadButton], Option<u32>)> {
-        let binding = self.actions.get(action)?;
-        Some((&binding.keys, &binding.buttons, binding.gamepad))
+    /// How far the mouse wheel turned for this update, in notches, as `[x, y]`: `y` is positive
+    /// turned away from the player, as to scroll up, and negative turned toward them, and `x`,
+    /// for a wheel that tilts, positive tilted right. A touchpad scrolls by fractions of a notch,
+    /// one for every 40 points. Turns over the interface are its own, as clicks are.
+    pub fn wheel(&self) -> [f32; 2] {
+        self.wheel
+    }
+
+    /// The keys and gamepad buttons pressed for this update, in the order they were pressed, as
+    /// a screen that lets players choose their controls asks which they pressed, then binds it.
+    /// Gamepad buttons are any gamepad's, sticks' directions among them. A key the system
+    /// repeats isn't pressed again, and the keys the interface takes aren't the game's.
+    pub fn pressed_controls(&self) -> &[Control] {
+        &self.pressed_controls
     }
 
     fn any_bound(
@@ -296,21 +335,32 @@ impl Input {
         button: impl Fn(&Gamepad, GamepadButton) -> bool,
     ) -> bool {
         self.actions.get(action).is_some_and(|binding| {
-            binding.keys.iter().any(|&k| key(self, k))
+            binding.keys().any(|k| key(self, k))
                 || self
                     .matching_gamepads(binding.gamepad)
-                    .any(|gamepad| binding.buttons.iter().any(|&b| button(gamepad, b)))
+                    .any(|gamepad| binding.buttons().any(|b| button(gamepad, b)))
         })
     }
 
+    /// Notes that `control` was pressed for this update, unless it was already.
+    fn note_pressed(pressed: &mut Vec<Control>, control: Control) {
+        if !pressed.contains(&control) {
+            pressed.push(control);
+        }
+    }
+
     pub(crate) fn key_down(&mut self, key: Key) {
-        self.keys.down(key);
+        if self.keys.down(key) {
+            Self::note_pressed(&mut self.pressed_controls, Control::Key(key));
+        }
     }
 
     /// Repeats `key`, as the system does while a key is held. A repeat of a key that isn't held,
     /// as when the window gains focus while it's down, presses it.
     pub(crate) fn key_repeat(&mut self, key: Key) {
-        self.keys.repeat(key);
+        if self.keys.repeat(key) {
+            Self::note_pressed(&mut self.pressed_controls, Control::Key(key));
+        }
     }
 
     pub(crate) fn key_up(&mut self, key: Key) {
@@ -343,6 +393,30 @@ impl Input {
         self.mouse_position = position;
     }
 
+    /// Turns the mouse wheel by `x`, `y` notches, as [`Input::wheel`] has them.
+    pub(crate) fn turn_wheel(&mut self, [x, y]: [f32; 2]) {
+        self.wheel[0] += x;
+        self.wheel[1] += y;
+    }
+
+    /// Turns the mouse wheel as winit says it turned, on a window whose scale factor is
+    /// `scale_factor`: in lines, which are notches, or in physical pixels, as touchpads scroll.
+    /// winit's `x` is positive the other way.
+    pub(crate) fn turn_wheel_by(
+        &mut self,
+        delta: winit::event::MouseScrollDelta,
+        scale_factor: f64,
+    ) {
+        let [x, y] = match delta {
+            winit::event::MouseScrollDelta::LineDelta(x, y) => [x, y],
+            winit::event::MouseScrollDelta::PixelDelta(pixels) => {
+                let notches = |pixels: f64| (pixels / scale_factor / PIXELS_PER_NOTCH) as f32;
+                [notches(pixels.x), notches(pixels.y)]
+            }
+        };
+        self.turn_wheel([-x, y]);
+    }
+
     /// Connects gamepad `number`, called `name`: a new one, or one that was disconnected.
     /// Numbers start at 1.
     pub(crate) fn connect_gamepad(&mut self, number: u32, name: String) {
@@ -368,21 +442,22 @@ impl Input {
     /// Sets how far `button` on gamepad `number` is pushed, from 0 to 1. A stick's direction
     /// moves the stick, that way or back to the middle.
     pub(crate) fn set_gamepad_button(&mut self, number: u32, button: GamepadButton, strength: f32) {
-        if let Some(gamepad) = self.gamepad_mut(number) {
-            gamepad.set_button(button, strength);
+        let pressed = &mut self.pressed_controls;
+        if let Some(gamepad) = gamepad_mut(&mut self.gamepads, number) {
+            gamepad.set_button(button, strength, pressed);
         }
     }
 
     /// Moves `stick` on gamepad `number` along one axis, `x` or `y` (`y` down), from -1 to 1.
     pub(crate) fn set_gamepad_axis(&mut self, number: u32, stick: Stick, axis: Axis, value: f32) {
-        if let Some(gamepad) = self.gamepad_mut(number) {
-            gamepad.set_axis(stick, axis, value);
+        let pressed = &mut self.pressed_controls;
+        if let Some(gamepad) = gamepad_mut(&mut self.gamepads, number) {
+            gamepad.set_axis(stick, axis, value, pressed);
         }
     }
 
     fn gamepad_mut(&mut self, number: u32) -> Option<&mut Gamepad> {
-        let index = usize::try_from(number).ok()?.checked_sub(1)?;
-        self.gamepads.get_mut(index)
+        gamepad_mut(&mut self.gamepads, number)
     }
 
     /// Releases every held key and button, for when the window loses focus and stops receiving
@@ -395,15 +470,24 @@ impl Input {
         }
     }
 
-    /// Clears this frame's presses, releases and text. Call after the game has updated.
+    /// Clears this frame's presses, releases, text and turns of the wheel. Call after the game has
+    /// updated.
     pub(crate) fn end_frame(&mut self) {
         self.text.clear();
+        self.wheel = [0.0, 0.0];
+        self.pressed_controls.clear();
         self.keys.end_frame();
         self.mouse_buttons.end_frame();
         for gamepad in &mut self.gamepads {
             gamepad.buttons.end_frame();
         }
     }
+}
+
+/// Gamepad `number` of `gamepads`, numbered from 1.
+fn gamepad_mut(gamepads: &mut [Gamepad], number: u32) -> Option<&mut Gamepad> {
+    let index = usize::try_from(number).ok()?.checked_sub(1)?;
+    gamepads.get_mut(index)
 }
 
 /// A gamepad's state, from [`Input::gamepad`].
@@ -457,7 +541,8 @@ impl Gamepad {
         self.strengths[button as usize]
     }
 
-    fn set_button(&mut self, button: GamepadButton, strength: f32) {
+    /// Pushes `button` `strength` of the way, noting it in `pressed` if that presses it.
+    fn set_button(&mut self, button: GamepadButton, strength: f32, pressed: &mut Vec<Control>) {
         let strength = strength.clamp(0.0, 1.0);
         if let Some((stick, axis, sign)) = button.stick_direction() {
             let value = &mut self.sticks[stick as usize][axis as usize];
@@ -468,33 +553,36 @@ impl Gamepad {
             } else if *value * sign > 0.0 {
                 *value = 0.0;
             }
-            self.update_stick(stick);
+            self.update_stick(stick, pressed);
             return;
         }
         self.strengths[button as usize] = strength;
-        self.update_held(button);
+        self.update_held(button, pressed);
     }
 
-    fn set_axis(&mut self, stick: Stick, axis: Axis, value: f32) {
+    fn set_axis(&mut self, stick: Stick, axis: Axis, value: f32, pressed: &mut Vec<Control>) {
         self.sticks[stick as usize][axis as usize] = value.clamp(-1.0, 1.0);
-        self.update_stick(stick);
+        self.update_stick(stick, pressed);
     }
 
     /// Works out how far `stick` is pushed each way from where it is.
-    fn update_stick(&mut self, stick: Stick) {
+    fn update_stick(&mut self, stick: Stick, pressed: &mut Vec<Control>) {
         let [x, y] = dead_zoned(self.sticks[stick as usize]);
         let [up, down, left, right] = stick.directions();
         for (button, strength) in [(up, -y), (down, y), (left, -x), (right, x)] {
             self.strengths[button as usize] = strength.max(0.0);
-            self.update_held(button);
+            self.update_held(button, pressed);
         }
     }
 
-    /// Holds or releases `button` by how far it's pushed.
-    fn update_held(&mut self, button: GamepadButton) {
+    /// Holds or releases `button` by how far it's pushed, noting it in `pressed` if that presses
+    /// it.
+    fn update_held(&mut self, button: GamepadButton, pressed: &mut Vec<Control>) {
         let strength = self.strengths[button as usize];
         if strength >= PRESS {
-            self.buttons.down(button);
+            if self.buttons.down(button) {
+                Input::note_pressed(pressed, Control::Button(button));
+            }
         } else if strength < RELEASE {
             self.buttons.up(button);
         }
@@ -548,17 +636,22 @@ impl<T> Default for Buttons<T> {
 }
 
 impl<T: Copy + Eq + Hash> Buttons<T> {
-    fn down(&mut self, button: T) {
-        if self.held.insert(button) {
+    /// Holds `button`, and returns whether that pressed it: whether it wasn't held already.
+    fn down(&mut self, button: T) -> bool {
+        let pressed = self.held.insert(button);
+        if pressed {
             self.pressed.insert(button);
         }
+        pressed
     }
 
-    fn repeat(&mut self, button: T) {
+    /// Repeats `button` if it's held, or else presses it, returning whether it did.
+    fn repeat(&mut self, button: T) -> bool {
         if self.held.contains(&button) {
             self.repeated.insert(button);
+            false
         } else {
-            self.down(button);
+            self.down(button)
         }
     }
 
@@ -699,6 +792,12 @@ impl GamepadButton {
         ("RightStickRight", Self::RightStickRight),
     ];
 
+    /// The button's name, as written here, such as `"South"` or `"LeftStickUp"`, which
+    /// [parsing](GamepadButton::from_str) reads back.
+    pub fn name(self) -> &'static str {
+        Self::ALL[self as usize].0
+    }
+
     /// The stick and axis this is a direction along, and which way along it (`-1` or `1`), if
     /// it's a stick's direction.
     fn stick_direction(self) -> Option<(Stick, Axis, f32)> {
@@ -785,6 +884,16 @@ pub enum Control {
     Button(GamepadButton),
 }
 
+impl Control {
+    /// The key's name or the gamepad button's, which [parsing](Control::from_str) reads back.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Key(key) => key.name(),
+            Self::Button(button) => button.name(),
+        }
+    }
+}
+
 impl From<Key> for Control {
     fn from(key: Key) -> Self {
         Self::Key(key)
@@ -838,6 +947,14 @@ macro_rules! keys {
             /// Every key's name.
             #[cfg(test)]
             const NAMES: &'static [&'static str] = &[$(stringify!($key),)*];
+
+            /// The key's name, as written here, such as `"Up"` or `"Digit1"`, which
+            /// [parsing](Key::from_str) reads back.
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Self::$key => stringify!($key),)*
+                }
+            }
 
             /// The engine's key for a winit key code, if it has one.
             pub(crate) fn from_winit(code: KeyCode) -> Option<Self> {
@@ -1268,5 +1385,102 @@ mod tests {
             assert!(name.parse::<Key>().is_err(), "{name}");
             assert_eq!(button as usize, index, "`ALL` is in order");
         }
+    }
+
+    #[test]
+    fn names_read_back_as_they_parse() {
+        for name in Key::NAMES {
+            let key: Key = name.parse().unwrap();
+            assert_eq!(key.name(), *name);
+            assert_eq!(Control::Key(key).name(), *name);
+        }
+        for (name, button) in GamepadButton::ALL {
+            assert_eq!(button.name(), name);
+            assert_eq!(name.parse(), Ok(Control::Button(button)));
+        }
+    }
+
+    #[test]
+    fn the_wheel_adds_up_until_an_update_has_seen_it() {
+        let mut input = Input::new();
+        input.turn_wheel([0.0, 1.0]);
+        input.turn_wheel([0.5, 2.0]);
+        assert_eq!(input.wheel(), [0.5, 3.0]);
+        input.end_frame();
+        assert_eq!(input.wheel(), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn the_wheel_counts_winits_lines_as_notches_and_its_pixels_by_forty_points() {
+        use winit::{dpi::PhysicalPosition, event::MouseScrollDelta};
+        let mut input = Input::new();
+        // Turned away, and tilted left, which winit's `x` has positive.
+        input.turn_wheel_by(MouseScrollDelta::LineDelta(1.0, 1.0), 2.0);
+        assert_eq!(input.wheel(), [-1.0, 1.0]);
+        input.end_frame();
+        // 120 physical pixels down a touchpad at a scale factor of 1.5 is 80 points: 2 notches.
+        let pixels = PhysicalPosition::new(-60.0, -120.0);
+        input.turn_wheel_by(MouseScrollDelta::PixelDelta(pixels), 1.5);
+        assert_eq!(input.wheel(), [1.0, -2.0]);
+    }
+
+    #[test]
+    fn pressed_controls_are_keys_and_buttons_in_the_order_pressed() {
+        let mut input = Input::new();
+        input.connect_gamepad(1, "Pad".into());
+        input.key_down(Key::K);
+        input.set_gamepad_button(1, GamepadButton::South, 1.0);
+        input.set_gamepad_axis(1, Stick::Left, Axis::X, -1.0);
+        // Pressed again in the same frame, and repeated: still once.
+        input.key_up(Key::K);
+        input.key_down(Key::K);
+        input.key_repeat(Key::K);
+        // Not a control.
+        input.mouse_down(MouseButton::Left);
+        assert_eq!(
+            input.pressed_controls(),
+            [
+                Control::Key(Key::K),
+                Control::Button(GamepadButton::South),
+                Control::Button(GamepadButton::LeftStickLeft),
+            ]
+        );
+
+        // Held isn't pressed, nor is a repeat.
+        input.end_frame();
+        input.key_repeat(Key::K);
+        input.set_gamepad_button(1, GamepadButton::South, 0.8);
+        assert!(input.pressed_controls().is_empty());
+
+        // A repeat of a key not held presses it, as when the window gains focus.
+        input.key_repeat(Key::J);
+        assert_eq!(input.pressed_controls(), [Control::Key(Key::J)]);
+    }
+
+    #[test]
+    fn bindings_keep_the_order_they_were_bound_in() {
+        let mut input = Input::new();
+        assert!(input.bindings("jump").is_empty());
+        input.bind_gamepad(
+            "jump",
+            2,
+            [
+                Control::Button(GamepadButton::South),
+                Control::Key(Key::Space),
+                Control::Key(Key::W),
+            ],
+        );
+        assert_eq!(
+            input.bindings("jump"),
+            [
+                Control::Button(GamepadButton::South),
+                Control::Key(Key::Space),
+                Control::Key(Key::W),
+            ]
+        );
+        assert_eq!(input.bound_gamepad("jump"), Some(2));
+        input.bind("jump", [Key::Up]);
+        assert_eq!(input.bindings("jump"), [Control::Key(Key::Up)]);
+        assert_eq!(input.bound_gamepad("jump"), None);
     }
 }

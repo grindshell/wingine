@@ -196,6 +196,7 @@ The script has one command per line. `#` starts a comment.
 | `mouse-up Left` | Lets a mouse button go. |
 | `click 120 64` | Moves the cursor, presses the left button, runs one frame, and lets it go. |
 | `click Right` | Clicks another button where the cursor is. |
+| `scroll 0 -2` | Turns the mouse wheel where the cursor is: 2 notches toward the player, as to scroll down. The first number tilts it right, as [`input.wheel`](api/input.md#inputwheel) has it. |
 | `click-gui Go to town` | Clicks the first widget of the game's [interface](api/gui.md) labelled the rest of the line, such as a button's text. See below. |
 | `pad-down 1 South` | Holds gamepad 1's button down. Buttons are named as in [Button names](api/input.md#button-names), in any case, and a stick's direction, such as `LeftStickLeft`, pushes the stick all the way. |
 | `pad-up 1 South` | Lets a gamepad's button go. |

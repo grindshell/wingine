@@ -151,10 +151,13 @@ sim.move_mouse(x: number, y: number)
 sim.press_mouse(button: MouseButton?)
 sim.release_mouse(button: MouseButton?)
 sim.click(x: number, y: number, button: MouseButton?)
+sim.scroll(x: number, y: number)
 ```
 
 Moves the cursor to `x`, `y` in canvas pixels, and holds a button down or lets it go.
-`sim.click` moves the cursor, presses the button, runs a frame, and lets it go.
+`sim.click` moves the cursor, presses the button, runs a frame, and lets it go. `sim.scroll`
+turns the mouse wheel where the cursor is, `y` notches away from the player and `x` tilted right,
+as [`input.wheel`](input.md#inputwheel) has them, for the next update.
 
 ### Gamepads
 

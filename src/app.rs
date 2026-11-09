@@ -575,6 +575,10 @@ where
                 state.cursor = Some([position.x, position.y])
             }
             WindowEvent::CursorLeft { .. } => state.cursor = None,
+            WindowEvent::MouseWheel { delta, .. } if !to_gui => {
+                let scale_factor = state.window.scale_factor();
+                state.ctx.input.turn_wheel_by(delta, scale_factor);
+            }
             WindowEvent::MouseInput {
                 state: button_state,
                 button,

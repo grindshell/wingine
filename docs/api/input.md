@@ -122,6 +122,83 @@ input.axis(negative: string, positive: string): number
 Returns how far `positive` is pushed less how far `negative` is, from -1 to 1. Bound to keys, it's
 -1, 0 or 1; bound to a stick's two directions along one axis, it's where the stick is along it.
 
+### `input.bindings`
+
+```lua
+input.bindings(action: string): ({ Key | GamepadButton }, number?)
+```
+
+Returns what `action` is bound to, named as `input.bind` takes them, in the order they were
+bound, and the gamepad whose buttons count, if it was bound to one. An action with nothing bound
+has an empty list. A game names an action by its first control, so its prompts follow the
+player's choice. Like the rest of `input`, it doesn't work in `draw`, so find the name in
+`update`:
+
+```lua
+local prompt = ""
+
+function update(dt: number)
+    prompt = `{input.bindings("interact")[1]}: Talk`
+end
+
+function draw()
+    graphics.draw_text(font, prompt, 4, 4, "#ffffff")
+end
+```
+
+## Choosing controls
+
+A screen where players choose their own controls waits for them to press something, then binds
+it. [`input.pressed_controls`](#inputpressed_controls) says what they pressed, and
+[`input.bindings`](#inputbindings) what an action has, to show it and to bind it again with the
+change:
+
+```lua
+input.bind("jump", { "Space", "South" })
+-- What the player chose before, by action.
+local chosen = save.read("controls") or {}
+for action, controls in chosen do
+    input.bind(action, controls)
+end
+
+-- The action waiting for its new key, if one is: the menu picking one sets it.
+local waiting: string? = nil
+
+function update(dt: number)
+    local pressed = input.pressed_controls()[1]
+    if waiting and pressed == "Escape" then
+        waiting = nil
+    elseif waiting and pressed then
+        -- The new key goes first, in place of the one it had first.
+        local controls = input.bindings(waiting)
+        controls[1] = pressed
+        input.bind(waiting, controls)
+        chosen[waiting] = controls
+        save.write("controls", chosen)
+        waiting = nil
+    end
+end
+```
+
+Bindings last only while the game runs, so a game keeps the player's in a [save](save.md) and
+binds them again as it starts. The press that picked the action from a menu is seen by the update
+that picked it, so a screen starts waiting from the next. The RPG's `controls.luau` is such a
+screen, which also hands a key another action has over to it in exchange for the one it replaces,
+so no two actions share one.
+
+### `input.pressed_controls`
+
+```lua
+input.pressed_controls(): { Key | GamepadButton }
+```
+
+Returns the keys and gamepad buttons pressed for this update, in the order they were pressed,
+named as [`input.bind`](#inputbind) takes them, so what it returns binds as it is. Gamepad buttons
+are any gamepad's, and include sticks' directions, such as `"LeftStickUp"`, pushed past halfway.
+A key the system [repeats](#inputkey_repeated) isn't pressed again. Mouse buttons aren't
+controls, so they aren't among them, and neither are keys the interface takes, as a focused text
+field does.
+
 ## Keys
 
 ### `input.key_held`
@@ -401,3 +478,21 @@ Returns whether `button` was released for this update.
 
 When the window loses focus, every key and button that was held counts as released, since the
 window no longer hears about them.
+
+### `input.wheel`
+
+```lua
+input.wheel(): (number, number)
+```
+
+Returns how far the mouse wheel turned for this update, in notches, as `x, y`: `y` is positive
+turned away from the player, as to scroll up, and negative turned toward them, and `x`, for a wheel
+that tilts, is positive tilted right. Turns between two updates add up, and each is seen by one
+update, as presses are. A touchpad scrolls by fractions of a notch, one for every 40 points it
+scrolls. Turns over the [interface](gui.md) are its own, as its clicks are.
+
+```lua
+local _, turned = input.wheel()
+-- Nearer for each notch turned away, and farther for each turned toward.
+zoom = math.clamp(zoom * 0.85 ^ turned, 0.4, 2)
+```

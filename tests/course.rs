@@ -299,6 +299,39 @@ fn the_shadow_is_hidden_off_the_course() {
     assert!(!shown);
 }
 
+/// How far the camera is from what it looks at.
+fn camera_distance(simulation: &mut Simulation<LuauGame>) -> f32 {
+    simulation.eval(
+        "(function()
+            local camera = course.camera()
+            return vector.magnitude(camera.position - camera.target)
+        end)()",
+    )
+}
+
+#[test]
+fn the_mouse_wheel_brings_the_camera_nearer_and_takes_it_farther() {
+    let mut simulation = simulation();
+    let start = camera_distance(&mut simulation);
+    // 4.5 above and 5.5 behind.
+    assert!(near(start, 50.5f32.sqrt(), 1e-3), "{start}");
+
+    // Two notches away from the player bring it nearer, by 0.85 a notch, in the frame they turn.
+    simulation.scroll(0.0, 2.0);
+    simulation.step();
+    check(&simulation);
+    let nearer = camera_distance(&mut simulation);
+    assert!(near(nearer, start * 0.85 * 0.85, 1e-3), "{nearer}");
+    simulation.step();
+    assert_eq!(camera_distance(&mut simulation), nearer);
+
+    // Toward the player, as far as it goes.
+    simulation.scroll(0.0, -20.0);
+    simulation.step();
+    let farthest = camera_distance(&mut simulation);
+    assert!(near(farthest, start * 2.0, 1e-3), "{farthest}");
+}
+
 /// A hash of the bits of every crate's position and turn, and the player's feet.
 fn hash_of_the_course(simulation: &mut Simulation<LuauGame>) -> u64 {
     let numbers: Vec<f32> = simulation.eval(

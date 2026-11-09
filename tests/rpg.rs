@@ -8,7 +8,7 @@ use std::{
 
 use wingine::{
     headless::Simulation,
-    input::{Key, MouseButton},
+    input::{GamepadButton, Key, MouseButton},
     runtime::{self, LuauGame},
 };
 
@@ -61,7 +61,7 @@ fn title_choices(simulation: &mut Simulation<LuauGame>) -> Option<Vec<String>> {
     simulation.eval("rpg.title.choices")
 }
 
-/// Picks `choice` from the title screen's menu.
+/// Picks `choice` from the title screen's menu, by whatever keys the actions are bound to.
 fn pick(simulation: &mut Simulation<LuauGame>, choice: &str) {
     let choices = title_choices(simulation).expect("the title screen is open");
     let index = choices
@@ -70,9 +70,9 @@ fn pick(simulation: &mut Simulation<LuauGame>, choice: &str) {
         .unwrap_or_else(|| panic!("the title offers {choice}: {choices:?}"));
     let highlighted = simulation.eval::<usize>("rpg.title.selected") - 1;
     for _ in 0..(index + choices.len() - highlighted) % choices.len() {
-        simulation.tap(Key::Down);
+        simulation.tap_action("down");
     }
-    simulation.tap(Key::Space);
+    simulation.tap_action("interact");
     if let Some(err) = simulation.game().error() {
         panic!("the game stopped: {err}");
     }
@@ -199,7 +199,7 @@ fn the_game_opens_on_its_title() {
     let mut simulation = start(None);
     assert_eq!(
         title_choices(&mut simulation),
-        Some(vec!["New Game".to_owned()])
+        Some(vec!["New Game".to_owned(), "Controls".to_owned()])
     );
     simulation.tap(Key::Up);
     simulation.tap(Key::Tab);
@@ -272,7 +272,11 @@ fn continuing_picks_up_where_the_game_saved() {
     let mut simulation = start(Some(&saves));
     assert_eq!(
         title_choices(&mut simulation),
-        Some(vec!["Continue".to_owned(), "New Game".to_owned()])
+        Some(vec![
+            "Continue".to_owned(),
+            "New Game".to_owned(),
+            "Controls".to_owned()
+        ])
     );
     pick(&mut simulation, "Continue");
     assert_eq!(title_choices(&mut simulation), None);
@@ -293,6 +297,96 @@ fn continuing_picks_up_where_the_game_saved() {
     assert_eq!(count(&mut simulation, "swift_feather"), 1);
     assert!(simulation.eval::<bool>("rpg.levels.village.found['6,5']"));
     assert!(!gate_is_shut(&mut simulation));
+}
+
+/// What `action` is bound to.
+fn bindings(simulation: &mut Simulation<LuauGame>, action: &str) -> Vec<String> {
+    simulation.eval(&format!("(input.bindings('{action}'))"))
+}
+
+/// Picks the controls screen's row `row`, counting from 1, by the keys the actions are bound to.
+fn pick_row(simulation: &mut Simulation<LuauGame>, row: usize) {
+    let rows: usize = simulation.eval("#rpg.controls.ACTIONS + 2");
+    let selected = simulation.eval::<usize>("rpg.controls.selected()");
+    for _ in 0..(row + rows - selected) % rows {
+        simulation.tap_action("down");
+    }
+    simulation.tap_action("interact");
+}
+
+#[test]
+fn the_controls_screen_rebinds_actions_and_keeps_them() {
+    let saves = saves_folder("controls");
+    let mut simulation = start(Some(&saves));
+    pick(&mut simulation, "Controls");
+    assert!(simulation.eval::<bool>("rpg.controls.is_open()"));
+
+    // Interact, the fifth action, waits for a key, which goes first in place of Space.
+    pick_row(&mut simulation, 5);
+    assert_eq!(
+        simulation.eval::<String>("rpg.controls.waiting"),
+        "interact"
+    );
+    simulation.tap(Key::K);
+    assert!(simulation.eval::<bool>("rpg.controls.waiting == nil"));
+    assert_eq!(bindings(&mut simulation, "interact"), ["K", "Enter", "E"]);
+
+    // A key another action has goes in exchange: Up takes E, and Interact gets Up for it.
+    pick_row(&mut simulation, 1);
+    simulation.tap(Key::E);
+    assert_eq!(bindings(&mut simulation, "up"), ["E", "W"]);
+    assert_eq!(bindings(&mut simulation, "interact"), ["K", "Enter", "Up"]);
+
+    // One the action has already swaps places with its first.
+    pick_row(&mut simulation, 2);
+    simulation.tap(Key::S);
+    assert_eq!(bindings(&mut simulation, "down"), ["S", "Down"]);
+
+    // A gamepad's button counts as much as a key.
+    let pad = simulation.connect_gamepad("Pad");
+    pick_row(&mut simulation, 7);
+    simulation.tap_button(pad, GamepadButton::North);
+    assert_eq!(bindings(&mut simulation, "menu"), ["North", "I"]);
+
+    // Escape stops waiting, changing nothing.
+    pick_row(&mut simulation, 3);
+    simulation.tap(Key::Escape);
+    assert!(simulation.eval::<bool>("rpg.controls.waiting == nil"));
+    assert_eq!(bindings(&mut simulation, "left"), ["Left", "A"]);
+    assert!(simulation.eval::<bool>("rpg.controls.is_open()"));
+
+    // Backing out returns to the title's menu.
+    simulation.tap_action("cancel");
+    assert!(!simulation.eval::<bool>("rpg.controls.is_open()"));
+    assert!(title_choices(&mut simulation).is_some());
+    drop(simulation);
+
+    // They last, and the game names the interact key by the one chosen.
+    let mut simulation = start(Some(&saves));
+    assert_eq!(bindings(&mut simulation, "interact"), ["K", "Enter", "Up"]);
+    assert_eq!(bindings(&mut simulation, "up"), ["E", "W"]);
+    pick(&mut simulation, "New Game");
+    assert_eq!(
+        simulation.eval::<String>("rpg.controls.first('interact')"),
+        "K"
+    );
+    place_player(&mut simulation, [6, 6], "up");
+    simulation.tap(Key::Space);
+    assert_eq!(dialogue(&mut simulation), None, "Space no longer examines");
+    simulation.tap(Key::K);
+    assert!(dialogue(&mut simulation).is_some(), "K does");
+    drop(simulation);
+
+    // Defaults puts them back, and forgets what was chosen.
+    let mut simulation = start(Some(&saves));
+    pick(&mut simulation, "Controls");
+    pick_row(&mut simulation, 8);
+    assert_eq!(
+        bindings(&mut simulation, "interact"),
+        ["Space", "Enter", "E"]
+    );
+    assert_eq!(bindings(&mut simulation, "up"), ["Up", "W"]);
+    assert!(simulation.eval::<bool>("save.read('controls') == nil"));
 }
 
 #[test]
@@ -1170,6 +1264,7 @@ fn the_bags_stats_panel_fits_its_lines() {
 fn the_title_menu_fits_its_choices_and_scene_files_are_canonical() {
     for path in [
         "title.scene.luau",
+        "controls.scene.luau",
         "bag.scene.luau",
         "maps/village.scene.luau",
         "maps/shrine.scene.luau",
@@ -1188,10 +1283,15 @@ fn the_title_menu_fits_its_choices_and_scene_files_are_canonical() {
 
     let mut simulation = start(None);
     let menu = "rpg.title.scene:find('menu')";
-    let (label, _): (f64, f64) = simulation.eval(&format!("{menu}:find('choice_1/label'):size()"));
+    let label = |simulation: &mut Simulation<LuauGame>, n: u32| {
+        let (width, _): (f64, f64) =
+            simulation.eval(&format!("{menu}:find('choice_{n}/label'):size()"));
+        width
+    };
+    let label = label(&mut simulation, 1).max(label(&mut simulation, 2));
     let (x, y, width, height) = bounds(&mut simulation, menu);
-    // One choice inside its padding, after the pointer's column, in the middle of the screen.
-    assert_eq!((y, width, height), (80.0, 6.0 + 8.0 + label + 6.0, 20.0));
+    // Two choices inside its padding, after the pointer's column, in the middle of the screen.
+    assert_eq!((y, width, height), (80.0, 6.0 + 8.0 + label + 6.0, 30.0));
     assert_eq!(x, 160.0 - (width / 2.0).floor());
     assert!(simulation.eval::<bool>(&format!("{menu}:find('choice_1/pointer'):is_visible()")));
 }

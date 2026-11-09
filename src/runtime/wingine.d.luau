@@ -842,6 +842,13 @@ declare input: {
     --- Binds `action` to keys and gamepad buttons, replacing what it was bound to before. With
     --- `gamepad`, only that gamepad's buttons count; without, any gamepad's do.
     bind: (action: string, controls: { Key | GamepadButton }, gamepad: number?) -> (),
+    --- Returns what `action` is bound to, in the order it was bound, empty if it isn't, and the
+    --- gamepad whose buttons count, if one was given.
+    bindings: (action: string) -> ({ Key | GamepadButton }, number?),
+    --- Returns the keys and gamepad buttons pressed for this update, in the order they were
+    --- pressed, named as `bind` takes them: what a screen choosing controls binds. Gamepad buttons
+    --- are any gamepad's.
+    pressed_controls: () -> { Key | GamepadButton },
     --- Returns whether anything bound to `action` is down.
     held: (action: string) -> boolean,
     --- Returns whether anything bound to `action` was pressed for this update.
@@ -880,6 +887,10 @@ declare input: {
     mouse_pressed: (button: MouseButton) -> boolean,
     --- Returns whether `button` was released for this update.
     mouse_released: (button: MouseButton) -> boolean,
+    --- Returns how far the mouse wheel turned for this update, in notches: `y` positive turned
+    --- away from the player, as to scroll up, and `x` positive tilted right. A touchpad scrolls by
+    --- fractions of a notch.
+    wheel: () -> (number, number),
     --- Returns the numbers of the gamepads connected, in order. They count from 1, in the order
     --- gamepads first connect.
     gamepads: () -> { number },
@@ -1107,6 +1118,9 @@ declare sim: {
     --- Moves the cursor to `x`, `y`, presses a mouse button (the left by default), runs a frame,
     --- and lets it go.
     click: (x: number, y: number, button: MouseButton?) -> (),
+    --- Turns the mouse wheel `x`, `y` notches where the cursor is: positive `y` away from the
+    --- player, as to scroll up, and positive `x` tilted right.
+    scroll: (x: number, y: number) -> (),
     --- Connects a gamepad, and returns its number.
     connect_gamepad: (name: string?) -> number,
     disconnect_gamepad: (gamepad: number) -> (),

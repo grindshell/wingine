@@ -120,6 +120,58 @@ fn without_settings_the_title_is_the_folders_name() {
 }
 
 #[test]
+fn games_read_the_wheel_what_was_pressed_and_what_actions_are_bound_to() {
+    let folder = game(
+        "pressed_controls",
+        &[(
+            "main.luau",
+            "input.bind('jump', { 'South', 'Space', 'W' }, 2)
+            pressed = {}
+            turned = {}
+            function update()
+                local x, y = input.wheel()
+                if x ~= 0 or y ~= 0 then
+                    table.insert(turned, { x, y })
+                end
+                for _, control in input.pressed_controls() do
+                    table.insert(pressed, control)
+                end
+            end",
+        )],
+    );
+    let mut simulation = simulation(&folder);
+    let (controls, gamepad): (Vec<String>, Option<u32>) = simulation.eval("input.bindings('jump')");
+    assert_eq!(
+        (controls, gamepad),
+        (vec!["South".into(), "Space".into(), "W".into()], Some(2))
+    );
+    let (controls, gamepad): (Vec<String>, Option<u32>) = simulation.eval("input.bindings('fly')");
+    assert!(controls.is_empty() && gamepad.is_none());
+
+    // Keys and gamepad buttons, in the order they're pressed, but not mouse buttons.
+    let pad = simulation.connect_gamepad("Pad");
+    simulation.key_down(Key::K);
+    simulation.button_down(pad, GamepadButton::Start);
+    simulation.mouse_down(MouseButton::Left);
+    simulation.step();
+    simulation.key_up(Key::K);
+    simulation.button_up(pad, GamepadButton::Start);
+    simulation.mouse_up(MouseButton::Left);
+    simulation.step();
+    assert_eq!(simulation.eval::<Vec<String>>("pressed"), ["K", "Start"]);
+
+    // The wheel's turns between two updates add up.
+    simulation.scroll(0.0, 1.5);
+    simulation.scroll(-1.0, 0.0);
+    simulation.run_frames(2);
+    assert_eq!(simulation.eval::<usize>("#turned"), 1);
+    assert_eq!(
+        simulation.eval::<(f32, f32)>("turned[1][1], turned[1][2]"),
+        (-1.0, 1.5)
+    );
+}
+
+#[test]
 fn games_cover_the_screen_and_scale_as_they_say() {
     let folder = game(
         "fullscreen",

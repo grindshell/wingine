@@ -650,6 +650,12 @@ impl FromLua for Control {
     }
 }
 
+impl IntoLua for Control {
+    fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
+        self.name().into_lua(lua)
+    }
+}
+
 /// `color` as a number `0xRRGGBBAA`, its components rounded to bytes, which converts back faster
 /// than a string or a table.
 pub(crate) fn packed_color(color: Color) -> u32 {

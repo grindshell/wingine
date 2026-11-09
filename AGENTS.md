@@ -147,8 +147,14 @@ networking or 3D pipelines.
   game takes one (`set_input_method`, an area of the canvas, which egui's own platform output
   carries to `egui_winit` when egui isn't using one), since they change which key events arrive;
   `composition` is what one is composing. Actions bind to
-  `Control`s, keys and gamepad buttons, of any gamepad or one, and have a strength from 0 to 1,
-  which `axis` makes an axis of two. Gamepads are numbered from 1, keeping their number while
+  `Control`s, keys and gamepad buttons, of any gamepad or one, kept in the order bound
+  (`bindings`, so games name an action by its first), and have a strength from 0 to 1, which
+  `axis` makes an axis of two. `pressed_controls` lists the controls pressed for an update in the
+  order they were, each once, as a screen choosing controls binds them, and names (`Key::name`,
+  `Control::name`) read back as they parse. The mouse wheel (`wheel`) adds up notches until an
+  update has seen them, `y` positive turned away and `x` tilted right (winit's `x` is the other
+  way), a touchpad's pixels a notch for every 40 points (`PIXELS_PER_NOTCH`, egui's line); turns
+  egui wants are its own, as its clicks are. Gamepads are numbered from 1, keeping their number while
   disconnected. Their buttons include the sticks' directions (`LeftStickLeft`), pushed as far as
   the stick is that way through a radial dead zone (`dead_zoned`); every button is held from 0.5
   of the way and released below 0.4, so a trigger or stick near the line doesn't flicker.
@@ -332,7 +338,8 @@ networking or 3D pipelines.
   want. All of them in a process share one GPU device, and
   only one thread at a time may hold any (a reentrant lease): lavapipe crashes with a device per
   thread and WARP renders wrongly with a shared one, so parallel GPU tests take turns. Simulated
-  input reaches egui too, typing as well, with `scroll` for it alone; screenshots show the
+  input reaches egui too, typing and the mouse wheel (`scroll`, in notches) as well, and
+  reaches the game only where egui doesn't want it, as a window would; screenshots show the
   interface; `request_close` presses the window's close button and `has_quit` tells whether the
   game called `Context::quit`. Each keeps its game's saves in a temporary folder of its own,
   unless its config gives one. Simulations run every frame they're asked to, but
@@ -606,7 +613,13 @@ networking or 3D pipelines.
   (`run_event`) once the title has closed: the player's state, where they are, and each visited
   level's beaten foes and found places (by cell). Continuing builds those levels afresh, marks
   them, and `story.restore` makes again what reaching the quest's stage changed, such as the open
-  gate; change it with the story's events. New Game over a save asks first. The game's state is
+  gate; change it with the story's events. New Game over a save asks first. The title's Controls
+  opens `controls.luau`'s screen, laid out in `controls.scene.luau` over the title's woods, which
+  binds the actions (`controls.ACTIONS`, with their defaults) as the player chooses: picking one
+  waits for `input.pressed_controls` to give it a new first control, a key another action has
+  going there in exchange (`controls.choose`), Escape stopping, and Defaults putting them back;
+  the choices last in the save `controls`, which `controls.load` binds as the game starts, and
+  the HUD names the interact key by its first (`controls.first`). The game's state is
   the global `rpg`, which its `.luaurc` names for luau-lsp, as the shmup's
   names `shmup` and `danmaku`.
 - `examples/shmup/`: a Touhou-style bullet hell, written entirely in Luau, at a fixed 60 updates
@@ -696,7 +709,8 @@ networking or 3D pipelines.
   down from the player's middle puts `shadow`, a dark sphere squashed flat, on whatever is below,
   tilted to it, so a jump shows where it lands. The coins aren't bodies: they spin and bob, and
   the player picks one up by coming near it, into `world:overlap_ball` around it. The camera
-  follows the player from above and behind (`course.camera()`). The scene
+  follows the player from above and behind (`course.camera()`), as near as the mouse wheel has
+  brought it (`course.zoom`, `input.wheel`). The scene
   file is in the canonical layout, and `tests/course.rs` checks it stays so. The game's state is
   the global `course`, its physics world `course.world`.
 - `src/math.rs`: geometry types: `Rect`, `Affine` and `Affine3`, 2D and 3D transforms that
@@ -767,9 +781,11 @@ networking or 3D pipelines.
   as it is, waits and input, the game stopping and time limits, refused requests, files that don't
   load, modules, filters, the interface, and screenshots matching, differing and updated.
 - `tests/gui.rs`: tests for egui over games, through `Simulation`: clicking widgets by label,
-  typing into a focused field, input egui takes not reaching the game, and the debug key.
+  typing into a focused field, input egui takes not reaching the game (the mouse wheel's turns
+  over its windows too), and the debug key.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders,
-  their settings, covering the screen and scaling, their saves, their 3D views, models and
+  their settings, covering the screen and scaling, the mouse wheel, the controls pressed and
+  what actions are bound to, their saves, their 3D views, models and
   picking, scenes' views and their nodes, menus over
   nodes, in its
   `physics` module (with the `physics` feature), physics worlds of their nodes, 2D and 3D (bodies
@@ -798,7 +814,8 @@ networking or 3D pipelines.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest, using
   its debug panel, its title menu and bag's panels fitting what they hold, questions answered by
   mouse, its scene files being in the canonical layout, and continuing a saved game in a second simulation sharing the first's
-  save folder. Its `simulation()` starts a new game from the title screen.
+  save folder, as its controls screen's choices last too. Its `simulation()` starts a new game
+  from the title screen, and `pick` picks from the title by whatever keys the actions have.
 - `tests/garden.rs`: tests for the `garden` example, the same way: walking, stopping at and
   sliding along what's solid and the ground's edges, seeds thrown the way the player faces and
   landing short of what's solid, or not growing without room, picking flowers, notes, its F1
@@ -814,7 +831,8 @@ networking or 3D pipelines.
   stopping the player without its creeping along them, climbing the stairs, walking down the
   slope on the ground all the way, jumping onto the block, pushing crates off the platform and
   toppling the stack, falling off and starting again, finding every coin, and the shadow under
-  the player, on the ground, the slope and the block, and hidden off the course. One plays a run and
+  the player, on the ground, the slope and the block, and hidden off the course, and the mouse
+  wheel moving the camera. One plays a run and
   checks a hash of every crate's pose and the player's feet, pinned, so CI checks physics is the
   same to the bit on Windows and Linux; a change to how the course plays changes it.
 - `tests/shmup.rs`: tests for the `shmup` example, the same way: the title menu by key and by
