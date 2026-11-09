@@ -32,7 +32,7 @@ thousands of things every frame:
 The [shmup example](../examples/shmup) has both: its bullets are in [`bullets.luau`](../examples/shmup/bullets.luau)
 and in the [`danmaku`](../examples/native-danmaku/src/lib.rs) library, behind one interface, and
 the library fits about 3.4 times as many bullets in a frame. The
-[README](../README.md#luau-and-rust-compared) breaks down where the time goes.
+[README](../README.md#luau-and-rust-compared) compares the two.
 
 What a library doesn't speed up is calling it. A call from Luau into a library costs more than
 drawing a sprite, so a library pays off when each call does a lot of work: "move every bullet",

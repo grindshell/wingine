@@ -12,77 +12,46 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 
 ## Features
 
-- **Rendering** with [wgpu](https://wgpu.rs): sprites, rotated or not, sprite sheets, and
-  rectangles, lines and circles, filled or outlined, batched by texture. A fixed resolution, such as 320x180, scales up by whole numbers for
-  crisp pixel art, or as far as fits, or stretched to fill the window, which can cover the screen,
-  borderless or exclusive.
-- **Timing**: games update once a frame by the frame's time, or at a fixed rate, such as 60 times
-  a second, so they play the same at any frame rate. Frame stats and a headless benchmark show
-  where each frame's time goes.
-- **3D views** among 2D drawing, from Rust or Luau: meshes lit by a sun, textured with sprites,
-  and sprites standing among them as billboards, for 2.5D games, seen through a perspective or
-  orthographic camera and rendered at the canvas's resolution, so they keep a pixel-art look.
-  Cubes, planes and spheres are built in, games build their own meshes, models load from glTF
-  files made in tools such as Blender, and the mouse picks what it points at by boxes.
-- **Tilemaps** with layers and tilesets, culled to the view, and a **camera** that follows the
-  player and stays inside the map.
-- **Scenes**: trees of sprites, rectangles, text, areas, stacks, panels, tilemaps and 3D views of
-  meshes, models and billboards, laid out in files of plain Luau data, which tools can write as
-  well as people. Nodes turn and stretch about pivots, carrying what's inside them along; screens
-  anchor to the canvas's edges and middle, with text aligned left, center or right, and stack
-  lists in panels that fit them, filled or framed by sliced sprites; scenes place other scenes,
-  changed by overrides; and games find nodes by path or tag, test the mouse against them, pick
-  what's under it in 3D, and add and remove them as they play.
-- **Menus** over scenes' nodes, which the keys move through by where the items are, lists and
-  grids alike, wrapping round and repeating as keys are held, and the mouse points at and clicks,
-  passing over items that can't be picked; games show the selection as they like.
-- **Rigged characters**: sprites for parts that turn about their joints, animated by clips of
-  keyframes in scene files, which games layer and crossfade.
-- **Grid movement** from tile to tile, with tile collision.
-- **Physics** with [Rapier](https://rapier.rs), the same to the bit on every platform: in 2D,
-  scene nodes made solid where they're drawn, turned and stretched, or along their edges, and
-  characters that walk among them, stopping at what's solid and sliding along it; in 3D views,
-  bodies shaped like the meshes and models nodes show, which fall, tumble and come to rest, and
-  characters that walk up stairs and slopes among them, pushing what's in their way; and in both,
-  rays, overlaps and sensors that tell where things are.
-- **Sprite animation**, such as walk cycles.
-- **Text** in a built-in pixel font, bitmap fonts drawn in PNGs, and TrueType and OpenType fonts,
-  smooth or crisp, whose glyphs are rasterized as text first needs them, so any language the font
-  has works; wrapped to a width and revealed a little at a time for dialogue.
-- **Input** from the keyboard, mouse and gamepads, with keys and buttons bound to named actions,
-  which players can choose for themselves, sticks and triggers read as far as they're pushed, and
-  the mouse wheel.
-- **Audio** with [kira](https://github.com/tesselode/kira): sound effects, played once or looping
-  and changed, paused or stopped as they play, and music that loops and crossfades.
-- **Luau scripting** with [mlua](https://github.com/mlua-rs/mlua): sandboxed scripts, with tasks
-  that `wait` across frames for NPCs, dialogue and events. Whole games can be written in Luau, and
-  trig that gives the same bits on every platform (`exact`) lets them replay inputs anywhere.
-- **Saves**: games keep data between runs, such as the player's progress, as files of plain Luau
-  values in a folder of their own.
-- **Headless runs**: games run without a window for tests and for scripted runs that save
-  screenshots.
-- **egui** interfaces over any game, in Rust or Luau, for debug panels and tools, and a window of
-  frame stats any game can show with a key. Tests click their widgets by name.
-- **An editor** for scenes and scripts, laid out like Godot's: a tree of nodes, an Inspector, a
-  viewport with gizmos, painting tilemaps, placing and overriding instances, laying out screens,
-  animating rigs on a timeline, editing 3D views and dropping models into them, undo, playing the
-  game, and a script editor that checks scripts against the engine's API with luau-lsp.
+- **Rendering** with [wgpu](https://wgpu.rs): sprites, sprite sheets, rectangles, lines and
+  circles, batched by texture. A fixed resolution scales up by whole numbers for crisp pixel art,
+  or to fit or fill the window, which can cover the screen.
+- **Timing**: an update a frame, or at a fixed rate so games play the same at any frame rate.
+  Frame stats and a headless benchmark show where the time goes.
+- **3D views** among the 2D: lit meshes, glTF models and billboarded sprites, for 2.5D games,
+  rendered at the canvas's resolution, and picked with the mouse.
+- **Tilemaps** with layers, and a **camera** that follows the player.
+- **Scenes**: trees of sprites, rectangles, text, areas, stacks, panels, tilemaps and 3D views, in
+  files of plain Luau data that tools write as well as people. Screens anchor to the canvas,
+  scenes place other scenes with overrides, and games find nodes by path or tag.
+- **Menus** over scenes' nodes, moved through by the keys and the mouse.
+- **Rigged characters** animated by clips of keyframes, layered and crossfaded.
+- **Grid movement** from tile to tile, and **sprite animation**.
+- **Physics** with [Rapier](https://rapier.rs), the same to the bit on every platform: solid
+  scene nodes and characters that slide along them in 2D; falling, tumbling bodies and characters
+  that climb stairs in 3D; and rays, overlaps and sensors in both.
+- **Text** in a built-in pixel font, bitmap fonts and TrueType fonts, wrapped and revealed a
+  glyph at a time.
+- **Input** from the keyboard, mouse and gamepads, bound to named actions players can rebind.
+- **Audio** with [kira](https://github.com/tesselode/kira): sound effects to change, pause and
+  stop as they play, and music that crossfades.
+- **Luau scripting** with [mlua](https://github.com/mlua-rs/mlua): sandboxed scripts with tasks
+  that `wait` across frames. Whole games can be written in Luau, and replay the same inputs the
+  same way on every platform.
+- **Saves**, **headless runs** for tests and scripted screenshots, and **egui** interfaces over any
+  game.
+- **An editor** for scenes and scripts, laid out like Godot's.
 
-Wingine targets desktops: Windows, macOS and Linux. CI builds and tests it on Windows and Linux.
+Wingine targets Windows, macOS and Linux. CI builds and tests it on Windows and Linux.
 
 ## Getting started
 
 You need a stable Rust toolchain and a C++ compiler (MSVC on Windows, `g++` or `clang`
-elsewhere), since `mlua` builds Luau from source. On Linux, audio also needs the ALSA headers,
-and gamepads the udev headers (`libasound2-dev` and `libudev-dev` on Debian and Ubuntu).
-
-Clone the repository and play the RPG:
+elsewhere), since `mlua` builds Luau from source. On Linux, you also need the ALSA and udev
+headers (`libasound2-dev` and `libudev-dev` on Debian and Ubuntu).
 
 ```bash
 cargo run -- examples/rpg
 ```
-
-The first build takes a little longer while Luau compiles.
 
 Each tagged release also has the runtime (`wingine`) and the editor (`wingine-editor`) built for
 Windows and Linux, on the [releases page](https://github.com/grindshell/wingine/releases). Run a
@@ -108,105 +77,55 @@ need ALSA's library (`libasound2`) and glibc 2.35 or newer.
 
 ### RPG
 
-[`examples/rpg`](examples/rpg) is a top-down RPG, written entirely in Luau. The elder of
-Mossbrook asks you to check on the shrine on the hill north of the village. What you find there
-sets creatures loose, and you fight them in turn-based battles. Coins from battles, and from
-poking around, buy gear at the village shop. The game saves itself after every conversation,
-battle and trip between maps, and its title screen continues from there.
+[`examples/rpg`](examples/rpg) is a top-down RPG. The elder of Mossbrook asks you to check on the
+shrine north of the village; what you find there sets creatures loose, to fight in turn-based
+battles. Coins buy gear at the shop, and the game saves after every event.
 
 | Talking to the elder | A creature on Shrine Hill notices you | A battle |
 |---|---|---|
 | ![Talking to Elder Rowan](docs/screenshots/rpg-dialogue.png) | ![A creature notices the player on Shrine Hill](docs/screenshots/rpg-shrine.png) | ![A battle against the Shade Bat](docs/screenshots/rpg-battle.png) |
 
-Walk with the arrow keys or WASD. Press Space, Enter or E to talk or to examine what's in front
-of you, Tab or I to open your bag, and Escape or Backspace to back out of menus, whose choices
-the mouse can point at and click too. Those are the defaults: Controls, on the title screen, lets
-you pick an action and press the key or gamepad button you'd rather it had, and remembers it. F1
-shows a debug
-window, laid out with egui from Luau, to set your hit points, coins, items and quest, and jump
-between maps.
-
-The maps in [`maps/`](examples/rpg/maps) are [scenes](docs/scenes.md): tilemaps over the tiles of
-[`world.tileset.luau`](examples/rpg/world.tileset.luau), with the places, exits, characters and
-foes on them marked out as nodes. The story, battles, items and shop each have a script of their
-own. The tileset is Kenney's [1-bit Pack](https://kenney.nl/assets/1-bit-pack). The title's name
-is in a font drawn for it, [`title.png`](examples/rpg/title.png), a
-[bitmap font](docs/api/graphics.md#font-files) described by
-[`title.font.luau`](examples/rpg/title.font.luau).
+Walk with the arrow keys or WASD, talk and examine with Space, open your bag with Tab, and back out
+with Escape; the title's Controls rebinds them. F1 shows a debug window laid out with egui from
+Luau. Its maps are [scenes](docs/scenes.md) over Kenney's
+[1-bit Pack](https://kenney.nl/assets/1-bit-pack), and its title is in a
+[bitmap font](docs/api/graphics.md#font-files) drawn for it.
 
 ### Shmup
 
-[`examples/shmup`](examples/shmup) is a bullet hell in the style of Touhou, written entirely in
-Luau: waves of fairies, then a boss with an opening attack and three spell cards. Shoot a spell
-card down without being hit or bombing for its bonus.
+[`examples/shmup`](examples/shmup) is a bullet hell in the style of Touhou: waves of fairies, then
+a boss with three spell cards.
 
 ![The boss's Twin Spiral spell card](docs/screenshots/shmup.png)
 
-Move with the arrow keys or WASD, and hold Shift to move slowly and see your hitbox. Hold Z to
-shoot and press X to bomb, which clears the bullets and keeps you safe for a moment. Grazing
-bullets scores. Escape pauses, and the sounds playing with it, such as the shot's, which loops for
-as long as you shoot ([voices](docs/api/audio.md#voice)). The title screen also offers boss
-practice and a stress test, chosen with the keys or the mouse, a [menu](docs/api/ui.md) of the
-title's items. The panel, title screen and messages are laid out in a
-[scene](docs/scenes.md#laying-out-screens), [`hud.scene.luau`](examples/shmup/hud.scene.luau),
-which the game fills in each frame.
+Move with the arrow keys, hold Shift to focus, Z to shoot and X to bomb; Escape pauses. The title
+also offers boss practice and a stress test.
 
-The game is a benchmark too, and is best run as a release build. Its enemy bullets go through one
-interface, implemented in Luau by [`bullets.luau`](examples/shmup/bullets.luau) and in Rust by
-[`danmaku`](examples/native-danmaku/src/lib.rs), a native library the game loads if it's in its
-`native` folder. Both do the same arithmetic, so from the same seed they fire the same bullets, to
-the bit. To run bullets in Rust too, build the library:
+Its enemy bullets go through one interface, implemented in Luau by
+[`bullets.luau`](examples/shmup/bullets.luau) and in Rust by
+[`danmaku`](examples/native-danmaku/src/lib.rs), a native library, and both fire the same bullets
+to the bit. To run them in Rust, build the library, copy `target/release/danmaku.dll`
+(`libdanmaku.so`, `libdanmaku.dylib`) into `examples/shmup/native/`, and press Tab in the game:
 
 ```bash
 cargo build --release -p native-danmaku
 ```
 
-Then copy `target/release/danmaku.dll` (`libdanmaku.so` on Linux, `libdanmaku.dylib` on macOS)
-into `examples/shmup/native/`, and press Tab in the game to switch between the two, which takes
-the bullets over as they are. The stress
-test pours out bullets until frames take longer than a 60th of a second, and plots frame time
-against the bullet count for each.
-
 #### Luau and Rust compared
 
-Bullets in Rust fit about 3.4 times as many in a frame as bullets in Luau:
+The stress test pours out bullets until a frame takes longer than a 60th of a second:
 
-| Bullets in | The most a 60th of a second fits |
-|---|---|
-| Luau, `bullets.luau` | about 105,000 |
-| Rust, `danmaku` | about 360,000 |
+| Bullets in | The most a 60th of a second fits | Each bullet's cost |
+|---|---|---|
+| Luau, `bullets.luau` | about 105,000 | 171 ns |
+| Rust, `danmaku` | about 360,000 | 54 ns |
 
 ![The stress test's plot of frame time against bullets, for Luau and for Rust](docs/screenshots/shmup-stress.png)
 
-These are the stress test's limits in a release build, rendering every frame, on a Ryzen 7 5800X
-with a GeForce RTX 3080 on Windows 10. Over three runs, Luau's limit ranged from 102,700 to
-105,300 bullets and Rust's from 356,400 to 362,300. The limit is where the median of 30 frames
-spends more than 16.7 ms updating, drawing and rendering. The GPU's own work isn't counted, since
-in a window it runs while the next frame is prepared.
-
-Each bullet costs this much of a frame:
-
-| | Luau | Rust |
-|---|---:|---:|
-| Moving it | 53 ns | 16 ns |
-| Checking it against the player | 9 ns | 4.5 ns |
-| Drawing it: recording its quad | 99 ns | 23 ns |
-| Rendering it: uploading its quad and submitting the draw | 8 ns | 8 ns |
-| Waiting for the GPU | 2 ns | 3 ns |
-| **Total** | **171 ns** | **54 ns** |
-
-- **Drawing** is where Luau loses most. Each bullet it draws is a call from Luau into the engine,
-  which costs about four times what recording the sprite does. The library hands the engine all
-  its bullets in a few calls, so what's left is the engine recording quads.
-- **Moving** a bullet needs its angle's cosine and sine. Both versions take them from the same C
-  library, which keeps their bullets identical, and they take 9 of Rust's 16 ns. The rest of
-  Luau's 53 ns is Luau's own overhead around the same arithmetic.
-- **Checking** a bullet against the player is a few multiplications, so most of what it costs
-  is reading the bullet from memory.
-- **Rendering** isn't what limits either version: uploading quads and the GPU's work are a fifth
-  of Rust's time.
-
-To measure it yourself, put the library in place and run this script, which prints each limit:
+Measured in a release build on a Ryzen 7 5800X with an RTX 3080, counting the CPU's time to
+update, draw and render. Drawing is where Luau loses most: each bullet it draws is a call into
+the engine, while the library hands the engine all its bullets in a few calls. To measure it
+yourself, put the library in place and run this script:
 
 ```text
 tap Down
@@ -223,152 +142,101 @@ WINGINE_SCRIPT=stress.txt cargo run --release -- examples/shmup
 
 ### Pong
 
-[`examples/pong`](examples/pong) is Pong against the computer, written entirely in Luau. The
-first to 5 points wins.
+[`examples/pong`](examples/pong) is Pong against the computer, first to 5 points.
 
 ![Pong](docs/screenshots/pong.png)
 
-Move your paddle, on the left, with W and S, the arrow keys, a gamepad or the mouse. Press Space,
-click, or press a gamepad's A to serve. Hits get faster and blip higher as a rally goes on, and
-sounds pan to where they happen. F11 covers the screen, and the court is scaled to fit whatever
-its shape, by fractions where whole numbers leave bars. Nothing in it is random, and its ball's
-angles come from
-[`exact`](docs/api/exact.md), so the same inputs play the same match on every platform. Run with
-`--watch`, it keeps the match as it reloads, so changing how the computer plays changes it
-mid-rally. Its tests are in Luau, in `pong.test.luau`: `cargo run -- test examples/pong`. Its
-window shows a 16-pixel [icon](docs/project-structure.md#icon), as an export of it does in Explorer:
-`cargo run --release -- export examples/pong dist/pong`.
+Move with W and S, the arrow keys, a gamepad or the mouse, and serve with Space or a click. F11
+covers the screen. Nothing in it is random, so the same inputs play the same match on every
+platform. Run with `--watch`, it keeps the match as it reloads. Its tests are in Luau:
+`cargo run -- test examples/pong`.
 
 ### Garden
 
 [`examples/garden`](examples/garden) is a garden around a windmill, laid out in a scene file,
-[`garden.scene.luau`](examples/garden/garden.scene.luau), which the game's short script loads and
-brings to life. The file is plain data, in the layout the engine writes scenes in, as a tool would
-leave it.
+[`garden.scene.luau`](examples/garden/garden.scene.luau), which a short script brings to life.
 
 ![The windmill's sails turning over the garden](docs/screenshots/garden.png)
 
-Walk with the arrow keys or WASD, and stand beside something to read about it. Press Space to
-throw a seed the way you face, which grows into a flower where it lands if there's room, or to
-pick the flower you're standing on. The mill's sails are a node holding four arms and cloths,
-which turn together as the script turns the node; the birds circle the same way. The trees and
-flowers are instances of scenes of their own, each changed by overrides, and planting adds
-another. Things tagged `solid` are in the player's way, solid in a physics world that the player
-walks in and slides along them, and areas tagged `note`, sensors in it, show their text when the
-player is in them; a ray finds where a seed lands, short of what's solid, and an overlap whether a
-flower has room. F1 outlines them, shows where a seed would land, and circles what turns. See
-[Scenes](docs/scenes.md).
+Walk with the arrow keys and stand beside things to read about them. Space throws a seed, which
+grows where there's room, or picks a flower. The trees and flowers are instances with overrides,
+and the solid things and notes are a physics world's colliders and sensors.
 
 ### Orchard
 
-[`examples/orchard`](examples/orchard) is an orchard where apples ripen and fall, and a picker
-with a basket on their head catches them. Three apples on the ground and the day is over.
+[`examples/orchard`](examples/orchard) is an orchard where a picker with a basket on their head
+catches falling apples.
 
 ![The picker walking under the apple trees as an apple falls](docs/screenshots/orchard.png)
 
-Walk with the arrow keys or A and D, and press Space to start again. The picker is a
-[rig](docs/scenes.md#rigging-characters), in
-[`picker.scene.luau`](examples/orchard/picker.scene.luau): a sprite for each part, turning about
-its joint, and clips of keyframes for standing, walking,
-blinking, catching, missing and giving up. Each frame the game poses the picker with one clip over
-another, weighting the walk by how much they're walking, so they ease between standing and
-walking, and fading the reactions in and out. The orchard places the picker as an instance of
-that file, and their clips pose it there. When the day is over, the camera zooms in on the picker.
+Walk with the arrow keys. The picker is a [rig](docs/scenes.md#rigging-characters) with clips for
+standing, walking, blinking and reacting, which the game layers and crossfades.
 
 ### Cellar
 
-[`examples/cellar`](examples/cellar) is a dark cellar in 2.5D, written entirely in Luau. The hero
-walks it tile by tile, lighting its candles by standing on them. Its level is a
-[scene](docs/scenes.md#3d-views), [`cellar.scene.luau`](examples/cellar/cellar.scene.luau), which
-the editor edits: a 3D view whose walls and floor are meshes, among barrels, crates and a table,
-models made in Blender ([`examples/models`](examples/models)), and the hero and the candles are
-sprites standing among them, billboards that turn to face the camera as it follows the hero.
+[`examples/cellar`](examples/cellar) is a dark cellar in 2.5D, where the hero lights candles by
+standing on them. Its level is a [3D view](docs/scenes.md#3d-views) of meshes and models made in
+Blender, with billboarded sprites for the hero and candles.
 
 ![The hero after lighting every candle in the cellar, with the mouse naming a barrel](docs/screenshots/cellar.png)
 
-Walk with the arrow keys or WASD, and point at a prop with the mouse to name it.
+Walk with the arrow keys, and point at a prop to name it.
 
 ### Course
 
-[`examples/course`](examples/course) is a course to run around in 3D, written entirely in Luau:
-up the stairs onto the platform, down the slope, onto the block, and around the crates, picking
-up the coins. Its level is a scene, [`course.scene.luau`](examples/course/course.scene.luau), of
-models from Kenney's [Prototype Kit](https://kenney.nl/assets/prototype-kit) (CC0), which a
-[physics world](docs/api/physics.md#in-3d) makes solid: the stairs and the slope by their
-triangles, and the crates as boxes that fall and tumble.
+[`examples/course`](examples/course) is a course to run around in 3D, collecting coins, built
+from Kenney's [Prototype Kit](https://kenney.nl/assets/prototype-kit) and made solid by a
+[physics world](docs/api/physics.md#in-3d).
 
 ![The figurine jumping toward the block and its coin, its shadow on the ground below](docs/screenshots/course.png)
 
-Walk with the arrow keys, WASD or a gamepad's stick, jump with Space, and bring the camera nearer
-or farther with the mouse wheel. The player is a
-character that walks up the stairs and the slope, along the walls, and into the crates, pushing
-them: off the platform, or into the stack, which topples. A ray straight down puts its shadow on
-whatever is below, so a jump shows where it lands, and a sensor under the course catches what
-falls off.
+Walk with the arrow keys or a stick, jump with Space, and zoom with the mouse wheel. The player
+climbs the stairs, pushes crates over, and casts a shadow where a jump will land.
 
 ### Lettering
 
-[`examples/lettering`](examples/lettering) is a type specimen, written in Luau: the fonts Wingine
-writes in. The built-in pixel font; a bitmap font drawn pixel by pixel in a PNG for the RPG's
-title, its glyphs as wide as their ink; and [Hack](https://sourcefoundry.org/hack/), a TrueType
-font, smooth and crisp, whose glyphs are rasterized the first time text needs them, so it writes
-Greek and Cyrillic as readily as English. Its scene's text nodes name their
-[font files](docs/api/graphics.md#font-files).
+[`examples/lettering`](examples/lettering) is a type specimen: the built-in pixel font, the RPG
+title's bitmap font, and [Hack](https://sourcefoundry.org/hack/), a TrueType font, smooth and
+crisp. Its scene's text nodes name their [font files](docs/api/graphics.md#font-files).
 
 ![The fonts of the lettering example](docs/screenshots/lettering.png)
 
-Up and Down make the sample line bigger and smaller, rasterizing Hack again at each size, and the
-paragraph at the bottom reveals itself a glyph at a time.
+Up and Down resize the sample line, and the paragraph reveals itself a glyph at a time.
 
 ### Sprites
 
-[`examples/sprites.rs`](examples/sprites.rs) is a small map written in Rust that uses Luau for
-its events, in [`sprites.luau`](examples/sprites.luau). It shows a game built on the crate
-directly: a tilemap, a camera that follows the hero, mouse input, music and sound, and a scripted
-bat and note.
+[`examples/sprites.rs`](examples/sprites.rs) is a small map in Rust with its events in Luau
+([`sprites.luau`](examples/sprites.luau)): a tilemap, a following camera, mouse input, music, and
+a scripted bat and note.
 
 ![The hero reading the note on the house](docs/screenshots/sprites.png)
 
-Walk with the arrow keys or WASD, or click a tile to walk toward it. Face the house and press
-Space, Enter or E to read the note on its door.
-
 ### Shapes
 
-[`examples/shapes.rs`](examples/shapes.rs) is the smallest example: a checkerboard, an outlined
-square sliding across it, a ball circling the middle on the end of a line, and a translucent panel
-drawn over them.
+[`examples/shapes.rs`](examples/shapes.rs) is the smallest example: each kind of shape, filled and
+outlined.
 
 ![Shapes](docs/screenshots/shapes.png)
 
 ### Meshes
 
-[`examples/meshes.rs`](examples/meshes.rs) draws meshes in a 3D view: crates, a post and a
-bouncing ball on a field of grass, with a table and barrels loaded from model files, lit by the sun
-and seen through a camera circling them. The view renders at the canvas's 320x180 pixels, with a
-HUD over it and a label that follows the ball. The field is a mesh the example builds itself, a quad
-for each tile. Left and Right turn the camera round faster.
+[`examples/meshes.rs`](examples/meshes.rs) draws meshes and models in a 3D view at 320x180, lit
+by the sun, with a HUD over it. Its models are in [`examples/models`](examples/models), made in
+Blender ([`props.blend`](examples/models/props.blend)).
 
 ![Crates, a table, barrels, a post and a ball on a field of grass](docs/screenshots/meshes.png)
 
-The models in [`examples/models`](examples/models) were made in Blender for the examples: a barrel
-colored by its vertices, a crate with a pixel-art texture, and a table whose four legs share one
-mesh. [`props.blend`](examples/models/props.blend) holds them, each a collection with an exporter
-that writes its `.glb` beside it (File > Export All Collections).
-
 ### egui
 
-[`examples/gui.rs`](examples/gui.rs) bounces sprites around the window, tuned from an egui panel
-that also shows a map of them, drawn by the engine into a texture. F3 shows the engine's window of
-frame stats. Run it with `cargo run --example gui`. Luau games lay out interfaces too, in a
-`gui(ui)` function of their own: see [`docs/api/gui.md`](docs/api/gui.md), and the RPG's F1
-window.
+[`examples/gui.rs`](examples/gui.rs) bounces sprites around, tuned from an egui panel that shows a
+map of them drawn by the engine. F3 shows the frame stats. Luau games lay out interfaces too: see
+[`docs/api/gui.md`](docs/api/gui.md).
 
 ## Editor
 
 [`crates/wingine-editor`](crates/wingine-editor) edits a game's scenes and scripts. It's a Wingine
-game itself, written in Rust, whose interface is egui, laid out like Godot's editor: the open
-scene's tree of nodes over the game's files on the left, the Inspector on the right, Output along
-the bottom, and the scene in the middle, drawn by the engine as the game draws it.
+game itself, laid out like Godot's editor: the scene tree and the game's files on the left, the
+Inspector on the right, and the scene in the middle, drawn as the game draws it.
 
 ![The editor with the garden open, its pond selected](docs/screenshots/editor.png)
 
@@ -376,26 +244,17 @@ the bottom, and the scene in the middle, drawn by the engine as the game draws i
 cargo run -p wingine-editor -- examples/garden
 ```
 
-Select nodes in the tree or the viewport, change their fields in the Inspector, or move, turn and
-stretch them with the mouse; add, rename, duplicate, move and delete them in the tree; paint
-tilemaps' layers from their tilesets and resize them; drag scenes in to place them, and override
-the nodes they place, from the Inspector; lay screens out with anchor presets and resize handles,
-and preview them on canvases of other sizes; animate rigs, scrubbing and playing clips on a
-timeline that poses the scene, and keying nodes' properties from the Inspector and the viewport;
-edit 3D views through their cameras, picking their nodes by their boxes, dragging them across the
-ground, and dropping model files in; undo; save, in the canonical layout; and play the game, in a
-process of its own. Its Script screen
-edits the game's Luau, colored, and with [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp)
-installed, checks it against the engine's API as it's typed: problems underlined, names' types and
-docs on hover, completion, and the parameters of calls. See [the editor's docs](docs/editor.md).
+It selects, moves and changes nodes, paints tilemaps, places and overrides instances, lays out
+screens, animates rigs on a timeline, edits 3D views, undoes, saves in the canonical layout, and
+plays the game. Its Script screen checks Luau against the engine's API with
+[luau-lsp](https://github.com/JohnnyMorganz/luau-lsp), if it's installed. See
+[the editor's docs](docs/editor.md).
 
 ## Making a game
 
-### In Luau
-
-A Luau game is a folder with a `main.luau` script and, optionally, a `conf.luau` of settings.
-The script's top level runs once to set the game up. Then each frame the engine calls its global
-`update(dt)` and `draw()` functions.
+A Luau game is a folder with a `main.luau` script and, optionally, a `conf.luau` of settings. The
+script's top level runs once; then each frame the engine calls its global `update(dt)` and
+`draw()`.
 
 ```lua
 -- conf.luau
@@ -424,44 +283,11 @@ function draw()
 end
 ```
 
-Run it with `cargo run -- path/to/folder`, or with `cargo run -- --watch path/to/folder` to
-reload it whenever a file in the folder changes, carrying on with whatever the game's `reloading`
-returns. Tests in files named `*.test.luau` drive the game as a player would and check its state
-and screenshots, which `cargo run -- test path/to/folder` runs without a window, and
-`cargo run --release -- export path/to/folder dist/game` makes a folder to ship, which players
-start by double-clicking its executable. The engine's API is the global tables `graphics`,
-`input`, `audio`, `tilemap`, `grid`, `physics`, `scene`, `ui`, `save` and `window`. [The docs](docs/README.md) cover making a game in
-Luau, from a quick start to native libraries, with a reference to every function and type scripts
-use.
-
-#### Native libraries
-
-Code that needs to be compiled can live in a native library: a Rust `cdylib` written with the
-[`wingine-native`](crates/wingine-native) crate, which adds a global table of functions and
-classes to the game, and can hook in before and after each `update` and `draw`. A game lists the
-libraries it loads in its `conf.luau`, and keeps them in its `native` folder:
-
-```lua
--- conf.luau
-return { libraries = { "particles" } } -- native/particles.dll, libparticles.so or .dylib
-```
-
-```lua
--- main.luau
-local sparks = particles.new_emitter("#f2c14e")
-sparks:burst(160, 90, 24)
-```
-
-A library listed as `{ name = "particles", optional = true }` loads only if it's there, so one
-game can run with it or without it.
-
-[`examples/native-particles`](examples/native-particles/src/lib.rs) is that library, which bursts
-sparks in 3D views too, and
-[`examples/native-danmaku`](examples/native-danmaku/src/lib.rs) runs the shmup's bullets. Unlike
-scripts, native libraries aren't sandboxed: a game that loads one runs it with the player's full
-permissions.
-
-### In Rust
+Run it with `cargo run -- path/to/folder`, or with `--watch` to reload it as its files change.
+`cargo run -- test path/to/folder` runs its `*.test.luau` tests, and
+`cargo run --release -- export path/to/folder dist/game` makes a folder to ship. Compiled code can
+go in a [native library](docs/native-libraries.md) written in Rust. [The docs](docs/README.md)
+cover the rest, with a reference to every function and type scripts use.
 
 A Rust game implements the `Game` trait and passes it to `wingine::run`:
 
@@ -501,36 +327,23 @@ fn main() -> wingine::Result<()> {
 
 ## Testing
 
-```bash
-cargo test
-```
-
-The tests play the examples headlessly, with simulated input and checks on game state. Rendering
-is covered by screenshot tests, which compare frames with the reference images in
-[`tests/screenshots/`](tests/screenshots). Set `UPDATE_SCREENSHOTS=1` to create or update them.
-
-To check a game without opening a window, point `WINGINE_SCRIPT` at a script of simulated input.
-The game follows the script, saves screenshots next to it, and exits:
-
-```text
-hold Right 0.5s
-tap Space
-wait 1s
-screenshot shots/after.png
-```
+`cargo test` plays the examples headlessly, with simulated input and checks on game state, and
+compares rendering with the reference images in [`tests/screenshots/`](tests/screenshots)
+(`UPDATE_SCREENSHOTS=1` updates them). To check a game without a window, point `WINGINE_SCRIPT` at
+a [script](src/script.rs) of simulated input; the game follows it, saves screenshots beside it,
+and exits:
 
 ```bash
 WINGINE_SCRIPT=check.txt cargo run -- examples/rpg
 ```
 
-The script format is documented in [`src/script.rs`](src/script.rs).
-
 ## Credits
 
-The tileset is Kenney's [1-bit Pack](https://kenney.nl/assets/1-bit-pack), released under CC0.
-The RPG's `strides.png` adds walking frames derived from it. The shmup's bullets and the
-orchard's picker, apples and trees were drawn for them. The music and sound effects were
-synthesized for the examples.
+The tileset is Kenney's [1-bit Pack](https://kenney.nl/assets/1-bit-pack), and the course's models
+Kenney's [Prototype Kit](https://kenney.nl/assets/prototype-kit), both CC0; the RPG's
+`strides.png` adds walking frames derived from the tileset. [Hack](https://sourcefoundry.org/hack/)
+is under the MIT and Bitstream Vera licenses, beside it in the lettering example. The rest of the
+art, the models, the music and the sound effects were made for the examples.
 
 ## License
 
