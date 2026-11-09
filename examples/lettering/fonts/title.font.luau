@@ -1,5 +1,5 @@
 return {
-    format = 3,
+    format = 4,
     image = "title.png",
     cell = { 14, 14 },
     characters = {

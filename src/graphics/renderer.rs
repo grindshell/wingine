@@ -4,7 +4,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use super::{
-    Mesh, MeshData, Texture,
+    Blend, Mesh, MeshData, Texture,
     camera3d::{self, Mat4},
     canvas::{Batch, Canvas, Vertex},
     mesh::GpuVertex,
@@ -42,7 +42,8 @@ struct ViewUniform {
 
 /// Turns a recorded [`Canvas`] into GPU draw calls, and creates the textures it draws with.
 pub(crate) struct Renderer {
-    pipeline: wgpu::RenderPipeline,
+    /// A pipeline for each [`Blend`], in the order of [`Blend::ALL`].
+    pipelines: [wgpu::RenderPipeline; 4],
     /// The format of the targets `pipeline` renders to.
     target_format: wgpu::TextureFormat,
     globals_buffer: wgpu::Buffer,
@@ -156,38 +157,41 @@ impl Renderer {
             bind_group_layouts: &[Some(&globals_layout), Some(&texture_layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("quad"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: size_of::<Vertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x2,
-                        1 => Float32x2,
-                        2 => Unorm8x4,
-                    ],
-                })],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
+        // The shader gives premultiplied colors, which every mode blends.
+        let pipelines = Blend::ALL.map(|blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("quad"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: size_of::<Vertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![
+                            0 => Float32x2,
+                            1 => Float32x2,
+                            2 => Unorm8x4,
+                        ],
+                    })],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: target_format,
+                        blend: Some(blend.state()),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
         });
 
         let white = create_texture(device, queue, &texture_layout, &sampler, 1, 1, &[255; 4]);
@@ -201,7 +205,7 @@ impl Renderer {
 
         let meshes = MeshRenderer::new(device, target_format, &texture_layout);
         Self {
-            pipeline,
+            pipelines,
             target_format,
             globals_buffer,
             globals_bind_group,
@@ -441,11 +445,15 @@ impl Renderer {
         let Some(first) = first else {
             return;
         };
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.globals_bind_group, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        let mut blend = None;
         for batch in std::iter::once(first).chain(batches) {
+            if blend != Some(batch.blend) {
+                pass.set_pipeline(&self.pipelines[batch.blend as usize]);
+                blend = Some(batch.blend);
+            }
             let texture = batch.texture.as_ref().unwrap_or(&self.white);
             pass.set_bind_group(1, texture.bind_group(), &[]);
             pass.draw_indexed(batch.quads.start * 6..batch.quads.end * 6, 0, 0..1);

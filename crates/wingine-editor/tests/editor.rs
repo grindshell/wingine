@@ -12,6 +12,7 @@ use std::{
 
 use wingine::{
     Redraw, WindowConfig,
+    graphics::Blend,
     headless::{Headless, Simulation},
     input::{Key, MouseButton},
     scene::{
@@ -256,6 +257,7 @@ fn every_example_scene_opens_without_errors() {
         "course",
         "lettering",
         "quarry",
+        "bonfire",
     ] {
         let mut simulation = editor(Some(examples().join(game)));
         let scenes = simulation
@@ -862,6 +864,59 @@ fn stacks_and_panels_are_added_and_inspected() {
     let panel = bounds(&simulation, "panel");
     assert_eq!([panel.w, panel.h], [40.0, 43.0]);
     assert!(simulation.game().document().unwrap().error.is_none());
+}
+
+#[test]
+fn particles_are_added_inspected_and_shown_moving_while_selected() {
+    let mut simulation = garden(copy_of("garden", "particles_added"));
+    simulation.click_gui("garden");
+    menu(&mut simulation, "➕", "✨ particles");
+    assert_eq!(selected_name(&simulation).as_deref(), Some("particles"));
+    set_field(&mut simulation, "rate", "25");
+    set_field(&mut simulation, "lifetime most", "2");
+    let combo = *simulation
+        .gui_rects("blend")
+        .last()
+        .expect("a blend mode to choose");
+    let [x, y] = middle(combo);
+    simulation.click(MouseButton::Left, x, y);
+    simulation.run_frames(2);
+    simulation.click_gui("add");
+    simulation.run_frames(2);
+    let KindDef::Particles(particles) = &node(&simulation, "particles").kind else {
+        panic!("particles");
+    };
+    assert_eq!(particles.settings.rate, 25.0);
+    assert_eq!(particles.settings.lifetime, [1.0, 2.0]);
+    assert_eq!(particles.settings.blend, Blend::Add);
+
+    // While it's selected, its particles move, so the editor keeps drawing.
+    let count = |simulation: &Simulation<Editor>| {
+        let scene = simulation
+            .game()
+            .document()
+            .unwrap()
+            .preview
+            .as_ref()
+            .unwrap();
+        scene.particle_count(scene.root())
+    };
+    simulation.step();
+    assert_eq!(simulation.next_frame_in(), Some(0.0));
+    assert!(count(&simulation) > 0, "shown as they are once going");
+    // With nothing holding particles selected, they're still, and the editor waits again.
+    simulation.game_mut().document_mut().unwrap().select(None);
+    settle(&mut simulation);
+    assert_eq!(simulation.next_frame_in(), None);
+    let still = count(&simulation);
+    simulation.step();
+    assert_eq!(count(&simulation), still);
+
+    // Adding it and each change are undone one by one.
+    for _ in 0..4 {
+        control(&mut simulation, Key::Z);
+    }
+    assert!(!simulation.game().document().unwrap().is_dirty());
 }
 
 #[test]

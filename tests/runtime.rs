@@ -2609,6 +2609,237 @@ fn the_camera_zooms_about_the_middle_of_the_view() {
 }
 
 #[test]
+fn blend_modes_last_until_the_frame_ends() {
+    let folder = game(
+        "blend_modes",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "blend = 'add'
+                function draw()
+                    graphics.clear('#ff0000')
+                    if blend then
+                        graphics.set_blend(blend)
+                    end
+                    graphics.fill_rect(0, 0, 10, 20, '#0000ff')
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(image.pixel(5, 5), [255, 0, 255, 255], "added");
+    assert_eq!(image.pixel(15, 5), RED);
+
+    simulation.exec("blend = 'multiply'");
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(image.pixel(5, 5), BLACK, "red times blue");
+
+    // The next frame blends normally again.
+    simulation.exec("blend = nil");
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(image.pixel(5, 5), BLUE);
+
+    let err = simulation
+        .try_exec("graphics.set_blend('alpha')")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains(r#"expected "normal", "add", "multiply" or "screen""#),
+        "{err}"
+    );
+    let err = simulation
+        .try_exec("graphics.set_blend('add')")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("drawing only works in `draw`"), "{err}");
+}
+
+#[test]
+fn games_make_particles_advance_and_draw_them() {
+    let folder = game(
+        "particles",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "sparks = graphics.new_particles({
+                    rate = 0, speed = 0, lifetime = 1, scales = { 4 }, colors = { '#ff0000' },
+                })
+                sparks:set_position(10, 10)
+                sparks:emit(3)
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.draw_particles(sparks)
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    // Squares 4 wide, centered on 10, 10.
+    assert_eq!(image.pixel(8, 8), RED);
+    assert_eq!(image.pixel(11, 11), RED);
+    assert_eq!(image.pixel(12, 12), BLACK);
+    assert_eq!(image.pixel(7, 7), BLACK);
+    assert_eq!(
+        simulation.eval::<(u32, bool, f32, f32)>(
+            "sparks:count(), sparks:is_emitting(), sparks:position()"
+        ),
+        (3, true, 10.0, 10.0)
+    );
+    // Advanced past their lives, they're gone.
+    simulation.exec("sparks:advance(2)");
+    assert_eq!(simulation.eval::<u32>("sparks:count()"), 0);
+    // Thirty a second, for a second.
+    simulation.exec("sparks:set_settings({ rate = 30 }) sparks:advance(1)");
+    assert_eq!(
+        simulation.eval::<(u32, f32, f32)>(
+            "sparks:count(), sparks:settings().rate, sparks:settings().lifetime"
+        ),
+        (30, 30.0, 1.0)
+    );
+    simulation.exec("sparks:set_emitting(false) sparks:clear() sparks:advance(1)");
+    assert_eq!(simulation.eval::<u32>("sparks:count()"), 0);
+
+    for (code, expected) in [
+        (
+            "graphics.new_particles({ colour = '#ff0000' })",
+            "a particle emitter has no field `colour`",
+        ),
+        (
+            "graphics.new_particles({ lifetime = 0 })",
+            "`lifetime` must be above 0",
+        ),
+        (
+            "graphics.new_particles({ blend = 'alpha' })",
+            r#"`blend` must be "normal", "add", "multiply" or "screen""#,
+        ),
+        (
+            "sparks:set_settings({ scales = {} })",
+            "`scales` must have at least one scale",
+        ),
+        ("sparks:advance(-1)", "dt must be a number of seconds"),
+        (
+            "graphics.draw_particles(sparks)",
+            "drawing only works in `draw`",
+        ),
+    ] {
+        let err = simulation.try_exec(code).unwrap_err().to_string();
+        assert!(err.contains(expected), "{code}: {err}");
+    }
+}
+
+/// A scene with a sprite in a blend mode of its own, and a fire of particles inside a node, rising
+/// straight up from the middle of a pixel near the bottom.
+const CAMP: &str = r##"return {
+    format = 4,
+    sheets = { colors = { path = "sheet.png", tile_width = 1, tile_height = 1 } },
+    children = {
+        {
+            name = "glow", kind = "sprite", sheet = "colors", cell = { 0, 0 }, width = 20,
+            height = 4, blend = "add",
+        },
+        {
+            name = "camp", kind = "node", x = 10.5, y = 18,
+            children = {
+                {
+                    name = "fire", kind = "particles", rate = 60, speed = 10,
+                    direction = -1.5707964, spread = 0, lifetime = 0.5, scales = { 1 },
+                    colors = { "#0000ff" },
+                },
+            },
+        },
+    },
+}"##;
+
+#[test]
+fn scenes_blend_their_nodes_and_advance_their_particles() {
+    let folder = game(
+        "particle_nodes",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            ("camp.scene.luau", CAMP),
+            (
+                "main.luau",
+                "camp = scene.load('camp.scene.luau')
+                fire = camp:find('camp/fire')
+                glow = camp:find('glow')
+                function update(dt)
+                    camp:advance_particles(dt)
+                end
+                function draw()
+                    graphics.clear('#00ff00')
+                    graphics.draw_scene(camp)
+                    -- The scene's blend modes stay in it.
+                    graphics.fill_rect(0, 0, 1, 1, '#ff000080')
+                end",
+            ),
+        ],
+    );
+    write_png(&folder.join("sheet.png"), 1, 1, &[RED]);
+    let mut simulation = simulation(&folder);
+    simulation.run_frames(30);
+    let image = simulation.screenshot().unwrap();
+    // Red added to green.
+    assert_eq!(image.pixel(15, 2), [255, 255, 0, 255]);
+    // Normal blending again after the scene: half red over yellow, which adding wouldn't dim.
+    let [red, green, ..] = image.pixel(0, 0);
+    assert!(red == 255 && (120..250).contains(&green), "{red}, {green}");
+    // Particles rise from 18 to 13, along the middles of column 10.
+    assert_eq!(image.pixel(10, 17), BLUE);
+    assert_eq!(image.pixel(10, 14), BLUE);
+    assert_eq!(image.pixel(10, 11), [0, 255, 0, 255]);
+    assert_eq!(image.pixel(11, 15), [0, 255, 0, 255]);
+    let count = simulation.eval::<u32>("camp:particle_count()");
+    assert!((28..=31).contains(&count), "{count}");
+    assert_eq!(
+        simulation.eval::<(String, String, bool)>("glow:blend(), fire:blend(), fire:is_emitting()"),
+        ("add".into(), "normal".into(), true)
+    );
+    simulation.exec(
+        "fire:set_emitting(false)
+        glow:set_blend('multiply')
+        fire:set_particle_settings({ colors = { '#ffffff' } })
+        fire:set_blend('add')",
+    );
+    assert_eq!(
+        simulation.eval::<(String, String)>(
+            "fire:particle_settings().blend, fire:particle_settings().colors[1]"
+        ),
+        ("add".into(), "#ffffffff".into())
+    );
+    simulation.run_frames(31);
+    assert_eq!(simulation.eval::<u32>("camp:particle_count()"), 0);
+    simulation.exec("fire:emit(5)");
+    assert_eq!(simulation.eval::<u32>("camp:particle_count()"), 5);
+    simulation.exec("camp:clear_particles()");
+    assert_eq!(simulation.eval::<u32>("fire:particle_count()"), 0);
+
+    for (code, expected) in [
+        ("glow:emit(1)", "which has no particles"),
+        ("glow:set_emitting(true)", "which has no particles"),
+        ("camp:set_blend('add')", "which has no blend mode"),
+        (
+            "fire:set_particle_settings({ rate = -1 })",
+            "`rate` must be 0 or more",
+        ),
+        (
+            "camp:advance_particles(-1)",
+            "dt must be a number of seconds",
+        ),
+    ] {
+        let err = simulation.try_exec(code).unwrap_err().to_string();
+        assert!(err.contains(expected), "{code}: {err}");
+    }
+}
+
+#[test]
 fn games_that_fail_to_load_are_errors() {
     let config = wingine::WindowConfig::default();
     let missing = game("no_main", &[]);

@@ -67,7 +67,8 @@
 //!
 //! Each call from Luau into a library costs far more than drawing a sprite, so a library that
 //! draws many sprites draws them with one function call and one [`Canvas::draw_sprites`], rather
-//! than a call from Luau for each.
+//! than a call from Luau for each. [`Canvas::set_blend`] mixes what it draws next with what's
+//! under it as a [`Blend`] says, as `graphics.set_blend` does.
 //!
 //! Libraries draw in 3D views as scripts do: [`Canvas::begin_3d`] begins one, and
 //! [`Canvas::draw_meshes`] and [`Canvas::draw_billboards`] draw batches of a mesh or a sprite in
@@ -91,8 +92,8 @@ use std::{
 #[doc(hidden)]
 pub use wingine_abi as abi;
 pub use wingine_abi::{
-    Affine3, BillboardDraw, Camera3d, Color, Lighting, MeshDraw, MeshVertex, Projection, Rect,
-    Size, SpriteDraw, Vec3, View3d,
+    Affine3, BillboardDraw, Blend, Camera3d, Color, Lighting, MeshDraw, MeshVertex, Projection,
+    Rect, Size, SpriteDraw, Vec3, View3d,
 };
 
 pub use call::{Call, FromArg, FromArgs, IntoResult, IntoResults};

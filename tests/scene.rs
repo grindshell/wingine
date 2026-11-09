@@ -6,7 +6,7 @@ use std::{collections::HashMap, f32::consts::FRAC_PI_2, fs, path::Path, rc::Rc};
 
 use wingine::{
     Context, Error, Result,
-    graphics::{Color, Font, Mesh, Model, Texture},
+    graphics::{Blend, Color, Font, Mesh, Model, Texture},
     headless::Headless,
     math::Rect,
     scene::{Assets, Kind, Scene, SceneFile, Shape, TilesetFile, Value},
@@ -826,6 +826,107 @@ fn instances_place_scenes_with_overrides() {
     );
     let mother_hat = scene.find(root, "family/mother/body/hat").unwrap();
     assert!(!scene.node(mother_hat).is_visible());
+}
+
+/// A torch: sparks of a sprite from a sheet, rising straight up from its origin.
+const TORCH: &str = r##"return {
+    format = 4,
+    sheets = { fx = { path = "fx.png", tile_width = 16, tile_height = 16 } },
+    children = {
+        {
+            name = "flame", kind = "particles", sheet = "fx", cell = { 1, 0 }, rate = 60,
+            speed = 30, direction = -1.5707964, spread = 0, lifetime = 1,
+        },
+    },
+}"##;
+
+/// Two torches, the second's flame added, showing another cell, and attached to it.
+const HALL: &str = r##"return {
+    format = 4,
+    children = {
+        { name = "left", kind = "instance", x = 10, y = 50, scene = "torch.scene.luau" },
+        {
+            name = "right", kind = "instance", x = 90, y = 50, scene = "torch.scene.luau",
+            overrides = { flame = { blend = "add", cell = { 2, 0 }, attached = true } },
+        },
+    },
+}"##;
+
+fn particles_of(scene: &Scene, id: wingine::scene::NodeId) -> &wingine::particles::Particles {
+    match scene.node(id).kind() {
+        Kind::Particles(node) => &node.particles,
+        kind => panic!("{} isn't particles", kind.name()),
+    }
+}
+
+#[test]
+fn particles_advance_from_where_their_nodes_are() {
+    let files = [("torch.scene.luau", TORCH), ("hall.scene.luau", HALL)];
+    let mut scene = load(&mut headless(), &files, "hall.scene.luau").unwrap();
+    let root = scene.root();
+    let [left, right] = ["left", "right"].map(|name| scene.find(root, name).unwrap());
+    let [left_flame, right_flame] =
+        ["left/flame", "right/flame"].map(|path| scene.find(root, path).unwrap());
+    // Overrides reach an instance's emitter, sheet and all.
+    let right_particles = particles_of(&scene, right_flame);
+    assert_eq!(right_particles.settings().blend, Blend::Add);
+    assert!(right_particles.settings().attached);
+    assert_eq!(right_particles.sprite().unwrap().region().x, 32.0);
+    assert_eq!(scene.node(left_flame).kind().blend(), Some(Blend::Normal));
+
+    for _ in 0..30 {
+        scene.advance_particles(root, 1.0 / 60.0);
+    }
+    assert_eq!(scene.particle_count(root), 60);
+    assert_eq!(scene.particle_count(left), 30);
+    // Sent out from the node, rising: in the scene's coordinates, or attached, in the node's.
+    let left_xs: Vec<f32> = particles_of(&scene, left_flame)
+        .positions()
+        .map(|[x, _]| x)
+        .collect();
+    assert!(left_xs.iter().all(|&x| x == 10.0), "{left_xs:?}");
+    assert!(
+        particles_of(&scene, right_flame)
+            .positions()
+            .all(|[x, y]| x.abs() < 1e-4 && y < 0.0)
+    );
+
+    // Left behind as the node moves, and those it sends out spread along the way it went.
+    scene.node_mut(left).set_position([40.0, 50.0]);
+    scene.advance_particles(left, 1.0 / 60.0);
+    let left_xs: Vec<f32> = particles_of(&scene, left_flame)
+        .positions()
+        .map(|[x, _]| x)
+        .collect();
+    assert_eq!(left_xs.len(), 31);
+    assert!(left_xs[..30].iter().all(|&x| x == 10.0), "{left_xs:?}");
+    assert!(left_xs[30] > 10.0 && left_xs[30] <= 40.0, "{left_xs:?}");
+    assert_eq!(
+        scene.particle_count(right),
+        30,
+        "only what's advanced moves"
+    );
+
+    assert_eq!(scene.emit(left_flame, 5), Some(()));
+    assert_eq!(scene.emit(left, 5), None, "a plain node sends nothing out");
+    assert_eq!(scene.particle_count(left), 36);
+    assert_eq!(
+        scene.node_mut(right_flame).kind_mut().set_cell([3, 0]),
+        Some(Ok(()))
+    );
+    assert_eq!(
+        particles_of(&scene, right_flame)
+            .sprite()
+            .unwrap()
+            .region()
+            .x,
+        48.0
+    );
+    // A copy starts over: none of its source's particles, and randomness of its own.
+    let copy = scene.add(root, &scene.clone(), left, Some("copy")).unwrap();
+    assert_eq!(scene.particle_count(copy), 0);
+    scene.clear_particles(root);
+    assert_eq!(scene.particle_count(root), 0);
 }
 
 #[test]

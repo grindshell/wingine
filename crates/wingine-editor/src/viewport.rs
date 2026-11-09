@@ -1464,7 +1464,7 @@ fn under(document: &Document, map: &ViewMap, pos: egui::Pos2) -> Vec<NodePath> {
     nodes.reverse();
     let pickable = |id: NodeId| match scene.node(id).kind() {
         Kind::Tilemap(_) | Kind::TileLayer(_) => Pickable::Tiles,
-        Kind::Area(_) | Kind::Stack(_) => Pickable::Area,
+        Kind::Area(_) | Kind::Stack(_) | Kind::Particles(_) => Pickable::Area,
         _ => Pickable::Seen,
     };
     let covering = |which: Pickable| {
@@ -1481,15 +1481,19 @@ fn under(document: &Document, map: &ViewMap, pos: egui::Pos2) -> Vec<NodePath> {
         };
         inside.into_iter().chain([id])
     });
-    // Plain nodes, by where their origins show, in 3D views as their cameras show them.
+    // Plain nodes, and particles sent out from a point, by where their origins show, in 3D views
+    // as their cameras show them.
     let near_origin = nodes.iter().copied().filter(|&id| {
         let node = scene.node(id);
+        let point = |rect: Rect| {
+            rect.w == 0.0 && rect.h == 0.0 && matches!(node.kind(), Kind::Particles(_))
+        };
         let origin = match node.placement3() {
             Some(_) if matches!(node.kind(), Kind::Node) => origin_3d(scene, id),
             Some(_) => None,
             None => scene
                 .rect(id)
-                .is_none()
+                .is_none_or(point)
                 .then(|| scene.transform(id).translation),
         };
         origin.is_some_and(|origin| map.to_screen(origin).distance(pos) <= PICK_DISTANCE)
@@ -1615,6 +1619,7 @@ fn node_handles(document: &Document) -> Option<(NodePath, Vec<Handle>)> {
             | KindDef::Stack(_)
             | KindDef::Panel(_)
             | KindDef::View3d(_)
+            | KindDef::Particles(_)
     ) {
         return None;
     }
@@ -1704,6 +1709,7 @@ fn size_to(document: &mut Document, sizing: &Sizing, point: [f32; 2]) {
         KindDef::Rect(rect) => rect.size = own,
         KindDef::Area(area) => area.size = own,
         KindDef::View3d(view) => view.size = own,
+        KindDef::Particles(particles) => particles.size = own.map(|side| side.max(0.0)),
         KindDef::Stack(_) | KindDef::Panel(_) => {}
         _ => return,
     }

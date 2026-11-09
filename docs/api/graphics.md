@@ -1,6 +1,6 @@
 # `graphics`
 
-Drawing, the camera, sprites, animations, text, and 3D views.
+Drawing, the camera, blend modes, sprites, animations, particles, text, and 3D views.
 
 Everything drawn in a frame is drawn in order, later things on top of earlier ones, onto a canvas
 that starts the frame cleared to black. 3D views take their place in that order too. Drawing
@@ -14,11 +14,15 @@ functions work only in `draw`.
   [`draw_text`](#graphicsdraw_text), [`draw_text_layout`](#graphicsdraw_text_layout),
   [`draw_tilemap`](#graphicsdraw_tilemap), [`draw_scene`](#graphicsdraw_scene)
 - [The camera](#the-camera): [`set_camera`](#graphicsset_camera)
+- [Blend modes](#blend-modes): [`set_blend`](#graphicsset_blend)
 - [The canvas and frames](#the-canvas-and-frames): [`size`](#graphicssize),
   [`color`](#graphicscolor), [`frame_stats`](#graphicsframe_stats)
 - [Sprites](#sprites): [`load_sprite_sheet`](#graphicsload_sprite_sheet),
   [`SpriteSheet`](#spritesheet), [`Sprite`](#sprite)
 - [Animation](#animation): [`new_animation`](#graphicsnew_animation), [`Animation`](#animation-1)
+- [Particles](#particles): [settings](#particle-settings),
+  [`new_particles`](#graphicsnew_particles), [`draw_particles`](#graphicsdraw_particles),
+  [`Particles`](#particles-1)
 - [Text](#text): [`default_font`](#graphicsdefault_font), [`load_font`](#graphicsload_font),
   [font files](#font-files), [`Font`](#font), [`TextLayout`](#textlayout)
 - [3D views](#3d-views): [`begin_3d`](#graphicsbegin_3d), [`draw_mesh`](#graphicsdraw_mesh),
@@ -322,6 +326,44 @@ At whole-number zooms, every texel of pixel art covers the same number of canvas
 zooms some cover one more than others, so pixel art looks uneven while it's there: a camera easing
 between zooms looks best ending on a whole number.
 
+## Blend modes
+
+### `graphics.set_blend`
+
+```lua
+graphics.set_blend(blend: Blend)
+```
+
+Mixes everything drawn after this call with what's under it as `blend` says, until it's set again
+or the frame ends. Every frame starts `"normal"`. Blending happens in linear light, as all drawing
+does, and a translucent color or sprite blends as much as it's opaque, in every mode.
+
+| Mode | What it does | For |
+|---|---|---|
+| `"normal"` | Covers what's under it as much as it's opaque. | Most things |
+| `"add"` | Adds its color to what's under it, so it only ever brightens, and colors add up toward white where they overlap. | Fire, sparks, glows, lasers |
+| `"multiply"` | Multiplies what's under it by its color, so it only ever darkens: white leaves it as it is, and black makes it black. | Shadows, night, tinting a whole scene |
+| `"screen"` | Brightens what's under it as much as its color is bright, but never past white, more gently than adding. | Soft light, mist, a lamp's pool of light |
+
+```lua
+function draw()
+    graphics.draw_scene(level)
+    -- Night over the whole scene, then a lamp's light over that.
+    graphics.set_blend("multiply")
+    graphics.fill_rect(0, 0, 320, 180, "#5868a8")
+    graphics.set_blend("screen")
+    graphics.draw_sprite(glow, lamp_x - 32, lamp_y - 32, "#ffb060", 64, 64)
+    graphics.set_blend("normal")
+    graphics.draw_text(font, "Night falls", 4, 4, "#ffffff")
+end
+```
+
+Drawing in one mode after another starts a new draw call, as switching images does, so drawing
+everything in a mode together is cheaper than alternating. A scene's nodes draw in the modes their
+[`blend`](../scenes.md#nodes) fields give them, whatever `set_blend` set, and leave it as it was;
+[particles](#particles) draw in their own mode too. 3D views don't blend: meshes and billboards are
+drawn opaque.
+
 ## The canvas and frames
 
 ### `graphics.size`
@@ -567,6 +609,196 @@ animation:flipped_y(): Animation
 ```
 
 Returns a copy with every frame mirrored top to bottom.
+
+## Particles
+
+Particles are many small sprites, or squares, that an emitter sends out: they fly, turn, change
+color and size as they age, and vanish when their lives end, for fire, smoke, sparks, dust and
+fireworks. An emitter keeps no time of its own: the game advances it, so it stops when the game
+pauses, and plays the same every run. [Scenes](../scenes.md#particles) hold emitters as particles
+nodes; a game makes emitters of its own with `graphics.new_particles`, for effects that come and
+go, such as a burst where something breaks.
+
+```lua
+local dust = graphics.new_particles({
+    rate = 0, lifetime = { 0.3, 0.6 }, speed = { 20, 40 }, gravity = { 0, 60 }, drag = 2,
+    scales = { 2, 0 }, colors = { "#d8c8a0", "#d8c8a000" },
+})
+
+function update(dt: number)
+    if player.landed then
+        dust:set_position(player.x, player.y)
+        dust:emit(12)
+    end
+    dust:advance(dt)
+end
+
+function draw()
+    graphics.draw_scene(level)
+    graphics.draw_particles(dust)
+end
+```
+
+### Particle settings
+
+What an emitter sends out, and how its particles move and look, is the same in Luau and in scene
+files. Ranges are `{ least, most }`, each particle getting a value between them at random as it
+starts, or one number for every particle. Lists over a particle's life are spread evenly from its
+start to its end, changing smoothly from each to the next.
+
+| Setting | What it is | Default |
+|---|---|---|
+| `emitting` | Whether it sends particles out at its `rate`. Bursts, `emit`, send them out either way. | `true` |
+| `rate` | Particles a second, while emitting. | `10` |
+| `limit` | The most particles alive at once: while it has this many, it sends no more out. | `500` |
+| `warmup` | Seconds it runs for as it first advances, before the time it's advanced by, so a fire is already burning when a scene starts. | `0` |
+| `seed` | Where its randomness starts, a whole number. Without one, an emitter from `new_particles` has a seed by how many the game made before it, and a scene's by its path, so emitters alike look different, and the same every run. | |
+| `lifetime` | Seconds a particle lives, a range above 0. | `1` |
+| `speed` | How fast a particle starts, in units a second, a range. | `20` |
+| `direction` | The way particles fly, in radians clockwise from right, as the emitter is turned: `-math.pi / 2` is up. | `0` |
+| `spread` | How many radians wide the ways they fly are, centered on `direction`: 0 sends each the same way. | a full turn, every way |
+| `gravity` | How much faster particles fly each second, `{ x, y }`: `{ 0, 98 }` falls. | `{ 0, 0 }` |
+| `drag` | How quickly particles slow down: each second, they keep `e^-drag` of their speed, so at 1 about a third. | `0` |
+| `angle` | How far a particle is turned as it starts, in radians, clockwise, a range. | `0` |
+| `spin` | How fast a particle turns, in radians a second, clockwise, a range. | `0` |
+| `scales` | A particle's sizes over its life, each 0 or more: times its sprite's size, or without one, its width in units. | `{ 1 }` |
+| `colors` | A particle's colors over its life, multiplying its sprite's. Fading to a clear color fades it out. | `{ "#ffffff" }` |
+| `blend` | How particles mix with what's under them: a [blend mode](#blend-modes). | `"normal"` |
+| `attached` | Whether particles move with the emitter after they've left it, as a fountain's spray would. By default they stay where they were sent out, so a moving emitter leaves a trail. | `false` |
+
+Particles start their lives as the emitter moves, so those sent out while it moved since it last
+advanced are spread along the way it went, and a trail is even however fast it goes. Long steps
+are split into steps of at most a sixtieth of a second, so particles move alike at any frame rate.
+Starting particles takes its sines from [`exact`](exact.md)'s math, so a game advancing its
+emitters by the same steps gets the same particles on every platform.
+
+### `graphics.new_particles`
+
+```lua
+graphics.new_particles(settings: ParticleSettings?, sprite: Sprite?): Particles
+```
+
+Returns an emitter with `settings`, at the origin, with no particles yet. Each particle shows
+`sprite`, centered on where it is, or without one, a white square. It works anywhere, and fails
+on a setting there isn't, or one out of range, saying which.
+
+### `graphics.draw_particles`
+
+```lua
+graphics.draw_particles(particles: Particles)
+```
+
+Draws the emitter's particles, oldest first, in its blend mode, then goes back to the mode drawing
+was in. With a [camera](#graphicsset_camera) set, particles are in the world, as everything else
+drawn is.
+
+### `Particles`
+
+#### `particles:emit`
+
+```lua
+particles:emit(count: number)
+```
+
+Sends `count` particles out at once from where the emitter is, emitting or not, as many as its
+`limit` leaves room for.
+
+#### `particles:advance`
+
+```lua
+particles:advance(dt: number)
+```
+
+Moves its particles on by `dt` seconds, ending those whose lives are over, and sends new ones out
+at its rate while it's emitting. The first time it advances, it first runs its `warmup`.
+
+#### `particles:count`
+
+```lua
+particles:count(): number
+```
+
+Returns how many particles are alive, so a game knows when an effect is over.
+
+#### `particles:clear`
+
+```lua
+particles:clear()
+```
+
+Ends every particle's life at once.
+
+#### `particles:is_emitting`
+
+```lua
+particles:is_emitting(): boolean
+```
+
+Returns whether it sends particles out at its rate.
+
+#### `particles:set_emitting`
+
+```lua
+particles:set_emitting(emitting: boolean)
+```
+
+Starts or stops sending particles out at its rate. Those it sent live out their lives, so a fire
+put out dies down.
+
+#### `particles:position`
+
+```lua
+particles:position(): (number, number)
+```
+
+Returns where it sends particles out from.
+
+#### `particles:set_position`
+
+```lua
+particles:set_position(x: number, y: number)
+```
+
+Moves where it sends particles out from. Particles it sends out as it moves are spread along the
+way, the next time it advances.
+
+#### `particles:set_rotation`
+
+```lua
+particles:set_rotation(angle: number)
+```
+
+Turns it, in radians, clockwise, which turns the way its particles fly, and how they start turned.
+
+#### `particles:settings`
+
+```lua
+particles:settings(): ParticleSettings
+```
+
+Returns its settings, every one of them, its colors as hex strings with their alpha.
+
+#### `particles:set_settings`
+
+```lua
+particles:set_settings(settings: ParticleSettings)
+```
+
+Changes the settings `settings` has, keeping the rest and the particles it has, which look and
+move as the new settings say. It fails, changing nothing, as `new_particles` would.
+
+```lua
+-- A rocket's exhaust grows with its thrust.
+exhaust:set_settings({ rate = 20 + 80 * thrust, speed = { 30, 30 + 60 * thrust } })
+```
+
+#### `particles:set_sprite`
+
+```lua
+particles:set_sprite(sprite: Sprite?)
+```
+
+Changes what its particles show, or with `nil`, white squares.
 
 ## Text
 

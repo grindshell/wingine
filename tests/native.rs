@@ -17,7 +17,7 @@ use wingine::{
     runtime::{self, LibraryConfig, LuauGame},
 };
 use wingine_native::{
-    Affine3, BillboardDraw, Call, Camera3d, Class, Color, Context, Library, Lighting, Mesh,
+    Affine3, BillboardDraw, Blend, Call, Camera3d, Class, Color, Context, Library, Lighting, Mesh,
     MeshDraw, MeshVertex, Rect, Registry, Result, Size, Sprite, SpriteDraw, Vec3, View3d, abi,
 };
 
@@ -134,6 +134,9 @@ impl Library for Probe {
             .function("fill", |_, call, color: Color| {
                 call.canvas()?.fill_rect(Rect::new(0.0, 0.0, 1.0, 1.0), color);
                 Ok(())
+            })
+            .function("blend", |_, call, mode: u32| {
+                call.canvas()?.set_blend(Blend(mode))
             })
             .function("stamp", |probe, call, ()| {
                 let draws = [
@@ -401,6 +404,34 @@ fn functions_get_the_context_or_canvas_as_scripts_do() {
     assert!(err.contains("not in `draw`"), "{err}");
     let image = simulation.screenshot().unwrap();
     assert_eq!(image.pixel(0, 0), [0, 0, 255, 255]);
+}
+
+#[test]
+fn libraries_set_blend_modes_until_the_game_has_drawn() {
+    let mut simulation = probe_game(
+        "blend",
+        "function draw()
+            graphics.clear('#ff0000')
+            probe.blend(1)
+            probe.fill('#0000ff')
+            graphics.fill_rect(19, 18, 1, 1, '#00ff00')
+            _, unknown = pcall(probe.blend, 9)
+            -- Left multiplying, which the hooks after the game's draw don't: multiplying by
+            -- their white would leave red as it is.
+            probe.blend(2)
+        end",
+    );
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(image.pixel(0, 0), [255, 0, 255, 255], "blue added to red");
+    assert_eq!(
+        image.pixel(19, 18),
+        [255, 255, 0, 255],
+        "green added to red"
+    );
+    assert_eq!(image.pixel(19, 19), [255, 255, 255, 255], "white over red");
+    let err: String = simulation.eval("tostring(unknown)");
+    assert!(err.contains("there's no blend mode 9"), "{err}");
 }
 
 #[test]

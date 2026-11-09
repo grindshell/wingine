@@ -1,5 +1,5 @@
-//! Scenes: trees of sprites, rectangles, text, areas, tilemaps and 3D views, laid out in files that
-//! people and tools can both write, for levels, screens and characters.
+//! Scenes: trees of sprites, rectangles, text, areas, particles, tilemaps and 3D views, laid out in
+//! files that people and tools can both write, for levels, screens and characters.
 //!
 //! A scene file is Luau that returns one table of plain data: tables, strings, numbers and
 //! booleans, with no function calls, variables or expressions apart from negative numbers. That
@@ -10,7 +10,7 @@
 //!
 //! ```lua
 //! return {
-//!     format = 2,
+//!     format = 4,
 //!     sheets = {
 //!         tiles = {
 //!             path = "tiles.png",
@@ -92,9 +92,9 @@
 //!
 //! At the top of the file:
 //!
-//! - `format`, required, is the version of the format, 3 ([`FORMAT`]), which added stacks and
-//!   panels, as 2 added 3D views. A newer engine reads older formats, as this one reads formats 1
-//!   and 2; this one refuses newer ones.
+//! - `format`, required, is the version of the format, 4 ([`FORMAT`]), which added particles and
+//!   blend modes, as 3 added stacks and panels and 2 3D views. A newer engine reads older formats,
+//!   as this one reads formats 1 to 3; this one refuses newer ones.
 //! - `sheets` names the sprite sheets sprites come from: images, by their path relative to the
 //!   game's folder, divided into a grid of sprites `tile_width` by `tile_height` texels.
 //! - `props` is data for the game about the scene as a whole. The engine doesn't read props;
@@ -147,6 +147,12 @@
 //!   or, with a `sheet` and a `cell`, that sprite sliced as a frame is (see
 //!   [`Canvas::draw_sprite_sliced`]), `slice` texels along its edges, a number for them all or
 //!   `{ left, top, right, bottom }`, keeping their size while the rest stretches, times `tint`.
+//! - `particles`: an emitter of particles ([`Particles`]), with the fields of
+//!   [`ParticleSettings`] (`rate`, `lifetime`, `colors` and the rest), each optional, which
+//!   [`Scene::advance_particles`] sends out from random points of its rectangle, laid out as an
+//!   area's, `width` by `height` (0 by 0, a point, by default) with a `stretch`. With a `sheet` and
+//!   a `cell`, each particle shows that sprite; without, a white square. Its particles draw where
+//!   it is among the scene's nodes. Its randomness starts from its path, unless it has a `seed`.
 //! - `tilemap`: a grid of `columns` by `rows` tiles from the tileset file `tileset`, with its
 //!   top-left corner at the node's origin. Its layers are its children of the kind `tile_layer`,
 //!   which draw in order with its other children, so a node can draw between two layers, such
@@ -195,7 +201,9 @@
 //! instead, and that it turns and stretches about. A sprite of a person 16 texels tall standing
 //! at `x`, `y` has a pivot of `{ 8, 16 }`, the middle of its feet. Text's pivot is from the top
 //! of the edge or middle it's aligned by. Colors are hex strings, such as `"#f2c14e"`, or
-//! `"#00000080"` with alpha. Any field a node doesn't have is an error naming the node, as is a
+//! `"#00000080"` with alpha. A sprite, rect, text, tile layer or particles node may have a
+//! `blend`, how what it draws mixes with what's under it: `"normal"`, the default, `"add"`,
+//! `"multiply"` or `"screen"` ([`Blend`]). Any field a node doesn't have is an error naming the node, as is a
 //! missing one it must have.
 //!
 //! Screens are laid out by anchors, so they fit canvases of any size. A node with an `anchor` is
@@ -328,7 +336,7 @@
 //!
 //! ```lua
 //! return {
-//!     format = 2,
+//!     format = 4,
 //!     tile_width = 16,
 //!     tile_height = 16,
 //!     sheets = {
@@ -367,7 +375,7 @@
 //!
 //! ```lua
 //! return {
-//!     format = 3,
+//!     format = 4,
 //!     image = "title.png",
 //!     cell = { 14, 14 },
 //!     characters = { "ABCDEFGHIJKLMNOP", "QRSTUVWXYZ" },
@@ -386,10 +394,11 @@
 //! [`Context::load_vector_font`] takes them:
 //!
 //! ```lua
-//! return { format = 3, file = "Hack-Regular.ttf", size = 13 }
+//! return { format = 4, file = "Hack-Regular.ttf", size = 13 }
 //! ```
 //!
-//! Nodes draw in order, each before its children, so later ones are on top. A [`Scene`] is a
+//! Nodes draw in order, each before its children, so later ones are on top, each in its own blend
+//! mode, leaving the canvas's as it was. A [`Scene`] is a
 //! scene loaded to play: its nodes, which a game finds by path or tag, moves, turns, changes,
 //! poses, adds and removes, drawn with [`Scene::draw`], which fits it to the canvas. A scene drawn
 //! without a camera is in canvas pixels, so [`Scene::bounds`] and [`Scene::contains`] test where
@@ -409,21 +418,22 @@ use std::{
 pub use clip::{Clip, Interpolation, KeyValue, Keys, Property, Track};
 pub use file::{
     AreaDef, BillboardDef, BitmapFontDef, CellDef, FORMAT, FontCharacters, FontFile, InstanceDef,
-    KindDef, MeshDef, ModelDef, NodeDef, PanelDef, PanelFill, PanelLookDef, Placement3, Props,
-    RectDef, SceneFile, Shape, SheetDef, SpriteDef, Stack, StackDirection, TextDef, TileDef,
-    TileLayerDef, TilemapDef, TilesetFile, Value, VectorFontDef, View3dDef,
+    KindDef, MeshDef, ModelDef, NodeDef, PanelDef, PanelFill, PanelLookDef, ParticlesDef,
+    Placement3, Props, RectDef, SceneFile, Shape, SheetDef, SpriteDef, Stack, StackDirection,
+    TextDef, TileDef, TileLayerDef, TilemapDef, TilesetFile, Value, VectorFontDef, View3dDef,
 };
-pub(crate) use file::{evaluate_any, plain};
+pub(crate) use file::{evaluate_any, particle_settings, particle_settings_value, plain};
 pub(crate) use writer::write_value;
 
 use crate::{
     Context, Error, Result,
     graphics::{
-        Align, Camera3d, Canvas, Canvas3d, Color, Font, Lighting, Mesh, Model, Ray, Sprite,
+        Align, Blend, Camera3d, Canvas, Canvas3d, Color, Font, Lighting, Mesh, Model, Ray, Sprite,
         SpriteSheet, TextLayout, Texture, View3d,
     },
     lua::check_tilemap_size,
     math::{Affine, Affine3, Bounds3, Rect, add3, scale3},
+    particles::{ParticleSettings, Particles, seed_for},
     save,
     tilemap::{Tile, TileId, Tilemap, Tileset},
 };
@@ -613,6 +623,33 @@ pub enum Kind {
     Stack(Stack),
     /// A stack that draws behind its children.
     Panel(PanelNode),
+    /// An emitter of particles, which draw where it is among the scene's nodes.
+    Particles(ParticlesNode),
+}
+
+/// An emitter of particles, sending them out from a rectangle laid out as an area's.
+#[derive(Clone, Debug)]
+pub struct ParticlesNode {
+    pub particles: Particles,
+    /// The sheet its particles' sprite is from, whose cells they show with
+    /// [`ParticlesNode::set_cell`] and clips.
+    pub sheet: Option<SpriteSheet>,
+    /// The rectangle particles start in.
+    pub size: [f32; 2],
+    /// As a rect's.
+    pub stretch: [f32; 2],
+    /// As a sprite's.
+    pub pivot: [f32; 2],
+}
+
+impl ParticlesNode {
+    /// Shows the sprite in `cell` of its sheet, its column and row. Fails if it has no sheet, or
+    /// the sheet has no such cell.
+    pub fn set_cell(&mut self, cell: [u32; 2]) -> Result<(), String> {
+        let sprite = cell_of(self.sheet.as_ref(), cell)?;
+        self.particles.set_sprite(Some(sprite));
+        Ok(())
+    }
 }
 
 /// A stack that draws behind its children.
@@ -689,6 +726,8 @@ pub struct SpriteNode {
     /// The point of the sprite, from its top-left corner, at the node's origin.
     pub pivot: [f32; 2],
     pub tint: Color,
+    /// How it mixes with what's under it.
+    pub blend: Blend,
 }
 
 /// What a rect node fills.
@@ -701,6 +740,8 @@ pub struct RectNode {
     /// As a sprite's.
     pub pivot: [f32; 2],
     pub color: Color,
+    /// As a sprite's.
+    pub blend: Blend,
 }
 
 /// What a text node shows, laid out once and again whenever the text changes.
@@ -713,6 +754,8 @@ pub struct TextNode {
     /// aligned by.
     pub pivot: [f32; 2],
     pub color: Color,
+    /// As a sprite's.
+    pub blend: Blend,
 }
 
 /// The rectangle an area node marks out.
@@ -747,6 +790,8 @@ pub struct TileLayerNode {
     pub layer: usize,
     /// The size of its map, which it covers.
     size: [f32; 2],
+    /// How its tiles mix with what's under them.
+    pub blend: Blend,
 }
 
 impl Kind {
@@ -766,7 +811,43 @@ impl Kind {
             Self::Billboard(_) => "billboard",
             Self::Stack(_) => "stack",
             Self::Panel(_) => "panel",
+            Self::Particles(_) => "particles",
         }
+    }
+
+    /// How what it draws mixes with what's under it, if it draws in a mode of its own: a
+    /// sprite, rect, text, tile layer or particles.
+    pub fn blend(&self) -> Option<Blend> {
+        match self {
+            Self::Sprite(sprite) => Some(sprite.blend),
+            Self::Rect(rect) => Some(rect.blend),
+            Self::Text(text) => Some(text.blend),
+            Self::TileLayer(layer) => Some(layer.blend),
+            Self::Particles(particles) => Some(particles.particles.settings().blend),
+            _ => None,
+        }
+    }
+
+    /// Changes how what it draws mixes with what's under it. `None` if it's a kind that has no
+    /// blend mode: see [`Kind::blend`].
+    pub fn set_blend(&mut self, blend: Blend) -> Option<()> {
+        match self {
+            Self::Sprite(sprite) => sprite.blend = blend,
+            Self::Rect(rect) => rect.blend = blend,
+            Self::Text(text) => text.blend = blend,
+            Self::TileLayer(layer) => layer.blend = blend,
+            Self::Particles(node) => {
+                let settings = ParticleSettings {
+                    blend,
+                    ..node.particles.settings().clone()
+                };
+                node.particles
+                    .set_settings(settings)
+                    .expect("only the blend mode changed");
+            }
+            _ => return None,
+        }
+        Some(())
     }
 
     /// How a stack or a panel is laid out and lays out its children.
@@ -801,6 +882,7 @@ impl Kind {
             Self::Sprite(sprite) => sprite.sheet.as_ref(),
             Self::Billboard(billboard) => billboard.sheet.as_ref(),
             Self::Mesh(mesh) => mesh.sheet.as_ref(),
+            Self::Particles(particles) => particles.sheet.as_ref(),
             _ => None,
         }
     }
@@ -812,6 +894,7 @@ impl Kind {
             Self::Sprite(sprite) => Some(sprite.set_cell(cell)),
             Self::Billboard(billboard) => Some(billboard.set_cell(cell)),
             Self::Mesh(mesh) => Some(mesh.set_cell(cell)),
+            Self::Particles(particles) => Some(particles.set_cell(cell)),
             _ => None,
         }
     }
@@ -876,6 +959,7 @@ impl TextNode {
             wrap,
             pivot: [0.0, 0.0],
             color: Color::WHITE,
+            blend: Blend::Normal,
         }
     }
 
@@ -1137,9 +1221,10 @@ impl Node {
         &mut self.kind
     }
 
-    /// The width and height of a sprite, rect, text, area, tilemap, tile layer or 3D view, before
-    /// stretching with its parent. A plain node has none, and nor do nodes in 3D views. A stack's
-    /// or a panel's depends on its children, so it's [`Scene::size_of`].
+    /// The width and height of a sprite, rect, text, area, tilemap, tile layer, 3D view or the
+    /// rectangle particles start in, before stretching with its parent. A plain node has none,
+    /// and nor do nodes in 3D views. A stack's or a panel's depends on its children, so it's
+    /// [`Scene::size_of`].
     pub fn size(&self) -> Option<[f32; 2]> {
         match &self.kind {
             Kind::Node
@@ -1158,6 +1243,7 @@ impl Node {
             }
             Kind::TileLayer(layer) => Some(layer.size),
             Kind::View3d(view) => Some(view.size),
+            Kind::Particles(particles) => Some(particles.size),
         }
     }
 
@@ -1172,6 +1258,7 @@ impl Node {
             Kind::Rect(rect) => (rect.stretch, rect.pivot),
             Kind::Area(area) => (area.stretch, area.pivot),
             Kind::View3d(view) => (view.stretch, view.pivot),
+            Kind::Particles(particles) => (particles.stretch, particles.pivot),
             Kind::Text(text) => {
                 let [x, y] = text.pivot;
                 let x = x + size[0] * text.align().fraction();
@@ -1601,13 +1688,17 @@ impl Scene {
         }
     }
 
-    /// Fails unless `id` is a sprite, billboard or mesh node from a sheet with every cell of
-    /// `keys`.
+    /// Fails unless `id` is a sprite, billboard, mesh or particles node from a sheet with every
+    /// cell of `keys`.
     fn check_cells(&self, id: NodeId, keys: &[(f32, [u32; 2])]) -> Result<(), String> {
         let kind = &self.node(id).kind;
         let sheet = match kind.sheet() {
             Some(sheet) => sheet,
-            None if matches!(kind, Kind::Sprite(_) | Kind::Billboard(_) | Kind::Mesh(_)) => {
+            None if matches!(
+                kind,
+                Kind::Sprite(_) | Kind::Billboard(_) | Kind::Mesh(_) | Kind::Particles(_)
+            ) =>
+            {
                 return Err(format!(
                     "{}'s sprite isn't from a sheet, so it has no cells",
                     self.describe(id)
@@ -2165,6 +2256,14 @@ impl Scene {
         }
         let id = self.copy(parent, source, from);
         self.node_mut(id).name = name.to_owned();
+        // Copied emitters start over, their randomness from their own paths, so copies of a torch
+        // don't flicker in step, or carry their source's particles.
+        for node in self.descendants(id) {
+            let path = self.path(node);
+            if let Kind::Particles(particles) = &mut self.node_mut(node).kind {
+                particles.particles.restart(seed_for(&path));
+            }
+        }
         Ok(id)
     }
 
@@ -2221,6 +2320,60 @@ impl Scene {
         Ok(())
     }
 
+    /// Moves the particles of `id`, and of every particles node inside it, on by `dt` seconds,
+    /// sending new ones out from where each node is now laid out, as [`Particles::advance`] does.
+    /// Particles advance whether their nodes are visible or not. Scenes keep no time of their
+    /// own, so particles move only when a game advances them.
+    pub fn advance_particles(&mut self, id: NodeId, dt: f32) {
+        for node in self.descendants(id) {
+            if let Some(particles) = self.placed_particles(node) {
+                particles.advance(dt);
+            }
+        }
+    }
+
+    /// The particles of `id`, if it's a particles node, sending them out from where it's laid
+    /// out now.
+    fn placed_particles(&mut self, id: NodeId) -> Option<&mut Particles> {
+        if !matches!(self.get(id)?.kind, Kind::Particles(_)) {
+            return None;
+        }
+        let placed = self.placed(id);
+        let Kind::Particles(node) = &mut self.node_mut(id).kind else {
+            return None;
+        };
+        let area = placed.rect.unwrap_or_default();
+        node.particles.set_origin(placed.transform, area);
+        Some(&mut node.particles)
+    }
+
+    /// Sends `count` particles out at once from `id`, a particles node, where it's laid out now,
+    /// as [`Particles::emit`] does. `None` if it isn't a particles node.
+    pub fn emit(&mut self, id: NodeId, count: u32) -> Option<()> {
+        self.placed_particles(id)?.emit(count);
+        Some(())
+    }
+
+    /// How many particles `id`, and every particles node inside it, have alive.
+    pub fn particle_count(&self, id: NodeId) -> usize {
+        self.descendants(id)
+            .into_iter()
+            .map(|node| match &self.node(node).kind {
+                Kind::Particles(particles) => particles.particles.count(),
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// Ends the lives of the particles of `id`, and of every particles node inside it, at once.
+    pub fn clear_particles(&mut self, id: NodeId) {
+        for node in self.descendants(id) {
+            if let Kind::Particles(particles) = &mut self.node_mut(node).kind {
+                particles.particles.clear();
+            }
+        }
+    }
+
     /// Draws the whole scene, first making its size the canvas's.
     pub fn draw(&mut self, canvas: &mut Canvas) {
         self.draw_node(canvas, self.root());
@@ -2252,7 +2405,10 @@ impl Scene {
             at = above;
         }
         let visible = canvas.visible_area();
+        // Nodes draw in their own blend modes, and leave the canvas's as it was.
+        let blend = canvas.blend();
         self.draw_tree(canvas, id, &self.placed(id), visible);
+        canvas.set_blend(blend);
     }
 
     /// Draws `id`, placed at `placed`, and the nodes inside it.
@@ -2262,8 +2418,15 @@ impl Scene {
             return;
         }
         let transform = placed.transform;
+        if let Some(blend) = node.kind.blend() {
+            canvas.set_blend(blend);
+        }
         if let Some(rect) = placed.rect {
             match &node.kind {
+                Kind::Particles(particles) => {
+                    // Particles fly out of their rectangle, so each is culled on its own.
+                    canvas.draw_particles_from(&particles.particles, transform);
+                }
                 Kind::Sprite(sprite) => {
                     if transform.bounds(rect).overlaps(&visible) {
                         canvas.draw_sprite_transformed(
@@ -2473,6 +2636,7 @@ fn fill_layer(map: &mut TilemapNode, layer: &TileLayerDef) -> Result<TileLayerNo
     Ok(TileLayerNode {
         layer: index,
         size: [bounds.w, bounds.h],
+        blend: layer.blend,
     })
 }
 
@@ -2648,6 +2812,10 @@ impl Expand<'_> {
                             ..
                         },
                     ..
+                })
+                | KindDef::Particles(ParticlesDef {
+                    sprite: Some(CellDef { sheet, .. }),
+                    ..
                 }) => *sheet = sheet_key(path, sheet),
                 _ => {}
             }
@@ -2708,6 +2876,9 @@ impl Expand<'_> {
                 KindDef::Sprite(sprite) => Some(&sprite.sheet),
                 KindDef::Billboard(billboard) => Some(&billboard.sheet),
                 KindDef::Mesh(mesh) => mesh.sprite.as_ref().map(|sprite| &sprite.sheet),
+                KindDef::Particles(particles) => {
+                    particles.sprite.as_ref().map(|sprite| &sprite.sheet)
+                }
                 KindDef::Panel(PanelDef {
                     look: PanelLookDef::Sprite { sprite, .. },
                     ..
@@ -2885,6 +3056,7 @@ impl Build<'_> {
                     stretch: sprite.stretch,
                     pivot: sprite.pivot,
                     tint: sprite.tint,
+                    blend: sprite.blend,
                 })
             }
             KindDef::Rect(rect) => Kind::Rect(RectNode {
@@ -2892,6 +3064,7 @@ impl Build<'_> {
                 stretch: rect.stretch,
                 pivot: rect.pivot,
                 color: rect.color,
+                blend: rect.blend,
             }),
             KindDef::Text(text) => {
                 let font = match &text.font {
@@ -2904,6 +3077,7 @@ impl Build<'_> {
                 Kind::Text(TextNode {
                     pivot: text.pivot,
                     color: text.color,
+                    blend: text.blend,
                     ..TextNode::new(&text.text, &font, text.wrap, text.align)
                 })
             }
@@ -2974,6 +3148,26 @@ impl Build<'_> {
                 Kind::Panel(PanelNode {
                     stack: panel.stack,
                     look,
+                })
+            }
+            KindDef::Particles(def) => {
+                let (sprite, sheet) = match &def.sprite {
+                    Some(sprite) => {
+                        let (image, sheet) = self.sprite(&sprite.sheet, sprite.cell, node)?;
+                        (Some(image), Some(sheet))
+                    }
+                    None => (None, None),
+                };
+                // Seeded by the node's path, so emitters alike differ, but each plays the same
+                // every time.
+                let particles = Particles::try_new(def.settings.clone(), sprite, seed_for(node))
+                    .map_err(|err| self.error(node, &err))?;
+                Kind::Particles(ParticlesNode {
+                    particles,
+                    sheet,
+                    size: def.size,
+                    stretch: def.stretch,
+                    pivot: def.pivot,
                 })
             }
         };

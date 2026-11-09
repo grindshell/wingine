@@ -5,7 +5,7 @@ use std::{mem, path::Path, time::SystemTime};
 
 use wingine::{
     Context,
-    scene::{Clip, NodeDef, NodeId, Scene, SceneFile},
+    scene::{Clip, Kind, NodeDef, NodeId, Scene, SceneFile},
 };
 
 use crate::{
@@ -17,6 +17,9 @@ use crate::{
 
 /// How many changes undo goes back through.
 const HISTORY: usize = 200;
+
+/// The most seconds particles in a preview run for as it's built, so they show.
+const PREVIEW_WARMUP: f32 = 5.0;
 
 /// A scene file open in a tab.
 pub struct Document {
@@ -176,6 +179,26 @@ impl Document {
             Some(names) => self.preview.as_ref()?.find(id, names),
             None => Some(id),
         }
+    }
+
+    /// Moves on by `dt` seconds the particles of the selected node, and of every particles node
+    /// inside it, the scene itself included. Whether there were any to move, so they're shown
+    /// moving.
+    pub fn animate_particles(&mut self, dt: f32) -> bool {
+        let Some(id) = self.selected_live() else {
+            return false;
+        };
+        let Some(scene) = &mut self.preview else {
+            return false;
+        };
+        let emits = scene
+            .descendants(id)
+            .into_iter()
+            .any(|node| matches!(scene.node(node).kind(), Kind::Particles(_)));
+        if emits {
+            scene.advance_particles(id, dt);
+        }
+        emits
     }
 
     /// Ends the change being made, if any, keeping it to undo if it changed anything.
@@ -446,6 +469,20 @@ impl Document {
         match built {
             Ok(mut scene) => {
                 scene.set_size(canvas_size);
+                // Particles show as they are once they've been going a while, so effects show
+                // even while nothing animates them.
+                let root = scene.root();
+                let longest = scene
+                    .descendants(root)
+                    .into_iter()
+                    .filter_map(|id| match scene.node(id).kind() {
+                        Kind::Particles(node) => Some(node.particles.longest_life()),
+                        _ => None,
+                    })
+                    .fold(0.0, f32::max);
+                if longest > 0.0 {
+                    scene.advance_particles(root, longest.min(PREVIEW_WARMUP));
+                }
                 self.preview = Some(scene);
                 self.error = None;
                 None

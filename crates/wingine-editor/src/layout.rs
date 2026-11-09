@@ -66,6 +66,7 @@ pub fn fits(node: &NodeDef, preset: &Preset) -> bool {
             | KindDef::Stack(_)
             | KindDef::Panel(_)
             | KindDef::View3d(_)
+            | KindDef::Particles(_)
     );
     let wide = preset.places.contains(&Wide);
     let placed = matches!(kind, KindDef::TileLayer(_)) || node.placement3.is_some();
@@ -109,6 +110,11 @@ pub fn apply(node: &mut NodeDef, preset: &Preset, size: [f32; 2], margin: f32) {
         }
         KindDef::Rect(rect) => (&mut rect.size, &mut rect.stretch, &mut rect.pivot),
         KindDef::Area(area) => (&mut area.size, &mut area.stretch, &mut area.pivot),
+        KindDef::Particles(particles) => (
+            &mut particles.size,
+            &mut particles.stretch,
+            &mut particles.pivot,
+        ),
         KindDef::Stack(_) | KindDef::Panel(_) => {
             // A stack's anchor lines it up by itself, so its pivot is from there, and one that
             // fits what it holds keeps fitting it, unless it stretches across its parent.
@@ -193,7 +199,7 @@ fn lay_out(
 #[cfg(test)]
 mod tests {
     use wingine::{
-        graphics::Color,
+        graphics::{Blend, Color},
         scene::{RectDef, SpriteDef, Stack, TextDef},
     };
 
@@ -211,6 +217,7 @@ mod tests {
                 stretch: [0.0, 0.0],
                 pivot: [0.0, 0.0],
                 color: Color::WHITE,
+                blend: Blend::Normal,
             }),
         );
         node.x = 7.0;
@@ -271,6 +278,7 @@ mod tests {
                 stretch: [0.0, 0.0],
                 pivot: [0.0, 0.0],
                 tint: Color::WHITE,
+                blend: Blend::Normal,
             }),
         );
         apply(&mut node, named("Center"), [16.0, 16.0], 0.0);
@@ -323,6 +331,7 @@ mod tests {
                 align: Align::Left,
                 pivot: [0.0, 0.0],
                 color: Color::WHITE,
+                blend: Blend::Normal,
             }),
         );
         assert!(fits(&node, named("Center Bottom")));

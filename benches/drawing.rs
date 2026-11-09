@@ -11,7 +11,8 @@ use wingine::{
     Context, FrameStats, Game, WindowConfig,
     graphics::{Camera3d, Canvas, Color, Mesh, MeshData, Sprite, View3d},
     headless::Simulation,
-    math::{Affine3, Rect},
+    math::{Affine, Affine3, Rect},
+    particles::{ParticleSettings, Particles},
     runtime::{self, LuauGame},
 };
 use wingine_native as native;
@@ -58,6 +59,10 @@ fn main() {
     for (case, shape) in [
         ("Rust: Canvas::draw_sprite_rotated", Shape::Rotated),
         ("Rust: Canvas::fill_rect", Shape::Rect),
+        (
+            "Rust: Canvas::draw_particles, colored and sized by age",
+            Shape::Particles,
+        ),
     ] {
         let mut simulation =
             Simulation::new(&config(), |ctx| RustGame::load(ctx, &image, shape)).unwrap();
@@ -252,12 +257,16 @@ enum Shape {
     Billboard,
     /// A cube showing the sprite in a 3D view.
     Cube,
+    /// The sprite as particles of an emitter, each colored and sized by its age, unturned.
+    Particles,
 }
 
 /// Draws [`SPRITES`] shapes.
 struct RustGame {
     sprite: Sprite,
     cube: Mesh,
+    /// [`SPRITES`] still particles over the canvas, of every age, for [`Shape::Particles`].
+    particles: Particles,
     shape: Shape,
 }
 
@@ -265,9 +274,22 @@ impl RustGame {
     fn load(ctx: &mut Context, image: &std::path::Path, shape: Shape) -> wingine::Result<Self> {
         let sprite = ctx.load_texture(image)?.sprite();
         let cube = ctx.create_mesh(&MeshData::cube(0.5))?;
+        let settings = ParticleSettings {
+            rate: SPRITES as f32,
+            limit: SPRITES,
+            lifetime: [2.0, 2.0],
+            speed: [0.0, 0.0],
+            scales: vec![1.0, 0.5],
+            colors: vec![Color::WHITE, Color::rgb8(0xff, 0x80, 0x40)],
+            ..ParticleSettings::default()
+        };
+        let mut particles = Particles::new(settings, Some(sprite.clone()), 1);
+        particles.set_origin(Affine::IDENTITY, Rect::new(0.0, 0.0, 320.0, 180.0));
+        particles.advance(1.5);
         Ok(Self {
             sprite,
             cube,
+            particles,
             shape,
         })
     }
@@ -295,6 +317,10 @@ impl Game for RustGame {
             }
             return;
         }
+        if let Shape::Particles = self.shape {
+            canvas.draw_particles(&self.particles);
+            return;
+        }
         for i in 0..SPRITES {
             let [x, y] = position(i);
             let dest = Rect::new(x, y, SIZE as f32, SIZE as f32);
@@ -304,7 +330,7 @@ impl Game for RustGame {
                     canvas.draw_sprite_rotated(&self.sprite, dest, ANGLE, Color::WHITE)
                 }
                 Shape::Rect => canvas.fill_rect(dest, tint),
-                Shape::Billboard | Shape::Cube => unreachable!("drawn in a view above"),
+                Shape::Billboard | Shape::Cube | Shape::Particles => unreachable!("drawn above"),
             }
         }
     }

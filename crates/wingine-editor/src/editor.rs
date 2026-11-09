@@ -1107,6 +1107,12 @@ impl Game for Editor {
         {
             self.output.push(Level::Error, error);
         }
+        // Particles move while what's selected holds them, and keep the editor drawing.
+        if let Some(document) = self.documents.get_mut(self.current)
+            && document.animate_particles(self.dt)
+        {
+            ctx.request_redraw();
+        }
 
         let mut tree_actions = Vec::new();
         let mut file_action = None;

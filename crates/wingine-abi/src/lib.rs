@@ -36,8 +36,8 @@ use core::{
 
 pub const ABI_MAJOR: u16 = 0;
 /// 1: the first version. 2: [`Host::draw_sprites`]. 3: 3D: meshes, vectors, and views drawn
-/// in, from [`Host::create_mesh`] on.
-pub const ABI_MINOR: u16 = 3;
+/// in, from [`Host::create_mesh`] on. 4: [`Host::set_blend`].
+pub const ABI_MINOR: u16 = 4;
 
 /// The name of the function a library exports, an [`Entry`].
 pub const ENTRY_SYMBOL: &[u8] = b"wingine_library\0";
@@ -331,6 +331,22 @@ impl Projection {
     pub const PERSPECTIVE: Self = Self(0);
     /// Things look the same size however far away they are.
     pub const ORTHOGRAPHIC: Self = Self(1);
+}
+
+/// How what's drawn mixes with what's under it, as Wingine's `Blend`. Since 0.4.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Blend(pub u32);
+
+impl Blend {
+    /// Covers what's under it as much as it's opaque, as drawing does by default.
+    pub const NORMAL: Self = Self(0);
+    /// Adds its color, scaled by its alpha, to what's under it.
+    pub const ADD: Self = Self(1);
+    /// Multiplies what's under it by its color, where it's opaque.
+    pub const MULTIPLY: Self = Self(2);
+    /// Brightens what's under it as much as its color is bright, never past white.
+    pub const SCREEN: Self = Self(3);
 }
 
 /// A camera looking into a 3D world, as Wingine's `Camera3d`.
@@ -719,4 +735,9 @@ pub struct Host {
         draws: *const BillboardDraw,
         count: usize,
     ) -> Status,
+
+    /// Blends everything drawn after it as `blend` says, as `graphics.set_blend` does, until the
+    /// frame ends, it's set again, or the game's `draw` returns. Fails if `blend` isn't one of
+    /// [`Blend`]'s. Since 0.4.
+    pub set_blend: unsafe extern "C" fn(canvas: *mut Canvas, blend: Blend) -> Status,
 }

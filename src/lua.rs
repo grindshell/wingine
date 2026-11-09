@@ -77,6 +77,16 @@
 //!   loops never is), and `animation:once()`, `animation:flipped_x()` and
 //!   `animation:flipped_y()`, which return copies that play once and hold the last frame, or
 //!   have mirrored frames.
+//! - A [`Blend`] is a string: `"normal"`, `"add"`, `"multiply"` or `"screen"`.
+//! - [`Particles`] are userdata, an emitter from `graphics.new_particles(settings, sprite)`, whose
+//!   settings are a table with the fields of [`ParticleSettings`], read as a scene file's
+//!   particles node's are (`crate::scene::particle_settings`), with the same errors. It keeps no
+//!   time: `particles:advance(dt)` moves it on. Its methods are `particles:emit(count)`,
+//!   `particles:advance(dt)`, `particles:count()`, `particles:clear()`,
+//!   `particles:is_emitting()`, `particles:set_emitting(emitting)`, `particles:position()`,
+//!   `particles:set_position(x, y)`, `particles:set_rotation(angle)`, `particles:settings()`
+//!   (every setting, colors as hex strings with alpha), `particles:set_settings(settings)` (those
+//!   given, keeping the rest) and `particles:set_sprite(sprite)` (or `nil` for squares).
 //! - 3D positions and directions are Luau vectors, `vector.create(x, y, z)`. A [`Camera3d`] is a
 //!   table `{ position, target, up, fov, height, near, far }`: `position` and `target` are
 //!   vectors, and the rest optional, `fov` (radians, for perspective, 0.8 by default) and
@@ -105,8 +115,8 @@
 //!   the mover too. `step` returns whether a step started.
 //! - A [`SceneNode`] is userdata for a node of a [`Scene`], which every node of the scene shares;
 //!   two of the same node are `==`. Finding nodes: `node:name()`, `node:kind()` (`"node"`,
-//!   `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`, `"tilemap"`, `"tile_layer"`,
-//!   `"view3d"`, `"mesh"`, `"model"` or `"billboard"`), `node:path()`
+//!   `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`, `"particles"`, `"tilemap"`,
+//!   `"tile_layer"`, `"view3d"`, `"mesh"`, `"model"` or `"billboard"`), `node:path()`
 //!   (the names from the root, joined by `/`), `node:find(path)` (the node `path` leads to from
 //!   this one, or `nil`), `node:tagged(tag)` (this node and those inside it with the tag, in draw
 //!   order), `node:parent()`, `node:children()`, `node:tags()`, `node:has_tag(tag)` and
@@ -129,16 +139,20 @@
 //!   nothing) and `node:ray(x, y)` (where the ray into its world through a point of the scene
 //!   starts and the way it goes, of length 1, or nothing outside the view). What they cover: `node:size()` (before stretching with its parent, or a
 //!   billboard's; a stack's or a panel's fits what it holds along the axes it has no size of its
-//!   own), `node:set_size(width, height)` (sprites, rects, areas, stacks, panels, views and
-//!   billboards; a stack or a panel then has a size of its own both ways),
+//!   own), `node:set_size(width, height)` (sprites, rects, areas, stacks, panels, views,
+//!   billboards and particles; a stack or a panel then has a size of its own both ways),
 //!   `node:bounds()` (a `Rect` in the scene's coordinates, or `nil` for a plain node or one in a
 //!   view) and `node:contains(x, y)`. A scene is laid out on the canvas when it's loaded and each
 //!   time it's drawn, and one drawn without a camera is in canvas pixels, so `contains` tests the
 //!   mouse against a node. What they show: `node:set_sprite(sprite)`, `node:set_cell(column, row)`
-//!   (a cell of the sheet the scene file gave a sprite, billboard or mesh), `node:set_tint(tint)`
-//!   (sprites, meshes, models and billboards), `node:set_color(color)` (rects, text and filled
-//!   panels),
-//!   `node:text()` and `node:set_text(text)` (text). Posing: `node:pose(clip, time, weight)`
+//!   (a cell of the sheet the scene file gave a sprite, billboard, mesh or particles),
+//!   `node:set_tint(tint)` (sprites, meshes, models and billboards), `node:set_color(color)`
+//!   (rects, text and filled panels), `node:text()` and `node:set_text(text)` (text), and
+//!   `node:blend()` and `node:set_blend(blend)` (sprites, rects, text, tile layers and particles).
+//!   Particles: `node:advance_particles(dt)`, `node:particle_count()` and
+//!   `node:clear_particles()` act on the node and every particles node inside it, any kind of
+//!   node; `node:emit(count)`, `node:is_emitting()`, `node:set_emitting(emitting)`,
+//!   `node:particle_settings()` and `node:set_particle_settings(settings)` on a particles node. Posing: `node:pose(clip, time, weight)`
 //!   poses the node and those inside it as `clip` has them `time` seconds after it started;
 //!   `weight`, from 0 to 1
 //!   and 1 if left out, moves numbers only that fraction of the way there, and changes
@@ -237,16 +251,18 @@ use crate::{
     Error, Fullscreen, Result,
     audio::{PlaySettings, Sound},
     graphics::{
-        Animation, Camera3d, Color, Font, Lighting, Mesh, Model, Projection, Scaling, Sprite,
-        SpriteSheet, TextLayout,
+        Animation, Blend, Camera3d, Color, Font, Lighting, Mesh, Model, Projection, Scaling,
+        Sprite, SpriteSheet, TextLayout,
     },
     grid::{Direction, GridMover},
     input::{Control, GamepadButton, Key, MouseButton},
-    math::{Bounds3, Rect},
+    math::{Affine, Bounds3, Rect},
+    particles::Particles,
     scene::{
         AreaNode, BillboardNode, Clip, Kind, MeshNode, ModelNode, Node, NodeId, PanelFill,
-        PanelLook, PanelNode, Placement3, Props, RectNode, Scene, SpriteNode, TextNode,
-        TilemapNode, Value, View3dNode, a_node_of,
+        PanelLook, PanelNode, ParticlesNode, Placement3, Props, RectNode, Scene, SpriteNode,
+        TextNode, TilemapNode, Value, View3dNode, a_node_of, particle_settings,
+        particle_settings_value, plain,
     },
     tilemap::{Tile, TileId, Tilemap, Tileset},
 };
@@ -640,6 +656,25 @@ impl FromLua for Scaling {
                 to: "Scaling".into(),
                 message: Some(r#"expected "whole", "fit" or "stretch""#.into()),
             })
+    }
+}
+
+impl IntoLua for Blend {
+    fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
+        self.name().into_lua(lua)
+    }
+}
+
+impl FromLua for Blend {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        let blend = match &value {
+            mlua::Value::String(name) => Blend::from_name(&name.to_str()?),
+            _ => None,
+        };
+        blend.ok_or_else(|| {
+            let message = r#"expected "normal", "add", "multiply" or "screen""#;
+            conversion_error(&value, "Blend", message.into())
+        })
     }
 }
 
@@ -1174,6 +1209,13 @@ impl SceneNode {
         })?
     }
 
+    /// Fails unless this is a particles node.
+    fn check_particles(&self) -> mlua::Result<()> {
+        self.read_kind("particles", |kind| {
+            matches!(kind, Kind::Particles(_)).then_some(())
+        })
+    }
+
     /// Fails unless this is a tile layer node.
     fn check_tile_layer(&self) -> mlua::Result<()> {
         self.read_kind("tiles", |kind| {
@@ -1231,6 +1273,80 @@ fn removed() -> mlua::Error {
 
 fn wrong_kind(described: &str, is: &str, what: &str) -> mlua::Error {
     mlua::Error::runtime(format!("{described} is {is}, which has no {what}"))
+}
+
+/// Fails unless `dt` is a number of seconds, 0 or more.
+fn check_dt(dt: f32) -> mlua::Result<()> {
+    if dt.is_finite() && dt >= 0.0 {
+        Ok(())
+    } else {
+        let message = format!("dt must be a number of seconds, 0 or more, not {dt}");
+        Err(mlua::Error::runtime(message))
+    }
+}
+
+impl mlua::UserData for Particles {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method_mut("emit", |_, particles, count: u32| {
+            particles.emit(count);
+            Ok(())
+        });
+        methods.add_method_mut("advance", |_, particles, dt: f32| {
+            check_dt(dt)?;
+            particles.advance(dt);
+            Ok(())
+        });
+        methods.add_method("count", |_, particles, ()| Ok(particles.count()));
+        methods.add_method_mut("clear", |_, particles, ()| {
+            particles.clear();
+            Ok(())
+        });
+        methods.add_method(
+            "is_emitting",
+            |_, particles, ()| Ok(particles.is_emitting()),
+        );
+        methods.add_method_mut("set_emitting", |_, particles, emitting: bool| {
+            particles.set_emitting(emitting);
+            Ok(())
+        });
+        methods.add_method("position", |_, particles, ()| {
+            let [x, y] = particles.origin().translation;
+            Ok((x, y))
+        });
+        methods.add_method_mut("set_position", |_, particles, (x, y): (f32, f32)| {
+            check_finite(&[x, y], "a position")?;
+            let origin = Affine {
+                translation: [x, y],
+                ..particles.origin()
+            };
+            particles.set_origin(origin, Rect::default());
+            Ok(())
+        });
+        methods.add_method_mut("set_rotation", |_, particles, angle: f32| {
+            check_finite(&[angle], "a rotation")?;
+            let origin = particles.origin();
+            let turned = Affine::from_parts_exact(origin.translation, angle, [1.0, 1.0]);
+            particles.set_origin(turned, Rect::default());
+            Ok(())
+        });
+        methods.add_method("settings", |lua, particles, ()| {
+            (&particle_settings_value(particles.settings())).into_lua(lua)
+        });
+        methods.add_method_mut("set_settings", |_, particles, change: mlua::Table| {
+            let change =
+                plain(mlua::Value::Table(change), "the settings").map_err(mlua::Error::runtime)?;
+            particle_settings(change, particles.settings())
+                .and_then(|settings| particles.set_settings(settings))
+                .map_err(mlua::Error::runtime)
+        });
+        methods.add_method_mut(
+            "set_sprite",
+            |_, particles, sprite: Option<mlua::UserDataRef<Sprite>>| {
+                particles.set_sprite(sprite.map(|sprite| Sprite::clone(&sprite)));
+                Ok(())
+            },
+        );
+    }
 }
 
 /// Fails unless every one of `numbers` is finite, which positions and the like must be so the
@@ -1562,6 +1678,7 @@ impl mlua::UserData for SceneNode {
                     | Kind::Rect(RectNode { size, .. })
                     | Kind::Area(AreaNode { size, .. })
                     | Kind::View3d(View3dNode { size, .. })
+                    | Kind::Particles(ParticlesNode { size, .. })
                     | Kind::Billboard(BillboardNode { size, .. }) => *size = [width, height],
                     Kind::Stack(stack) | Kind::Panel(PanelNode { stack, .. }) => {
                         stack.size = [Some(width), Some(height)];
@@ -1577,6 +1694,10 @@ impl mlua::UserData for SceneNode {
                 node.write_kind("sprite", |kind| match kind {
                     Kind::Sprite(node) => {
                         node.sprite = Sprite::clone(&sprite);
+                        Some(())
+                    }
+                    Kind::Particles(node) => {
+                        node.particles.set_sprite(Some(Sprite::clone(&sprite)));
                         Some(())
                     }
                     _ => None,
@@ -1624,6 +1745,61 @@ impl mlua::UserData for SceneNode {
                 }
                 Some(())
             })
+        });
+        methods.add_method("blend", |_, node, ()| {
+            node.read_kind("blend mode", Kind::blend)
+        });
+        methods.add_method("set_blend", |_, node, blend: Blend| {
+            node.write_kind("blend mode", |kind| kind.set_blend(blend))
+        });
+        methods.add_method("emit", |_, node, count: u32| {
+            node.check_particles()?;
+            node.write(|scene, id| scene.emit(id, count))?;
+            Ok(())
+        });
+        methods.add_method("is_emitting", |_, node, ()| {
+            node.read_kind("particles", |kind| match kind {
+                Kind::Particles(node) => Some(node.particles.is_emitting()),
+                _ => None,
+            })
+        });
+        methods.add_method("set_emitting", |_, node, emitting: bool| {
+            node.write_kind("particles", |kind| match kind {
+                Kind::Particles(node) => {
+                    node.particles.set_emitting(emitting);
+                    Some(())
+                }
+                _ => None,
+            })
+        });
+        methods.add_method("particle_settings", |lua, node, ()| {
+            let settings = node.read_kind("particles", |kind| match kind {
+                Kind::Particles(node) => Some(particle_settings_value(node.particles.settings())),
+                _ => None,
+            })?;
+            (&settings).into_lua(lua)
+        });
+        methods.add_method("set_particle_settings", |_, node, change: mlua::Table| {
+            let change =
+                plain(mlua::Value::Table(change), "the settings").map_err(mlua::Error::runtime)?;
+            node.write_kind("particles", |kind| match kind {
+                Kind::Particles(node) => Some(
+                    particle_settings(change, node.particles.settings())
+                        .and_then(|settings| node.particles.set_settings(settings)),
+                ),
+                _ => None,
+            })?
+            .map_err(mlua::Error::runtime)
+        });
+        methods.add_method("advance_particles", |_, node, dt: f32| {
+            check_dt(dt)?;
+            node.write(|scene, id| scene.advance_particles(id, dt))
+        });
+        methods.add_method("particle_count", |_, node, ()| {
+            node.read(|scene, id| scene.particle_count(id))
+        });
+        methods.add_method("clear_particles", |_, node, ()| {
+            node.write(|scene, id| scene.clear_particles(id))
         });
         methods.add_method("text", |_, node, ()| {
             node.read_kind("text", |kind| match kind {

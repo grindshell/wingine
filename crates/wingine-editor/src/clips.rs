@@ -271,7 +271,10 @@ pub fn rename_clip(file: &mut SceneFile, from: &str, to: &str) -> Result<(), Str
 
 #[cfg(test)]
 mod tests {
-    use wingine::{graphics::Color, scene::SpriteDef};
+    use wingine::{
+        graphics::{Blend, Color},
+        scene::SpriteDef,
+    };
 
     use super::*;
 
@@ -373,6 +376,7 @@ mod tests {
                 stretch: [0.0, 0.0],
                 pivot: [0.0, 0.0],
                 tint: Color::WHITE,
+                blend: Blend::Normal,
             }),
         );
         set_value(&mut sprite, "cell", KeyValue::Cell([2, 1]));

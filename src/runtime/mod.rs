@@ -66,7 +66,8 @@
 //! The engine's API is in ten global tables:
 //!
 //! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.color`, `graphics.default_font`,
-//! `graphics.frame_stats`, `graphics.new_animation` and `graphics.hit_box` work anywhere,
+//! `graphics.frame_stats`, `graphics.new_animation`, `graphics.new_particles` and
+//! `graphics.hit_box` work anywhere,
 //! `graphics.load_sprite_sheet`, `graphics.load_model` and the functions that make meshes while
 //! the game loads and in `update`, and `graphics.project` and `graphics.ray` then and in `draw`.
 //!
@@ -110,6 +111,15 @@
 //!   and scaling it by `zoom`, canvas pixels a world unit: above 1 zooms in and below 1 out, about
 //!   the view's center. It's 1 by default, and must be above 0. `graphics.set_camera(nil)`, the
 //!   default at the start of each frame, draws in canvas pixels, as for a HUD.
+//! - `graphics.set_blend(blend)` mixes whatever is drawn next with what's under it as `blend`
+//!   says: `"normal"`, the default at the start of each frame, `"add"`, `"multiply"` or
+//!   `"screen"`. A scene's nodes draw in their own modes, and leave it as it was.
+//! - `graphics.new_particles(settings, sprite)` returns an emitter of particles, each showing
+//!   `sprite` or a white square, with `settings` as a scene file's particles node has them (see
+//!   `wingine::scene`), and `graphics.draw_particles(particles)` draws its particles, in its
+//!   blend mode. Emitters keep no time: `particles:advance(dt)` moves them on. Each one a game
+//!   makes is seeded by how many it made before, unless its settings give a seed, so a game plays
+//!   the same every run.
 //! - `graphics.size()` returns the canvas's width and height.
 //! - `graphics.default_font()` returns the built-in pixel font.
 //! - `graphics.load_font(path, settings)` loads a font. Without `settings`, `path` is a font file,
@@ -430,7 +440,7 @@ use crate::lua::mlua::luau::FsRequirer as FileRequirer;
 use crate::watch::Watcher;
 use crate::{
     Context, Error, Game, Result, WindowConfig, WindowIcon,
-    graphics::{Canvas, Color, Font, FontSettings, Model, Resolution, Texture},
+    graphics::{Blend, Canvas, Color, Font, FontSettings, Model, Resolution, Texture},
     lua::{
         Scripts, mlua,
         mlua::{
@@ -1026,12 +1036,13 @@ impl LuauGame {
     }
 
     /// Runs the libraries' hooks before `draw`, the script's `draw`, then the hooks after, which
-    /// draw in canvas pixels whatever camera the script left set.
+    /// draw in canvas pixels and blend normally whatever camera and blend mode the script left set.
     fn run_draw(&mut self, canvas: &mut Canvas) -> Result<()> {
         self.natives.draw(Phase::BEFORE, canvas)?;
         let lent = self.lent.clone();
         lent.lend(canvas, || self.callback("draw", ()))?;
         canvas.set_camera(None);
+        canvas.set_blend(Blend::Normal);
         self.natives.draw(Phase::AFTER, canvas)
     }
 
@@ -1053,6 +1064,7 @@ fn draw_error(canvas: &mut Canvas, font: &Font, err: &Error) {
     const MARGIN: f32 = 8.0;
     canvas.clear(Color::rgb8(0x30, 0x10, 0x18));
     canvas.set_camera(None);
+    canvas.set_blend(Blend::Normal);
     // Tracebacks indent with tabs, which the font doesn't have.
     let text = format!("The game stopped with an error:\n\n{err}").replace('\t', "  ");
     let width = (canvas.width() - MARGIN * 2.0).max(MARGIN);

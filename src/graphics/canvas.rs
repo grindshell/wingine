@@ -3,7 +3,7 @@ use std::ops::{Bound, Range, RangeBounds};
 use bytemuck::{Pod, Zeroable};
 
 use super::{
-    Camera, Canvas3d, Color, Font, Mesh, Sprite, TextLayout, Texture, View3d,
+    Blend, Camera, Canvas3d, Color, Font, Mesh, Sprite, TextLayout, Texture, View3d,
     camera::Transform,
     font::PlacedGlyph,
     view3d::{Instance, MeshDraw, Segment3d},
@@ -11,6 +11,7 @@ use super::{
 use crate::{
     FrameStats,
     math::{Affine, Rect},
+    particles::Particles,
 };
 
 #[repr(C)]
@@ -22,10 +23,11 @@ pub(crate) struct Vertex {
     pub color: [u8; 4],
 }
 
-/// A run of consecutive quads that share a texture, drawn with one draw call.
+/// A run of consecutive quads that share a texture and a blend mode, drawn with one draw call.
 pub(crate) struct Batch {
     /// `None` draws with a plain white texture, for solid fills.
     pub texture: Option<Texture>,
+    pub blend: Blend,
     /// Its quads, counting from the frame's first. Each quad is four vertices.
     pub quads: Range<u32>,
 }
@@ -49,6 +51,7 @@ pub struct Canvas {
     width: f32,
     height: f32,
     transform: Transform,
+    blend: Blend,
     /// The stats of the frame before, as the context has them, for Luau games, which are lent the
     /// canvas and not the context while they draw.
     pub(crate) frame_stats: FrameStats,
@@ -66,6 +69,7 @@ impl Canvas {
             width: 0.0,
             height: 0.0,
             transform: Transform::IDENTITY,
+            blend: Blend::Normal,
             frame_stats: FrameStats::default(),
         }
     }
@@ -75,6 +79,7 @@ impl Canvas {
         self.width = width;
         self.height = height;
         self.transform = Transform::IDENTITY;
+        self.blend = Blend::Normal;
         self.clear(Color::BLACK);
     }
 
@@ -95,6 +100,18 @@ impl Canvas {
         self.transform = camera.map_or(Transform::IDENTITY, |camera| {
             camera.transform(self.width, self.height)
         });
+    }
+
+    /// Blends everything drawn after this call with what's under it as `blend` says.
+    /// [`Blend::Normal`] is the default at the start of each frame. Quads drawn in one mode after
+    /// another start a new draw call, so drawing everything in one mode together is cheaper.
+    pub fn set_blend(&mut self, blend: Blend) {
+        self.blend = blend;
+    }
+
+    /// The blend mode drawing currently uses.
+    pub fn blend(&self) -> Blend {
+        self.blend
     }
 
     /// The area the canvas shows, in the coordinates drawing currently uses: world coordinates
@@ -159,6 +176,7 @@ impl Canvas {
         let quad = self.quad_count();
         self.batches.push(Batch {
             texture: None,
+            blend: self.blend,
             quads: quad..quad,
         });
         let first = self.mesh_draws.len() as u32;
@@ -394,6 +412,74 @@ impl Canvas {
             .map(|corner| self.transform.apply_point(corner))
     }
 
+    /// Draws the particles of `particles`, oldest first, each as its sprite or a white square
+    /// centered on where it is, turned by its angle, sized by its scale and multiplied by its
+    /// color at its age, blended as its settings say. Particles that move with their emitter
+    /// are placed by its origin; the rest are where they are. Drawing switches to the emitter's
+    /// blend mode and back.
+    pub fn draw_particles(&mut self, particles: &Particles) {
+        self.draw_particles_from(particles, particles.origin());
+    }
+
+    /// Draws `particles` as [`Canvas::draw_particles`] does, with `origin` placing them if
+    /// they're attached.
+    pub(crate) fn draw_particles_from(&mut self, particles: &Particles, origin: Affine) {
+        let settings = particles.settings();
+        let placed = if settings.attached {
+            origin
+        } else {
+            Affine::IDENTITY
+        };
+        let (texture, uv, [width, height]) = match particles.sprite() {
+            Some(sprite) => (
+                Some(sprite.texture()),
+                sprite.uv_bounds(),
+                [sprite.width(), sprite.height()],
+            ),
+            None => (None, SOLID, [1.0, 1.0]),
+        };
+        // How far a corner can be from the middle, as placed, times the particle's scale.
+        let [ax, ay] = placed.x_axis;
+        let [bx, by] = placed.y_axis;
+        let reach = (width + height) / 2.0 * (ax.abs() + ay.abs() + bx.abs() + by.abs());
+        let visible = self.visible_area();
+        let blend = self.blend;
+        self.blend = settings.blend;
+        for particle in particles.live() {
+            let life = particle.age / particle.lifetime;
+            let scale = settings.scale_at(life);
+            let center = placed.apply(particle.position);
+            let r = reach * scale;
+            let [x, y] = center;
+            if x + r < visible.x
+                || y + r < visible.y
+                || x - r > visible.right()
+                || y - r > visible.bottom()
+            {
+                continue;
+            }
+            let [half_w, half_h] = [width * scale / 2.0, height * scale / 2.0];
+            let [px, py] = particle.position;
+            let corners = [
+                [-half_w, -half_h],
+                [half_w, -half_h],
+                [half_w, half_h],
+                [-half_w, half_h],
+            ];
+            // Most particles don't turn, and the sine and cosine are calls into the math library.
+            let corners = if particle.angle == 0.0 {
+                corners.map(|[cx, cy]| [px + cx, py + cy])
+            } else {
+                let (sin, cos) = particle.angle.sin_cos();
+                corners.map(|[cx, cy]| [px + cx * cos - cy * sin, py + cx * sin + cy * cos])
+            };
+            let corners = corners.map(|corner| self.transform.apply_point(placed.apply(corner)));
+            let color = settings.color_at(life).to_rgba8();
+            self.push_quad_rgba8(texture, corners, uv, color);
+        }
+        self.blend = blend;
+    }
+
     /// Draws `text` in `font` with its top-left corner at `position`, without wrapping; `\n`
     /// starts a new line. The position is rounded to whole units, so pixel fonts stay crisp.
     pub fn draw_text(&mut self, font: &Font, text: &str, position: [f32; 2], color: Color) {
@@ -456,23 +542,38 @@ impl Canvas {
 
     /// Records a quad with `corners` in canvas pixels, clockwise from the one that shows the
     /// top-left of the texture region `uv_min..uv_max`.
-    fn push_quad(
+    pub(crate) fn push_quad(
+        &mut self,
+        texture: Option<&Texture>,
+        corners: [[f32; 2]; 4],
+        uv: ([f32; 2], [f32; 2]),
+        color: Color,
+    ) {
+        self.push_quad_rgba8(texture, corners, uv, color.to_rgba8());
+    }
+
+    /// Records a quad as [`Canvas::push_quad`] does, with its color already as sRGB bytes.
+    pub(crate) fn push_quad_rgba8(
         &mut self,
         texture: Option<&Texture>,
         corners: [[f32; 2]; 4],
         (uv_min, uv_max): ([f32; 2], [f32; 2]),
-        color: Color,
+        color: [u8; 4],
     ) {
         let quad = self.quad_count();
         match self.batches.last_mut() {
-            Some(batch) if same_texture(batch.texture.as_ref(), texture) => batch.quads.end += 1,
+            Some(batch)
+                if batch.blend == self.blend && same_texture(batch.texture.as_ref(), texture) =>
+            {
+                batch.quads.end += 1
+            }
             _ => self.batches.push(Batch {
                 texture: texture.cloned(),
+                blend: self.blend,
                 quads: quad..quad + 1,
             }),
         }
 
-        let color = color.to_rgba8();
         let uvs = [
             uv_min,
             [uv_max[0], uv_min[1]],
@@ -875,6 +976,85 @@ mod tests {
         canvas.begin(20.0, 20.0);
         canvas.fill_rect(Rect::new(1.0, 1.0, 1.0, 1.0), Color::WHITE);
         assert_eq!(canvas.vertices[0].position, [1.0, 1.0]);
+    }
+
+    #[test]
+    fn blend_modes_split_batches_until_the_frame_ends() {
+        let mut canvas = Canvas::new();
+        canvas.begin(20.0, 20.0);
+        let rect = Rect::new(0.0, 0.0, 1.0, 1.0);
+        canvas.fill_rect(rect, Color::WHITE);
+        canvas.set_blend(Blend::Add);
+        canvas.fill_rect(rect, Color::WHITE);
+        canvas.fill_rect(rect, Color::WHITE);
+        canvas.set_blend(Blend::Add);
+        canvas.fill_rect(rect, Color::WHITE);
+        canvas.set_blend(Blend::Normal);
+        canvas.fill_rect(rect, Color::WHITE);
+        let batches: Vec<_> = canvas
+            .batches
+            .iter()
+            .map(|b| (b.blend, b.quads.clone()))
+            .collect();
+        assert_eq!(
+            batches,
+            [
+                (Blend::Normal, 0..1),
+                (Blend::Add, 1..4),
+                (Blend::Normal, 4..5)
+            ]
+        );
+        assert_eq!(canvas.draw_call_count(), 3);
+
+        canvas.set_blend(Blend::Screen);
+        canvas.begin(20.0, 20.0);
+        assert_eq!(canvas.blend(), Blend::Normal);
+    }
+
+    #[test]
+    fn particles_draw_in_their_blend_mode_and_skip_those_off_the_canvas() {
+        use crate::particles::{ParticleSettings, Particles};
+
+        let mut particles = Particles::new(
+            ParticleSettings {
+                rate: 0.0,
+                speed: [0.0, 0.0],
+                scales: vec![4.0],
+                blend: Blend::Add,
+                ..ParticleSettings::default()
+            },
+            None,
+            1,
+        );
+        particles.set_origin(Affine::from_translation([10.0, 10.0]), Rect::default());
+        particles.emit(2);
+        particles.set_origin(Affine::from_translation([-10.0, 10.0]), Rect::default());
+        particles.emit(1);
+
+        let mut canvas = Canvas::new();
+        canvas.begin(20.0, 20.0);
+        canvas.draw_particles(&particles);
+        assert_eq!(canvas.blend(), Blend::Normal);
+        assert_eq!(canvas.batches.len(), 1);
+        assert_eq!(canvas.batches[0].blend, Blend::Add);
+        assert_eq!(
+            quads(&canvas),
+            [[[8.0, 8.0], [12.0, 8.0], [12.0, 12.0], [8.0, 12.0]]; 2]
+        );
+    }
+
+    #[test]
+    fn quads_after_a_3d_view_keep_the_blend_mode() {
+        use crate::graphics::Camera3d;
+
+        let mut canvas = Canvas::new();
+        canvas.begin(100.0, 100.0);
+        canvas.set_blend(Blend::Multiply);
+        let camera = Camera3d::perspective([0.0, 0.0, 5.0], [0.0; 3], 1.0);
+        canvas.begin_3d(View3d::new(camera, Rect::new(0.0, 0.0, 10.0, 10.0)));
+        canvas.fill_rect(Rect::new(0.0, 0.0, 1.0, 1.0), Color::WHITE);
+        assert_eq!(canvas.batches.len(), 1);
+        assert_eq!(canvas.batches[0].blend, Blend::Multiply);
     }
 
     #[test]

@@ -52,11 +52,15 @@ origin. A screen anchored to the canvas's edges is laid out as it is in the game
 - **Zoom** with the wheel, about the pointer. **Frame** shows the whole canvas again, and **1:1**
   shows a pixel of the scene for each of the screen's.
 - **Select** a node by clicking it. What can be seen comes first, a 3D view's nodes before the
-  view, then areas and stacks, then plain nodes near their origins, then tilemaps. Click again in the same
-  place for the node under that one, and so on, round to the first.
+  view, then areas, stacks and the rectangles particles start in, then plain nodes and particles
+  from a point near their origins, then tilemaps. Click again in the same place for the node under
+  that one, and so on, round to the first.
 
 The selected node is outlined in blue, with a cross at its origin. Text and tilemaps move with
 their node but don't turn or stretch, and their outline shows that.
+
+Particles show as they'd be once they've been going a few seconds, still. While a particles node
+is selected, or a node holding one, or the scene itself, they move, as they would in the game.
 
 ## Changing nodes
 
@@ -79,12 +83,16 @@ The **Inspector** shows the selected node's fields, as scene files name them:
 - **Transform**: `x` and `y`, `rotation` in degrees (scene files hold radians), `scale_x` and
   `scale_y`, and its `anchor`, if it has one. Drag a number to change it, or click it to type one.
 - **Its kind's fields**: a sprite's sheet and cell (**Pick…** shows the sheet to click a cell
-  in), its size, stretch, pivot and tint; a rect's size, stretch, pivot and color; text's text,
-  font (**Built-in**, or one of the game's `*.font.luau` files), scale, wrap, alignment, pivot
-  and color; an area's size, stretch and pivot; a stack's width
+  in), its size, stretch, pivot, tint and blend mode; a rect's size, stretch, pivot, color and
+  blend mode; text's text, font (**Built-in**, or one of the game's `*.font.luau` files), scale,
+  wrap, alignment, pivot, color and blend mode; an area's size, stretch and pivot; a particles
+  node's sprite, or squares, the rectangle particles start in, and every one of its
+  [settings](api/graphics.md#particle-settings), its angles in degrees, and its colors and scales
+  over a particle's life as lists, **+** adding one and **−** taking the last away; a stack's width
   and height, each its own or **fits** what it holds, its stretch, direction, gap, padding and
   pivot, and a panel's too, with its look: a fill's color and border, or a sprite's sheet, cell,
-  slice and tint; a tilemap's tileset and size, which resizes its layers; an instance's scene,
+  slice and tint; a tilemap's tileset and size, which resizes its layers, and a tile layer's blend
+  mode; an instance's scene,
   and the overrides it has, each of which selects the node it changes when clicked.
 - **Props**: the node's data for the game. Add one by typing its name and choosing its kind of
   value; lists and tables hold more values.
@@ -104,9 +112,10 @@ shrinks with its parent.
   its `anchor`, a `pivot` at the same point of the node, and its size and `stretch`; `x` and `y`
   become the **margin** set below the presets, in from the parent's edges. Text lines up with the
   edge or middle it's put at, a stack or a panel by its anchor alone, keeping on fitting what it
-  holds unless it's stretched across, and only sprites, rects, areas, stacks, panels and views
-  stretch. **No Anchor** takes the anchor away, leaving the node where it is.
-- With the **Select** tool, a selected sprite, rect, area, stack, panel or view has handles on its
+  holds unless it's stretched across, and only sprites, rects, areas, stacks, panels, views and
+  particles stretch. **No Anchor** takes the anchor away, leaving the node where it is.
+- With the **Select** tool, a selected sprite, rect, area, stack, panel, view or particles node has
+  handles on its
   edges and corners: drag one to resize the node, its other edges staying where they are. A sprite
   takes a size of its own the first time, and so does a stack or a panel, along the way it's
   resized.
@@ -317,8 +326,9 @@ The editor looks at the game's folder every second, and reads what's changed els
 image, or a scene or script with no unsaved changes, without opening it again. A scene with unsaved
 changes is left as it is, and Output says its file changed.
 
-The editor draws only when something changes: when it's used, when a clip plays, when the game
-it's playing prints something, or when luau-lsp has something to say. While nothing happens, it
+The editor draws only when something changes: when it's used, when a clip plays, while what's
+selected holds particles, when the game it's playing prints something, or when luau-lsp has
+something to say. While nothing happens, it
 waits, using next to no power.
 
 ## Shortcuts

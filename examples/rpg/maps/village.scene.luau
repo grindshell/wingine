@@ -1,5 +1,5 @@
 return {
-    format = 3,
+    format = 4,
     props = {
         music = "sounds/music.ogg",
         title = "Mossbrook",

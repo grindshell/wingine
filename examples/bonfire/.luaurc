@@ -1,0 +1,4 @@
+{
+    "globals": ["bonfire"],
+    "lint": { "BuiltinGlobalWrite": false }
+}

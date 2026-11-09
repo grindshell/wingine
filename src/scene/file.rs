@@ -16,18 +16,19 @@ use super::{
 };
 use crate::{
     Error, Result,
-    graphics::{Align, Camera3d, Color, Lighting, MeshData, Projection},
+    graphics::{Align, Blend, Camera3d, Color, Lighting, MeshData, Projection},
     lua::{
         DEFAULT_FOV, is_identifier,
         mlua::{self, chunk::ChunkMode},
         parse_hex, unpacked_color,
     },
+    particles::ParticleSettings,
 };
 
 /// The version of the scene, tileset and font formats this engine writes, their `format`. It reads
-/// files of this format and every one before it: format 2 added 3D views and their nodes, and
-/// format 3 stacks and panels.
-pub const FORMAT: u32 = 3;
+/// files of this format and every one before it: format 2 added 3D views and their nodes, format 3
+/// stacks and panels, and format 4 particles and blend modes.
+pub const FORMAT: u32 = 4;
 
 /// How deeply tables may nest. Files written by hand or by an editor come nowhere near, but one
 /// that builds a table holding itself would otherwise never finish being read.
@@ -252,6 +253,8 @@ pub enum KindDef {
     Stack(Stack),
     /// A stack that draws behind what it holds.
     Panel(PanelDef),
+    /// An emitter of particles.
+    Particles(ParticlesDef),
 }
 
 impl KindDef {
@@ -272,6 +275,31 @@ impl KindDef {
             Self::Billboard(_) => "billboard",
             Self::Stack(_) => "stack",
             Self::Panel(_) => "panel",
+            Self::Particles(_) => "particles",
+        }
+    }
+
+    /// How what it draws mixes with what's under it, if it draws: a sprite, rect, text, tile
+    /// layer or particles.
+    pub fn blend(&self) -> Option<Blend> {
+        match self {
+            Self::Sprite(sprite) => Some(sprite.blend),
+            Self::Rect(rect) => Some(rect.blend),
+            Self::Text(text) => Some(text.blend),
+            Self::TileLayer(layer) => Some(layer.blend),
+            Self::Particles(particles) => Some(particles.settings.blend),
+            _ => None,
+        }
+    }
+
+    pub fn blend_mut(&mut self) -> Option<&mut Blend> {
+        match self {
+            Self::Sprite(sprite) => Some(&mut sprite.blend),
+            Self::Rect(rect) => Some(&mut rect.blend),
+            Self::Text(text) => Some(&mut text.blend),
+            Self::TileLayer(layer) => Some(&mut layer.blend),
+            Self::Particles(particles) => Some(&mut particles.settings.blend),
+            _ => None,
         }
     }
 
@@ -325,6 +353,8 @@ pub struct SpriteDef {
     pub pivot: [f32; 2],
     /// A color its colors are multiplied by.
     pub tint: Color,
+    /// How it mixes with what's under it.
+    pub blend: Blend,
 }
 
 /// A filled rectangle.
@@ -338,6 +368,8 @@ pub struct RectDef {
     /// As a sprite's.
     pub pivot: [f32; 2],
     pub color: Color,
+    /// As a sprite's.
+    pub blend: Blend,
 }
 
 /// Text in a font: a font file's, or the built-in one's.
@@ -357,6 +389,8 @@ pub struct TextDef {
     /// aligned by. Text moves with its node but doesn't turn or stretch.
     pub pivot: [f32; 2],
     pub color: Color,
+    /// As a sprite's.
+    pub blend: Blend,
 }
 
 /// A rectangle that doesn't draw, for marking out part of a scene, such as somewhere the player
@@ -488,6 +522,37 @@ pub struct TileLayerDef {
     pub legend: BTreeMap<char, String>,
     /// The cells, a string for each row with a character for each column.
     pub tiles: Vec<String>,
+    /// How its tiles mix with what's under them.
+    pub blend: Blend,
+}
+
+/// An emitter of particles: what it sends out and how, from where. They start from random points
+/// of its rectangle, laid out as an area's, or from its origin while it's 0 by 0, and draw where
+/// it is among the scene's nodes. See [`ParticleSettings`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParticlesDef {
+    pub settings: ParticleSettings,
+    /// What each particle shows, or a white square without one.
+    pub sprite: Option<CellDef>,
+    /// The rectangle particles start in, 0 by 0 by default.
+    pub size: [f32; 2],
+    /// As a rect's.
+    pub stretch: [f32; 2],
+    /// As a sprite's.
+    pub pivot: [f32; 2],
+}
+
+impl ParticlesDef {
+    /// Particles from a point, with `settings`, showing white squares.
+    pub fn new(settings: ParticleSettings) -> Self {
+        Self {
+            settings,
+            sprite: None,
+            size: [0.0, 0.0],
+            stretch: [0.0, 0.0],
+            pivot: [0.0, 0.0],
+        }
+    }
 }
 
 /// Another scene file, placed at the node, with changes to some of its nodes.
@@ -1526,6 +1591,7 @@ fn read_kind(
                 stretch: read_stretch(fields)?,
                 pivot: read_pivot(fields)?,
                 tint: optional_color(fields, "tint")?,
+                blend: read_blend(fields)?,
             })
         }
         "rect" => KindDef::Rect(RectDef {
@@ -1533,6 +1599,7 @@ fn read_kind(
             stretch: read_stretch(fields)?,
             pivot: read_pivot(fields)?,
             color: optional_color(fields, "color")?,
+            blend: read_blend(fields)?,
         }),
         "text" => {
             let text = fields.take("text").ok_or("a text node has a `text`")?;
@@ -1568,6 +1635,7 @@ fn read_kind(
                 align,
                 pivot: read_pivot(fields)?,
                 color: optional_color(fields, "color")?,
+                blend: read_blend(fields)?,
             })
         }
         "area" => KindDef::Area(AreaDef {
@@ -1746,14 +1814,189 @@ fn read_kind(
             };
             KindDef::Panel(PanelDef { stack, look })
         }
+        "particles" => {
+            let sprite = if fields.has("sheet") || fields.has("cell") {
+                let (sheet, cell) =
+                    read_sheet_cell(fields, sheets, "a particles node with a sprite")?;
+                Some(CellDef { sheet, cell })
+            } else {
+                None
+            };
+            let mut number = |field: &str| match fields.take(field) {
+                Some(value) => finite(value, field),
+                None => Ok(0.0),
+            };
+            let size = [number("width")?, number("height")?];
+            if size.iter().any(|&side| side < 0.0) {
+                return Err("a particles node's `width` and `height` can't be less than 0".into());
+            }
+            KindDef::Particles(ParticlesDef {
+                sprite,
+                size,
+                stretch: read_stretch(fields)?,
+                pivot: read_pivot(fields)?,
+                settings: read_particle_settings(fields, &ParticleSettings::default())?,
+            })
+        }
         other => {
             return Err(format!(
                 "there's no kind of node `{other}`: a node is a node, sprite, rect, text, area, \
-                 stack, panel, tilemap, tile_layer, instance, view3d, mesh, model or billboard"
+                 stack, panel, particles, tilemap, tile_layer, instance, view3d, mesh, model or \
+                 billboard"
             ));
         }
     };
     Ok(kind)
+}
+
+/// A drawing node's `blend`, normal without one.
+fn read_blend(fields: &mut Fields) -> Result<Blend, String> {
+    let Some(blend) = fields.take("blend") else {
+        return Ok(Blend::Normal);
+    };
+    let name = string(blend, "blend")?;
+    Blend::from_name(&name).ok_or_else(|| {
+        format!(r#"`blend` must be "normal", "add", "multiply" or "screen", not "{name}""#)
+    })
+}
+
+/// The settings of particles among `fields`, with those that aren't there as `base` has them.
+fn read_particle_settings(
+    fields: &mut Fields,
+    base: &ParticleSettings,
+) -> Result<ParticleSettings, String> {
+    let mut settings = base.clone();
+    if let Some(emitting) = fields.take("emitting") {
+        settings.emitting = boolean(emitting, "emitting")?;
+    }
+    let mut number = |field: &str, value: &mut f32| -> Result<(), String> {
+        if let Some(given) = fields.take(field) {
+            *value = finite(given, field)?;
+        }
+        Ok(())
+    };
+    number("rate", &mut settings.rate)?;
+    number("warmup", &mut settings.warmup)?;
+    number("direction", &mut settings.direction)?;
+    number("spread", &mut settings.spread)?;
+    number("drag", &mut settings.drag)?;
+    if let Some(limit) = fields.take("limit") {
+        settings.limit = positive_whole(limit, "limit")?;
+    }
+    if let Some(seed) = fields.take("seed") {
+        settings.seed = Some(whole(seed, "seed")?);
+    }
+    for (field, range) in [
+        ("lifetime", &mut settings.lifetime),
+        ("speed", &mut settings.speed),
+        ("angle", &mut settings.angle),
+        ("spin", &mut settings.spin),
+    ] {
+        if let Some(value) = fields.take(field) {
+            *range = self::range(value, field)?;
+        }
+    }
+    if let Some(gravity) = fields.take("gravity") {
+        settings.gravity = pair(gravity, "gravity")?;
+    }
+    if let Some(colors) = fields.take("colors") {
+        settings.colors = list(colors, "colors")?
+            .into_iter()
+            .map(|value| color(value, "colors"))
+            .collect::<Result<_, _>>()?;
+    }
+    if let Some(scales) = fields.take("scales") {
+        settings.scales = list(scales, "scales")?
+            .into_iter()
+            .map(|value| finite(value, "scales"))
+            .collect::<Result<_, _>>()?;
+    }
+    if fields.has("blend") {
+        settings.blend = read_blend(fields)?;
+    }
+    if let Some(attached) = fields.take("attached") {
+        settings.attached = boolean(attached, "attached")?;
+    }
+    match settings.problem() {
+        Some(problem) => Err(problem),
+        None => Ok(settings),
+    }
+}
+
+/// A range, `{ least, most }`, or a number, which is both.
+fn range(value: Value, field: &str) -> Result<[f32; 2], String> {
+    match value {
+        Value::Number(_) => {
+            let number = finite(value, field)?;
+            Ok([number, number])
+        }
+        value => match <[Value; 2]>::try_from(list(value, field)?) {
+            Ok([least, most]) => Ok([finite(least, field)?, finite(most, field)?]),
+            Err(_) => Err(format!(
+                "`{field}` must be a number, or two, {{ least, most }}"
+            )),
+        },
+    }
+}
+
+/// Particles' settings as `base` has them, with the fields `change` sets, as a scene file
+/// holds them: for scripts, which make and change settings with the same fields, checked the
+/// same way.
+pub(crate) fn particle_settings(
+    change: Value,
+    base: &ParticleSettings,
+) -> Result<ParticleSettings, String> {
+    let mut fields = Fields::new(change, "a particle emitter's settings")?;
+    let settings = read_particle_settings(&mut fields, base)?;
+    fields.finish("a particle emitter")?;
+    Ok(settings)
+}
+
+/// Particles' settings as a scene file holds them, with every field, for scripts to read.
+pub(crate) fn particle_settings_value(settings: &ParticleSettings) -> Value {
+    let mut fields = BTreeMap::new();
+    particle_fields(settings, &mut |key: &str, value| {
+        fields.insert(key.to_owned(), value);
+    });
+    Value::Map(fields)
+}
+
+/// Particles' settings, as a scene file holds them.
+fn particle_fields(settings: &ParticleSettings, set: &mut impl FnMut(&str, Value)) {
+    let number = |n: f32| Value::Number(n.into());
+    let range = |[least, most]: [f32; 2]| {
+        if least == most {
+            number(least)
+        } else {
+            Value::List(vec![number(least), number(most)])
+        }
+    };
+    set("emitting", Value::Bool(settings.emitting));
+    set("rate", number(settings.rate));
+    set("limit", Value::Number(settings.limit.into()));
+    set("warmup", number(settings.warmup));
+    if let Some(seed) = settings.seed {
+        set("seed", Value::Number(seed.into()));
+    }
+    set("lifetime", range(settings.lifetime));
+    set("speed", range(settings.speed));
+    set("direction", number(settings.direction));
+    set("spread", number(settings.spread));
+    let [x, y] = settings.gravity;
+    set("gravity", Value::List(vec![number(x), number(y)]));
+    set("drag", number(settings.drag));
+    set("angle", range(settings.angle));
+    set("spin", range(settings.spin));
+    set(
+        "scales",
+        Value::List(settings.scales.iter().map(|&s| number(s)).collect()),
+    );
+    set(
+        "colors",
+        Value::List(settings.colors.iter().map(|&c| hex_value(c)).collect()),
+    );
+    set("blend", Value::String(settings.blend.name().into()));
+    set("attached", Value::Bool(settings.attached));
 }
 
 /// The fields of a stack or panel, `what`, that size, place and lay it out.
@@ -1963,7 +2206,11 @@ fn read_tile_layer(fields: &mut Fields, [columns, rows]: [u32; 2]) -> Result<Til
             ));
         }
     }
-    Ok(TileLayerDef { legend, tiles })
+    Ok(TileLayerDef {
+        legend,
+        tiles,
+        blend: read_blend(fields)?,
+    })
 }
 
 /// A rect's or an area's `width` and `height`, which they must have.
@@ -2270,6 +2517,7 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
             set("stretch", pair(sprite.stretch));
             set("pivot", pair(sprite.pivot));
             set("tint", hex(sprite.tint));
+            set("blend", string(sprite.blend.name()));
         }
         KindDef::Rect(rect) => {
             set("width", number(rect.size[0]));
@@ -2277,6 +2525,7 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
             set("stretch", pair(rect.stretch));
             set("pivot", pair(rect.pivot));
             set("color", hex(rect.color));
+            set("blend", string(rect.blend.name()));
         }
         KindDef::Text(text) => {
             set("text", string(&text.text));
@@ -2290,6 +2539,7 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
             set("align", string(text.align.name()));
             set("pivot", pair(text.pivot));
             set("color", hex(text.color));
+            set("blend", string(text.blend.name()));
         }
         KindDef::Area(area) => {
             set("width", number(area.size[0]));
@@ -2313,6 +2563,7 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
                 "tiles",
                 Value::List(layer.tiles.iter().map(|row| string(row)).collect()),
             );
+            set("blend", string(layer.blend.name()));
         }
         KindDef::Instance(instance) => {
             set("scene", string(&instance.scene));
@@ -2375,6 +2626,17 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
                     set("tint", hex(*tint));
                 }
             }
+        }
+        KindDef::Particles(particles) => {
+            if let Some(sprite) = &particles.sprite {
+                set("sheet", string(&sprite.sheet));
+                set("cell", cell_value(sprite.cell));
+            }
+            set("width", number(particles.size[0]));
+            set("height", number(particles.size[1]));
+            set("stretch", pair(particles.stretch));
+            set("pivot", pair(particles.pivot));
+            particle_fields(&particles.settings, &mut set);
         }
     }
     fields
@@ -2631,7 +2893,7 @@ mod tests {
                     },
                     {
                         name = "pond", kind = "rect", anchor = { 0.5, 1 }, width = 48, height = 32,
-                        stretch = { 1, 0 }, color = "#21406a80",
+                        stretch = { 1, 0 }, color = "#21406a80", blend = "multiply",
                     },
                     { name = "title", kind = "text", text = "Hi", font = "fonts/title.font.luau", font_scale = 2, wrap = 100, align = "center" },
                     { name = "gate", kind = "area", width = 16, height = 8, props = { to = "town" } },
@@ -2639,7 +2901,7 @@ mod tests {
                         name = "map", kind = "tilemap", x = 8, tileset = "world.tileset.luau",
                         columns = 3, rows = 2,
                         children = {
-                            { name = "ground", kind = "tile_layer", legend = { ["."] = "grass", T = "tree" }, tiles = { "..T", "T. " } },
+                            { name = "ground", kind = "tile_layer", legend = { ["."] = "grass", T = "tree" }, tiles = { "..T", "T. " }, blend = "add" },
                             { name = "people", kind = "node" },
                         },
                     },
@@ -2677,6 +2939,7 @@ mod tests {
                 stretch: [0.0, 0.0],
                 pivot: [8.0, 16.0],
                 tint: Color::rgb8(0xd8, 0xb0, 0x70),
+                blend: Blend::Normal,
             })
         );
         let sails = &mill.children[0];
@@ -2692,6 +2955,7 @@ mod tests {
                 stretch: [1.0, 0.0],
                 pivot: [0.0, 0.0],
                 color: Color::rgba8(0x21, 0x40, 0x6a, 0x80),
+                blend: Blend::Multiply,
             })
         );
         assert_eq!(
@@ -2704,6 +2968,7 @@ mod tests {
                 align: Align::Center,
                 pivot: [0.0, 0.0],
                 color: Color::WHITE,
+                blend: Blend::Normal,
             })
         );
         let gate = &scene.children[3];
@@ -2731,6 +2996,7 @@ mod tests {
             KindDef::TileLayer(TileLayerDef {
                 legend: [('.', "grass".to_owned()), ('T', "tree".to_owned())].into(),
                 tiles: vec!["..T".into(), "T. ".into()],
+                blend: Blend::Add,
             })
         );
         let KindDef::Instance(elder) = &scene.children[5].kind else {
@@ -2740,6 +3006,123 @@ mod tests {
         assert_eq!(
             elder.overrides["body"]["tint"],
             Value::String("#c8b8e8".into())
+        );
+    }
+
+    #[test]
+    fn reads_particles_and_their_settings() {
+        let scene = parse(
+            r##"return {
+                format = 4,
+                sheets = { fx = { path = "fx.png", tile_width = 8, tile_height = 8 } },
+                children = {
+                    { name = "dust", kind = "particles" },
+                    {
+                        name = "fire", kind = "particles", sheet = "fx", cell = { 1, 0 },
+                        width = 12, height = 2, pivot = { 6, 1 }, emitting = false, rate = 40,
+                        limit = 80, warmup = 1.5, seed = 9, lifetime = { 0.5, 1 }, speed = 30,
+                        direction = -1.5, spread = 0.5, gravity = { 0, -20 }, drag = 2,
+                        angle = { 0, 3 }, spin = { -1, 1 }, scales = { 1, 2, 0 },
+                        colors = { "#ffd080", "#ff602000" }, blend = "add", attached = true,
+                    },
+                },
+            }"##,
+        )
+        .unwrap();
+        assert_eq!(
+            scene.children[0].kind,
+            KindDef::Particles(ParticlesDef::new(ParticleSettings::default()))
+        );
+        let KindDef::Particles(fire) = &scene.children[1].kind else {
+            panic!("{:?}", scene.children[1].kind);
+        };
+        assert_eq!(
+            fire.sprite,
+            Some(CellDef {
+                sheet: "fx".into(),
+                cell: [1, 0]
+            })
+        );
+        assert_eq!([fire.size, fire.pivot], [[12.0, 2.0], [6.0, 1.0]]);
+        assert_eq!(
+            fire.settings,
+            ParticleSettings {
+                emitting: false,
+                rate: 40.0,
+                limit: 80,
+                warmup: 1.5,
+                seed: Some(9),
+                lifetime: [0.5, 1.0],
+                speed: [30.0, 30.0],
+                direction: -1.5,
+                spread: 0.5,
+                gravity: [0.0, -20.0],
+                drag: 2.0,
+                angle: [0.0, 3.0],
+                spin: [-1.0, 1.0],
+                colors: vec![
+                    Color::rgb8(0xff, 0xd0, 0x80),
+                    Color::rgba8(0xff, 0x60, 0x20, 0)
+                ],
+                scales: vec![1.0, 2.0, 0.0],
+                blend: Blend::Add,
+                attached: true,
+            }
+        );
+        // Written back and read again, the same.
+        let again = parse(&scene.to_luau().unwrap()).unwrap();
+        assert_eq!(again, scene);
+    }
+
+    #[test]
+    fn particles_settings_are_checked_in_files_and_from_scripts() {
+        let node = |fields: &str| {
+            format!(
+                "return {{ format = 4, children = {{ {{ name = 'p', kind = 'particles', {fields} }} }} }}"
+            )
+        };
+        let cases = [
+            ("rate = -2", "`rate` must be 0 or more, not -2"),
+            ("lifetime = { 2, 1 }", "its least no more than its most"),
+            (
+                "lifetime = { 1, 2, 3 }",
+                "`lifetime` must be a number, or two",
+            ),
+            ("colors = {}", "`colors` must have at least one color"),
+            ("limit = 0", "`limit` must be at least 1"),
+            ("blend = 'alpha'", r#"`blend` must be "normal", "add""#),
+            ("width = -1", "`width` and `height` can't be less than 0"),
+            (
+                "cell = { 0, 0 }",
+                "a particles node with a sprite has a `sheet`",
+            ),
+            ("colour = 'red'", "a particles node has no field `colour`"),
+        ];
+        for (fields, expected) in cases {
+            let source = node(fields);
+            let err = parse(&source).unwrap_err().to_string();
+            assert!(err.contains(expected), "{source}\n{err}");
+        }
+
+        let mut change = BTreeMap::new();
+        change.insert("rate".to_owned(), Value::Number(5.0));
+        let base = ParticleSettings {
+            drag: 1.0,
+            ..ParticleSettings::default()
+        };
+        let changed = particle_settings(Value::Map(change.clone()), &base).unwrap();
+        assert_eq!([changed.rate, changed.drag], [5.0, 1.0]);
+        change.insert("colour".to_owned(), Value::String("red".into()));
+        assert_eq!(
+            particle_settings(Value::Map(change), &base).unwrap_err(),
+            "a particle emitter has no field `colour`"
+        );
+        let Value::Map(all) = particle_settings_value(&base) else {
+            panic!("settings are a table");
+        };
+        assert_eq!(
+            particle_settings(Value::Map(all), &ParticleSettings::default()),
+            Ok(base)
         );
     }
 
@@ -2830,9 +3213,9 @@ mod tests {
     fn the_format_is_required_and_checked() {
         let err = error("return {}");
         assert!(err.contains("has no `format`"), "{err}");
-        let err = error("return { format = 4 }");
+        let err = error("return { format = 5 }");
         assert!(
-            err.contains("format 4, newer than this engine reads (3)"),
+            err.contains("format 5, newer than this engine reads (4)"),
             "{err}"
         );
         let err = error("return { format = 0 }");
@@ -2843,6 +3226,7 @@ mod tests {
         );
         assert!(parse("return { format = 2 }").is_ok());
         assert!(parse("return { format = 3 }").is_ok());
+        assert!(parse("return { format = 4 }").is_ok());
     }
 
     #[test]

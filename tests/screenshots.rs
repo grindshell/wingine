@@ -15,11 +15,12 @@ use image::{RgbaImage, imageops};
 use wingine::{
     Context,
     graphics::{
-        Align, Camera, Camera3d, Canvas, Color, Font, Lighting, Mesh, MeshData, MeshVertex, Model,
-        Resolution, Scaling, SpriteSheet, Texture, View3d,
+        Align, Blend, Camera, Camera3d, Canvas, Color, Font, Lighting, Mesh, MeshData, MeshVertex,
+        Model, Resolution, Scaling, SpriteSheet, Texture, View3d,
     },
     headless::{Comparison, Headless, Image},
     math::{Affine, Affine3, Rect},
+    particles::{ParticleSettings, Particles},
     scene::{Assets, Scene, SceneFile, Shape, TilesetFile},
     tilemap::{Tile, Tilemap, Tileset},
 };
@@ -690,6 +691,151 @@ fn load_scene(headless: &mut Headless, files: &[(&'static str, &'static str)]) -
     let mut assets = Files { ctx, files };
     let file = assets.scene(path).unwrap();
     Scene::new(&file, path, &font, &mut assets).unwrap()
+}
+
+/// Blend modes, a column each in the order of `Blend::ALL`, over bands of gray from black at the
+/// top to white at the bottom: a red bar, then a translucent green one overlapping it. Normal
+/// covers; add brightens, and red and green add to yellow; multiply darkens, keeping black black
+/// and taking each color where it's white; screen brightens, never past white. Then a translucent
+/// white bar across the bottom, in normal blending again.
+#[test]
+fn blend_modes() {
+    let mut headless = headless();
+    let frame = headless
+        .render(64, 48, |canvas| {
+            canvas.clear(Color::BLACK);
+            for band in 0..12 {
+                let gray = band as f32 / 11.0;
+                let rect = Rect::new(0.0, band as f32 * 4.0, 64.0, 4.0);
+                canvas.fill_rect(rect, Color::rgb(gray, gray, gray));
+            }
+            for (i, blend) in Blend::ALL.into_iter().enumerate() {
+                let x = i as f32 * 16.0;
+                canvas.set_blend(blend);
+                let red = Color::rgb8(0xd0, 0x40, 0x40);
+                canvas.fill_rect(Rect::new(x + 1.0, 0.0, 9.0, 44.0), red);
+                let green = Color::rgba8(0x40, 0xb0, 0x50, 0xc0);
+                canvas.fill_rect(Rect::new(x + 6.0, 0.0, 9.0, 44.0), green);
+            }
+            canvas.set_blend(Blend::Normal);
+            canvas.fill_rect(
+                Rect::new(0.0, 44.0, 64.0, 4.0),
+                Color::rgba(1.0, 1.0, 1.0, 0.5),
+            );
+        })
+        .unwrap();
+    assert_screenshot(&headless.adapter_name(), "blend_modes", frame);
+}
+
+/// Particles. On the left, squares from a fountain on an emitter moved and turned as it goes,
+/// slowed by drag and pulled down, turning as they fly, shrinking and fading from white through
+/// orange to clear red. On the right, sprites added over a dark band, their colors by their ages:
+/// three still bursts a quarter of a second apart, each at a whole pixel.
+#[test]
+fn particles() {
+    let mut headless = headless();
+    let sheet = SpriteSheet::new(headless.context().load_texture(TILESET).unwrap(), 16, 16);
+    let mut fountain = Particles::new(
+        ParticleSettings {
+            rate: 60.0,
+            lifetime: [0.6, 1.2],
+            speed: [20.0, 40.0],
+            direction: -1.4,
+            spread: 0.8,
+            gravity: [0.0, 40.0],
+            drag: 0.5,
+            angle: [0.0, 1.5],
+            spin: [-3.0, 3.0],
+            scales: vec![3.0, 1.0],
+            colors: vec![
+                Color::WHITE,
+                Color::rgb8(0xf2, 0xa0, 0x30),
+                Color::rgba8(0xd0, 0x30, 0x30, 0),
+            ],
+            ..ParticleSettings::default()
+        },
+        None,
+        7,
+    );
+    for frame in 0..60 {
+        let t = frame as f32 / 60.0;
+        let origin = Affine::from_parts_exact([10.0 + 20.0 * t, 44.0], 0.4 * t, [1.0, 1.0]);
+        fountain.set_origin(origin, Rect::new(-2.0, 0.0, 4.0, 1.0));
+        fountain.advance(1.0 / 60.0);
+    }
+    let mut sparks = Particles::new(
+        ParticleSettings {
+            rate: 0.0,
+            lifetime: [1.0, 1.0],
+            speed: [0.0, 0.0],
+            colors: vec![Color::rgb8(0x40, 0x80, 0xff), Color::rgb8(0xff, 0x80, 0x20)],
+            blend: Blend::Add,
+            ..ParticleSettings::default()
+        },
+        Some(sheet.sprite(5, 0)),
+        1,
+    );
+    for x in [64.0, 80.0, 96.0] {
+        sparks.set_origin(Affine::from_translation([x, 36.0]), Rect::default());
+        sparks.emit(1);
+        sparks.advance(0.25);
+    }
+    let frame = headless
+        .render(112, 48, |canvas| {
+            canvas.clear(Color::rgb8(0x20, 0x20, 0x28));
+            canvas.draw_particles(&fountain);
+            canvas.fill_rect(
+                Rect::new(56.0, 24.0, 56.0, 24.0),
+                Color::rgb8(0x30, 0x10, 0x10),
+            );
+            canvas.draw_particles(&sparks);
+        })
+        .unwrap();
+    assert_screenshot(&headless.adapter_name(), "particles", frame);
+}
+
+/// Blend modes and particles in a scene: a sprite added over a field, a night multiplying the
+/// field's right half, and a fire of particles, run for a second, rising from a box and added to
+/// what's under it, over the night and the sky. The canvas's own blend mode, set to screen before
+/// the scene draws, doesn't change how the scene draws, and is screen again after.
+#[test]
+fn scene_blend() {
+    let source = r##"return {
+        format = 4,
+        sheets = { tiles = { path = "tiles.png", tile_width = 16, tile_height = 16 } },
+        children = {
+            { name = "sky", kind = "rect", width = 64, height = 24, color = "#203060" },
+            { name = "field", kind = "rect", y = 24, width = 64, height = 24, color = "#3e6b3f" },
+            {
+                name = "tree", kind = "sprite", x = 8, y = 20, sheet = "tiles", cell = { 0, 1 },
+                tint = "#a0d070", blend = "add",
+            },
+            {
+                name = "night", kind = "rect", x = 32, width = 32, height = 48,
+                color = "#4050a0", blend = "multiply",
+            },
+            {
+                name = "fire", kind = "particles", x = 44, y = 40, width = 8, height = 2,
+                rate = 40, seed = 3, lifetime = { 0.5, 1 }, speed = { 10, 20 }, direction = -1.5707964,
+                spread = 0.4, scales = { 2, 1 }, colors = { "#ffe080", "#ff602000" }, blend = "add",
+            },
+        },
+    }"##;
+    let mut headless = headless();
+    let mut scene = load_scene(&mut headless, &[("fire.scene.luau", source)]);
+    let root = scene.root();
+    for _ in 0..60 {
+        scene.advance_particles(root, 1.0 / 60.0);
+    }
+    let frame = headless
+        .render(64, 48, |canvas| {
+            canvas.set_blend(Blend::Screen);
+            scene.draw(canvas);
+            assert_eq!(canvas.blend(), Blend::Screen);
+            canvas.set_blend(Blend::Normal);
+        })
+        .unwrap();
+    assert_screenshot(&headless.adapter_name(), "scene_blend", frame);
 }
 
 /// Solid fills and sprites interleaved, so batches switch texture several times. Draw order must

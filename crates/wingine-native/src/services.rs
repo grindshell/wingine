@@ -3,8 +3,8 @@
 use std::ptr::{self, NonNull};
 
 use crate::{
-    BillboardDraw, Color, Error, MeshDraw, MeshVertex, Rect, Result, SpriteDraw, View3d, abi,
-    check, host,
+    BillboardDraw, Blend, Color, Error, MeshDraw, MeshVertex, Rect, Result, SpriteDraw, View3d,
+    abi, check, host,
 };
 
 /// The engine's services, lent while a game loads and updates: input, the canvas size, and
@@ -128,6 +128,14 @@ impl Canvas {
         unsafe {
             (host().draw_sprites)(self.raw, sprite.raw.as_ptr(), draws.as_ptr(), draws.len());
         }
+    }
+
+    /// Blends everything drawn after this call with what's under it as `blend` says, as
+    /// `graphics.set_blend` does, until the frame ends, it's set again, or the game's `draw`
+    /// returns. Fails if `blend` isn't one of [`Blend`]'s constants.
+    pub fn set_blend(&mut self, blend: Blend) -> Result<()> {
+        // SAFETY: lent for as long as `self` is.
+        check(unsafe { (host().set_blend)(self.raw, blend) })
     }
 
     /// Begins a 3D view over what's been drawn: the meshes and billboards drawn after it go in it,

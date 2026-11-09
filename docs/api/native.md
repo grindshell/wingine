@@ -389,6 +389,7 @@ set, or canvas pixels without one.
 | `fn fill_rect(&mut self, rect: Rect, color: Color)` | Fills `rect` with `color`. |
 | `fn draw_sprite(&mut self, sprite: &Sprite, dest: Rect, tint: Color)` | Draws `sprite` stretched over `dest`, its colors multiplied by `tint`. |
 | `fn draw_sprites(&mut self, sprite: &Sprite, draws: &[SpriteDraw])` | Draws `sprite` as each of `draws` says, in order. |
+| `fn set_blend(&mut self, blend: Blend) -> Result<()>` | Blends what's drawn after it as `blend` says, `Blend::NORMAL`, `ADD`, `MULTIPLY` or `SCREEN`, as [`graphics.set_blend`](graphics.md#graphicsset_blend) does, until the frame ends, it's set again, or the game's `draw` returns. Fails for a `Blend` that isn't one of those. |
 | `fn begin_3d(&mut self, view: &View3d) -> Result<()>` | Begins a [3D view](#view3d-camera3d-and-lighting) over what's been drawn, as `graphics.begin_3d` does. Fails if its camera's projection, `near` or `far` aren't ones it allows. |
 | `fn draw_meshes(&mut self, mesh: &Mesh, sprite: Option<&Sprite>, draws: &[MeshDraw]) -> Result<()>` | Draws `mesh` as each of [`draws`](#meshdraw) says, showing `sprite`, or white without one, in the 3D view begun last. |
 | `fn draw_billboards(&mut self, sprite: &Sprite, draws: &[BillboardDraw]) -> Result<()>` | Draws `sprite` standing upright as each of [`draws`](#billboarddraw) says, facing the camera, in the 3D view begun last. |

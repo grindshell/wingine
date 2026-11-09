@@ -13,14 +13,18 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 ## Features
 
 - **Rendering** with [wgpu](https://wgpu.rs): sprites, sprite sheets, rectangles, lines and
-  circles, batched by texture. A fixed resolution scales up by whole numbers for crisp pixel art,
-  or to fit or fill the window, which can cover the screen.
+  circles, batched by texture, blended normally or added, multiplied or screened over what's under
+  them. A fixed resolution scales up by whole numbers for crisp pixel art, or to fit or fill the
+  window, which can cover the screen.
 - **Timing**: an update a frame, or at a fixed rate so games play the same at any frame rate.
   Frame stats and a headless benchmark show where the time goes.
 - **3D views** among the 2D: lit meshes, glTF models and billboarded sprites, for 2.5D games,
   rendered at the canvas's resolution, and picked with the mouse.
 - **Tilemaps** with layers, and a **camera** that follows the player.
-- **Scenes**: trees of sprites, rectangles, text, areas, stacks, panels, tilemaps and 3D views, in
+- **Particles**: emitters of sprites or squares that fly, turn, change color and size as they
+  age, and leave trails, in scenes or made by scripts, the same to the bit on every platform.
+- **Scenes**: trees of sprites, rectangles, text, areas, stacks, panels, particles, tilemaps and
+  3D views, in
   files of plain Luau data that tools write as well as people. Screens anchor to the canvas,
   scenes place other scenes with overrides, and games find nodes by path or tag.
 - **Menus** over scenes' nodes, moved through by the keys and the mouse.
@@ -71,6 +75,7 @@ need ALSA's library (`libasound2`) and glibc 2.35 or newer.
 | [Cellar](#cellar) | Luau, in 2.5D | `cargo run -- examples/cellar` |
 | [Course](#course) | Luau, in 3D with physics | `cargo run -- examples/course` |
 | [Quarry](#quarry) | Luau, in 2D with physics | `cargo run -- examples/quarry` |
+| [Bonfire](#bonfire) | Luau, around particles and blend modes | `cargo run -- examples/bonfire` |
 | [Lettering](#lettering) | Luau, around fonts | `cargo run -- examples/lettering` |
 | [Sprites](#sprites) | Rust, with Luau scripts | `cargo run --example sprites` |
 | [Shapes](#shapes) | Rust | `cargo run --example shapes` |
@@ -206,6 +211,17 @@ carries what's on it.
 
 Run with the arrow keys and jump with Space: push a crate against the ledge to climb it, and
 ride the lift up to the door.
+
+### Bonfire
+
+[`examples/bonfire`](examples/bonfire) is a night by a fire, made of
+[particles](docs/api/graphics.md#particles) and [blend modes](docs/api/graphics.md#blend-modes):
+stars, smoke, flames, sparks and fireflies are a scene's particles nodes, a night multiplied over
+the scene darkens it, and the fire's and the moon's glows are screened over that.
+
+![Fireworks bursting over the camp, by the fire's glow and the moon's](docs/screenshots/bonfire.png)
+
+Space puts the fire out and lights it again, and a click in the sky sends up a firework.
 
 ### Lettering
 

@@ -16,8 +16,9 @@ use super::{
     },
 };
 use crate::{
-    graphics::{Align, Camera3d, Color, Lighting, Projection},
+    graphics::{Align, Blend, Camera3d, Color, Lighting, Projection},
     lua::{DEFAULT_FOV, is_identifier},
+    particles::ParticleSettings,
 };
 
 /// `scene` as the text of a scene file, or why it can't be written: only finite numbers can.
@@ -367,6 +368,7 @@ impl Writer {
                 self.stretch(sprite.stretch)?;
                 self.pivot(sprite.pivot)?;
                 self.color("tint", sprite.tint);
+                self.blend(sprite.blend);
             }
             KindDef::Rect(rect) => {
                 self.number_field("width", rect.size[0])?;
@@ -374,6 +376,7 @@ impl Writer {
                 self.stretch(rect.stretch)?;
                 self.pivot(rect.pivot)?;
                 self.color("color", rect.color);
+                self.blend(rect.blend);
             }
             KindDef::Text(text) => {
                 self.field("text", &quoted(&text.text));
@@ -391,6 +394,7 @@ impl Writer {
                 }
                 self.pivot(text.pivot)?;
                 self.color("color", text.color);
+                self.blend(text.blend);
             }
             KindDef::Area(area) => {
                 self.number_field("width", area.size[0])?;
@@ -426,6 +430,7 @@ impl Writer {
                     self.close();
                 }
                 self.end_field();
+                self.blend(layer.blend);
             }
             KindDef::Instance(instance) => {
                 self.field("scene", &quoted(&instance.scene));
@@ -507,8 +512,112 @@ impl Writer {
                     self.color("tint", *tint);
                 }
             },
+            KindDef::Particles(particles) => {
+                if let Some(sprite) = &particles.sprite {
+                    self.field("sheet", &quoted(&sprite.sheet));
+                    let [column, row] = sprite.cell;
+                    self.field("cell", &format!("{{ {column}, {row} }}"));
+                }
+                for (key, length) in ["width", "height"].into_iter().zip(particles.size) {
+                    if length != 0.0 {
+                        self.number_field(key, length)?;
+                    }
+                }
+                self.stretch(particles.stretch)?;
+                self.pivot(particles.pivot)?;
+                self.particle_settings(&particles.settings)?;
+            }
         }
         Ok(())
+    }
+
+    /// A drawing node's blend mode, unless it's normal, the default.
+    fn blend(&mut self, blend: Blend) {
+        if blend != Blend::Normal {
+            self.field("blend", &quoted(blend.name()));
+        }
+    }
+
+    /// Particles' settings, leaving out those at their defaults: how many it sends out, how
+    /// they move, then how they look.
+    fn particle_settings(&mut self, settings: &ParticleSettings) -> Result<(), String> {
+        let default = ParticleSettings::default();
+        if !settings.emitting {
+            self.field("emitting", "false");
+        }
+        let numbers = [
+            ("rate", settings.rate, default.rate),
+            ("warmup", settings.warmup, default.warmup),
+        ];
+        for (key, value, default) in numbers {
+            if value != default {
+                self.number_field(key, value)?;
+            }
+        }
+        if settings.limit != default.limit {
+            self.field("limit", &settings.limit.to_string());
+        }
+        if let Some(seed) = settings.seed {
+            self.field("seed", &seed.to_string());
+        }
+        self.range("lifetime", settings.lifetime, default.lifetime)?;
+        self.range("speed", settings.speed, default.speed)?;
+        let numbers = [
+            ("direction", settings.direction, default.direction),
+            ("spread", settings.spread, default.spread),
+        ];
+        for (key, value, default) in numbers {
+            if value != default {
+                self.number_field(key, value)?;
+            }
+        }
+        if settings.gravity != default.gravity {
+            self.pair_field("gravity", settings.gravity)?;
+        }
+        if settings.drag != default.drag {
+            self.number_field("drag", settings.drag)?;
+        }
+        self.range("angle", settings.angle, default.angle)?;
+        self.range("spin", settings.spin, default.spin)?;
+        if settings.scales != default.scales {
+            let scales: Vec<String> = settings
+                .scales
+                .iter()
+                .map(|&scale| single(scale, "scales"))
+                .collect::<Result<_, _>>()?;
+            self.field("scales", &format!("{{ {} }}", scales.join(", ")));
+        }
+        let white =
+            |colors: &[Color]| colors.len() == 1 && colors[0].to_rgba8() == Color::WHITE.to_rgba8();
+        if !white(&settings.colors) {
+            let colors: Vec<String> = settings
+                .colors
+                .iter()
+                .map(|&color| quoted(&hex(color)))
+                .collect();
+            self.field("colors", &format!("{{ {} }}", colors.join(", ")));
+        }
+        self.blend(settings.blend);
+        if settings.attached {
+            self.field("attached", "true");
+        }
+        Ok(())
+    }
+
+    /// A range, `{ least, most }`, or one number if they're the same, unless it's `default`.
+    fn range(
+        &mut self,
+        key: &str,
+        [least, most]: [f32; 2],
+        default: [f32; 2],
+    ) -> Result<(), String> {
+        if [least, most] == default {
+            return Ok(());
+        }
+        if least == most {
+            return self.number_field(key, least);
+        }
+        self.pair_field(key, [least, most])
     }
 
     /// A stack's or panel's size and layout, leaving out what's at its defaults.
@@ -640,12 +749,7 @@ impl Writer {
 
     /// A color field, as a hex string, whatever it is.
     fn any_color(&mut self, key: &str, color: Color) {
-        let [r, g, b, a] = color.to_rgba8();
-        let mut hex = format!("#{r:02x}{g:02x}{b:02x}");
-        if a != 255 {
-            write!(hex, "{a:02x}").unwrap();
-        }
-        self.field(key, &quoted(&hex));
+        self.field(key, &quoted(&hex(color)));
     }
 
     /// A table with strings for keys, in the order of its keys.
@@ -724,6 +828,16 @@ fn single(value: f32, field: &str) -> Result<String, String> {
     Ok(format!("{value}"))
 }
 
+/// `color` as a hex string, with its alpha only if it isn't opaque.
+fn hex(color: Color) -> String {
+    let [r, g, b, a] = color.to_rgba8();
+    let mut hex = format!("#{r:02x}{g:02x}{b:02x}");
+    if a != 255 {
+        write!(hex, "{a:02x}").unwrap();
+    }
+    hex
+}
+
 /// `text` as a Luau string literal, in double quotes.
 fn quoted(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
@@ -746,11 +860,11 @@ fn quoted(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{Property, Props, RectDef, SpriteDef};
+    use crate::scene::{ParticlesDef, Property, Props, RectDef, SpriteDef};
 
     /// A scene in its canonical layout.
     const CANONICAL: &str = r##"return {
-    format = 3,
+    format = 4,
     sheets = {
         tiles = {
             path = "tiles.png",
@@ -772,6 +886,7 @@ mod tests {
             cell = { 3, 20 },
             pivot = { 8, 16 },
             tint = "#d8b070",
+            blend = "screen",
             tags = { "building", "solid" },
             children = {
                 {
@@ -779,6 +894,28 @@ mod tests {
                     kind = "node",
                     y = -12,
                     visible = false,
+                },
+                {
+                    name = "smoke",
+                    kind = "particles",
+                    y = -20,
+                    sheet = "tiles",
+                    cell = { 0, 1 },
+                    width = 8,
+                    pivot = { 4, 0 },
+                    emitting = false,
+                    rate = 4,
+                    limit = 40,
+                    lifetime = { 1, 2.5 },
+                    speed = 6,
+                    direction = -1.5,
+                    spread = 0.5,
+                    gravity = { 2, -1 },
+                    spin = { -1, 1 },
+                    scales = { 1, 3 },
+                    colors = { "#808080c0", "#80808000" },
+                    blend = "multiply",
+                    attached = true,
                 },
             },
         },
@@ -840,6 +977,7 @@ mod tests {
                 stretch: [0.0, 0.5],
                 pivot: [0.5, 0.25],
                 tint: Color::rgba8(1, 2, 3, 4),
+                blend: Blend::Add,
             }),
         );
         mill.scale_x = 2.0;
@@ -851,7 +989,18 @@ mod tests {
                 stretch: [0.0, 0.0],
                 pivot: [0.0, 0.0],
                 color: Color::BLACK,
+                blend: Blend::Normal,
             }),
+        ));
+        mill.children.push(NodeDef::new(
+            "dust",
+            KindDef::Particles(ParticlesDef::new(ParticleSettings {
+                seed: Some(3),
+                warmup: 0.25,
+                drag: 0.5,
+                angle: [0.0, 6.0],
+                ..ParticleSettings::default()
+            })),
         ));
         mill.children[0].anchor = Some([0.0, 0.0]);
         let mut props = Props::new();
@@ -918,7 +1067,7 @@ mod tests {
 
     /// A level: a tilemap with two layers and people between them, and an instance.
     const LEVEL: &str = r##"return {
-    format = 3,
+    format = 4,
     children = {
         {
             name = "map",
@@ -983,7 +1132,7 @@ mod tests {
     /// A screen: a bar along the bottom of the canvas, with a label at its right end, and a
     /// panel in the middle.
     const SCREEN: &str = r##"return {
-    format = 3,
+    format = 4,
     children = {
         {
             name = "bar",
@@ -1027,7 +1176,7 @@ mod tests {
 
     /// A rig: an arm with a hand, and clips that wave it and make it blink.
     const RIG: &str = r##"return {
-    format = 3,
+    format = 4,
     sheets = {
         hands = {
             path = "hands.png",
@@ -1111,7 +1260,7 @@ mod tests {
 
     /// A menu: a panel fitting a column of items, a sliced frame, and a row stretched across.
     const MENU: &str = r##"return {
-    format = 3,
+    format = 4,
     sheets = {
         ui = {
             path = "ui.png",
@@ -1180,7 +1329,7 @@ mod tests {
 
     /// A tileset in its canonical layout.
     const TILESET: &str = r##"return {
-    format = 3,
+    format = 4,
     tile_width = 16,
     tile_height = 16,
     sheets = {
@@ -1217,7 +1366,7 @@ mod tests {
     /// A 3D level: a view with a camera and lighting holding meshes, a model, a billboard and a
     /// node placed in 3D, and a view from above through an orthographic camera.
     const WORLD: &str = r##"return {
-    format = 3,
+    format = 4,
     sheets = {
         tiles = {
             path = "tiles.png",

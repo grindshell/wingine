@@ -14,8 +14,9 @@ use std::{
 
 use wingine::{
     Context,
-    graphics::{Align, Camera3d, Color, Projection},
+    graphics::{Align, Blend, Camera3d, Color, Projection},
     gui::egui,
+    particles::ParticleSettings,
     scene::{
         CellDef, KindDef, NodeDef, PanelFill, PanelLookDef, Placement3, Props, Shape, SheetDef,
         Stack, StackDirection, Value,
@@ -497,6 +498,9 @@ impl Inspector {
                     over.label(ui, "tint", &["tint"]);
                     color(ui, &mut sprite.tint);
                     ui.end_row();
+                    over.label(ui, "blend", &["blend"]);
+                    blend_choice(ui, &mut sprite.blend);
+                    ui.end_row();
                 });
                 if self.picking_cell
                     && let Some(sheet) = sheets.get(&sprite.sheet)
@@ -517,6 +521,9 @@ impl Inspector {
                     ui.end_row();
                     over.label(ui, "color", &["color"]);
                     color(ui, &mut rect.color);
+                    ui.end_row();
+                    over.label(ui, "blend", &["blend"]);
+                    blend_choice(ui, &mut rect.blend);
                     ui.end_row();
                 });
             }),
@@ -561,6 +568,9 @@ impl Inspector {
                     over.label(ui, "color", &["color"]);
                     color(ui, &mut text.color);
                     ui.end_row();
+                    over.label(ui, "blend", &["blend"]);
+                    blend_choice(ui, &mut text.blend);
+                    ui.end_row();
                 });
             }),
             KindDef::Area(area) => section(ui, &title, |ui| {
@@ -601,6 +611,11 @@ impl Inspector {
                         ui.label(tile);
                         ui.end_row();
                     }
+                });
+                grid(ui, "tile layer", |ui| {
+                    over.label(ui, "blend", &["blend"]);
+                    blend_choice(ui, &mut layer.blend);
+                    ui.end_row();
                 });
             }),
             KindDef::Instance(instance) => {
@@ -868,8 +883,217 @@ impl Inspector {
                     cell_picker(ui, sheet, &mut sprite.cell, services);
                 }
             }),
+            KindDef::Particles(particles) => section(ui, &title, |ui| {
+                grid(ui, "particles", |ui| {
+                    over.label(ui, "sprite", &["sheet", "cell"]);
+                    ui.horizontal(|ui| {
+                        let mut shows = particles.sprite.is_some();
+                        let first = sheets.keys().next();
+                        let response = ui.add_enabled(
+                            first.is_some() || shows,
+                            egui::Checkbox::new(&mut shows, ""),
+                        );
+                        if response.changed() {
+                            particles.sprite =
+                                shows
+                                    .then(|| first.cloned())
+                                    .flatten()
+                                    .map(|sheet| CellDef {
+                                        sheet,
+                                        cell: [0, 0],
+                                    });
+                        }
+                        match &mut particles.sprite {
+                            Some(sprite) => sheet_choice(ui, &mut sprite.sheet, sheets),
+                            None => {
+                                ui.weak("squares");
+                            }
+                        }
+                    });
+                    ui.end_row();
+                    if let Some(sprite) = &mut particles.sprite {
+                        over.label(ui, "cell", &["cell"]);
+                        cell_fields(ui, &mut sprite.cell, &mut self.picking_cell);
+                        ui.end_row();
+                    }
+                    over.label(ui, "size", &["width", "height"]);
+                    pair(ui, &mut particles.size, 1.0);
+                    for side in &mut particles.size {
+                        *side = side.max(0.0);
+                    }
+                    ui.end_row();
+                    over.label(ui, "stretch", &["stretch"]);
+                    pair(ui, &mut particles.stretch, 0.01);
+                    ui.end_row();
+                    over.label(ui, "pivot", &["pivot"]);
+                    pair(ui, &mut particles.pivot, 1.0);
+                    ui.end_row();
+                    particle_fields(ui, &mut particles.settings, over);
+                });
+                if self.picking_cell
+                    && let Some(sprite) = &mut particles.sprite
+                    && let Some(sheet) = sheets.get(&sprite.sheet)
+                {
+                    cell_picker(ui, sheet, &mut sprite.cell, services);
+                }
+            }),
         }
     }
+}
+
+/// The settings of particles, in a grid's rows, kept to values they can have.
+fn particle_fields(ui: &mut egui::Ui, settings: &mut ParticleSettings, over: &mut Marks) {
+    over.label(ui, "emitting", &["emitting"]);
+    let emitting = ui.checkbox(&mut settings.emitting, "");
+    emitting.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::CheckBox, true, settings.emitting, "emitting")
+    });
+    ui.end_row();
+    over.label(ui, "rate", &["rate"]);
+    number(ui, "rate", &mut settings.rate, 0.1);
+    settings.rate = settings.rate.max(0.0);
+    ui.end_row();
+    over.label(ui, "limit", &["limit"]);
+    ui.add(egui::DragValue::new(&mut settings.limit).range(1..=100_000));
+    ui.end_row();
+    over.label(ui, "warmup", &["warmup"]);
+    number(ui, "warmup", &mut settings.warmup, 0.05);
+    settings.warmup = settings.warmup.max(0.0);
+    ui.end_row();
+    over.label(ui, "seed", &["seed"]);
+    ui.horizontal(|ui| {
+        let mut seeded = settings.seed.is_some();
+        if ui.checkbox(&mut seeded, "").changed() {
+            settings.seed = seeded.then_some(1);
+        }
+        match &mut settings.seed {
+            Some(seed) => {
+                ui.add(egui::DragValue::new(seed));
+            }
+            None => {
+                ui.weak("its path's");
+            }
+        }
+    });
+    ui.end_row();
+    over.label(ui, "lifetime", &["lifetime"]);
+    range(ui, "lifetime", &mut settings.lifetime, 0.05);
+    settings.lifetime[0] = settings.lifetime[0].max(0.01);
+    settings.lifetime[1] = settings.lifetime[1].max(settings.lifetime[0]);
+    ui.end_row();
+    over.label(ui, "speed", &["speed"]);
+    range(ui, "speed", &mut settings.speed, 0.5);
+    settings.speed[1] = settings.speed[1].max(settings.speed[0]);
+    ui.end_row();
+    over.label(ui, "direction", &["direction"]);
+    degrees(ui, "direction", &mut settings.direction);
+    ui.end_row();
+    over.label(ui, "spread", &["spread"]);
+    degrees(ui, "spread", &mut settings.spread);
+    settings.spread = settings.spread.clamp(0.0, std::f32::consts::TAU);
+    ui.end_row();
+    over.label(ui, "gravity", &["gravity"]);
+    ui.horizontal(|ui| {
+        number(ui, "gravity x", &mut settings.gravity[0], 1.0);
+        number(ui, "gravity y", &mut settings.gravity[1], 1.0);
+    });
+    ui.end_row();
+    over.label(ui, "drag", &["drag"]);
+    number(ui, "drag", &mut settings.drag, 0.05);
+    settings.drag = settings.drag.max(0.0);
+    ui.end_row();
+    over.label(ui, "angle", &["angle"]);
+    ui.horizontal(|ui| {
+        degrees(ui, "angle least", &mut settings.angle[0]);
+        degrees(ui, "angle most", &mut settings.angle[1]);
+    });
+    settings.angle[1] = settings.angle[1].max(settings.angle[0]);
+    ui.end_row();
+    over.label(ui, "spin", &["spin"]);
+    ui.horizontal(|ui| {
+        degrees(ui, "spin least", &mut settings.spin[0]);
+        degrees(ui, "spin most", &mut settings.spin[1]);
+    });
+    settings.spin[1] = settings.spin[1].max(settings.spin[0]);
+    ui.end_row();
+    over.label(ui, "scales", &["scales"]);
+    ui.horizontal_wrapped(|ui| {
+        list(ui, "scale", &mut settings.scales, 1.0, |ui, i, scale| {
+            number(ui, &format!("scale {}", i + 1), scale, 0.05);
+            *scale = scale.max(0.0);
+        });
+    });
+    ui.end_row();
+    over.label(ui, "colors", &["colors"]);
+    ui.horizontal_wrapped(|ui| {
+        let last = settings.colors.last().copied().unwrap_or(Color::WHITE);
+        list(ui, "color", &mut settings.colors, last, |ui, _, value| {
+            color(ui, value);
+        });
+    });
+    ui.end_row();
+    over.label(ui, "blend", &["blend"]);
+    blend_choice(ui, &mut settings.blend);
+    ui.end_row();
+    over.label(ui, "attached", &["attached"]);
+    let attached = ui.checkbox(&mut settings.attached, "move with it");
+    attached.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::CheckBox, true, settings.attached, "attached")
+    });
+    ui.end_row();
+}
+
+/// Fields for a range's least and most, named `name least` and `name most`.
+fn range(ui: &mut egui::Ui, name: &str, values: &mut [f32; 2], speed: f32) {
+    ui.horizontal(|ui| {
+        number(ui, &format!("{name} least"), &mut values[0], speed);
+        number(ui, &format!("{name} most"), &mut values[1], speed);
+    });
+}
+
+/// A field for each of `values`, then buttons that add `new` after them and take the last away,
+/// keeping at least one.
+fn list<T: Clone>(
+    ui: &mut egui::Ui,
+    name: &str,
+    values: &mut Vec<T>,
+    new: T,
+    mut field: impl FnMut(&mut egui::Ui, usize, &mut T),
+) {
+    for (i, value) in values.iter_mut().enumerate() {
+        field(ui, i, value);
+    }
+    let add = ui.small_button("+");
+    add.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Add a {name}"))
+    });
+    if add.on_hover_text(format!("Add a {name}")).clicked() {
+        values.push(new);
+    }
+    let removable = values.len() > 1;
+    let remove = ui.add_enabled(removable, egui::Button::new("−").small());
+    remove.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Button, removable, format!("Remove a {name}"))
+    });
+    if remove
+        .on_hover_text(format!("Remove the last {name}"))
+        .clicked()
+    {
+        values.pop();
+    }
+}
+
+/// A choice of how a node mixes with what's under it.
+fn blend_choice(ui: &mut egui::Ui, blend: &mut Blend) {
+    egui::ComboBox::from_id_salt("blend")
+        .selected_text(blend.name())
+        .show_ui(ui, |ui| {
+            for mode in Blend::ALL {
+                ui.selectable_value(blend, mode, mode.name());
+            }
+        })
+        .response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "blend"));
 }
 
 /// The fields of a stack or a panel that size, place and lay it out, in a grid's rows: along each
@@ -1099,7 +1323,9 @@ fn tidy(key: &str, value: &Value) -> Value {
         }
         Value::List(items) => Value::List(items.iter().map(|item| tidy(key, item)).collect()),
         Value::String(hex)
-            if matches!(key, "tint" | "color") && hex.len() == 9 && hex.ends_with("ff") =>
+            if matches!(key, "tint" | "color" | "colors")
+                && hex.len() == 9
+                && hex.ends_with("ff") =>
         {
             Value::String(hex[..7].to_owned())
         }

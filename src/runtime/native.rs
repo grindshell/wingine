@@ -24,7 +24,8 @@ use super::{Lent, LibraryConfig};
 use crate::{
     Context, Error, Result,
     graphics::{
-        Camera3d, Canvas, Color, Lighting, Mesh, MeshData, MeshVertex, Projection, Sprite, View3d,
+        Blend, Camera3d, Canvas, Color, Lighting, Mesh, MeshData, MeshVertex, Projection, Sprite,
+        View3d,
     },
     lua::is_identifier,
     math::{Affine3, Rect},
@@ -684,6 +685,7 @@ static HOST: abi::Host = abi::Host {
     begin_3d: host::begin_3d,
     draw_meshes: host::draw_meshes,
     draw_billboards: host::draw_billboards,
+    set_blend: host::set_blend,
 };
 
 /// The functions in [`HOST`]. Each trusts the library to pass what the ABI says: pointers the
@@ -1504,6 +1506,25 @@ mod host {
             let size = [draw.size.width, draw.size.height];
             view.draw_billboard(sprite, vec3(draw.position), size, color(draw.tint));
         }
+        abi::Status::OK
+    }
+
+    pub(super) unsafe extern "C" fn set_blend(
+        canvas: *mut abi::Canvas,
+        blend: abi::Blend,
+    ) -> abi::Status {
+        let blend = match blend {
+            abi::Blend::NORMAL => Blend::Normal,
+            abi::Blend::ADD => Blend::Add,
+            abi::Blend::MULTIPLY => Blend::Multiply,
+            abi::Blend::SCREEN => Blend::Screen,
+            other => {
+                super::set_error(format!("there's no blend mode {}", other.0));
+                return abi::Status::ERROR;
+            }
+        };
+        // SAFETY: the library's promise.
+        unsafe { canvas_mut(canvas) }.set_blend(blend);
         abi::Status::OK
     }
 }

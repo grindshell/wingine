@@ -1,6 +1,7 @@
 //! Drawing: 2D, and meshes in 3D views drawn among it.
 
 mod animation;
+mod blend;
 mod camera;
 mod camera3d;
 mod canvas;
@@ -20,6 +21,7 @@ mod texture;
 mod view3d;
 
 pub use animation::Animation;
+pub use blend::Blend;
 pub use camera::Camera;
 pub use camera3d::{Camera3d, Projection, Ray};
 pub use canvas::Canvas;

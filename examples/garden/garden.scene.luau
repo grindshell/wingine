@@ -1,5 +1,5 @@
 return {
-    format = 3,
+    format = 4,
     sheets = {
         tiles = {
             path = "kenney_1-bit-pack.png",

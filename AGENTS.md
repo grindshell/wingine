@@ -7,8 +7,8 @@ systems, and don't build more 3D features unless asked.
 
 ## Scope
 
-Wingine has what its examples need: tilemaps and batched sprites, meshes and glTF models in 3D
-views picked by boxes, sprite animation, a camera, keyboard, mouse and gamepad input bound to
+Wingine has what its examples need: tilemaps and batched sprites in blend modes, meshes and glTF
+models in 3D views picked by boxes, sprite animation, particles, a camera, keyboard, mouse and gamepad input bound to
 actions, grid movement, physics with Rapier (bodies and characters, in 2D and in 3D views),
 text in the built-in font, bitmap fonts and TrueType fonts, audio, saves, Luau scripting with
 tasks, native libraries written in Rust, scenes (levels, screens and rigged characters), menus
@@ -89,8 +89,10 @@ own right.
   only when asked for (`Redraws`, shared with the `Context`, `Waker`s and egui).
 - `src/context.rs`: `Context`, the services games get: input, audio, saves, canvas size, fonts,
   loading textures, fonts and models, `FrameStats`, and redraw requests.
-- `src/graphics/`: `Canvas` records quads, all through one textured pipeline (fills use a white
-  texture), batched by texture into draw calls; rotation, transforms, slicing, outlines, lines
+- `src/graphics/`: `Canvas` records quads, all through one textured shader (fills use a white
+  texture), batched by texture and `Blend` into draw calls, a pipeline for each blend mode, all
+  blending premultiplied colors (normal is premultiplied alpha blending, which renders as straight
+  alpha did); rotation, transforms, slicing, outlines, lines
   and circles are worked out on the CPU as quads are recorded. Vertices are 20 bytes, colors
   sRGB bytes made linear in the shader. A fixed resolution renders offscreen, then onto the
   output as its `Scaling` says. Sprites aren't instanced: rendering is a fifth of the shmup's
@@ -126,6 +128,12 @@ own right.
   order bound, so the first names them. Sticks and triggers go through a radial dead zone and
   hold from 0.5 and release below 0.4. Gamepads are numbered from 1 and polled only while the
   window is focused.
+- `src/particles.rs`: `Particles`, an emitter with `ParticleSettings` that keeps no time:
+  `advance` steps it in parts of at most 1/60 s, spreading particles started as its origin moved
+  along the way. Each emitter has a xorshift seeded by its settings or its owner (a scene node's
+  path, a game's count of emitters), and starting particles uses `libm`, so a hash pinned in its
+  tests checks Windows and Linux agree. `Canvas::draw_particles` draws them, culling each, taking
+  `sin_cos` only for turned ones. Attached particles are in the emitter's coordinates.
 - `src/menu.rs`: `Menu`, a selection that holds no items: each `update` takes them as they are.
   Directions go by where items are, so lists, rows and ragged grids move as they look.
 - `src/physics.rs`, `physics/world2d.rs` and `physics/world3d.rs`: `World` and `World3d`, by
@@ -203,6 +211,11 @@ own right.
 - Layout walks down from the root: anchors and stretch place nodes in their parent's rect, stacks
   and panels place their children and fit what they hold, and 3D views' children are placed in
   3D (`placement3`). `Scene::pose` applies `Clip`s, finding every track's node before changing any.
+- Drawing nodes carry a `blend`, which `draw_tree` sets before each, and `draw_from` restores the
+  canvas's after. Particles nodes are laid out as areas (their rect is where particles start, 0 by
+  0 by default) and keep their emitter's state; scenes keep no time, so games call
+  `advance_particles`. Particle settings are read by the file reader for files and for Luau alike
+  (`file::particle_settings`, through `plain`), so both take the same fields with the same errors.
 - Scripts hold nodes as `lua::SceneNode`, an `Rc<RefCell<Scene>>` and a `NodeId`.
 
 ### Editor
@@ -218,6 +231,8 @@ own right.
   with luau-lsp (`lsp.rs`, with the engine's definitions). Play runs the editor's own executable
   with `--run`, watching the folder.
 - It redraws on demand: threads (luau-lsp, the game played, the `Watcher`) wake it with a `Waker`.
+  A rebuilt preview runs its particles a few seconds to show them; they animate, asking for frames,
+  only while the selection holds a particles node (`Document::animate_particles`).
   Its tests (`crates/wingine-editor/tests/editor.rs`) click widgets by label; those that wait in
   real time run frames
   only when it wants them (`wait_for`), and `settle` checks it stops wanting them.
@@ -236,10 +251,10 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
   step for step in `f64`, so both produce the same bullets to the bit: change them together. Only
   the game's seed may feed `math.random`.
 - `pong/`: Pong in Luau, with Luau tests and an icon; its match hash is pinned in `tests/pong.rs`.
-- `garden/`, `orchard/`, `cellar/`, `course/`, `quarry/`, `lettering/`: a scene with 2D physics
-  seen from above, a rigged character, a 2.5D cellar, a 3D course with physics, a level seen from
-  the side with 2D bodies (both with their run's hash pinned), and a type specimen of the
-  engine's fonts.
+- `garden/`, `orchard/`, `cellar/`, `course/`, `quarry/`, `bonfire/`, `lettering/`: a scene with
+  2D physics seen from above, a rigged character, a 2.5D cellar, a 3D course with physics, a level
+  seen from the side with 2D bodies (both with their run's hash pinned), a night of particles and
+  blend modes with fireworks, and a type specimen of the engine's fonts.
 - `sprites.rs`, `shapes.rs`, `meshes.rs`, `gui.rs`: examples in Rust; `native-particles/` a native
   library that `tests/native.rs` builds.
 - Assets: art drawn for the examples is under the project's licenses; Kenney's packs are CC0 and

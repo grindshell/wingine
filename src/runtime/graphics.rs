@@ -8,11 +8,13 @@ use super::{Lent, Textures};
 use crate::{
     Context,
     graphics::{
-        Animation, Camera, Camera3d, Canvas, Color, Font, FontSettings, Lighting, Mesh, MeshData,
-        MeshVertex, Model, Ray, Sprite, SpriteSheet, TextLayout, View3d,
+        Animation, Blend, Camera, Camera3d, Canvas, Color, Font, FontSettings, Lighting, Mesh,
+        MeshData, MeshVertex, Model, Ray, Sprite, SpriteSheet, TextLayout, View3d,
     },
     lua::{SceneNode, check_layer, packed_color, vector3},
     math::{Affine3, Bounds3, Rect},
+    particles::{ParticleSettings, Particles, seed_for},
+    scene::{particle_settings, plain},
     tilemap::Tilemap,
 };
 
@@ -293,6 +295,38 @@ pub(super) fn module(
                 lent.canvas(|canvas| canvas.set_camera(camera))
             },
         )?
+    })?;
+    graphics.set("new_particles", {
+        // Each emitter a game makes is seeded by how many it made before, so a game plays the
+        // same every time, unless the settings give a seed.
+        let made = std::cell::Cell::new(0u32);
+        lua.create_function(
+            move |_, (settings, sprite): (Option<Table>, Option<UserDataRef<Sprite>>)| {
+                let settings = match settings {
+                    Some(table) => {
+                        let value = plain(mlua::Value::Table(table), "the settings")
+                            .map_err(mlua::Error::runtime)?;
+                        particle_settings(value, &ParticleSettings::default())
+                            .map_err(mlua::Error::runtime)?
+                    }
+                    None => ParticleSettings::default(),
+                };
+                let seed = seed_for(&format!("emitter {}", made.get()));
+                made.set(made.get().wrapping_add(1));
+                let sprite = sprite.map(|sprite| Sprite::clone(&sprite));
+                Particles::try_new(settings, sprite, seed).map_err(mlua::Error::runtime)
+            },
+        )?
+    })?;
+    graphics.set("draw_particles", {
+        let lent = lent.clone();
+        lua.create_function(move |_, particles: UserDataRef<Particles>| {
+            lent.canvas(|canvas| canvas.draw_particles(&particles))
+        })?
+    })?;
+    graphics.set("set_blend", {
+        let lent = lent.clone();
+        lua.create_function(move |_, blend: Blend| lent.canvas(|canvas| canvas.set_blend(blend)))?
     })?;
     graphics.set("size", {
         let lent = lent.clone();

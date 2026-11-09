@@ -108,7 +108,7 @@ impl Affine {
     }
 
     /// Where the step `vector` goes, which the translation doesn't move.
-    fn apply_vector(&self, [x, y]: [f32; 2]) -> [f32; 2] {
+    pub(crate) fn apply_vector(&self, [x, y]: [f32; 2]) -> [f32; 2] {
         [
             self.x_axis[0] * x + self.y_axis[0] * y,
             self.x_axis[1] * x + self.y_axis[1] * y,

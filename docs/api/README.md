@@ -6,7 +6,7 @@ hand out, and the `Ui` a game's `gui` lays its interface out with:
 | Page | What it covers |
 |---|---|
 | [Built-ins](globals.md) | The game's `update`, `gui`, `draw`, `close_requested` and `reloading`, tasks (`spawn`, `wait`, `wait_until`), `print`, `require` and `approach` |
-| [`graphics`](graphics.md) | Drawing, the camera, sprite sheets, sprites, animations, fonts and text, frame stats, and 3D views of meshes, models and billboards, with picking by boxes |
+| [`graphics`](graphics.md) | Drawing, the camera, blend modes, sprite sheets, sprites, animations, particles, fonts and text, frame stats, and 3D views of meshes, models and billboards, with picking by boxes |
 | [`input`](input.md) | The keyboard, mouse and gamepads, and actions bound to keys and buttons |
 | [`audio`](audio.md) | Sound effects, music and volume |
 | [`tilemap`](tilemap.md) | Tilesets and maps of tiles in layers |
@@ -60,8 +60,9 @@ time raises an error saying when it works.
   `graphics.outline_rect`, `graphics.draw_line`, `graphics.fill_circle`,
   `graphics.outline_circle`, `graphics.draw_sprite`, `graphics.draw_sprite_rotated`,
   `graphics.draw_text`, `graphics.draw_text_layout`, `graphics.draw_tilemap`,
-  `graphics.draw_scene`, `graphics.set_camera`, `graphics.begin_3d`, `graphics.draw_mesh`,
-  `graphics.draw_model` and `graphics.draw_billboard`.
+  `graphics.draw_scene`, `graphics.set_camera`, `graphics.set_blend`,
+  `graphics.draw_particles`, `graphics.begin_3d`, `graphics.draw_mesh`, `graphics.draw_model` and
+  `graphics.draw_billboard`.
 - **The keyboard, mouse, gamepads and sound** work while the game loads (the top level of
   `main.luau` and the modules it requires), in `update` and the tasks it resumes, and in `gui`:
   everything in `input`, everything in `audio` but `audio.load`, and the methods of the
@@ -75,6 +76,7 @@ time raises an error saying when it works.
 - **Interfaces** are laid out only in `gui`, with the `Ui` it's passed.
 - **Everything else** works any time: `graphics.size`, `graphics.color`,
   `graphics.default_font`, `graphics.frame_stats`, `graphics.new_animation`,
+  `graphics.new_particles`,
   `graphics.hit_box`, `audio.load`,
   `tilemap`, `grid`, `physics`, `save`, `ui.menu`, `window.reloaded`, and the methods of every
   object, scene nodes,
@@ -131,6 +133,19 @@ One of `"left"`, `"right"`, `"middle"`, `"back"` and `"forward"`, in any case.
 A gamepad button's name, such as `"South"`, `"Start"` or `"DPadUp"`, or a stick's direction, such
 as `"LeftStickLeft"`, in any case. Buttons are named for where they are on the gamepad.
 [Button names](input.md#button-names) lists them.
+
+### `Blend`
+
+How what's drawn mixes with what's under it: one of `"normal"`, `"add"`, `"multiply"` and
+`"screen"`. See [blend modes](graphics.md#blend-modes).
+
+### `ParticleSettings`
+
+What an emitter of particles sends out and how they move and look, for
+[`graphics.new_particles`](graphics.md#graphicsnew_particles) and particles nodes: a table with any
+of `emitting`, `rate`, `limit`, `warmup`, `seed`, `lifetime`, `speed`, `direction`, `spread`,
+`gravity`, `drag`, `angle`, `spin`, `scales`, `colors`, `blend` and `attached`. See
+[particle settings](graphics.md#particle-settings).
 
 ### `PlaySettings`
 

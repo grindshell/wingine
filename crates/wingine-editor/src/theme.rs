@@ -102,6 +102,7 @@ pub fn kind_icon(kind: &str) -> &'static str {
         "area" => "⛶",
         "stack" => "▤",
         "panel" => "▣",
+        "particles" => "✨",
         "tilemap" => "🗺",
         "tile_layer" => "☰",
         "instance" => "⛓",

@@ -17,7 +17,13 @@ the files.
   [`bounds`](#nodebounds), [`contains`](#nodecontains)
 - [What nodes show](#what-nodes-show): [`set_sprite`](#nodeset_sprite),
   [`set_cell`](#nodeset_cell), [`set_tint`](#nodeset_tint), [`set_color`](#nodeset_color),
-  [`text`](#nodetext), [`set_text`](#nodeset_text)
+  [`text`](#nodetext), [`set_text`](#nodeset_text), [`blend`](#nodeblend),
+  [`set_blend`](#nodeset_blend)
+- [Particles](#particles): [`advance_particles`](#nodeadvance_particles),
+  [`particle_count`](#nodeparticle_count), [`clear_particles`](#nodeclear_particles),
+  [`emit`](#nodeemit), [`is_emitting`](#nodeis_emitting), [`set_emitting`](#nodeset_emitting),
+  [`particle_settings`](#nodeparticle_settings),
+  [`set_particle_settings`](#nodeset_particle_settings)
 - [Nodes in 3D views](#nodes-in-3d-views): [`position_3d`](#nodeposition_3d),
   [`set_position_3d`](#nodeset_position_3d), [`orientation`](#nodeorientation),
   [`set_orientation`](#nodeset_orientation), [`scale_3d`](#nodescale_3d),
@@ -92,9 +98,9 @@ Returns the node's name, unique among its siblings. The root's is `""`.
 node:kind(): string
 ```
 
-Returns `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`, `"tilemap"`,
-`"tile_layer"`, `"view3d"`, `"mesh"`, `"model"` or `"billboard"`. An instance is a `"node"` once
-loaded.
+Returns `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`, `"particles"`,
+`"tilemap"`, `"tile_layer"`, `"view3d"`, `"mesh"`, `"model"` or `"billboard"`. An instance is a
+`"node"` once loaded.
 
 ### `node:path`
 
@@ -267,7 +273,8 @@ Positions, anchors, rotations and scales must be finite numbers.
 
 ## What nodes cover
 
-A sprite, rect, text, area or 3D view covers a rectangle, with its pivot at the node's origin,
+A sprite, rect, text, area or 3D view covers a rectangle, with its pivot at the node's origin, as
+the rectangle particles start in does,
 and a tilemap, or a layer of one, covers its map. A plain node covers nothing, and nor do nodes in
 3D views, which have [boxes](#nodebounds_3d) instead.
 
@@ -291,7 +298,8 @@ holds, with its padding, along those it fits it.
 node:set_size(width: number, height: number)
 ```
 
-Changes the size of a sprite, a rect, an area, a stack, a panel, a 3D view or a billboard. A
+Changes the size of a sprite, a rect, an area, a stack, a panel, a 3D view, a billboard, or the
+rectangle particles start in. A
 sprite stretches to it, a billboard with a negative width is mirrored, and a stack or a panel
 then has a size of its own both ways, rather than fitting what it holds.
 
@@ -346,6 +354,7 @@ node:set_sprite(sprite: Sprite)
 
 Changes the sprite a sprite node shows, such as to a frame of an
 [animation](graphics.md#animation). It keeps its size: a sprite of another size stretches to it.
+On a particles node, it changes what its particles show.
 
 ### `node:set_cell`
 
@@ -353,8 +362,8 @@ Changes the sprite a sprite node shows, such as to a frame of an
 node:set_cell(column: number, row: number)
 ```
 
-Shows the sprite in another cell of the sheet the scene file gave a sprite, billboard or mesh
-node, counting from 0 at the top-left. A cell outside the sheet is an error. Clips change cells
+Shows the sprite in another cell of the sheet the scene file gave a sprite, billboard, mesh or
+particles node, counting from 0 at the top-left. A cell outside the sheet is an error. Clips change cells
 too, with a `cell` track.
 
 ```lua
@@ -394,6 +403,110 @@ node:set_text(text: string)
 
 Changes a text node's text, laying it out again if it's different, so setting the same text
 every frame costs little.
+
+### `node:blend`
+
+```lua
+node:blend(): Blend
+```
+
+Returns how a sprite, rect, text, tile layer or particles node mixes with what's under it: one of
+the [blend modes](graphics.md#blend-modes).
+
+### `node:set_blend`
+
+```lua
+node:set_blend(blend: Blend)
+```
+
+Changes how a sprite, rect, text, tile layer or particles node mixes with what's under it.
+
+## Particles
+
+A [particles node](../scenes.md#particles) sends particles out as it's advanced. Its methods are
+an error on a node of another kind, apart from `advance_particles`, `particle_count` and
+`clear_particles`, which act on every particles node inside the node too, on any kind of node.
+
+### `node:advance_particles`
+
+```lua
+node:advance_particles(dt: number)
+```
+
+Moves on by `dt` seconds the particles of the node and of every particles node inside it, sending
+new ones out from where each node is laid out now, as
+[`particles:advance`](graphics.md#particlesadvance) does. Scenes keep no time, so a game advances
+its scene's particles in `update`:
+
+```lua
+function update(dt: number)
+    level:advance_particles(dt)
+end
+```
+
+Particles advance whether their nodes are visible or not; a hidden node's particles don't draw.
+
+### `node:particle_count`
+
+```lua
+node:particle_count(): number
+```
+
+Returns how many particles the node and every particles node inside it have alive.
+
+### `node:clear_particles`
+
+```lua
+node:clear_particles()
+```
+
+Ends the lives of the particles of the node and every particles node inside it at once, as when a
+level starts over.
+
+### `node:emit`
+
+```lua
+node:emit(count: number)
+```
+
+Sends `count` of a particles node's particles out at once from where it's laid out, emitting or
+not, as many as its `limit` leaves room for: a burst, such as dust where something lands.
+
+### `node:is_emitting`
+
+```lua
+node:is_emitting(): boolean
+```
+
+Returns whether a particles node sends particles out at its rate.
+
+### `node:set_emitting`
+
+```lua
+node:set_emitting(emitting: boolean)
+```
+
+Starts or stops a particles node sending particles out at its rate. Those it sent live out their
+lives, so a torch put out dies down.
+
+### `node:particle_settings`
+
+```lua
+node:particle_settings(): ParticleSettings
+```
+
+Returns a particles node's [settings](graphics.md#particle-settings), every one of them.
+
+### `node:set_particle_settings`
+
+```lua
+node:set_particle_settings(settings: ParticleSettings)
+```
+
+Changes the settings of a particles node that `settings` has, keeping the rest, as
+[`particles:set_settings`](graphics.md#particlesset_settings) does. Its sprite changes with
+[`set_sprite`](#nodeset_sprite) and [`set_cell`](#nodeset_cell), and the rectangle particles
+start in with [`set_size`](#nodeset_size).
 
 ## Nodes in 3D views
 

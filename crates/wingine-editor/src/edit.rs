@@ -8,11 +8,12 @@ use std::{
 };
 
 use wingine::{
-    graphics::{Align, Camera3d, Color, Lighting},
+    graphics::{Align, Blend, Camera3d, Color, Lighting},
+    particles::ParticleSettings,
     scene::{
         AreaDef, BillboardDef, InstanceDef, KindDef, MeshDef, ModelDef, NodeDef, PanelDef,
-        PanelFill, PanelLookDef, Placement3, RectDef, SceneFile, Shape, SpriteDef, Stack, TextDef,
-        TileLayerDef, TilemapDef, View3dDef,
+        PanelFill, PanelLookDef, ParticlesDef, Placement3, RectDef, SceneFile, Shape, SpriteDef,
+        Stack, TextDef, TileLayerDef, TilemapDef, View3dDef,
     },
 };
 
@@ -22,8 +23,18 @@ use wingine::{
 pub type NodePath = Vec<usize>;
 
 /// The kinds of node that can be added to the 2D scene, as scene files name them.
-pub const KINDS: [&str; 10] = [
-    "node", "sprite", "rect", "text", "area", "stack", "panel", "tilemap", "view3d", "instance",
+pub const KINDS: [&str; 11] = [
+    "node",
+    "sprite",
+    "rect",
+    "text",
+    "area",
+    "stack",
+    "panel",
+    "particles",
+    "tilemap",
+    "view3d",
+    "instance",
 ];
 
 /// The kinds of node that can be added to a 3D view, placed in 3D.
@@ -398,12 +409,14 @@ pub fn new_node(kind: &str, showing: Showing) -> NodeDef {
             stretch: [0.0, 0.0],
             pivot: [0.0, 0.0],
             tint: Color::WHITE,
+            blend: Blend::Normal,
         }),
         "rect" => KindDef::Rect(RectDef {
             size: [16.0, 16.0],
             stretch: [0.0, 0.0],
             pivot: [0.0, 0.0],
             color: Color::WHITE,
+            blend: Blend::Normal,
         }),
         "text" => KindDef::Text(TextDef {
             text: "Text".into(),
@@ -413,7 +426,17 @@ pub fn new_node(kind: &str, showing: Showing) -> NodeDef {
             align: Align::Left,
             pivot: [0.0, 0.0],
             color: Color::WHITE,
+            blend: Blend::Normal,
         }),
+        // A puff rising and fading, which shows at once in a scene of any size.
+        "particles" => KindDef::Particles(ParticlesDef::new(ParticleSettings {
+            speed: [10.0, 20.0],
+            direction: -std::f32::consts::FRAC_PI_2,
+            spread: 0.5,
+            scales: vec![2.0],
+            colors: vec![Color::WHITE, Color::rgba(1.0, 1.0, 1.0, 0.0)],
+            ..ParticleSettings::default()
+        })),
         "area" => KindDef::Area(AreaDef {
             size: [16.0, 16.0],
             stretch: [0.0, 0.0],
@@ -491,6 +514,7 @@ pub fn tile_layer(name: &str, columns: u32, rows: u32) -> NodeDef {
         KindDef::TileLayer(TileLayerDef {
             legend: Default::default(),
             tiles: vec![" ".repeat(columns as usize); rows as usize],
+            blend: Blend::Normal,
         }),
     )
 }
@@ -964,6 +988,7 @@ mod tests {
         TileLayerDef {
             legend: [('.', "grass".to_owned()), ('T', "tree.1".to_owned())].into(),
             tiles: vec!["....".into(), ".T..".into(), "....".into()],
+            blend: Blend::Normal,
         }
     }
 

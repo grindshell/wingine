@@ -90,8 +90,8 @@ With an update rate, steps 1 to 3 run for each update in the frame, so update ho
 same `dt` the game does.
 
 Hooks before `draw` draw first, under what the game draws, and in the coordinates of no camera.
-Hooks after `draw` draw on top, in canvas pixels, whatever camera the game left set: they suit
-overlays such as a performance graph.
+Hooks after `draw` draw on top, in canvas pixels and blending normally, whatever camera and blend
+mode the game left set: they suit overlays such as a performance graph.
 
 ## What a library can reach
 
@@ -102,8 +102,9 @@ lends them to scripts:
   held, pressed or released, the mouse's position, and creating sprites from pixels and meshes
   from triangles.
 - **The canvas**, in `draw`: its size, filling rectangles, drawing sprites, one at a time or many
-  in one call, and [3D views](api/native.md#3d): beginning one, and drawing batches of a mesh or
-  of billboards in the view begun last, whether the library or the script began it.
+  in one call, setting the [blend mode](api/graphics.md#blend-modes), and
+  [3D views](api/native.md#3d): beginning one, and drawing batches of a mesh or of billboards in
+  the view begun last, whether the library or the script began it.
 
 Update hooks receive the context, and draw hooks the canvas. A function or method asks for
 whichever the script that called it could use: a function called from `draw` gets the canvas,

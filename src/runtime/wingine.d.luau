@@ -41,6 +41,58 @@ type Fullscreen = "borderless" | "exclusive"
 --- or width; or `"stretch"`, filling it both ways.
 type Scaling = "whole" | "fit" | "stretch"
 
+--- How what's drawn mixes with what's under it: `"normal"`, covering it as much as it's opaque;
+--- `"add"`, adding to it, only ever brightening, for fire and glows; `"multiply"`, multiplying it,
+--- only ever darkening, for shadows and night; or `"screen"`, brightening it as much as its color
+--- is bright, never past white, for soft light.
+type Blend = "normal" | "add" | "multiply" | "screen"
+
+--- What an emitter of particles sends out, how often, and how its particles move and look as they
+--- age: for `graphics.new_particles` and particles nodes. Ranges are `{ least, most }`, each
+--- particle getting a value between them at random, or one number for every particle. Lists over a
+--- particle's life are spread evenly from its start to its end.
+type ParticleSettings = {
+    --- Whether it sends particles out at its `rate`. By default, true.
+    emitting: boolean?,
+    --- Particles a second, while emitting. By default, 10.
+    rate: number?,
+    --- The most particles alive at once. By default, 500.
+    limit: number?,
+    --- Seconds it runs for as it first advances, so a fire is already burning. By default, 0.
+    warmup: number?,
+    --- Where its randomness starts. By default, the emitter's own.
+    seed: number?,
+    --- Seconds a particle lives, above 0. By default, 1.
+    lifetime: (number | { number })?,
+    --- How fast a particle starts, in units a second. By default, 20.
+    speed: (number | { number })?,
+    --- The way particles fly, in radians clockwise from right, as the emitter is turned: `-math.pi
+    --- / 2` is up. By default, 0.
+    direction: number?,
+    --- How many radians wide the ways they fly are, centered on `direction`. By default, a full
+    --- turn, every way.
+    spread: number?,
+    --- How much faster particles fly each second, `{ x, y }`. By default, `{ 0, 0 }`.
+    gravity: { number }?,
+    --- How quickly particles slow down: each second, they keep `e^-drag` of their speed. By
+    --- default, 0.
+    drag: number?,
+    --- How far a particle is turned as it starts, in radians, clockwise. By default, 0.
+    angle: (number | { number })?,
+    --- How fast a particle turns, in radians a second, clockwise. By default, 0.
+    spin: (number | { number })?,
+    --- A particle's sizes over its life: times its sprite's size, or its width without one. By
+    --- default, `{ 1 }`.
+    scales: { number }?,
+    --- A particle's colors over its life, multiplying its sprite's. By default, white.
+    colors: { Color }?,
+    --- How particles mix with what's under them. By default, `"normal"`.
+    blend: Blend?,
+    --- Whether particles move with the emitter after they've left it. By default, false: they stay
+    --- where they were sent out, so a moving emitter leaves a trail.
+    attached: boolean?,
+}
+
 --- How `audio.play` plays a sound.
 type PlaySettings = {
     --- Linear volume: 1 is as recorded. By default, 1.
@@ -428,6 +480,37 @@ declare extern type Animation with
     function flipped_y(self): Animation
 end
 
+--- An emitter of particles, from `graphics.new_particles`, which `graphics.draw_particles` draws.
+--- It doesn't keep time: games advance it.
+declare extern type Particles with
+    --- Sends `count` particles out at once from where it is, emitting or not, as many as its
+    --- limit leaves room for.
+    function emit(self, count: number): ()
+    --- Moves its particles on by `dt` seconds, ending those whose lives are over, and sends new
+    --- ones out at its rate while emitting, spread along the way it moved since it last advanced.
+    function advance(self, dt: number): ()
+    --- Returns how many particles are alive.
+    function count(self): number
+    --- Ends every particle's life at once.
+    function clear(self): ()
+    --- Returns whether it sends particles out at its rate.
+    function is_emitting(self): boolean
+    --- Starts or stops sending particles out at its rate. Those it sent live out their lives.
+    function set_emitting(self, emitting: boolean): ()
+    --- Returns where it sends particles out from.
+    function position(self): (number, number)
+    --- Moves where it sends particles out from.
+    function set_position(self, x: number, y: number): ()
+    --- Turns it, in radians, clockwise, which turns the way its particles fly.
+    function set_rotation(self, angle: number): ()
+    --- Returns its settings, every one of them.
+    function settings(self): ParticleSettings
+    --- Changes the settings `settings` has, keeping the rest and its particles.
+    function set_settings(self, settings: ParticleSettings): ()
+    --- Changes what its particles show, or with `nil`, white squares.
+    function set_sprite(self, sprite: Sprite?): ()
+end
+
 --- A font to draw text with: the built-in pixel font, `graphics.default_font()`, or one from
 --- `graphics.load_font`.
 declare extern type Font with
@@ -555,7 +638,8 @@ declare extern type SceneNode with
     --- Returns the node's name, unique among its siblings. The root's is `""`.
     function name(self): string
     --- Returns `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`,
-    --- `"tilemap"`, `"tile_layer"`, `"view3d"`, `"mesh"`, `"model"` or `"billboard"`.
+    --- `"particles"`, `"tilemap"`, `"tile_layer"`, `"view3d"`, `"mesh"`, `"model"` or
+    --- `"billboard"`.
     function kind(self): string
     --- Returns the names from the root to the node, separated by `/`.
     function path(self): string
@@ -636,22 +720,46 @@ declare extern type SceneNode with
     function set_visible(self, visible: boolean): ()
     --- Returns the width and height it covers, before any scaling, or a billboard's.
     function size(self): (number, number)
-    --- Changes the size of a sprite, a rect, an area, a 3D view or a billboard.
+    --- Changes the size of a sprite, a rect, an area, a 3D view, a billboard, or the rectangle
+    --- particles start in.
     function set_size(self, width: number, height: number): ()
     --- Returns the smallest rectangle in the scene's coordinates around what it covers, or `nil`
     --- for a plain node.
     function bounds(self): Rect?
     --- Returns whether a point in the scene's coordinates is inside what it covers.
     function contains(self, x: number, y: number): boolean
-    --- Changes the sprite a sprite node shows. It keeps its size.
+    --- Changes the sprite a sprite node shows, which keeps its size, or a particles node's
+    --- particles show.
     function set_sprite(self, sprite: Sprite): ()
-    --- Shows another cell of the sheet of a sprite, a billboard or a mesh, counting from 0 at the
-    --- top-left.
+    --- Shows another cell of the sheet of a sprite, a billboard, a mesh or particles, counting from
+    --- 0 at the top-left.
     function set_cell(self, column: number, row: number): ()
     --- Changes the color the colors of a sprite, mesh, model or billboard are multiplied by.
     function set_tint(self, tint: Color): ()
     --- Changes the color of a rect or text node.
     function set_color(self, color: Color): ()
+    --- Returns how a sprite, rect, text, tile layer or particles node mixes with what's under it.
+    function blend(self): Blend
+    --- Changes how a sprite, rect, text, tile layer or particles node mixes with what's under it.
+    function set_blend(self, blend: Blend): ()
+    --- Sends `count` of a particles node's particles out at once from where it is, emitting or
+    --- not.
+    function emit(self, count: number): ()
+    --- Returns whether a particles node sends particles out at its rate.
+    function is_emitting(self): boolean
+    --- Starts or stops a particles node sending particles out at its rate.
+    function set_emitting(self, emitting: boolean): ()
+    --- Returns a particles node's settings, every one of them.
+    function particle_settings(self): ParticleSettings
+    --- Changes the settings of a particles node that `settings` has, keeping the rest.
+    function set_particle_settings(self, settings: ParticleSettings): ()
+    --- Moves the particles of this node and every particles node inside it on by `dt` seconds,
+    --- sending new ones out from where each node is now. Scenes keep no time, so games call it.
+    function advance_particles(self, dt: number): ()
+    --- Returns how many particles this node and every particles node inside it have alive.
+    function particle_count(self): number
+    --- Ends the lives of the particles of this node and every particles node inside it.
+    function clear_particles(self): ()
     --- Returns a text node's text.
     function text(self): string
     --- Changes a text node's text.
@@ -844,7 +952,8 @@ declare extern type Ui with
     function space(self, amount: number?): ()
 end
 
---- Drawing, the camera, sprites, animations, text and 3D views. Drawing works only in `draw`.
+--- Drawing, the camera, blend modes, sprites, animations, particles, text and 3D views. Drawing
+--- works only in `draw`.
 declare graphics: {
     --- Fills the canvas with `color`, discarding anything drawn so far this frame.
     clear: (color: Color) -> (),
@@ -880,6 +989,13 @@ declare graphics: {
     --- at `zoom` canvas pixels a world unit (1 by default), or with `nil`, goes back to canvas
     --- pixels.
     set_camera: ((x: number, y: number, bounds: Rect?, zoom: number?) -> ()) & ((nothing: nil) -> ()),
+    --- Blends what's drawn after with what's under it as `blend` says, until the frame ends.
+    set_blend: (blend: Blend) -> (),
+    --- Returns an emitter of particles with `settings`, each showing `sprite` or a white square.
+    --- It works anywhere.
+    new_particles: (settings: ParticleSettings?, sprite: Sprite?) -> Particles,
+    --- Draws the particles of `particles`, in its blend mode.
+    draw_particles: (particles: Particles) -> (),
     --- Returns the canvas's width and height in canvas pixels.
     size: () -> (number, number),
     --- Returns `color` as a number `0xRRGGBBAA`, the fastest way to pass it, with its alpha

@@ -39,7 +39,9 @@ fn vs_main(in: VertexIn) -> VertexOut {
     return out;
 }
 
+// Premultiplied, as every blend mode's pipeline blends it.
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    return textureSample(quad_texture, quad_sampler, in.uv) * in.color;
+    let color = textureSample(quad_texture, quad_sampler, in.uv) * in.color;
+    return vec4<f32>(color.rgb * color.a, color.a);
 }

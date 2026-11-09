@@ -30,7 +30,7 @@ scene's clips, and [`examples/cellar`](../examples/cellar) one whose level is a 
 ```lua
 -- garden.scene.luau
 return {
-    format = 3,
+    format = 4,
     sheets = {
         tiles = {
             path = "tiles.png",
@@ -85,7 +85,7 @@ At the top of the file:
 
 | Field | What it is |
 |---|---|
-| `format` | Required: the version of the format, `3`, which added stacks and panels, as `2` added 3D views. The engine reads files of formats 1 and 2 too, and refuses files newer than it reads. |
+| `format` | Required: the version of the format, `4`, which added particles and blend modes, as `3` added stacks and panels and `2` 3D views. The engine reads files of formats 1 to 3 too, and refuses files newer than it reads. |
 | `sheets` | The sprite sheets the scene's sprites come from, by name: each an image's `path`, relative to the game's folder, divided into sprites `tile_width` by `tile_height` texels, as [`graphics.load_sprite_sheet`](api/graphics.md#graphicsload_sprite_sheet) divides one. |
 | `props` | Data for the game about the scene as a whole, such as its music. |
 | `children` | The nodes at the top of the scene's tree. |
@@ -98,7 +98,7 @@ Every node has a `name` and a `kind`, and may have any of the rest:
 | Field | What it is | Default |
 |---|---|---|
 | `name` | Required. Unique among the node's siblings, and without `/`. | |
-| `kind` | Required. `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`, `"tilemap"`, `"tile_layer"`, `"instance"`, `"view3d"`, `"mesh"`, `"model"` or `"billboard"`. | |
+| `kind` | Required. `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`, `"particles"`, `"tilemap"`, `"tile_layer"`, `"instance"`, `"view3d"`, `"mesh"`, `"model"` or `"billboard"`. | |
 | `x`, `y` | Where the node's origin is within its parent. | `0` |
 | `anchor` | The point of the parent's rectangle that `x` and `y` are measured from, `{ x, y }`, as fractions of its width and height. See [Laying out screens](#laying-out-screens). | the parent's origin |
 | `rotation` | Radians, clockwise, about its origin. | `0` |
@@ -133,6 +133,8 @@ Each kind has fields of its own:
 - **`stack`** and **`panel`**: a rectangle that lays out the nodes inside it one after another,
   such as a menu's items, and fits them; a panel draws behind them, as a box or a frame. See
   [Stacks and panels](#stacks-and-panels).
+- **`particles`**: an emitter of particles, for fire, smoke, sparks and the like. See
+  [Particles](#particles).
 - **`tilemap`** and **`tile_layer`**: a grid of tiles, and its layers. See [Tilemaps](#tilemaps).
 - **`instance`**: another scene file, placed here. See [Instances](#instances).
 - **`view3d`**, and **`mesh`**, **`model`** and **`billboard`** in it: a 3D world shown in a
@@ -145,7 +147,10 @@ that it turns and stretches about. A person 16 texels tall standing at `x`, `y` 
 in place.
 
 Colors are hex strings such as `"#f2c14e"`, or `"#00000080"` with alpha, and are white if left
-out. Props hold booleans, numbers, strings, and tables of them that are lists or have strings for
+out. A sprite, rect, text, tile layer or particles node may have a `blend`, how what it draws mixes
+with what's under it: `"normal"`, the default, `"add"`, `"multiply"` or `"screen"`, as
+[`graphics.set_blend`](api/graphics.md#blend-modes) has them. A rect of `"multiply"` over a scene
+makes it night, and a glow of `"screen"` or `"add"` over that lights it. Props hold booleans, numbers, strings, and tables of them that are lists or have strings for
 keys.
 
 Nodes draw in order, each before its children, so later nodes are on top: the ground first, the
@@ -282,6 +287,53 @@ whose choices are copies of a hidden row that [`title.luau`](../examples/rpg/tit
 [`node:add`](api/scene.md#nodeadd), and its [bag's stats](../examples/rpg/bag.scene.luau) are
 another. The shmup's panel stacks its rows, and hides the play's to show the stress test's.
 
+## Particles
+
+A `particles` node is an emitter: it sends particles out, small sprites or squares that fly,
+change color and size as they age, and vanish. Its fields are the
+[particle settings](api/graphics.md#particle-settings) `graphics.new_particles` takes, and:
+
+| Field | What it is | Default |
+|---|---|---|
+| `sheet`, `cell` | The sprite each particle shows, as a sprite node's. | a white square |
+| `width`, `height` | The rectangle particles start in, at random points of it. | `0`, a point |
+| `stretch`, `pivot` | As an area's. | |
+
+```lua
+{
+    name = "flames",
+    kind = "particles",
+    sheet = "fx",
+    cell = { 4, 0 },
+    width = 10,
+    height = 2,
+    pivot = { 5, 2 },
+    rate = 40,
+    warmup = 1,
+    lifetime = { 0.4, 0.8 },
+    speed = { 10, 22 },
+    direction = -1.5707964,
+    spread = 0.5,
+    gravity = { 0, -24 },
+    scales = { 1.5, 0.5 },
+    colors = { "#fff2a0", "#ffa040", "#ff482000" },
+    blend = "add",
+},
+```
+
+Particles start where the node is laid out, and fly the way it's turned. Those that aren't
+`attached` stay where they started in the scene, so a moving node leaves a trail; attached ones
+move, turn and stretch with it. They draw where the node is among the scene's nodes, after what's
+before it and under what's after, however far they've flown from it.
+
+Scenes keep no time of their own, so a game moves particles on with
+[`node:advance_particles(dt)`](api/scene.md#nodeadvance_particles), on the scene's root to advance
+them all, or on part of the scene to advance only that. Each emitter's randomness starts from its
+path, so emitters alike look different, and a scene plays the same every time. A copy made with
+[`node:add`](api/scene.md#nodeadd) starts over, with none of its source's particles.
+[`examples/bonfire`](../examples/bonfire) is a night made of them: stars, smoke, flames, sparks and
+fireflies.
+
 ## Tilemaps
 
 A `tilemap` node is a grid of `columns` by `rows` tiles, with its top-left corner at the node's
@@ -348,7 +400,7 @@ data:
 ```lua
 -- world.tileset.luau
 return {
-    format = 3,
+    format = 4,
     tile_width = 16,
     tile_height = 16,
     sheets = {
@@ -685,12 +737,9 @@ tile layer's rows one to a line, lined up as the map is. Writing the same scene 
 same text, so a change to a scene changes few lines of its file, and version control shows what
 changed. Reading what it writes gives back the same scene. It doesn't keep comments.
 
-The scene files of [`examples/garden`](../examples/garden), the
-[RPG's maps](../examples/rpg/maps), the [shmup's HUD](../examples/shmup/hud.scene.luau),
-[`examples/orchard`](../examples/orchard) and the [cellar's level](../examples/cellar) are in that
-layout, as [the editor](editor.md) leaves them, and tests check the garden's, the shmup's, the
-orchard's and the cellar's stay so. A clip's keys go one to a line, and a camera's and lighting's
-fields too. Files are written at the newest format, 2.
+Every example's scene files are in that layout, as [the editor](editor.md) leaves them, and each
+game's tests check they stay so. A clip's keys go one to a line, and a camera's and lighting's
+fields too. Files are written at the newest format, 4.
 
 ## Using a scene
 
