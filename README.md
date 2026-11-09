@@ -51,8 +51,8 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **Input** from the keyboard, mouse and gamepads, with keys and buttons bound to named actions,
   which players can choose for themselves, sticks and triggers read as far as they're pushed, and
   the mouse wheel.
-- **Audio** with [kira](https://github.com/tesselode/kira): sound effects, and music that loops
-  and crossfades.
+- **Audio** with [kira](https://github.com/tesselode/kira): sound effects, played once or looping
+  and changed, paused or stopped as they play, and music that loops and crossfades.
 - **Luau scripting** with [mlua](https://github.com/mlua-rs/mlua): sandboxed scripts, with tasks
   that `wait` across frames for NPCs, dialogue and events. Whole games can be written in Luau, and
   trig that gives the same bits on every platform (`exact`) lets them replay inputs anywhere.
@@ -139,10 +139,12 @@ card down without being hit or bombing for its bonus.
 
 Move with the arrow keys or WASD, and hold Shift to move slowly and see your hitbox. Hold Z to
 shoot and press X to bomb, which clears the bullets and keeps you safe for a moment. Grazing
-bullets scores. Escape pauses. The title screen also offers boss practice and a stress test,
-chosen with the keys or the mouse, a [menu](docs/api/ui.md) of the title's items. The panel, title
-screen and messages are laid out in a [scene](docs/scenes.md#laying-out-screens),
-[`hud.scene.luau`](examples/shmup/hud.scene.luau), which the game fills in each frame.
+bullets scores. Escape pauses, and the sounds playing with it, such as the shot's, which loops for
+as long as you shoot ([voices](docs/api/audio.md#voice)). The title screen also offers boss
+practice and a stress test, chosen with the keys or the mouse, a [menu](docs/api/ui.md) of the
+title's items. The panel, title screen and messages are laid out in a
+[scene](docs/scenes.md#laying-out-screens), [`hud.scene.luau`](examples/shmup/hud.scene.luau),
+which the game fills in each frame.
 
 The game is a benchmark too, and is best run as a release build. Its enemy bullets go through one
 interface, implemented in Luau by [`bullets.luau`](examples/shmup/bullets.luau) and in Rust by

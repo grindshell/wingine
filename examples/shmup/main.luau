@@ -218,12 +218,14 @@ end
 local function update_play(dt: number)
     if input.pressed("pause") then
         shmup.paused = not shmup.paused
+        sounds.pause(shmup.paused)
     end
     if shmup.paused then
         if input.pressed("bomb") then
             shmup.mode = "title"
             shmup.paused = false
             shmup.bullets.clear()
+            audio.stop_sounds()
         end
         return
     end
@@ -233,6 +235,7 @@ local function update_play(dt: number)
     end
     enemies.update(dt)
     player.update(dt)
+    sounds.shoot(shmup.player.shooting)
     player.update_shots(dt)
     shmup.bullets.step(dt)
     player.collide()
@@ -267,6 +270,10 @@ function update(dt: number)
         -- Game over, or the stage cleared.
         shmup.mode = "title"
         shmup.bullets.clear()
+    end
+    if shmup.mode ~= "play" then
+        -- However play ended, the shot's sound ends with it.
+        sounds.shoot(false)
     end
 end
 

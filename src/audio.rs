@@ -5,6 +5,10 @@
 //! itself; music streams from its file as it plays, and loops. Games reach the `Audio` through
 //! [`Context::audio`](crate::Context::audio).
 //!
+//! Playing a sound gives a [`Voice`], by which the game changes it as it plays (its volume, speed
+//! and panning, at once or gradually), pauses and resumes it, or stops it, which is how a sound
+//! that loops, such as a hum or footsteps, ends.
+//!
 //! Files can be WAV or OGG Vorbis. Volumes are linear: 1 plays a sound as recorded, 0.5 at half
 //! the amplitude, and 0 is silent.
 //!
@@ -54,9 +58,32 @@ pub struct Audio {
     output: Output,
     sound_track: TrackHandle,
     music_track: TrackHandle,
-    /// Sound effects started and not yet known to have finished.
-    sounds: Vec<StaticSoundHandle>,
+    /// Sound effects started and not yet known to have finished, in the order they started, so by
+    /// their voices.
+    sounds: Vec<Playing>,
+    /// The voice the next sound effect plays as.
+    next_voice: u64,
     music: Option<MusicHandle>,
+}
+
+/// A sound effect playing, as [`Audio::play`] started it, by which the game changes, pauses or
+/// stops it while it plays. Copying it is free.
+///
+/// Once its sound finishes, or is stopped, a voice refers to nothing: changing it does nothing,
+/// and [`Audio::voice_playing`] is false. A sound that couldn't start gives a voice that has
+/// finished already. Voices are never reused, so an old one never reaches a newer sound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Voice(u64);
+
+/// A sound effect the mixer has, and what the game asked of it. The mixer's own state catches up
+/// only once it has rendered since, so a sound stopped this frame still reads as playing there.
+struct Playing {
+    voice: Voice,
+    handle: StaticSoundHandle,
+    /// Whether the game stopped it. It may be fading out, but it's over.
+    stopped: bool,
+    /// Whether the game paused it, and hasn't resumed it since.
+    paused: bool,
 }
 
 /// The managers are boxed because they're large, and differently so.
@@ -76,7 +103,7 @@ pub struct Sound {
     data: StaticSoundData,
 }
 
-/// How [`Audio::play_with`] plays a sound. Every setting must be a finite number.
+/// How [`Audio::play_with`] plays a sound. The volume, speed and panning must be finite numbers.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlaySettings {
     /// Linear volume: 1 is as recorded.
@@ -86,6 +113,10 @@ pub struct PlaySettings {
     pub speed: f32,
     /// Stereo position, from -1 (left) through 0 (center) to 1 (right).
     pub pan: f32,
+    /// Whether the sound plays over and over until it's stopped, rather than once.
+    pub looping: bool,
+    /// Seconds the sound takes to fade in from silence: 0, by default, starts it at once.
+    pub fade_in: f32,
 }
 
 impl Default for PlaySettings {
@@ -94,6 +125,8 @@ impl Default for PlaySettings {
             volume: 1.0,
             speed: 1.0,
             pan: 0.0,
+            looping: false,
+            fade_in: 0.0,
         }
     }
 }
@@ -101,14 +134,25 @@ impl Default for PlaySettings {
 impl PlaySettings {
     /// What's wrong with these settings, if anything.
     pub(crate) fn problem(&self) -> Option<String> {
-        let Self { volume, speed, pan } = *self;
-        if !(volume.is_finite() && pan.is_finite()) {
-            Some(format!("volume {volume} and pan {pan} must be numbers"))
-        } else if !(speed.is_finite() && speed > 0.0) {
-            Some(format!("speed must be a number above 0, not {speed}"))
-        } else {
-            None
-        }
+        let Self {
+            volume, speed, pan, ..
+        } = *self;
+        setting_problem("volume", volume)
+            .or_else(|| setting_problem("speed", speed))
+            .or_else(|| setting_problem("pan", pan))
+    }
+}
+
+/// What's wrong with `value` as the setting `name` (`volume`, `speed` or `pan`), if anything:
+/// each must be a number, and a speed above 0, since a sound at speed 0 would never end, and the
+/// rest could fill the mix with NaNs.
+pub(crate) fn setting_problem(name: &str, value: f32) -> Option<String> {
+    if !value.is_finite() {
+        Some(format!("{name} must be a number, not {value}"))
+    } else if name == "speed" && value <= 0.0 {
+        Some(format!("speed must be above 0, not {value}"))
+    } else {
+        None
     }
 }
 
@@ -146,6 +190,7 @@ impl Audio {
             music_track: output.add_track(),
             output,
             sounds: Vec::new(),
+            next_voice: 0,
             music: None,
         }
     }
@@ -156,42 +201,158 @@ impl Audio {
     }
 
     /// Plays `sound` once, as recorded.
-    pub fn play(&mut self, sound: &Sound) {
-        self.play_with(sound, PlaySettings::default());
+    pub fn play(&mut self, sound: &Sound) -> Voice {
+        self.play_with(sound, PlaySettings::default())
     }
 
-    /// Plays `sound` once, with its volume, speed or panning changed.
-    pub fn play_with(&mut self, sound: &Sound, settings: PlaySettings) {
-        // A sound at speed 0 would never end, and other values could fill the mix with NaNs.
+    /// Plays `sound` with its volume, speed or panning changed, looping or fading in as
+    /// `settings` say.
+    ///
+    /// Settings that aren't numbers, or too many sounds playing at once, log a warning, and the
+    /// sound doesn't play: its voice has finished already. Dropping a sound is better than
+    /// stopping the game.
+    pub fn play_with(&mut self, sound: &Sound, settings: PlaySettings) -> Voice {
+        let voice = Voice(self.next_voice);
+        self.next_voice += 1;
         if let Some(problem) = settings.problem() {
             log::warn!("couldn't play a sound: {problem}");
-            return;
+            return voice;
         }
-        let data = sound
+        let fade_in = settings.fade_in;
+        let mut data = sound
             .data
             .volume(decibels(settings.volume))
             .playback_rate(f64::from(settings.speed))
-            .panning(settings.pan);
+            .panning(settings.pan)
+            .fade_in_tween((fade_in > 0.0).then(|| tween(fade_in)));
+        if settings.looping {
+            data = data.loop_region(..);
+        }
         match self.sound_track.play(data) {
-            Ok(handle) => self.sounds.push(handle),
-            // Too many sounds at once. Dropping one is better than stopping the game.
+            Ok(handle) => self.sounds.push(Playing {
+                voice,
+                handle,
+                stopped: false,
+                paused: false,
+            }),
             Err(err) => log::warn!("couldn't play a sound: {err}"),
         }
+        voice
     }
 
     /// Stops every sound effect, fading them out over `fade` seconds.
     pub fn stop_sounds(&mut self, fade: f32) {
-        for sound in &mut self.sounds {
-            sound.stop(tween(fade));
+        for sound in self.sounds.iter_mut().filter(|sound| sound.is_playing()) {
+            sound.stop(fade);
         }
     }
 
-    /// How many sound effects are playing, as of the latest frame.
+    /// Pauses every sound effect playing, fading them out over `fade` seconds, as when the game
+    /// pauses. Sounds played after carry on as usual.
+    pub fn pause_sounds(&mut self, fade: f32) {
+        for sound in self.sounds.iter_mut().filter(|sound| sound.is_playing()) {
+            sound.pause(fade);
+        }
+    }
+
+    /// Resumes every sound effect paused, whether by [`Audio::pause_sounds`] or by its voice,
+    /// fading them in over `fade` seconds.
+    pub fn resume_sounds(&mut self, fade: f32) {
+        for sound in self.sounds.iter_mut().filter(|sound| sound.is_playing()) {
+            sound.resume(fade);
+        }
+    }
+
+    /// How many sound effects are playing: started, and neither finished nor stopped. Paused ones
+    /// count.
     pub fn sounds_playing(&self) -> usize {
         self.sounds
             .iter()
-            .filter(|sound| is_playing(sound.state()))
+            .filter(|sound| sound.is_playing())
             .count()
+    }
+
+    /// Whether `voice` is playing: it hasn't finished or been stopped. A paused voice is still
+    /// playing, only paused.
+    pub fn voice_playing(&self, voice: Voice) -> bool {
+        self.find(voice).is_some()
+    }
+
+    /// Whether `voice` is paused: playing, but paused since it was last resumed.
+    pub fn voice_paused(&self, voice: Voice) -> bool {
+        self.find(voice).is_some_and(|sound| sound.paused)
+    }
+
+    /// Stops `voice`, fading it out over `fade` seconds. It can't be resumed.
+    pub fn stop_voice(&mut self, voice: Voice, fade: f32) {
+        if let Some(sound) = self.find_mut(voice) {
+            sound.stop(fade);
+        }
+    }
+
+    /// Pauses `voice`, fading it out over `fade` seconds, until it's resumed.
+    pub fn pause_voice(&mut self, voice: Voice, fade: f32) {
+        if let Some(sound) = self.find_mut(voice) {
+            sound.pause(fade);
+        }
+    }
+
+    /// Resumes `voice` where it was paused, fading it in over `fade` seconds.
+    pub fn resume_voice(&mut self, voice: Voice, fade: f32) {
+        if let Some(sound) = self.find_mut(voice) {
+            sound.resume(fade);
+        }
+    }
+
+    /// Changes `voice`'s volume to `volume` over `fade` seconds, as [`PlaySettings::volume`].
+    pub fn set_voice_volume(&mut self, voice: Voice, volume: f32, fade: f32) {
+        if let Some(sound) = self.find_changing(voice, "volume", volume) {
+            sound.handle.set_volume(decibels(volume), tween(fade));
+        }
+    }
+
+    /// Changes `voice`'s speed, and its pitch with it, to `speed` over `fade` seconds, as
+    /// [`PlaySettings::speed`].
+    pub fn set_voice_speed(&mut self, voice: Voice, speed: f32, fade: f32) {
+        if let Some(sound) = self.find_changing(voice, "speed", speed) {
+            sound
+                .handle
+                .set_playback_rate(f64::from(speed), tween(fade));
+        }
+    }
+
+    /// Moves `voice` between the speakers to `pan` over `fade` seconds, as [`PlaySettings::pan`].
+    pub fn set_voice_pan(&mut self, voice: Voice, pan: f32, fade: f32) {
+        if let Some(sound) = self.find_changing(voice, "pan", pan) {
+            sound.handle.set_panning(pan, tween(fade));
+        }
+    }
+
+    /// The sound playing as `voice`, unless it's over.
+    fn find(&self, voice: Voice) -> Option<&Playing> {
+        let index = self.index(voice)?;
+        Some(&self.sounds[index]).filter(|sound| sound.is_playing())
+    }
+
+    fn find_mut(&mut self, voice: Voice) -> Option<&mut Playing> {
+        let index = self.index(voice)?;
+        Some(&mut self.sounds[index]).filter(|sound| sound.is_playing())
+    }
+
+    /// The sound playing as `voice`, unless it's over, to change its setting `name` to `value`; or
+    /// none, logging a warning, if that's no value for it.
+    fn find_changing(&mut self, voice: Voice, name: &str, value: f32) -> Option<&mut Playing> {
+        if let Some(problem) = setting_problem(name, value) {
+            log::warn!("couldn't change a sound: {problem}");
+            return None;
+        }
+        self.find_mut(voice)
+    }
+
+    fn index(&self, voice: Voice) -> Option<usize> {
+        self.sounds
+            .binary_search_by_key(&voice.0, |sound| sound.voice.0)
+            .ok()
     }
 
     /// Starts looping the music file at `path`, streaming it from disk as it plays. Music already
@@ -276,7 +437,33 @@ impl Audio {
                 *frames_due -= BUFFER_FRAMES as f64;
             }
         }
-        self.sounds.retain(|sound| is_playing(sound.state()));
+        self.sounds.retain(|sound| is_playing(sound.handle.state()));
+    }
+}
+
+impl Playing {
+    /// Whether the sound is still going: neither stopped nor finished.
+    fn is_playing(&self) -> bool {
+        !self.stopped && is_playing(self.handle.state())
+    }
+
+    fn stop(&mut self, fade: f32) {
+        self.handle.stop(tween(fade));
+        self.stopped = true;
+    }
+
+    fn pause(&mut self, fade: f32) {
+        if !self.paused {
+            self.handle.pause(tween(fade));
+            self.paused = true;
+        }
+    }
+
+    fn resume(&mut self, fade: f32) {
+        if self.paused {
+            self.handle.resume(tween(fade));
+            self.paused = false;
+        }
     }
 }
 
@@ -412,6 +599,110 @@ mod tests {
         audio.stop_sounds(0.05);
         run(&mut audio, 0.1);
         assert_eq!(audio.sounds_playing(), 0);
+    }
+
+    #[test]
+    fn looping_sounds_play_until_their_voices_stop() {
+        let mut audio = Audio::silent();
+        let chime = sound("chime.wav");
+        let looping = PlaySettings {
+            looping: true,
+            fade_in: 0.2,
+            ..Default::default()
+        };
+        let hum = audio.play_with(&chime, looping);
+        let once = audio.play(&chime);
+        run(&mut audio, 1.0);
+        assert!(audio.voice_playing(hum), "it loops past its end");
+        assert!(!audio.voice_playing(once));
+        audio.stop_voice(hum, 0.1);
+        assert!(!audio.voice_playing(hum), "it's over once it's stopped");
+        assert_eq!(audio.sounds_playing(), 0);
+        run(&mut audio, 0.2);
+        assert!(audio.sounds.is_empty(), "the mixer let it go once it faded");
+    }
+
+    #[test]
+    fn paused_voices_wait_to_be_resumed() {
+        let mut audio = Audio::silent();
+        let chime = sound("chime.wav");
+        let paused = audio.play(&chime);
+        let playing = audio.play(&chime);
+        run(&mut audio, 0.1);
+        audio.pause_voice(paused, 0.0);
+        assert!(audio.voice_paused(paused) && audio.voice_playing(paused));
+        run(&mut audio, 0.5);
+        assert!(audio.voice_playing(paused), "paused past its end");
+        assert!(!audio.voice_playing(playing));
+        assert_eq!(audio.sounds_playing(), 1, "paused sounds count");
+
+        // It carries on from where it paused, 0.1 seconds into its 0.44.
+        audio.resume_voice(paused, 0.0);
+        assert!(!audio.voice_paused(paused));
+        run(&mut audio, 0.2);
+        assert!(audio.voice_playing(paused));
+        run(&mut audio, 0.25);
+        assert!(!audio.voice_playing(paused));
+    }
+
+    #[test]
+    fn pausing_every_sound_leaves_new_ones_playing() {
+        let mut audio = Audio::silent();
+        let chime = sound("chime.wav");
+        let before = audio.play(&chime);
+        audio.pause_sounds(0.0);
+        let after = audio.play(&chime);
+        run(&mut audio, 0.6);
+        assert!(audio.voice_paused(before));
+        assert!(!audio.voice_playing(after));
+        audio.resume_sounds(0.05);
+        assert!(!audio.voice_paused(before));
+        run(&mut audio, 0.6);
+        assert!(!audio.voice_playing(before));
+    }
+
+    #[test]
+    fn voices_change_as_they_play() {
+        let mut audio = Audio::silent();
+        let chime = sound("chime.wav");
+        let changed = audio.play(&chime);
+        let unchanged = audio.play(&chime);
+        run(&mut audio, 0.1);
+        audio.set_voice_speed(changed, 4.0, 0.0);
+        audio.set_voice_volume(changed, 0.5, 0.1);
+        audio.set_voice_pan(changed, -1.0, 0.1);
+        // The rest of it, 0.34 seconds at its own speed, takes a quarter of that.
+        run(&mut audio, 0.15);
+        assert!(!audio.voice_playing(changed));
+        assert!(audio.voice_playing(unchanged));
+    }
+
+    #[test]
+    fn voices_that_are_over_change_nothing() {
+        let mut audio = Audio::silent();
+        let chime = sound("chime.wav");
+        let old = audio.play(&chime);
+        run(&mut audio, 0.6);
+        let new = audio.play(&chime);
+        assert_ne!(old, new, "voices aren't reused");
+        audio.stop_voice(old, 0.0);
+        audio.pause_voice(old, 0.0);
+        audio.set_voice_volume(old, 0.0, 0.0);
+        assert!(!audio.voice_playing(old));
+        assert!(audio.voice_playing(new) && !audio.voice_paused(new));
+
+        // Nor do values no sound could have.
+        audio.set_voice_speed(new, 0.0, 0.0);
+        audio.set_voice_pan(new, f32::NAN, 0.0);
+        run(&mut audio, 0.1);
+        assert!(audio.voice_playing(new));
+        // A sound that couldn't play has finished already.
+        let speed = PlaySettings {
+            speed: -1.0,
+            ..Default::default()
+        };
+        let refused = audio.play_with(&chime, speed);
+        assert!(!audio.voice_playing(refused));
     }
 
     #[test]

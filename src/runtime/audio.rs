@@ -1,11 +1,11 @@
-//! The `audio` table, for sound effects and music.
+//! The `audio` table, for sound effects and music, and the voices `audio.play` gives.
 
 use std::path::Path;
 
-use mlua::{Function, Lua, Table, UserDataRef};
+use mlua::{Function, Lua, Table, UserDataMethods, UserDataRef};
 
 use super::Lent;
-use crate::audio::{Audio, PlaySettings, Sound};
+use crate::audio::{Audio, PlaySettings, Sound, Voice, setting_problem};
 
 /// The table, loading files relative to `folder`.
 pub(super) fn module(lua: &Lua, lent: &Lent, folder: &Path) -> mlua::Result<Table> {
@@ -21,16 +21,17 @@ pub(super) fn module(lua: &Lua, lent: &Lent, folder: &Path) -> mlua::Result<Tabl
         let lent = lent.clone();
         lua.create_function(
             move |_, (sound, settings): (UserDataRef<Sound>, PlaySettings)| {
-                lent.context(|ctx| ctx.audio().play_with(&sound, settings))
+                let voice = lent.context(|ctx| ctx.audio().play_with(&sound, settings))?;
+                Ok(ScriptVoice {
+                    voice,
+                    lent: lent.clone(),
+                })
             },
         )?
     })?;
-    audio.set("stop_sounds", {
-        let lent = lent.clone();
-        lua.create_function(move |_, fade: Option<f32>| {
-            lent.context(|ctx| ctx.audio().stop_sounds(fade.unwrap_or(0.0)))
-        })?
-    })?;
+    audio.set("stop_sounds", fader(lua, lent, Audio::stop_sounds)?)?;
+    audio.set("pause_sounds", fader(lua, lent, Audio::pause_sounds)?)?;
+    audio.set("resume_sounds", fader(lua, lent, Audio::resume_sounds)?)?;
     audio.set("sounds_playing", {
         let lent = lent.clone();
         lua.create_function(move |_, ()| lent.context(|ctx| ctx.audio().sounds_playing()))?
@@ -44,12 +45,7 @@ pub(super) fn module(lua: &Lua, lent: &Lent, folder: &Path) -> mlua::Result<Tabl
                 .map_err(mlua::Error::external)
         })?
     })?;
-    audio.set("stop_music", {
-        let lent = lent.clone();
-        lua.create_function(move |_, fade: Option<f32>| {
-            lent.context(|ctx| ctx.audio().stop_music(fade.unwrap_or(0.0)))
-        })?
-    })?;
+    audio.set("stop_music", fader(lua, lent, Audio::stop_music)?)?;
     audio.set("music_playing", {
         let lent = lent.clone();
         lua.create_function(move |_, ()| lent.context(|ctx| ctx.audio().music_playing()))?
@@ -71,4 +67,68 @@ pub(super) fn module(lua: &Lua, lent: &Lent, folder: &Path) -> mlua::Result<Tabl
 fn volume_setter(lua: &Lua, lent: &Lent, set: fn(&mut Audio, f32)) -> mlua::Result<Function> {
     let lent = lent.clone();
     lua.create_function(move |_, volume: f32| lent.context(|ctx| set(ctx.audio(), volume)))
+}
+
+/// A function doing `act` over a fade of seconds it takes, 0 if it's left out.
+fn fader(lua: &Lua, lent: &Lent, act: fn(&mut Audio, f32)) -> mlua::Result<Function> {
+    let lent = lent.clone();
+    lua.create_function(move |_, fade: Option<f32>| {
+        lent.context(|ctx| act(ctx.audio(), fade.unwrap_or(0.0)))
+    })
+}
+
+/// A sound effect playing, as scripts hold it: the [`Voice`] `audio.play` gave, with the context
+/// it reaches the [`Audio`] through. Its methods are in the [module docs](super).
+struct ScriptVoice {
+    voice: Voice,
+    lent: Lent,
+}
+
+impl mlua::UserData for ScriptVoice {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        add_fade(methods, "stop", Audio::stop_voice);
+        add_fade(methods, "pause", Audio::pause_voice);
+        add_fade(methods, "resume", Audio::resume_voice);
+        add_setting(methods, "volume", Audio::set_voice_volume);
+        add_setting(methods, "speed", Audio::set_voice_speed);
+        add_setting(methods, "pan", Audio::set_voice_pan);
+        methods.add_method("is_playing", |_, this, ()| {
+            this.lent
+                .context(|ctx| ctx.audio().voice_playing(this.voice))
+        });
+        methods.add_method("is_paused", |_, this, ()| {
+            this.lent
+                .context(|ctx| ctx.audio().voice_paused(this.voice))
+        });
+    }
+}
+
+/// Adds the method `name`, doing `act` to the voice over a fade of seconds it takes.
+fn add_fade<M: UserDataMethods<ScriptVoice>>(
+    methods: &mut M,
+    name: &'static str,
+    act: fn(&mut Audio, Voice, f32),
+) {
+    methods.add_method(name, move |_, this, fade: Option<f32>| {
+        this.lent
+            .context(|ctx| act(ctx.audio(), this.voice, fade.unwrap_or(0.0)))
+    });
+}
+
+/// Adds the method `set_<setting>`, changing the voice's `setting` with `set` over a fade.
+fn add_setting<M: UserDataMethods<ScriptVoice>>(
+    methods: &mut M,
+    setting: &'static str,
+    set: fn(&mut Audio, Voice, f32, f32),
+) {
+    methods.add_method(
+        format!("set_{setting}"),
+        move |_, this, (value, fade): (f32, Option<f32>)| {
+            if let Some(problem) = setting_problem(setting, value) {
+                return Err(mlua::Error::runtime(problem));
+            }
+            this.lent
+                .context(|ctx| set(ctx.audio(), this.voice, value, fade.unwrap_or(0.0)))
+        },
+    );
 }

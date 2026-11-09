@@ -275,9 +275,20 @@
 //! `audio`, while the game loads and in `update`. `audio.load` works anywhere.
 //!
 //! - `audio.load(path)` loads a sound effect from a WAV or OGG Vorbis file.
-//! - `audio.play(sound, settings)` plays a sound, with optional settings.
-//! - `audio.stop_sounds(fade)` fades out every sound effect over `fade` seconds (0 by default).
-//! - `audio.sounds_playing()` returns how many sound effects are playing.
+//! - `audio.play(sound, settings)` plays a sound, with optional settings, and returns its `Voice`,
+//!   by which the game changes it as it plays. A sound plays once, or with `looping`, until its
+//!   voice stops it.
+//! - `audio.stop_sounds(fade)` fades out every sound effect over `fade` seconds (0 by default),
+//!   and `audio.pause_sounds(fade)` and `audio.resume_sounds(fade)` pause and resume them, as
+//!   the game pauses.
+//! - `audio.sounds_playing()` returns how many sound effects are playing, paused ones too.
+//! - A voice's methods work where `audio`'s do. `voice:stop(fade)`, `voice:pause(fade)` and
+//!   `voice:resume(fade)` act over `fade` seconds (0 by default); a stopped voice can't start
+//!   again. `voice:set_volume(volume, fade)`, `voice:set_speed(speed, fade)` and
+//!   `voice:set_pan(pan, fade)` change the settings of those names, checked as `audio.play`'s
+//!   are. `voice:is_playing()` is whether it hasn't finished or been stopped (a paused voice is
+//!   still playing), and `voice:is_paused()` whether it's paused. Once its sound is over, changing
+//!   a voice does nothing.
 //! - `audio.play_music(path, fade)` streams music from a file and loops it, crossfading from any
 //!   music already playing over `fade` seconds.
 //! - `audio.stop_music(fade)` and `audio.music_playing()`

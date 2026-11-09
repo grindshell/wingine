@@ -57,8 +57,8 @@
 //!   more than drawing a sprite, so code that draws a lot makes its colors numbers once, with
 //!   `graphics.color`.
 //! - A [`Rect`] is a table `{ x, y, width, height }`.
-//! - [`PlaySettings`] are a table with any of `volume`, `speed` and `pan`; the rest, or all of
-//!   them for `nil`, keep their defaults.
+//! - [`PlaySettings`] are a table with any of `volume`, `speed`, `pan`, `looping` (a boolean) and
+//!   `fade_in` (seconds); the rest, or all of them for `nil`, keep their defaults.
 //! - A [`Font`] is userdata with the methods `font:scaled(scale)`, `font:measure(text)` (its
 //!   width and height), `font:line_height()` and `font:layout(text, max_width)`, which lays text
 //!   out once to draw a little at a time, wrapping it to `max_width` if given. The
@@ -715,9 +715,15 @@ impl FromLua for PlaySettings {
                     .unwrap_or(defaults.volume),
                 speed: table.get::<Option<f32>>("speed")?.unwrap_or(defaults.speed),
                 pan: table.get::<Option<f32>>("pan")?.unwrap_or(defaults.pan),
+                looping: table
+                    .get::<Option<bool>>("looping")?
+                    .unwrap_or(defaults.looping),
+                fade_in: table
+                    .get::<Option<f32>>("fade_in")?
+                    .unwrap_or(defaults.fade_in),
             },
             _ => {
-                let message = "expected a table { volume, speed, pan }".into();
+                let message = "expected a table { volume, speed, pan, looping, fade_in }".into();
                 return Err(conversion_error(&value, "PlaySettings", message));
             }
         };
@@ -2129,12 +2135,21 @@ mod tests {
                 ..Default::default()
             }
         );
+        assert_eq!(
+            convert::<PlaySettings>("{ looping = true, fade_in = 0.5 }").unwrap(),
+            PlaySettings {
+                looping: true,
+                fade_in: 0.5,
+                ..Default::default()
+            }
+        );
         assert!(convert::<PlaySettings>("1").is_err());
         for invalid in [
             "{ speed = 0 }",
             "{ speed = -1 }",
             "{ volume = math.huge }",
             "{ pan = 0/0 }",
+            "{ fade_in = 'slowly' }",
         ] {
             assert!(convert::<PlaySettings>(invalid).is_err(), "{invalid}");
         }

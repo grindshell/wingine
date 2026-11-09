@@ -50,6 +50,10 @@ type PlaySettings = {
     speed: number?,
     --- From -1 (left) through 0 (center) to 1 (right). By default, 0.
     pan: number?,
+    --- Whether the sound plays over and over until its voice stops it. By default, false.
+    looping: boolean?,
+    --- Seconds it fades in over from silence. By default, 0: at once.
+    fade_in: number?,
 }
 
 --- A kind of tile, for `tileset:add`.
@@ -401,6 +405,28 @@ end
 declare extern type Sound with
     --- Returns how long the sound lasts at its normal speed, in seconds.
     function duration(self): number
+end
+
+--- A sound effect playing, from `audio.play`, by which it's changed, paused or stopped as it
+--- plays. Once it's over, changing it does nothing. Its methods work where `audio`'s do.
+declare extern type Voice with
+    --- Stops the sound, fading it out over `fade` seconds (by default, at once). It can't start
+    --- again.
+    function stop(self, fade: number?): ()
+    --- Pauses the sound, fading it out over `fade` seconds, until it's resumed.
+    function pause(self, fade: number?): ()
+    --- Resumes the sound where it paused, fading it in over `fade` seconds.
+    function resume(self, fade: number?): ()
+    --- Changes the sound's volume over `fade` seconds.
+    function set_volume(self, volume: number, fade: number?): ()
+    --- Changes the sound's speed, and its pitch with it, over `fade` seconds. Above 0.
+    function set_speed(self, speed: number, fade: number?): ()
+    --- Moves the sound between the speakers, from -1 (left) to 1 (right), over `fade` seconds.
+    function set_pan(self, pan: number, fade: number?): ()
+    --- Returns whether the sound hasn't finished or been stopped. A paused one is still playing.
+    function is_playing(self): boolean
+    --- Returns whether the sound is paused.
+    function is_paused(self): boolean
 end
 
 --- Kinds of tile, for building maps with `tilemap.new`.
@@ -910,11 +936,15 @@ declare input: {
 declare audio: {
     --- Loads the sound effect at `path`, decoding all of it into memory.
     load: (path: string) -> Sound,
-    --- Plays `sound` once.
-    play: (sound: Sound, settings: PlaySettings?) -> (),
+    --- Plays `sound`, once or looping, and returns its voice, by which it's changed as it plays.
+    play: (sound: Sound, settings: PlaySettings?) -> Voice,
     --- Stops every sound effect playing, fading them out over `fade` seconds.
     stop_sounds: (fade: number?) -> (),
-    --- Returns how many sound effects are playing.
+    --- Pauses every sound effect playing, fading them out over `fade` seconds.
+    pause_sounds: (fade: number?) -> (),
+    --- Resumes every sound effect paused, fading them in over `fade` seconds.
+    resume_sounds: (fade: number?) -> (),
+    --- Returns how many sound effects are playing, paused ones too.
     sounds_playing: () -> number,
     --- Starts looping the music file at `path`, crossfading from what's playing over `fade` seconds.
     play_music: (path: string, fade: number?) -> (),

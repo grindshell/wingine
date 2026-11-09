@@ -131,10 +131,16 @@ networking or 3D pipelines.
   on egui's AccessKit output, which gives every widget's label and bounds, so tests find widgets
   by label (`Simulation::gui_rect`, `click_gui`).
 - `src/audio.rs`: `Audio` (kira's mixer, with separate sound-effect and music tracks) and
-  `Sound`. Sound effects are decoded into memory when loaded; music streams from its file and
+  `Sound`. Sound effects are decoded into memory when loaded, and play once or loop
+  (`PlaySettings::looping`) as a `Voice`, a number never reused, by which games change, pause and
+  stop them as they play (`stop_voice`, `set_voice_speed`, ...; `pause_sounds` pauses them all).
+  `Audio` keeps kira's handles in order of their voices, with what the game asked of each
+  (`Playing`), since kira's own state catches up only once the mixer renders, so a voice is over
+  as soon as it's stopped. Music streams from its file and
   loops, crossfading when it changes. Without a sound device, and always headless, audio plays
   to a silent mixer that the engine advances by game time each frame, so sounds still start and
-  finish on schedule and tests can check them (`sounds_playing`, `music_playing`).
+  finish on schedule and tests can check them (`sounds_playing`, `voice_playing`,
+  `music_playing`).
 - `src/input.rs`: `Input` (keyboard, mouse and gamepad state per frame), `Key`, `MouseButton`,
   `Gamepad`, `GamepadButton` and `Stick`. The event loop feeds it winit events, maps the cursor to
   canvas pixels, and clears per-frame presses and releases after each `update`. The system's
@@ -370,7 +376,9 @@ networking or 3D pipelines.
   each. `ui.menu` hands out a `Menu` (`ui.rs`'s `ScriptMenu`), which holds the `Lent` to read
   input, so it's documented with its table rather than in `src/lua.rs`: a `menu::Menu` over a
   node's children or tagged descendants, found again each call (those shown, at
-  `Scene::extent`), keeping its selection by `NodeId` as they come and go. The close
+  `Scene::extent`), keeping its selection by `NodeId` as they come and go. `audio.play` hands
+  out a `Voice` (`audio.rs`'s `ScriptVoice`) the same way, holding the `Lent` to reach the
+  `Audio`, so its methods work where `audio`'s do. The close
   button asks the game's global `close_requested`, lent the context as `update` is, and closes
   unless it returns false; a game stopped by an error always closes. `LuauGame::reload` loads the
   game again in its place, a whole new `LuauGame` (VM, caches and libraries' state, made before
@@ -641,7 +649,9 @@ networking or 3D pipelines.
   are stacks,
   the play's hidden to show the stress test's), which it fills in from the game's state and draws
   each frame; `shmup.hud` is the scene's root, for tests, which check the file
-  stays in the canonical layout. `shmup.start("boss")` is
+  stays in the canonical layout. `sfx.luau` plays the sounds: the shot's loops while the player
+  shoots, a voice (`sounds.shot`) the game stops when they stop or play ends, and pausing pauses
+  every sound playing (`audio.pause_sounds`). `shmup.start("boss")` is
   boss practice, and `shmup.cheats` (`invincible`, `damage`) are for tests. The game's state is
   the global `shmup`.
 - `examples/native-danmaku/`: the shmup's bullets as a native library, `danmaku`, a `cdylib` the
@@ -785,7 +795,8 @@ networking or 3D pipelines.
   over its windows too), and the debug key.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders,
   their settings, covering the screen and scaling, the mouse wheel, the controls pressed and
-  what actions are bound to, their saves, their 3D views, models and
+  what actions are bound to, voices of the sounds they play, their saves, their 3D views, models
+  and
   picking, scenes' views and their nodes, menus over
   nodes, in its
   `physics` module (with the `physics` feature), physics worlds of their nodes, 2D and 3D (bodies
@@ -836,7 +847,8 @@ networking or 3D pipelines.
   checks a hash of every crate's pose and the player's feet, pinned, so CI checks physics is the
   same to the bit on Windows and Linux; a change to how the course plays changes it.
 - `tests/shmup.rs`: tests for the `shmup` example, the same way: the title menu by key and by
-  mouse, its HUD's scene, the player, the bullet systems
+  mouse, the shot's sound looping, pausing and stopping, its HUD's scene, the player, the bullet
+  systems
   through `shmup.bullets`, spell cards, clearing the stage with cheats, the same seed firing the
   same bullets, and the stress test. They run copies of the game in `target/tmp`, one with the
   `danmaku` library, which they build with a nested `cargo build` as `tests/native.rs` builds

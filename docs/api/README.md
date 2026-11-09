@@ -64,7 +64,8 @@ time raises an error saying when it works.
   `graphics.draw_model` and `graphics.draw_billboard`.
 - **The keyboard, mouse, gamepads and sound** work while the game loads (the top level of
   `main.luau` and the modules it requires), in `update` and the tasks it resumes, and in `gui`:
-  everything in `input`, and everything in `audio` but `audio.load`. So do
+  everything in `input`, everything in `audio` but `audio.load`, and the methods of the
+  [voices](audio.md#voice) it plays. So do
   `graphics.load_sprite_sheet`, `graphics.load_model`, the functions that make meshes
   (`graphics.new_cube`, `new_cuboid`, `new_plane`, `new_sphere` and `new_mesh`), `scene.load`,
   `menu:update` and the rest of `window` but `window.reloaded`, and all
@@ -76,7 +77,7 @@ time raises an error saying when it works.
   `graphics.hit_box`, `audio.load`,
   `tilemap`, `grid`, `physics`, `save`, `ui.menu`, `window.reloaded`, and the methods of every
   object, scene nodes,
-  physics worlds and menus included, but `menu:update`.
+  physics worlds and menus included, but `menu:update` and voices'.
 
 ## Values
 
@@ -132,8 +133,8 @@ as `"LeftStickLeft"`, in any case. Buttons are named for where they are on the g
 
 ### `PlaySettings`
 
-How [`audio.play`](audio.md#audioplay) plays a sound: a table with any of `volume`, `speed` and
-`pan`. See [`audio.play`](audio.md#audioplay).
+How [`audio.play`](audio.md#audioplay) plays a sound: a table with any of `volume`, `speed`,
+`pan`, `looping` and `fade_in`. See [`audio.play`](audio.md#audioplay).
 
 ### `Tile`
 

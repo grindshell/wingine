@@ -1075,6 +1075,60 @@ fn sounds_load_from_the_game_folder() {
 }
 
 #[test]
+fn voices_change_pause_and_stop_the_sounds_they_play() {
+    let folder = game(
+        "voices",
+        &[("main.luau", "blip = audio.load('sounds/blip.wav')")],
+    );
+    let sounds = folder.join("sounds");
+    fs::create_dir_all(&sounds).unwrap();
+    let blip = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/sounds/blip.wav");
+    fs::copy(blip, sounds.join("blip.wav")).unwrap();
+    let mut simulation = simulation(&folder);
+    let playing = |simulation: &mut Simulation<LuauGame>| -> usize {
+        simulation.context().audio().sounds_playing()
+    };
+
+    simulation.exec(
+        "hum = audio.play(blip, { looping = true, fade_in = 0.1 })
+        once = audio.play(blip)",
+    );
+    simulation.run_for(0.5);
+    assert!(simulation.eval::<bool>("hum:is_playing() and not once:is_playing()"));
+    assert_eq!(playing(&mut simulation), 1, "the blip loops");
+    simulation.exec("hum:set_volume(0.5, 0.1) hum:set_speed(2) hum:set_pan(-1, 0.2)");
+
+    simulation.exec("audio.pause_sounds() later = audio.play(blip)");
+    assert!(simulation.eval::<bool>("hum:is_paused() and hum:is_playing()"));
+    assert!(simulation.eval::<bool>("not later:is_paused()"));
+    simulation.exec("audio.resume_sounds(0.1)");
+    assert!(simulation.eval::<bool>("not hum:is_paused()"));
+    simulation.exec("hum:pause(0.1)");
+    assert!(simulation.eval::<bool>("hum:is_paused()"));
+    simulation.exec("hum:resume()");
+    assert!(simulation.eval::<bool>("not hum:is_paused()"));
+
+    simulation.exec("hum:stop(0.1)");
+    assert!(simulation.eval::<bool>("not hum:is_playing()"));
+    // A stopped voice stays stopped, whatever it's asked.
+    simulation.exec("hum:resume() hum:pause() hum:set_volume(1)");
+    assert!(simulation.eval::<bool>("not hum:is_playing() and not hum:is_paused()"));
+    simulation.run_for(0.2);
+    assert_eq!(playing(&mut simulation), 0);
+
+    for (code, problem) in [
+        ("hum:set_speed(0)", "speed must be above 0"),
+        ("hum:set_volume(0/0)", "volume must be a number"),
+        ("hum:set_pan(math.huge)", "pan must be a number"),
+        ("hum:set_pan('left')", "number"),
+        ("audio.play(blip, { looping = true, speed = -1 })", "speed"),
+    ] {
+        let err = simulation.try_exec(code).unwrap_err().to_string();
+        assert!(err.contains(problem), "{code}: {err}");
+    }
+}
+
+#[test]
 fn fonts_measure_and_scale() {
     let folder = game(
         "fonts",

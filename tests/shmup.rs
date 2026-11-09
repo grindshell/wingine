@@ -251,6 +251,57 @@ fn the_mouse_points_at_and_starts_the_title_menus_items() {
     assert_eq!(simulation.eval::<u32>("shmup.selected"), 1, "Play");
 }
 
+fn sounds_playing(simulation: &mut Simulation<LuauGame>) -> usize {
+    simulation.context().audio().sounds_playing()
+}
+
+#[test]
+fn the_shot_ticks_while_the_player_shoots_and_pauses_with_the_game() {
+    let mut simulation = quiet_game("Luau");
+    let shot = "require('./sfx').shot";
+    let shot_is = |simulation: &mut Simulation<LuauGame>, what: &str| {
+        simulation.eval::<bool>(&format!("{shot} ~= nil and {shot}:{what}()"))
+    };
+    simulation.key_down(Key::Z);
+    run_for(&mut simulation, 0.5);
+    // Ten times as long as the blip it loops, with nothing else to hear.
+    assert!(shot_is(&mut simulation, "is_playing"));
+    assert_eq!(sounds_playing(&mut simulation), 1);
+
+    // Pausing pauses it, and it waits until the game carries on.
+    simulation.tap(Key::Escape);
+    assert!(shot_is(&mut simulation, "is_paused"));
+    run_for(&mut simulation, 0.5);
+    assert_eq!(sounds_playing(&mut simulation), 1);
+    simulation.tap(Key::Escape);
+    assert!(!shot_is(&mut simulation, "is_paused"));
+    assert!(shot_is(&mut simulation, "is_playing"));
+
+    simulation.key_up(Key::Z);
+    step(&mut simulation);
+    assert!(simulation.eval::<bool>(&format!("{shot} == nil")));
+    assert_eq!(sounds_playing(&mut simulation), 0);
+
+    // Leaving the game from the pause stops it.
+    simulation.key_down(Key::Z);
+    step(&mut simulation);
+    simulation.tap(Key::Escape);
+    simulation.key_up(Key::Z);
+    simulation.tap(Key::X);
+    assert_eq!(mode(&mut simulation), "title");
+    assert_eq!(sounds_playing(&mut simulation), 0);
+
+    // So does the game ending as the player shoots.
+    simulation.exec("shmup.start() shmup.stage = nil");
+    simulation.key_down(Key::Z);
+    run_for(&mut simulation, 0.2);
+    assert_eq!(sounds_playing(&mut simulation), 1);
+    simulation.exec("shmup.finish()");
+    step(&mut simulation);
+    assert_eq!(sounds_playing(&mut simulation), 0);
+    assert!(simulation.eval::<bool>(&format!("{shot} == nil")));
+}
+
 #[test]
 fn the_hud_is_laid_out_by_its_scene() {
     let path = Path::new(GAME).join("hud.scene.luau");

@@ -57,6 +57,8 @@ export type Player = {
     bombing: number,
     reload: number,
     focused: boolean,
+    -- Whether the player is holding shoot, and alive to.
+    shooting: boolean,
 }
 
 function player.new(): Player
@@ -70,6 +72,7 @@ function player.new(): Player
         bombing = 0,
         reload = 0,
         focused = false,
+        shooting = false,
     }
 end
 
@@ -109,6 +112,7 @@ function player.update(dt: number)
     local p = shmup.player
     p.invincible = math.max(p.invincible - dt, 0)
     p.bombing = math.max(p.bombing - dt, 0)
+    p.shooting = false
     if p.dead > 0 then
         p.dead -= dt
         if p.dead <= 0 then
@@ -144,7 +148,8 @@ function player.update(dt: number)
     p.y = math.clamp(p.y + dy * speed * dt, MARGIN, field.HEIGHT - MARGIN)
 
     p.reload -= dt
-    if input.held("shoot") and p.reload <= 0 then
+    p.shooting = input.held("shoot")
+    if p.shooting and p.reload <= 0 then
         fire(p)
         p.reload = SHOT_INTERVAL
     end
