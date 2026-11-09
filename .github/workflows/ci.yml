@@ -80,5 +80,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: screenshots-${{ matrix.os }}
-          path: target/tmp/screenshots/
+          # Engine tests' mismatches, and the frames Luau tests' failures name.
+          path: |
+            target/tmp/screenshots/
+            examples/*/.test-output/
+          include-hidden-files: true
           if-no-files-found: ignore

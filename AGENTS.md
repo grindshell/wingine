@@ -400,7 +400,8 @@ per-channel difference of 2 so references pass on any GPU. Add a test there when
 feature.
 
 - A mismatch writes the rendered frame and a diff (mismatched pixels in magenta) to
-  `target/tmp/screenshots/`; CI uploads them as an artifact.
+  `target/tmp/screenshots/`; CI uploads them, and the examples' `.test-output` folders, as an
+  artifact.
 - `UPDATE_SCREENSHOTS=1` creates or rewrites missing or mismatched references. Look at every
   changed PNG before committing it.
 - Where a pixel's middle lands on the edge between two texels, GPUs pick either, so 2D scenes keep
