@@ -288,45 +288,45 @@ impl Default for Viewport {
     }
 }
 
-/// How the scene maps to the viewport's points this frame, as the engine's camera maps it to the
-/// viewport's pixels.
+/// How the scene maps to the viewport's points this frame, through the engine's camera that draws
+/// it on the viewport's pixels.
 #[derive(Clone, Copy)]
 struct ViewMap {
     rect: egui::Rect,
     pixels_per_point: f32,
     /// Pixels per unit of the scene.
     scale: f32,
-    /// Where the scene's origin is, in pixels from the viewport's top-left, negated.
-    offset: [f32; 2],
+    camera: Camera,
+    /// The viewport's size in pixels.
+    pixels: [f32; 2],
 }
 
 impl ViewMap {
     fn new(rect: egui::Rect, pixels_per_point: f32, view: View, pixels: [u32; 2]) -> Self {
         let scale = view.zoom * pixels_per_point;
-        // As `Camera` places it, snapped to whole pixels.
-        let offset = [0, 1].map(|i| (view.center[i] * scale - pixels[i] as f32 / 2.0).round());
         Self {
             rect,
             pixels_per_point,
             scale,
-            offset,
+            camera: Camera {
+                zoom: scale,
+                ..Camera::new(view.center[0], view.center[1])
+            },
+            pixels: pixels.map(|p| p as f32),
         }
     }
 
-    fn to_screen(self, [x, y]: [f32; 2]) -> egui::Pos2 {
-        self.rect.min
-            + egui::vec2(
-                x * self.scale - self.offset[0],
-                y * self.scale - self.offset[1],
-            ) / self.pixels_per_point
+    fn to_screen(self, point: [f32; 2]) -> egui::Pos2 {
+        let [x, y] = self
+            .camera
+            .world_to_canvas(point, self.pixels[0], self.pixels[1]);
+        self.rect.min + egui::vec2(x, y) / self.pixels_per_point
     }
 
     fn to_scene(self, pos: egui::Pos2) -> [f32; 2] {
         let pixels = (pos - self.rect.min) * self.pixels_per_point;
-        [
-            (pixels.x + self.offset[0]) / self.scale,
-            (pixels.y + self.offset[1]) / self.scale,
-        ]
+        self.camera
+            .canvas_to_world([pixels.x, pixels.y], self.pixels[0], self.pixels[1])
     }
 }
 
@@ -1398,10 +1398,7 @@ fn draw(
     canvas_size: [f32; 2],
 ) {
     canvas.clear(theme::VIEWPORT);
-    canvas.set_camera(Some(Camera {
-        zoom: map.scale,
-        ..Camera::new(view.center[0], view.center[1])
-    }));
+    canvas.set_camera(Some(map.camera));
     let visible = canvas.visible_area();
     let line = 1.0 / map.scale;
     // Lines closer than a few points would be a haze.

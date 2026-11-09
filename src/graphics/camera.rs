@@ -39,6 +39,11 @@ impl Camera {
         [0, 1].map(|i| (point[i] + transform.offset[i]) / transform.scale)
     }
 
+    /// Where world position `point` shows on a canvas of `width` by `height` pixels.
+    pub fn world_to_canvas(&self, point: [f32; 2], width: f32, height: f32) -> [f32; 2] {
+        self.transform(width, height).apply_point(point)
+    }
+
     /// The world-to-canvas transform for a canvas of `width` by `height` pixels.
     pub(crate) fn transform(&self, width: f32, height: f32) -> Transform {
         let half_view = [width / self.zoom / 2.0, height / self.zoom / 2.0];
@@ -47,16 +52,31 @@ impl Camera {
             center[0] = clamp_axis(center[0], bounds.x, bounds.w, half_view[0]);
             center[1] = clamp_axis(center[1], bounds.y, bounds.h, half_view[1]);
         }
-        // Snapped to whole canvas pixels, so the world doesn't shimmer as the camera moves by
-        // fractions of a pixel.
+        let offset = [
+            center[0] * self.zoom - width / 2.0,
+            center[1] * self.zoom - height / 2.0,
+        ];
         Transform {
             scale: self.zoom,
-            offset: [
-                (center[0] * self.zoom - width / 2.0).round(),
-                (center[1] * self.zoom - height / 2.0).round(),
-            ],
+            offset: if on_pixel_grid(self.zoom) {
+                // Snapped to whole canvas pixels, so the world moves in step and doesn't shimmer
+                // as the camera moves by fractions of a pixel.
+                offset.map(f32::round)
+            } else {
+                // The world's pixels fall between the canvas's anyway, and snapping would only
+                // shift the whole world by a different fraction of a pixel each frame the zoom
+                // changes, so it jitters as it zooms.
+                offset
+            },
         }
     }
+}
+
+/// Whether the world's pixels line up with the canvas's at `zoom`: at whole numbers, each world
+/// pixel covers a whole number of canvas pixels, and at their reciprocals, each canvas pixel a
+/// whole number of world pixels.
+fn on_pixel_grid(zoom: f32) -> bool {
+    zoom.fract() == 0.0 || zoom.recip().fract() == 0.0
 }
 
 /// Keeps a view `2 * half_view` long, centered on `center`, inside `start..start + length`.
@@ -153,6 +173,57 @@ mod tests {
     fn offset_snaps_to_whole_pixels() {
         let transform = Camera::new(10.3, 10.6).transform(20.0, 20.0);
         assert_eq!(transform.offset, [0.0, 1.0]);
+        // At whole zooms and their reciprocals too.
+        for (zoom, offset) in [(2.0, [11.0, 11.0]), (0.5, [-5.0, -5.0])] {
+            let camera = Camera {
+                zoom,
+                ..Camera::new(10.3, 10.6)
+            };
+            assert_eq!(camera.transform(20.0, 20.0).offset, offset, "{zoom}");
+        }
+    }
+
+    #[test]
+    fn offset_is_exact_between_whole_zooms() {
+        let camera = Camera {
+            zoom: 0.75,
+            ..Camera::new(10.3, 10.6)
+        };
+        assert_eq!(
+            camera.transform(20.0, 20.0).offset,
+            [10.3 * 0.75 - 10.0, 10.6 * 0.75 - 10.0]
+        );
+    }
+
+    #[test]
+    fn zooming_out_moves_the_world_steadily() {
+        // A point right of the center moves toward it as the camera zooms out, every step.
+        let mut last = f32::INFINITY;
+        for step in 1..500 {
+            let camera = Camera {
+                zoom: 1.0 - step as f32 / 1000.0,
+                ..Camera::new(700.3, 400.0)
+            };
+            let [x, _] = camera.world_to_canvas([900.0, 400.0], 640.0, 360.0);
+            assert!(x < last, "at {}, {x} after {last}", camera.zoom);
+            last = x;
+        }
+    }
+
+    #[test]
+    fn world_and_canvas_positions_convert_both_ways() {
+        for zoom in [1.0, 0.75] {
+            let camera = Camera {
+                zoom,
+                ..Camera::new(10.3, 10.6)
+            };
+            let canvas = camera.world_to_canvas([13.0, 7.0], 40.0, 40.0);
+            let [x, y] = camera.canvas_to_world(canvas, 40.0, 40.0);
+            assert!(
+                (x - 13.0).abs() < 1e-4 && (y - 7.0).abs() < 1e-4,
+                "{zoom}: {x}, {y}"
+            );
+        }
     }
 
     #[test]

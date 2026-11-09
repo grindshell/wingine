@@ -318,13 +318,16 @@ local zoom = math.min(2, width / spread_x, height / spread_y)
 graphics.set_camera((a.x + b.x) / 2, (a.y + b.y) / 2, stage_bounds, zoom)
 ```
 
-The view moves in whole canvas pixels, so the world doesn't shimmer as the camera moves by
-fractions of a pixel. Shaking the view is a matter of moving the camera by a few pixels for a few
-frames. The camera costs nothing to set, so set it as often as needed.
+At whole-number zooms, every texel of pixel art covers the same number of canvas pixels, and at
+their reciprocals, such as 0.5, every canvas pixel covers the same number of texels. At those
+zooms the view moves in whole canvas pixels, so the world moves in step and doesn't shimmer as the
+camera moves by fractions of a pixel. Shaking the view is a matter of moving the camera by a few
+pixels for a few frames. The camera costs nothing to set, so set it as often as needed.
 
-At whole-number zooms, every texel of pixel art covers the same number of canvas pixels. At other
-zooms some cover one more than others, so pixel art looks uneven while it's there: a camera easing
-between zooms looks best ending on a whole number.
+At other zooms some texels cover one more canvas pixel than others, so pixel art looks uneven while
+it's there: a camera easing between zooms looks best ending on a whole number. There the view goes
+exactly where it's asked, between pixels too, so the world zooms smoothly rather than jumping a
+pixel one way or the other each frame.
 
 ## Blend modes
 

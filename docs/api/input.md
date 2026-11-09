@@ -442,12 +442,19 @@ end
 
 The position is in canvas pixels whatever camera `draw` sets. To find the world position under
 the cursor for a camera set with `graphics.set_camera(camera_x, camera_y, nil, zoom)`, add the
-camera's offset, which the engine rounds to whole pixels, and divide by its zoom (1 if not given):
+camera's offset and divide by its zoom (1 if not given). The engine rounds the offset to whole
+pixels at whole zooms and their reciprocals, such as 0.5, and leaves it as it is at others:
 
 ```lua
 local canvas_width, canvas_height = graphics.size()
-local world_x = (x + math.round(camera_x * zoom - canvas_width / 2)) / zoom
-local world_y = (y + math.round(camera_y * zoom - canvas_height / 2)) / zoom
+local on_grid = zoom % 1 == 0 or (1 / zoom) % 1 == 0
+local offset_x = camera_x * zoom - canvas_width / 2
+local offset_y = camera_y * zoom - canvas_height / 2
+if on_grid then
+    offset_x, offset_y = math.round(offset_x), math.round(offset_y)
+end
+local world_x = (x + offset_x) / zoom
+local world_y = (y + offset_y) / zoom
 ```
 
 With bounds, use the center the bounds held the camera to.
