@@ -495,7 +495,9 @@ The executable, started without a game's folder, as a double-click starts it, ru
 called `game` beside it. Players see any error loading the game in its window rather than in a
 console, which they don't have: one in `main.luau`, or in `conf.luau`, shown in a window with the
 default settings. On Windows the exported executable opens no console window behind the game,
-and prints nothing; the `wingine` you run in a terminal still does.
+and prints nothing; the `wingine` you run in a terminal still does. And if the game has an
+[`icon`](project-structure.md#icon), the exported executable shows it in Explorer and in
+shortcuts to it, as its window does.
 
 Zip the folder and ship it. It runs on the platform it was exported on, so export on each one the
 game ships for, with any [native libraries](native-libraries.md) the game loads built there in

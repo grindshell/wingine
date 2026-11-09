@@ -230,7 +230,9 @@ its shape, by fractions where whole numbers leave bars. Nothing in it is random,
 angles come from
 [`exact`](docs/api/exact.md), so the same inputs play the same match on every platform. Run with
 `--watch`, it keeps the match as it reloads, so changing how the computer plays changes it
-mid-rally. Its tests are in Luau, in `pong.test.luau`: `cargo run -- test examples/pong`.
+mid-rally. Its tests are in Luau, in `pong.test.luau`: `cargo run -- test examples/pong`. Its
+window shows a 16-pixel [icon](docs/project-structure.md#icon), as an export of it does in Explorer:
+`cargo run --release -- export examples/pong dist/pong`.
 
 ### Garden
 

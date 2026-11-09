@@ -107,6 +107,12 @@ networking or 3D pipelines.
   Games get it in their init closure and in `Game::update`; Luau games call
   `graphics.frame_stats()`. Games that redraw on demand ask for frames with
   `request_redraw` and `request_redraw_after`, and from other threads with a `Waker`.
+- `src/icon.rs`: `WindowIcon`, a square picture (`WindowConfig::icon`, `icon` in `conf.luau`),
+  which the window gets scaled up by whole numbers to within 256 pixels, nearest neighbor
+  (`scaled_within`), so systems only shrink it and pixel art stays crisp, as its title bar's icon
+  and, on Windows, its taskbar's; `resized` makes the exported executable's sizes, by whole
+  numbers past each, then smoothly down. Wayland and macOS ignore windows' icons. Its unit tests
+  don't need a GPU.
 - `src/save.rs`: `Saves`, a game's saves: named files of plain `Value`s, `<name>.luau` in a
   folder of the game's own, read with the scene reader and written in its canonical layout
   (`scene::evaluate_any`, `plain` and `write_value`), each to a file of its own and then renamed
@@ -482,7 +488,10 @@ networking or 3D pipelines.
   entries or `*.test.luau` (skipping the output folder if it's inside), and `licenses/` (the
   engine's two, built in with `include_str!`, and `THIRD-PARTY-NOTICES.txt` if it's beside the
   executable). On Windows the copy's PE header is patched to the GUI subsystem
-  (`gui_subsystem`), so it opens no console. It refuses a game with no `main.luau` or settings that
+  (`gui_subsystem`), so it opens no console, and given the game's icon (`set_icon`): an
+  `RT_GROUP_ICON` of PNGs at the sizes Windows shows (`icon_resources`, pure, so tested
+  everywhere), written by Windows' `UpdateResourceW`, declared in an `extern` block of its own
+  rather than through a crate. It refuses a game with no `main.luau` or settings that
   don't read, and an output folder that isn't empty, and warns of a debug build, missing notices
   and native libraries the game needs that aren't built. Its unit tests export a game with the
   test executable; `tests/export.rs` runs the exported executable end to end.
@@ -731,7 +740,8 @@ networking or 3D pipelines.
   entirely in Luau, with its computer opponent in `opponent.luau`, played with the keys, the mouse
   or a gamepad, whose stick moves the paddle as fast as it's pushed (`input.axis`). F11 covers the
   screen (`window.set_fullscreen`), and its court is scaled to fit (`scaling = "fit"`), which
-  `tests/pong.rs` checks on a 4:3 screen, stretched too. Nothing in it
+  `tests/pong.rs` checks on a 4:3 screen, stretched too. Its window's icon is `icon.png`, 16
+  pixels drawn in its colors (`icon` in `conf.luau`). Nothing in it
   is random, and its ball's angles come from `exact`, so the same inputs play the same match on
   every platform. Its `pong` table is plain data, which its `reloading` returns and the reloaded
   game copies back over a fresh one, so the match carries on as it reloads. Its own tests are in
@@ -794,7 +804,7 @@ networking or 3D pipelines.
   typing into a focused field, input egui takes not reaching the game (the mouse wheel's turns
   over its windows too), and the debug key.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders,
-  their settings, covering the screen and scaling, the mouse wheel, the controls pressed and
+  their settings, icons, covering the screen and scaling, the mouse wheel, the controls pressed and
   what actions are bound to, voices of the sounds they play, their saves, their 3D views, models
   and
   picking, scenes' views and their nodes, menus over

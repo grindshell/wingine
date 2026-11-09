@@ -7,7 +7,7 @@ use std::{
 };
 
 use wingine::{
-    Error, Fullscreen,
+    Error, Fullscreen, WindowIcon,
     graphics::{Resolution, Scaling},
     headless::Simulation,
     input::{GamepadButton, Key, MouseButton, Stick},
@@ -100,10 +100,44 @@ fn settings_come_from_conf_luau() {
 }
 
 #[test]
+fn icons_are_square_pngs_in_the_games_folder() {
+    let folder = game(
+        "icon",
+        &[
+            ("conf.luau", "return { icon = 'art/icon.png' }"),
+            ("main.luau", ""),
+        ],
+    );
+    fs::create_dir_all(folder.join("art")).unwrap();
+    write_png(&folder.join("art/icon.png"), 2, 2, &[RED, BLUE, BLUE, RED]);
+    let config = runtime::config(&folder).unwrap();
+    let icon = config.window.icon.expect("an icon");
+    assert_eq!(icon.size(), 2);
+    assert_eq!(
+        icon,
+        WindowIcon::from_rgba([RED, BLUE, BLUE, RED].concat(), 2, 2).unwrap()
+    );
+    // A game with an icon runs as any other, without a window to show it.
+    simulation(&folder).step();
+
+    write_png(&folder.join("art/icon.png"), 2, 1, &[RED, BLUE]);
+    let err = runtime::config(&folder).unwrap_err().to_string();
+    assert!(err.contains("`icon`"), "{err}");
+    assert!(err.contains("must be square, not 2x1"), "{err}");
+    fs::write(folder.join("art/icon.png"), "not a picture").unwrap();
+    let err = runtime::config(&folder).unwrap_err().to_string();
+    assert!(err.contains("icon.png"), "{err}");
+    fs::remove_file(folder.join("art/icon.png")).unwrap();
+    let err = runtime::config(&folder).unwrap_err().to_string();
+    assert!(err.contains("failed to read"), "{err}");
+}
+
+#[test]
 fn without_settings_the_title_is_the_folders_name() {
     let folder = game("untitled", &[("main.luau", "")]);
     let config = runtime::config(&folder).unwrap();
     assert_eq!(config.window.title, "untitled");
+    assert_eq!(config.window.icon, None);
     assert_eq!(config.window.identity, "untitled");
     assert_eq!(config.window.resolution, Resolution::Window);
     assert_eq!(config.window.fullscreen, Fullscreen::Off);

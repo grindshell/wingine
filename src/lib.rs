@@ -11,6 +11,7 @@ pub mod grid;
 #[cfg(feature = "egui")]
 pub mod gui;
 pub mod headless;
+mod icon;
 pub mod input;
 pub mod lua;
 pub mod math;
@@ -28,3 +29,4 @@ pub mod watch;
 pub use app::{Fullscreen, Game, Redraw, Waker, WindowConfig, run};
 pub use context::{Context, FrameStats};
 pub use error::{BoxedError, Error, Result};
+pub use icon::WindowIcon;

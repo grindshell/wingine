@@ -13,7 +13,9 @@
 //! [`shipped_game`](super::shipped_game)), and shows any error loading it in its window, as players
 //! have no console to read it in. On Windows, the copy opens no console window behind the game:
 //! its header says it's a program of Windows' GUI subsystem, not the console's
-//! ([`gui_subsystem`]), as `editbin /SUBSYSTEM:WINDOWS` would make it.
+//! ([`gui_subsystem`]), as `editbin /SUBSYSTEM:WINDOWS` would make it. And if the game has an
+//! `icon`, the copy shows it in Explorer and in shortcuts to it: Windows' own resource functions
+//! write it into the copy's resources, at the sizes Windows shows icons at, each a PNG.
 //!
 //! Export a release build of wingine (`cargo run --release -- export ...`, or the release
 //! archives'), since debug builds run games far slower, and export on each platform the game
@@ -25,6 +27,8 @@ use std::{
 };
 
 use super::{SHIPPED_FOLDER, config, native::library_path};
+#[cfg(any(windows, test))]
+use crate::WindowIcon;
 use crate::{Error, Result};
 
 /// The engine's licenses, which games built on it ship.
@@ -97,6 +101,12 @@ pub fn export(
             ))
         })?;
         fs::write(&copied, bytes).map_err(|source| write_error(&copied, source))?;
+    }
+    #[cfg(windows)]
+    {
+        if let Some(icon) = &config.window.icon {
+            set_icon(&copied, icon).map_err(|source| write_error(&copied, source))?;
+        }
     }
 
     let mut warnings = Vec::new();
@@ -233,6 +243,111 @@ pub fn gui_subsystem(bytes: &mut [u8]) -> std::result::Result<(), String> {
 fn read_u16(bytes: &[u8], at: usize) -> Option<u16> {
     let pair = bytes.get(at..at + 2)?;
     Some(u16::from_le_bytes([pair[0], pair[1]]))
+}
+
+/// The sizes, in pixels across, of the pictures of an exported executable's icon, among which
+/// Windows picks as it shows it: those it shows at each scale of the screen, and the largest.
+#[cfg(any(windows, test))]
+const ICON_SIZES: [u32; 8] = [16, 20, 24, 32, 40, 48, 64, 256];
+
+/// What gives a Windows executable `icon`: its pictures, each a PNG of one of [`ICON_SIZES`], for
+/// resources of the kind `RT_ICON` numbered from 1, and the group of them, for an `RT_GROUP_ICON`,
+/// which lists each one's size and number.
+#[cfg(any(windows, test))]
+fn icon_resources(icon: &WindowIcon) -> (Vec<u8>, Vec<Vec<u8>>) {
+    let pictures: Vec<Vec<u8>> = ICON_SIZES
+        .iter()
+        .map(|&size| {
+            let mut png = std::io::Cursor::new(Vec::new());
+            icon.resized(size)
+                .write_to(&mut png, image::ImageFormat::Png)
+                .expect("a PNG encodes in memory");
+            png.into_inner()
+        })
+        .collect();
+    // A GRPICONDIR: reserved, the kind (1, icons rather than cursors) and how many there are.
+    let mut group = [0u16, 1, pictures.len() as u16]
+        .iter()
+        .flat_map(|field| field.to_le_bytes())
+        .collect::<Vec<u8>>();
+    for (number, (&size, picture)) in (1u16..).zip(ICON_SIZES.iter().zip(&pictures)) {
+        // A GRPICONDIRENTRY: its width and height, 0 meaning 256, which a byte can't hold; no
+        // palette; reserved; one plane of 32 bits a pixel; its length; and its RT_ICON's number.
+        let side = u8::try_from(size).unwrap_or(0);
+        group.extend([side, side, 0, 0]);
+        group.extend(1u16.to_le_bytes());
+        group.extend(32u16.to_le_bytes());
+        group.extend((picture.len() as u32).to_le_bytes());
+        group.extend(number.to_le_bytes());
+    }
+    (group, pictures)
+}
+
+/// Gives the Windows executable at `path` `icon`, in place of any it had, through Windows'
+/// `UpdateResourceW`, which lays out its resources again as it writes them. Explorer shows the
+/// first icon group, which the executables Rust builds have none before.
+#[cfg(windows)]
+fn set_icon(path: &Path, icon: &WindowIcon) -> std::io::Result<()> {
+    use std::{ffi::c_void, io, os::windows::ffi::OsStrExt, ptr};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn BeginUpdateResourceW(file_name: *const u16, delete_existing: i32) -> *mut c_void;
+        fn UpdateResourceW(
+            update: *mut c_void,
+            kind: *const u16,
+            name: *const u16,
+            language: u16,
+            data: *const c_void,
+            length: u32,
+        ) -> i32;
+        fn EndUpdateResourceW(update: *mut c_void, discard: i32) -> i32;
+    }
+    /// The kinds of resource icons are: a picture, and the group listing them.
+    const RT_ICON: usize = 3;
+    const RT_GROUP_ICON: usize = 14;
+    /// A resource's kind or name by number, as `MAKEINTRESOURCEW` passes it.
+    fn by_number(number: usize) -> *const u16 {
+        ptr::without_provenance(number)
+    }
+
+    let (group, pictures) = icon_resources(icon);
+    let resources = (1..)
+        .zip(&pictures)
+        .map(|(number, picture)| (RT_ICON, number, picture))
+        .chain([(RT_GROUP_ICON, 1, &group)]);
+    let file_name: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    // SAFETY: the name is a wide string ending in a null.
+    let update = unsafe { BeginUpdateResourceW(file_name.as_ptr(), 0) };
+    if update.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    let mut failed = None;
+    for (kind, number, data) in resources {
+        // SAFETY: the handle is the open update's, and the data is `length` bytes, which last
+        // until it ends. Language 0 is neutral.
+        let written = unsafe {
+            UpdateResourceW(
+                update,
+                by_number(kind),
+                by_number(number),
+                0,
+                data.as_ptr().cast(),
+                data.len() as u32,
+            )
+        };
+        if written == 0 {
+            failed = Some(io::Error::last_os_error());
+            break;
+        }
+    }
+    // SAFETY: the handle is the open update's, which this ends, discarding it if a write failed.
+    let ended = unsafe { EndUpdateResourceW(update, i32::from(failed.is_some())) };
+    match failed {
+        Some(err) => Err(err),
+        None if ended == 0 => Err(io::Error::last_os_error()),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -381,6 +496,79 @@ mod tests {
             !warnings.contains("`extra`"),
             "optional libraries may be missing"
         );
+    }
+
+    /// A 2x2 icon of checks.
+    fn checks() -> WindowIcon {
+        let rgba = [
+            [255, 0, 0, 255],
+            [0, 0, 255, 255],
+            [0, 0, 255, 255],
+            [255, 0, 0, 255],
+        ];
+        WindowIcon::from_rgba(rgba.concat(), 2, 2).unwrap()
+    }
+
+    #[test]
+    fn icon_groups_list_a_png_for_each_size() {
+        let (group, pictures) = icon_resources(&checks());
+        let u16_at = |at: usize| u16::from_le_bytes([group[at], group[at + 1]]);
+        let u32_at = |at: usize| u32::from_le_bytes(group[at..at + 4].try_into().unwrap());
+        assert_eq!([u16_at(0), u16_at(2), u16_at(4)], [0, 1, 8]);
+        assert_eq!(group.len(), 6 + 14 * ICON_SIZES.len());
+        assert_eq!(pictures.len(), ICON_SIZES.len());
+        for (i, (&size, picture)) in ICON_SIZES.iter().zip(&pictures).enumerate() {
+            let entry = 6 + 14 * i;
+            let side = if size == 256 { 0 } else { size as u8 };
+            assert_eq!(group[entry..entry + 4], [side, side, 0, 0], "{size}");
+            assert_eq!([u16_at(entry + 4), u16_at(entry + 6)], [1, 32]);
+            assert_eq!(u32_at(entry + 8) as usize, picture.len());
+            assert_eq!(u16_at(entry + 12) as usize, i + 1, "numbered from 1");
+            let decoded = image::load_from_memory(picture).unwrap().into_rgba8();
+            assert_eq!(decoded.dimensions(), (size, size));
+            assert_eq!(decoded.get_pixel(0, 0).0, [255, 0, 0, 255]);
+        }
+    }
+
+    #[test]
+    fn exported_executables_show_the_games_icon_on_windows() {
+        let game = game(&[
+            ("main.luau", ""),
+            (
+                "conf.luau",
+                "return { identity = 'tiny', icon = 'icon.png' }",
+            ),
+        ]);
+        checks()
+            .resized(2)
+            .save(game.path().join("icon.png"))
+            .unwrap();
+        let out = game.path().join("out");
+        let executable = std::env::current_exe().unwrap();
+        let exported = export(game.path(), &out, &executable).unwrap();
+        assert!(out.join("game/icon.png").is_file());
+
+        let copied = fs::read(&exported.executable).unwrap();
+        let (group, pictures) = icon_resources(&checks());
+        // From the end, where the resources Windows writes usually are, since the copy is large.
+        let holds = |bytes: &[u8]| {
+            copied
+                .windows(bytes.len())
+                .rev()
+                .any(|window| window == bytes)
+        };
+        if cfg!(windows) {
+            // Windows keeps resources as they're written, so the group and the largest picture
+            // are in it as they are.
+            assert!(holds(&group), "the icon's group");
+            assert!(holds(&pictures[pictures.len() - 1]), "its largest picture");
+        } else {
+            assert_eq!(
+                copied,
+                fs::read(&executable).unwrap(),
+                "only Windows' have icons"
+            );
+        }
     }
 
     #[test]

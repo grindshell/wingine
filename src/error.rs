@@ -23,6 +23,9 @@ pub enum Error {
         path: PathBuf,
         source: image::ImageError,
     },
+    /// An image can't be a window's icon.
+    #[error("invalid icon: {0}")]
+    Icon(String),
     #[error("failed to save image {}: {source}", .path.display())]
     SaveImage {
         path: PathBuf,

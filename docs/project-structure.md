@@ -215,6 +215,7 @@ the engine doesn't know is an error, so a misspelling doesn't go unnoticed:
 ```lua
 return {
     title = "My Game",
+    icon = "icon.png",
     width = 1280,
     height = 720,
     resizable = true,
@@ -235,6 +236,19 @@ there, so `conf.luau` holds plain values.
 ### `title`
 
 The window's title. By default, the name of the game's folder.
+
+### `icon`
+
+The path, from the game's folder, of a square PNG the window shows in its title bar and taskbar
+button, such as pixel art 16, 32 or 48 pixels across. By default, the system's own.
+
+Systems show icons at sizes of their own, so the engine scales an icon up by the largest whole
+number that keeps it within 256 pixels, and pixel art stays crisp as the system shrinks it to
+fit. A game [exported](running-games.md#shipping-a-game) on Windows shows it on its executable too,
+in Explorer and in shortcuts to it.
+
+Windows and Linux's X11 show windows' icons. Wayland and macOS show an application's icon rather
+than its window's, so a game there shows the system's, and on the web, the page's.
 
 ### `width` and `height`
 

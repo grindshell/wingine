@@ -20,6 +20,9 @@
 //! ```lua
 //! return {
 //!     title = "Pong", -- by default, the folder's name
+//!     -- A square PNG the window shows in its title bar and taskbar button, and on Windows, the
+//!     -- exported game's executable. Pixel art stays crisp. By default, the system's.
+//!     icon = "icon.png",
 //!     width = 1280, -- the window's initial size in logical pixels
 //!     height = 720,
 //!     resizable = true,
@@ -417,7 +420,7 @@ use crate::lua::mlua::luau::FsRequirer as FileRequirer;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::watch::Watcher;
 use crate::{
-    Context, Error, Game, Result, WindowConfig,
+    Context, Error, Game, Result, WindowConfig, WindowIcon,
     graphics::{Canvas, Color, Font, Model, Resolution, Texture},
     lua::{
         Scripts, mlua,
@@ -561,7 +564,7 @@ pub fn config(folder: impl AsRef<Path>) -> Result<Config> {
         .eval()?;
     for pair in settings.pairs::<String, mlua::Value>() {
         let (name, value) = pair?;
-        apply_setting(&mut config, &lua, &name, value).map_err(|err| Error::Script {
+        apply_setting(&mut config, folder, &lua, &name, value).map_err(|err| Error::Script {
             path: path.clone(),
             message: format!("`{name}`: {err}"),
         })?;
@@ -575,8 +578,10 @@ pub fn config(folder: impl AsRef<Path>) -> Result<Config> {
     Ok(config)
 }
 
+/// Applies the setting `name` of the game in `folder` to `config`.
 fn apply_setting(
     config: &mut Config,
+    folder: &Path,
     lua: &mlua::Lua,
     name: &str,
     value: mlua::Value,
@@ -584,6 +589,11 @@ fn apply_setting(
     let window = &mut config.window;
     match name {
         "title" => window.title = lua.unpack(value)?,
+        "icon" => {
+            let path: String = lua.unpack(value)?;
+            let icon = WindowIcon::load(folder.join(path)).map_err(mlua::Error::runtime)?;
+            window.icon = Some(icon);
+        }
         "width" => window.width = positive(lua.unpack(value)?)?,
         "height" => window.height = positive(lua.unpack(value)?)?,
         "resizable" => window.resizable = lua.unpack(value)?,

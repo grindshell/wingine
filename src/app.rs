@@ -16,7 +16,7 @@ use winit::{
 };
 
 use crate::{
-    Context, Error, FrameStats, Result,
+    Context, Error, FrameStats, Result, WindowIcon,
     audio::Audio,
     gamepads::Gamepads,
     graphics::{
@@ -62,6 +62,9 @@ pub trait Game {
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowConfig {
     pub title: String,
+    /// The picture the window shows in its title bar and taskbar button, where the system shows
+    /// windows' own. `None`, the default, leaves the system's.
+    pub icon: Option<WindowIcon>,
     /// Initial width in logical pixels.
     pub width: u32,
     /// Initial height in logical pixels.
@@ -104,6 +107,7 @@ impl Default for WindowConfig {
     fn default() -> Self {
         Self {
             title: "Wingine".into(),
+            icon: None,
             width: 1280,
             height: 720,
             resizable: true,
@@ -682,16 +686,35 @@ struct State<G> {
     gui_window: egui_winit::State,
 }
 
+/// `icon` as winit takes it, scaled up by whole numbers so that the system only ever shrinks it.
+fn winit_icon(icon: &WindowIcon) -> Option<winit::window::Icon> {
+    let image = icon.scaled_within(crate::icon::LARGEST);
+    let (width, height) = image.dimensions();
+    winit::window::Icon::from_rgba(image.into_raw(), width, height)
+        .inspect_err(|err| log::warn!("couldn't give the window its icon: {err}"))
+        .ok()
+}
+
 /// Opens the game's window, or on the web its canvas, and a surface on it for a GPU to present
 /// frames to.
 fn create_window(
     event_loop: &ActiveEventLoop,
     config: &WindowConfig,
 ) -> Result<(Arc<Window>, wgpu::Instance, wgpu::Surface<'static>)> {
+    let icon = config.icon.as_ref().and_then(winit_icon);
+    // Windows shows the window's icon small, in its title bar, and its taskbar's large.
+    #[cfg(windows)]
+    let taskbar_icon = icon.clone();
     let attributes = Window::default_attributes()
         .with_title(&config.title)
+        .with_window_icon(icon)
         .with_resizable(config.resizable)
         .with_fullscreen(opening_fullscreen(event_loop, config));
+    #[cfg(windows)]
+    let attributes = {
+        use winit::platform::windows::WindowAttributesExtWindows;
+        attributes.with_taskbar_icon(taskbar_icon)
+    };
     #[cfg(not(target_arch = "wasm32"))]
     let attributes =
         attributes.with_inner_size(winit::dpi::LogicalSize::new(config.width, config.height));
