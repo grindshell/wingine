@@ -9,7 +9,7 @@ systems, and don't build more 3D features unless asked.
 
 Wingine has what its examples need: tilemaps and batched sprites, meshes and glTF models in 3D
 views picked by boxes, sprite animation, a camera, keyboard, mouse and gamepad input bound to
-actions, grid movement, physics with Rapier (collision in 2D; bodies and characters in 3D views),
+actions, grid movement, physics with Rapier (bodies and characters, in 2D and in 3D views),
 text in the built-in font, bitmap fonts and TrueType fonts, audio, saves, Luau scripting with
 tasks, native libraries written in Rust, scenes (levels, screens and rigged characters), menus
 over scenes' nodes, egui interfaces, and an editor built on the engine. Each feature is finished
@@ -128,17 +128,27 @@ own right.
   window is focused.
 - `src/menu.rs`: `Menu`, a selection that holds no items: each `update` takes them as they are.
   Directions go by where items are, so lists, rows and ragged grids move as they look.
-- `src/physics.rs` (2D) and `physics/world3d.rs`: `World` and `World3d`, by Rapier.
-  - 2D colliders are fixed rects, solid, edges or sensors. `slide` casts the box itself rather
-    than using Rapier's `KinematicCharacterController`, whose rounded box turns normals so a box
-    pushed at a wall creeps along it; `true_normal` snaps GJK's normals to the sides.
-  - 3D has fixed, dynamic and kinematic bodies (kinematic ones never asleep, since Rapier doesn't
-    wake one a body leaves) and `walk` for characters, flat-footed cylinders that step and
-    slope. `step` splits long steps and moves kinematic bodies a share each. Rapier forgets new
-    bodies in the step after `detect_collisions`, so `refresh` puts them in the query tree itself.
-  - Queries never find sensors. Unit tests pin hashes so CI checks Windows and Linux agree.
-  - Luau's worlds (`src/lua/physics.rs`) are of scene nodes, re-read before each move, step or
-    query to follow what scripts moved; they give nodes back in the order they were added.
+- `src/physics.rs`, `physics/world2d.rs` and `physics/world3d.rs`: `World` and `World3d`, by
+  Rapier, sharing `BodyKind` and `Material`.
+  - Both have fixed, dynamic and kinematic bodies (kinematic ones never asleep, since Rapier
+    doesn't wake one a body leaves) and `walk` for characters, flat-footed boxes in 2D and
+    cylinders in 3D, that step and slope. `step` splits long steps and moves kinematic bodies a
+    share each. Rapier forgets new bodies in the step after `detect_collisions`, so `refresh`
+    puts them in the query tree itself, and queries skip disabled colliders it leaves there.
+  - 2D also has fixed rects without bodies, solid, edges or sensors, and tiles (a compound of
+    boxes); every collider is one `ColliderId`. `slide` casts the box itself rather than using
+    Rapier's `KinematicCharacterController`, whose rounded box turns normals so a box pushed at
+    a wall creeps along it; `true_normal` snaps GJK's normals to the sides. A 2D character is
+    carried by what it stands on as far as that moved in the last step (3D's only follows it
+    down). Its units are pixels, so `set_length_unit` tunes Rapier, and Luau's densities are of
+    square metres.
+  - Queries never find sensors. Unit tests pin hashes so CI checks Windows and Linux agree;
+    scene nodes' 2D transforms take their sines from `libm` (`Affine::from_parts_exact`) so
+    colliders placed by them do too.
+  - Luau's worlds (`src/lua/physics.rs`, and `physics/world2d.rs` beside it) are of scene nodes,
+    re-read before each move, walk, step or query to follow what scripts moved; they give nodes
+    back in the order they were added. Tile maps are solid by `Tilemap::solid_rects`, rebuilt
+    when the map's `revision` changes.
 - `src/headless.rs`: `Headless` renders a canvas to an image; `Simulation` runs a whole `Game` at
   60 fps with simulated input, egui included, and screenshots. Key repeats run in game time, and
   typing is as on a US keyboard. All simulations in a process share one GPU device, held by one
@@ -153,7 +163,8 @@ own right.
   applications' data, each written to a file of its own then renamed over the old. Simulations
   keep theirs in a temporary folder, so tests never touch the player's.
 - `src/icon.rs`: `WindowIcon`, scaled up by whole numbers so systems only shrink it.
-- Also: `tilemap.rs` (`Tilemap` and `Tileset`; outside the map is solid), `grid.rs` (`GridMover`,
+- Also: `tilemap.rs` (`Tilemap` and `Tileset`; outside the map is solid; `solid_rects` merges
+  solid cells into boxes for physics), `grid.rs` (`GridMover`,
   carrying leftover time between steps), `math.rs` (`Rect`, `Affine`, `Affine3`, `Bounds3`),
   `watch.rs` (`Watcher`, hashing a folder's files in a thread), `script.rs` (scripted runs).
 
@@ -225,9 +236,10 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
   step for step in `f64`, so both produce the same bullets to the bit: change them together. Only
   the game's seed may feed `math.random`.
 - `pong/`: Pong in Luau, with Luau tests and an icon; its match hash is pinned in `tests/pong.rs`.
-- `garden/`, `orchard/`, `cellar/`, `course/`, `lettering/`: a scene with 2D physics, a rigged
-  character, a 2.5D cellar, a 3D course with physics (its run's hash is pinned), and a type
-  specimen of the engine's fonts.
+- `garden/`, `orchard/`, `cellar/`, `course/`, `quarry/`, `lettering/`: a scene with 2D physics
+  seen from above, a rigged character, a 2.5D cellar, a 3D course with physics, a level seen from
+  the side with 2D bodies (both with their run's hash pinned), and a type specimen of the
+  engine's fonts.
 - `sprites.rs`, `shapes.rs`, `meshes.rs`, `gui.rs`: examples in Rust; `native-particles/` a native
   library that `tests/native.rs` builds.
 - Assets: art drawn for the examples is under the project's licenses; Kenney's packs are CC0 and
@@ -247,10 +259,10 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
   reference. Change the docs, the module docs and `wingine.d.luau` together; `docs/editor.md`
   follows the editor. Check docs' examples by running them headlessly.
 - `README.md`: a screenshot of each example in `docs/screenshots/`, taken headlessly at 640x360
-  (768x432 for `sprites`, 960x720 for `shmup`, 960x540 for `course`, 1280x720 for the editor with
-  the garden open and its pond selected); retake them when an example changes how it looks. The
-  shmup's numbers come from its stress test and benchmark, measured on a Ryzen 7 5800X with an
-  RTX 3080; measure again on that machine after changes that could move them.
+  (768x432 for `sprites`, 960x720 for `shmup`, 960x540 for `course` and `quarry`, 1280x720 for the
+  editor with the garden open and its pond selected); retake them when an example changes how it
+  looks. The shmup's numbers come from its stress test and benchmark, measured on a Ryzen 7 5800X
+  with an RTX 3080; measure again on that machine after changes that could move them.
 
 ## Conventions
 

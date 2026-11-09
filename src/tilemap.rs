@@ -1,7 +1,10 @@
 //! Tile maps: grids of tiles from a tileset, in layers drawn one over another, where solid tiles
 //! block movement.
 
-use std::ops::Range;
+use std::{
+    ops::Range,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use crate::{
     graphics::{Canvas, Color, Sprite},
@@ -111,6 +114,16 @@ pub struct Tilemap {
     rows: u32,
     /// Each layer's cells, row by row.
     layers: Vec<Vec<Option<TileId>>>,
+    /// Which version of its cells it has: see [`Tilemap::revision`].
+    revision: u64,
+}
+
+/// The last revision any map has had, so that no two maps' cells are of the same revision unless
+/// one's a copy of the other.
+static REVISIONS: AtomicU64 = AtomicU64::new(0);
+
+fn next_revision() -> u64 {
+    REVISIONS.fetch_add(1, Ordering::Relaxed) + 1
 }
 
 impl Tilemap {
@@ -121,7 +134,15 @@ impl Tilemap {
             columns,
             rows,
             layers: Vec::new(),
+            revision: next_revision(),
         }
+    }
+
+    /// Which version of its cells the map has, which changes whenever a layer is added or a cell
+    /// set, and is never the same as another map's unless it's a copy: so what's worked out from
+    /// its cells, such as physics' boxes, need be worked out again only when this changes.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn tileset(&self) -> &Tileset {
@@ -140,6 +161,7 @@ impl Tilemap {
     pub fn add_layer(&mut self) -> usize {
         let cells = self.columns as usize * self.rows as usize;
         self.layers.push(vec![None; cells]);
+        self.revision = next_revision();
         self.layers.len() - 1
     }
 
@@ -170,6 +192,7 @@ impl Tilemap {
             )
         });
         self.layers[layer][index] = id;
+        self.revision = next_revision();
     }
 
     /// Whether cell `tile` is inside the map.
@@ -187,6 +210,70 @@ impl Tilemap {
             .iter()
             .filter_map(|cells| cells[index])
             .any(|id| self.tileset.tile(id).solid)
+    }
+
+    /// The cells inside the map holding a solid tile, on `layer`, or with `None`, on any, as
+    /// rectangles in the world: as few as merging them makes, each a run of solid cells along a
+    /// row, grown down over the rows below holding the same run. A floor along a row is one
+    /// rectangle, so what slides along it in physics has no seams to catch on. None for a layer
+    /// the map doesn't have.
+    pub fn solid_rects(&self, layer: Option<usize>) -> Vec<Rect> {
+        let [width, height] = self.tile_size();
+        let (columns, rows) = (self.columns as usize, self.rows as usize);
+        let solid_in = |cells: &[Option<TileId>], index: usize| {
+            cells[index].is_some_and(|id| self.tileset.tile(id).solid)
+        };
+        let solid = |row: usize, column: usize| {
+            let index = row * columns + column;
+            match layer {
+                Some(layer) => self
+                    .layers
+                    .get(layer)
+                    .is_some_and(|cells| solid_in(cells, index)),
+                None => self.layers.iter().any(|cells| solid_in(cells, index)),
+            }
+        };
+        let rect = |(start, end): (usize, usize), top: usize, bottom: usize| {
+            Rect::new(
+                start as f32 * width,
+                top as f32 * height,
+                (end - start) as f32 * width,
+                (bottom - top) as f32 * height,
+            )
+        };
+        // The runs growing down: their first column, the column past their last, and their
+        // first row.
+        let mut growing: Vec<((usize, usize), usize)> = Vec::new();
+        let mut rects = Vec::new();
+        for row in 0..=rows {
+            let mut runs = Vec::new();
+            let mut column = 0;
+            while row < rows && column < columns {
+                if solid(row, column) {
+                    let start = column;
+                    while column < columns && solid(row, column) {
+                        column += 1;
+                    }
+                    runs.push((start, column));
+                } else {
+                    column += 1;
+                }
+            }
+            // Those the row carries on grow; the rest end above it.
+            let mut still = Vec::new();
+            for (run, top) in growing.drain(..) {
+                match runs.iter().position(|&this| this == run) {
+                    Some(index) => {
+                        runs.remove(index);
+                        still.push((run, top));
+                    }
+                    None => rects.push(rect(run, top, row)),
+                }
+            }
+            still.extend(runs.into_iter().map(|run| (run, row)));
+            growing = still;
+        }
+        rects
     }
 
     /// The world area the map covers, such as for [`Camera::bounds`](crate::graphics::Camera::bounds).
@@ -351,6 +438,75 @@ mod tests {
         for outside in [[-1, 0], [3, 0], [0, -1], [0, 2]] {
             assert!(map.is_solid(outside), "{outside:?}");
         }
+    }
+
+    #[test]
+    fn solid_cells_merge_into_as_few_rectangles_as_rows_make() {
+        let (map, _) = map();
+        // The wall at [1, 0], on the layer above the grass.
+        assert_eq!(map.solid_rects(None), vec![Rect::new(8.0, 0.0, 8.0, 4.0)]);
+        assert_eq!(
+            map.solid_rects(Some(1)),
+            vec![Rect::new(8.0, 0.0, 8.0, 4.0)]
+        );
+        assert_eq!(map.solid_rects(Some(0)), vec![]);
+        assert_eq!(map.solid_rects(Some(2)), vec![]);
+
+        // Two pillars standing on a floor, on two layers, and a ledge of one cell.
+        let sprite = texture().sprite();
+        let mut tileset = Tileset::new(16, 16);
+        let stone = tileset.add(Tile {
+            solid: true,
+            ..Tile::new(sprite.clone())
+        });
+        let moss = tileset.add(Tile::new(sprite));
+        let mut map = Tilemap::new(tileset, 5, 3);
+        let ground = map.add_layer();
+        let top = map.add_layer();
+        for (layer, rows) in [
+            (ground, ["#...#", "#...#", "#####"]),
+            (top, ["~.#~~", ".....", "....."]),
+        ] {
+            for (row, cells) in rows.iter().enumerate() {
+                for (column, cell) in cells.chars().enumerate() {
+                    let id = match cell {
+                        '#' => Some(stone),
+                        '~' => Some(moss),
+                        _ => None,
+                    };
+                    if id.is_some() {
+                        map.set(layer, [column as i32, row as i32], id);
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            map.solid_rects(None),
+            vec![
+                Rect::new(32.0, 0.0, 16.0, 16.0),
+                Rect::new(0.0, 0.0, 16.0, 32.0),
+                Rect::new(64.0, 0.0, 16.0, 32.0),
+                Rect::new(0.0, 32.0, 80.0, 16.0),
+            ]
+        );
+        assert_eq!(
+            map.solid_rects(Some(top)),
+            vec![Rect::new(32.0, 0.0, 16.0, 16.0)]
+        );
+    }
+
+    #[test]
+    fn maps_change_revision_as_their_cells_do() {
+        let (mut map, [grass, _]) = map();
+        let copy = map.clone();
+        assert_eq!(copy.revision(), map.revision());
+        map.set(0, [0, 0], Some(grass));
+        assert_ne!(copy.revision(), map.revision());
+        let before = map.revision();
+        map.add_layer();
+        assert_ne!(map.revision(), before);
+        let (other, _) = self::map();
+        assert_ne!(other.revision(), map.revision());
     }
 
     #[test]

@@ -1,16 +1,17 @@
 //! Physics worlds as scripts hold them, from `physics.world()` and `physics.world_3d()`: Rapier's
-//! colliders and bodies, each of a node, following the node as it moves, or moving it, and asked
-//! where things are by rays, overlaps and sensors.
+//! colliders and bodies, each of a node, following the node as it moves, or moving it, characters
+//! walked among them, and asked where things are by rays, overlaps and sensors.
+
+mod world2d;
 
 use std::{cell::RefCell, rc::Rc};
 
+pub use world2d::PhysicsWorld;
+
 use super::{SceneNode, check_finite, not_3d, vector, vector3};
 use crate::{
-    math::{Affine, Affine3, Bounds3, Rect},
-    physics::{
-        Body3d, BodyId, BodyKind, Character, ColliderId, Material, Pose3d, Shape3d, Solid, World,
-        World3d,
-    },
+    math::{Affine3, Bounds3},
+    physics::{Body3d, BodyId, BodyKind, Character3d, Material, Pose3d, Shape3d, World3d},
     scene::{Kind, Node, NodeId, Scene},
 };
 
@@ -70,308 +71,6 @@ fn followed(
     Ok(Some(Rc::clone(scene)))
 }
 
-/// A [`World`] of a scene's nodes, as scripts hold it, from `physics.world()`: colliders that
-/// cover nodes as they're drawn, following them as they move and going when they do, nodes moved
-/// among them, and sensors. Queries (`ray`, `overlap_circle`, `overlap_box` and a sensor's
-/// `inside`) follow the nodes first, and return nodes, in the order they were added.
-#[derive(Default)]
-pub struct PhysicsWorld {
-    world: World,
-    /// The scene its nodes are of: the first node's given to it.
-    scene: Option<Rc<RefCell<Scene>>>,
-    /// The nodes with colliders, in the order they were added.
-    covered: Vec<Covered>,
-}
-
-/// A node of a [`PhysicsWorld`] with a collider.
-struct Covered {
-    node: NodeId,
-    solid: Solid,
-    collider: ColliderId,
-    /// Where the node was when its collider was last placed, or `None` if it covered nothing.
-    placed: Option<(Affine, Rect)>,
-}
-
-impl PhysicsWorld {
-    /// Fails unless `node` is of the 2D part of the world's scene, which becomes its scene if the
-    /// world has none yet.
-    fn check(&mut self, node: &SceneNode) -> mlua::Result<()> {
-        node.check_2d(
-            "place in a physics world",
-            "physics.world_3d() is for nodes in 3D views",
-        )?;
-        match &self.scene {
-            Some(scene) if !Rc::ptr_eq(scene, &node.scene) => {
-                let described = node.read(Scene::describe)?;
-                Err(mlua::Error::runtime(format!(
-                    "{described} is of another scene than the physics world's nodes"
-                )))
-            }
-            Some(_) => Ok(()),
-            None => {
-                self.scene = Some(Rc::clone(&node.scene));
-                Ok(())
-            }
-        }
-    }
-
-    /// Covers `node` with a collider, solid as `solid` says, or changes how solid it is if it
-    /// has one already.
-    fn add(&mut self, scene: &Scene, node: NodeId, solid: Solid) {
-        let placed = scene.placement(node);
-        let (transform, rect) = placed.unwrap_or((Affine::IDENTITY, Rect::default()));
-        match self.covered.iter_mut().find(|covered| covered.node == node) {
-            Some(covered) => {
-                self.world.set(covered.collider, transform, rect, solid);
-                covered.solid = solid;
-                covered.placed = placed;
-            }
-            None => {
-                let collider = self.world.add(transform, rect, solid);
-                self.covered.push(Covered {
-                    node,
-                    solid,
-                    collider,
-                    placed,
-                });
-            }
-        }
-    }
-
-    /// Brings the colliders up to date with their nodes: moved, reshaped, or gone.
-    fn follow(&mut self, scene: &Scene) {
-        let world = &mut self.world;
-        self.covered.retain_mut(|covered| {
-            if !scene.contains_node(covered.node) {
-                world.remove(covered.collider);
-                return false;
-            }
-            let placed = scene.placement(covered.node);
-            if placed != covered.placed {
-                let (transform, rect) = placed.unwrap_or((Affine::IDENTITY, Rect::default()));
-                world.set(covered.collider, transform, rect, covered.solid);
-                covered.placed = placed;
-            }
-            true
-        });
-    }
-
-    /// Which of `covered` is `node`'s, if it's of this world's scene and has a collider.
-    fn covered_of(&self, node: &SceneNode) -> Option<usize> {
-        let scene = self.scene.as_ref()?;
-        if !Rc::ptr_eq(scene, &node.scene) {
-            return None;
-        }
-        self.covered
-            .iter()
-            .position(|covered| covered.node == node.id)
-    }
-
-    /// Brings the colliders up to date with their nodes before a query, and returns their
-    /// scene, or `None` if the world has no nodes yet.
-    fn followed(&mut self) -> mlua::Result<Option<Rc<RefCell<Scene>>>> {
-        let scene = self.scene.clone();
-        followed(scene.as_ref(), |scene| self.follow(scene))
-    }
-
-    /// The nodes of `found`, nodes of `scene`, in the order they were added to the world.
-    fn nodes(&self, scene: &Rc<RefCell<Scene>>, found: &[ColliderId]) -> Vec<SceneNode> {
-        self.covered
-            .iter()
-            .filter(|covered| found.contains(&covered.collider))
-            .map(|covered| SceneNode::new(Rc::clone(scene), covered.node))
-            .collect()
-    }
-
-    /// The colliders of the nodes a query's `except` option names. Nodes without colliders in
-    /// the world are in nothing's way already.
-    fn except(&self, options: Option<&mlua::Table>) -> mlua::Result<Vec<ColliderId>> {
-        let nodes = excepted(options)?;
-        let colliders = nodes.iter().filter_map(|node| self.covered_of(node));
-        Ok(colliders
-            .map(|index| self.covered[index].collider)
-            .collect())
-    }
-
-    /// The nodes whose colliders `query` finds, but those `options` excepts.
-    fn query_nodes(
-        &mut self,
-        options: Option<&mlua::Table>,
-        query: impl FnOnce(&mut World, &[ColliderId]) -> Vec<ColliderId>,
-    ) -> mlua::Result<Vec<SceneNode>> {
-        let except = self.except(options)?;
-        let Some(scene) = self.followed()? else {
-            return Ok(Vec::new());
-        };
-        let found = query(&mut self.world, &except);
-        Ok(self.nodes(&scene, &found))
-    }
-}
-
-impl mlua::UserData for PhysicsWorld {
-    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method_mut(
-            "add",
-            |_, world, (node, options): (mlua::UserDataRef<SceneNode>, Option<mlua::Table>)| {
-                let flag = |name: &str| -> mlua::Result<bool> {
-                    match &options {
-                        Some(options) => Ok(options.get::<Option<bool>>(name)?.unwrap_or(false)),
-                        None => Ok(false),
-                    }
-                };
-                let solid = match (flag("edges")?, flag("sensor")?) {
-                    (true, true) => {
-                        return Err(mlua::Error::runtime(
-                            "a sensor is all of its area, not only its edges: give a node `edges` \
-                             or `sensor`, not both",
-                        ));
-                    }
-                    (true, false) => Solid::Edges,
-                    (false, true) => Solid::Sensor,
-                    (false, false) => Solid::Whole,
-                };
-                world.check(&node)?;
-                node.read(|scene, id| world.add(scene, id, solid))
-            },
-        );
-        methods.add_method_mut("remove", |_, world, node: mlua::UserDataRef<SceneNode>| {
-            let ours = world
-                .scene
-                .as_ref()
-                .is_some_and(|scene| Rc::ptr_eq(scene, &node.scene));
-            let found = world
-                .covered
-                .iter()
-                .position(|covered| covered.node == node.id);
-            if let (true, Some(index)) = (ours, found) {
-                let covered = world.covered.remove(index);
-                world.world.remove(covered.collider);
-            }
-            Ok(())
-        });
-        methods.add_method_mut(
-            "move",
-            |_, world, (node, dx, dy, area): (mlua::UserDataRef<SceneNode>, f32, f32, Rect)| {
-                check_finite(&[dx, dy], "a move")?;
-                check_finite(&[area.x, area.y, area.w, area.h], "a box")?;
-                if !(area.w > 0.0 && area.h > 0.0) {
-                    let message = format!(
-                        "a box must be wider and taller than 0, not {} by {}",
-                        area.w, area.h
-                    );
-                    return Err(mlua::Error::runtime(message));
-                }
-                world.check(&node)?;
-                let moved = node.read(|scene, id| {
-                    world.follow(scene);
-                    let [x, y] = scene.transform(id).apply([0.0, 0.0]);
-                    let at = Rect::new(x + area.x, y + area.y, area.w, area.h);
-                    // The node's own collider isn't in its way.
-                    let own = world.covered.iter().find(|covered| covered.node == id);
-                    let own = own.map(|covered| covered.collider);
-                    world.world.slide(at, [dx, dy], own)
-                })?;
-                // Moved in the scene's coordinates, so in its parent's, by however much the
-                // parent turns and stretches it.
-                let moved = node.write(|scene, id| {
-                    let local = match scene.node(id).parent() {
-                        Some(parent) => match scene.transform(parent).inverse() {
-                            Some(inverse) => Affine {
-                                translation: [0.0, 0.0],
-                                ..inverse
-                            }
-                            .apply(moved),
-                            None => return [0.0, 0.0],
-                        },
-                        None => moved,
-                    };
-                    let [x, y] = scene.node(id).position();
-                    scene
-                        .node_mut(id)
-                        .set_position([x + local[0], y + local[1]]);
-                    moved
-                })?;
-                Ok((moved[0], moved[1]))
-            },
-        );
-        methods.add_method_mut(
-            "ray",
-            |lua, world, (x, y, dx, dy, options): (f32, f32, f32, f32, Option<mlua::Table>)| {
-                check_finite(&[x, y], "a ray's start")?;
-                check_finite(&[dx, dy], "a ray's direction")?;
-                if [dx, dy] == [0.0; 2] {
-                    return Err(mlua::Error::runtime("a ray's direction can't be zero"));
-                }
-                let distance = ray_distance(options.as_ref())?;
-                let except = world.except(options.as_ref())?;
-                let Some(scene) = world.followed()? else {
-                    return Ok(None);
-                };
-                let hit = world.world.cast_ray([x, y], [dx, dy], distance, &except);
-                let Some((hit, covered)) = hit.and_then(|hit| {
-                    let covered = world.covered.iter().find(|c| c.collider == hit.collider)?;
-                    Some((hit, covered))
-                }) else {
-                    return Ok(None);
-                };
-                let table = lua.create_table_with_capacity(0, 6)?;
-                table.raw_set("node", SceneNode::new(scene, covered.node))?;
-                table.raw_set("distance", hit.distance)?;
-                table.raw_set("x", hit.point[0])?;
-                table.raw_set("y", hit.point[1])?;
-                table.raw_set("normal_x", hit.normal[0])?;
-                table.raw_set("normal_y", hit.normal[1])?;
-                Ok(Some(table))
-            },
-        );
-        methods.add_method_mut(
-            "overlap_circle",
-            |_, world, (x, y, radius, options): (f32, f32, f32, Option<mlua::Table>)| {
-                check_finite(&[x, y], "a circle's middle")?;
-                if !(radius.is_finite() && radius > 0.0) {
-                    let message = format!("a circle's radius must be more than 0, not {radius}");
-                    return Err(mlua::Error::runtime(message));
-                }
-                world.query_nodes(options.as_ref(), |world, except| {
-                    world.overlapping_circle([x, y], radius, except)
-                })
-            },
-        );
-        methods.add_method_mut(
-            "overlap_box",
-            |_, world, (area, options): (Rect, Option<mlua::Table>)| {
-                check_finite(&[area.x, area.y, area.w, area.h], "a box")?;
-                if !(area.w > 0.0 && area.h > 0.0) {
-                    let message = format!(
-                        "a box must be wider and taller than 0, not {} by {}",
-                        area.w, area.h
-                    );
-                    return Err(mlua::Error::runtime(message));
-                }
-                world.query_nodes(options.as_ref(), |world, except| {
-                    world.overlapping(Affine::IDENTITY, area, except)
-                })
-            },
-        );
-        methods.add_method_mut("inside", |_, world, node: mlua::UserDataRef<SceneNode>| {
-            let Some(index) = world.covered_of(&node) else {
-                let described = node.read(Scene::describe)?;
-                return Err(mlua::Error::runtime(format!(
-                    "{described} isn't in the physics world: add it first"
-                )));
-            };
-            let collider = world.covered[index].collider;
-            if !world.world.is_sensor(collider) {
-                let described = node.read(Scene::describe)?;
-                return Err(mlua::Error::runtime(format!(
-                    "{described} isn't a sensor, so nothing's in it: add it with `sensor = true`"
-                )));
-            }
-            world.query_nodes(None, |world, _| world.inside(collider))
-        });
-    }
-}
-
 /// A [`World3d`] of the nodes of a 3D view, as scripts hold it, from `physics.world_3d()`: a body
 /// for each node given to it, shaped like what the node shows. Fixed and kinematic bodies follow
 /// their nodes as they move, dynamic bodies move their nodes as the world steps, and characters
@@ -397,7 +96,7 @@ struct Bodied {
     body: BodyId,
     kind: BodyKind,
     shaped: Shaped,
-    character: Option<Character>,
+    character: Option<Character3d>,
     /// How the node was placed when the body was last put where it is, or put the node there.
     placed: Placed,
     /// Where a character's last walk left its feet, in the view's world: its body goes there
@@ -574,7 +273,7 @@ struct Asked {
     kind: BodyKind,
     shaped: Shaped,
     material: Material,
-    character: Option<Character>,
+    character: Option<Character3d>,
     sensor: bool,
 }
 
@@ -652,7 +351,7 @@ impl Asked {
 
 /// A character from `world:add`'s `character` option, sized by what its node shows unless it
 /// says otherwise.
-fn read_character(options: &mlua::Table, scene: &Scene, id: NodeId) -> mlua::Result<Character> {
+fn read_character(options: &mlua::Table, scene: &Scene, id: NodeId) -> mlua::Result<Character3d> {
     let shown = geometry(scene.node(id).kind())
         .and_then(|(points, _)| Bounds3::from_points(points))
         .map(|bounds| {
@@ -692,7 +391,7 @@ fn read_character(options: &mlua::Table, scene: &Scene, id: NodeId) -> mlua::Res
              and its mass more than 0, not {step}, {slope} and {mass}"
         )));
     }
-    Ok(Character {
+    Ok(Character3d {
         radius,
         height,
         step,
@@ -723,7 +422,7 @@ fn shape(
     scene: &Scene,
     id: NodeId,
     shaped: Shaped,
-    character: Option<&Character>,
+    character: Option<&Character3d>,
     placed: &Placed,
 ) -> Result<Shape3d, String> {
     if let Some(character) = character {

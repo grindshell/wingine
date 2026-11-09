@@ -14,6 +14,7 @@ use rapier3d::{
     },
 };
 
+use super::{BodyKind, Material, check_material, check_sensor_kind};
 use crate::math::Bounds3;
 
 /// Rapier's vectors and rotations, which are glam's.
@@ -35,20 +36,6 @@ const MAX_STEPS: u32 = 16;
 
 /// The most things a character slides off in one part of its walk.
 const MAX_HITS: usize = 4;
-
-/// How a body moves.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum BodyKind {
-    /// It doesn't: the ground, walls, and what stands still. Only fixed bodies can be shaped by
-    /// their triangles.
-    #[default]
-    Fixed,
-    /// As it's pushed: it falls, tumbles, bounces and rests on what's below it.
-    Dynamic,
-    /// Where it's put, pushing dynamic bodies out of its way as it goes, as a lift or a door
-    /// does, or a character.
-    Kinematic,
-}
 
 /// A body's shape, in its own coordinates.
 #[derive(Clone, Debug, PartialEq)]
@@ -74,27 +61,6 @@ pub enum Shape3d {
         radius: f32,
         height: f32,
     },
-}
-
-/// What a body's surface is like.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Material {
-    /// How heavy each unit of its volume is, which with its shape makes its mass.
-    pub density: f32,
-    /// How much it grips what slides along it: 0 for ice, 1 for rubber.
-    pub friction: f32,
-    /// How much it bounces: 0 for not at all, 1 for back as fast as it hit.
-    pub bounce: f32,
-}
-
-impl Default for Material {
-    fn default() -> Self {
-        Self {
-            density: 1.0,
-            friction: 0.5,
-            bounce: 0.0,
-        }
-    }
 }
 
 /// Where a body is and how it's turned, as a node placed in 3D is: turned by `yaw`, `pitch` and
@@ -188,7 +154,7 @@ pub struct RayHit3d {
 /// A character walking with [`World3d::walk`]: an upright cylinder, standing on its flat feet, so
 /// it stands on the edge of a step as a box would.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Character {
+pub struct Character3d {
     /// How far it reaches out from its middle.
     pub radius: f32,
     /// How tall it is, from its feet to the top of its head.
@@ -201,7 +167,7 @@ pub struct Character {
     pub mass: f32,
 }
 
-impl Character {
+impl Character3d {
     /// Its cylinder, with its middle at the origin.
     fn shape(&self) -> Cylinder {
         Cylinder::new(self.height / 2.0, self.radius)
@@ -210,7 +176,7 @@ impl Character {
 
 /// How a character's walk went: see [`World3d::walk`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Walked {
+pub struct Walked3d {
     /// How far it moved.
     pub moved: [f32; 3],
     /// Whether it ended standing on something it can stand on.
@@ -521,8 +487,8 @@ impl World3d {
     /// in its way.
     ///
     /// On the ground, and not rising, it walks across by the motion's `x` and `z`: up stairs no
-    /// higher than its [`Character::step`], up and down slopes no steeper than its
-    /// [`Character::slope`], sliding along walls and steeper slopes, and staying on the ground as
+    /// higher than its [`Character3d::step`], up and down slopes no steeper than its
+    /// [`Character3d::slope`], sliding along walls and steeper slopes, and staying on the ground as
     /// it goes down steps, and with what it stands on as that goes down, as a lift does, unless it
     /// walks off a ledge, where it falls by the motion's `y`. Off
     /// the ground, or rising, it moves as `motion` says, landing on what it can stand on, sliding
@@ -534,11 +500,11 @@ impl World3d {
     /// light crate at its own speed, and a light one a heavy crate slowly.
     pub fn walk(
         &mut self,
-        character: &Character,
+        character: &Character3d,
         feet: [f32; 3],
         motion: [f32; 3],
         own: Option<BodyId>,
-    ) -> Walked {
+    ) -> Walked3d {
         self.refresh();
         let mut walk = Walk {
             world: &self.rapier,
@@ -571,7 +537,7 @@ impl World3d {
         for push in pushes {
             self.push_away(character, push, across / dt);
         }
-        Walked {
+        Walked3d {
             moved: moved.into(),
             grounded,
         }
@@ -668,7 +634,7 @@ impl World3d {
 
     /// Pushes what a character walking at `velocity` walked into, as a collision of the two
     /// would, along the ground.
-    fn push_away(&mut self, character: &Character, push: Push, velocity: Vector) {
+    fn push_away(&mut self, character: &Character3d, push: Push, velocity: Vector) {
         let Some(body) = self.rapier.bodies.get_mut(push.body) else {
             return;
         };
@@ -703,7 +669,7 @@ struct Push {
 /// A character's walk in progress.
 struct Walk<'a> {
     world: &'a PhysicsWorld,
-    character: &'a Character,
+    character: &'a Character3d,
     shape: Cylinder,
     /// Where the cylinder's middle is.
     middle: Vector,
@@ -1009,9 +975,7 @@ fn excepts(except: &[BodyId], collider: &Collider) -> bool {
 /// Fails unless a sensor can be of `kind` and `shape`: an area doesn't fall, and is solid all
 /// through, which triangles aren't.
 fn check_sensor(kind: BodyKind, shape: &Shape3d) -> Result<(), String> {
-    if kind == BodyKind::Dynamic {
-        return Err("a sensor doesn't fall: make it fixed or kinematic".into());
-    }
+    check_sensor_kind(kind)?;
     if matches!(shape, Shape3d::Triangles { .. }) {
         return Err(
             "a sensor is an area, solid all through, which triangles aren't: give it a hull, a \
@@ -1032,28 +996,6 @@ fn sensed(collider: ColliderBuilder, sensor: bool) -> ColliderBuilder {
     } else {
         collider
     }
-}
-
-/// Fails unless `material` is one a body of `kind` can be of: what falls must weigh something.
-fn check_material(material: &Material, kind: BodyKind) -> Result<(), String> {
-    let Material {
-        density,
-        friction,
-        bounce,
-    } = *material;
-    for (name, value) in [
-        ("density", density),
-        ("friction", friction),
-        ("bounce", bounce),
-    ] {
-        if !(value.is_finite() && value >= 0.0) {
-            return Err(format!("a body's {name} must be 0 or more, not {value}"));
-        }
-    }
-    if kind == BodyKind::Dynamic && density == 0.0 {
-        return Err("a dynamic body's density must be more than 0, so it weighs something".into());
-    }
-    Ok(())
 }
 
 /// A collider of `shape`, for a body of `kind`.
@@ -1195,7 +1137,7 @@ mod tests {
         }
     }
 
-    const WALKER: Character = Character {
+    const WALKER: Character3d = Character3d {
         radius: 0.2,
         height: 1.0,
         step: 0.3,

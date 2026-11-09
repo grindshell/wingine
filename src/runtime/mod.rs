@@ -193,12 +193,15 @@
 //!   `direction`.
 //! - `grid.opposite(direction)`
 //!
-//! `physics`, for collision among a scene's nodes, and bodies and characters in 3D views,
-//! anywhere:
+//! `physics`, for bodies and characters among a scene's nodes, in 2D and in 3D views, anywhere:
 //!
-//! - `physics.world()` returns an empty `PhysicsWorld`, which the first node given to it makes a
-//!   world of that node's scene: its colliders cover nodes as they're drawn, following them as
-//!   they move and going when they do, `world:move` moves nodes among them, and rays, overlaps
+//! - `physics.world(options)` returns an empty `PhysicsWorld`, with `options.metre` of the scene's
+//!   units to a metre (16 by default), whose dynamic bodies fall down the scene with
+//!   `options.gravity` (9.81 metres a second each second by default), and which the first node
+//!   given to it makes a world of that node's scene: its colliders cover nodes as they're drawn,
+//!   or tile maps' solid tiles, following them as they move and going when they do; its bodies
+//!   fall, roll and are carried, moving their nodes as `world:step` moves on through time;
+//!   `world:move` slides nodes among them and `world:walk` walks characters; and rays, overlaps
 //!   and sensors ask it where things are.
 //! - `physics.world_3d(options)` returns an empty `PhysicsWorld3d`, whose dynamic bodies fall with
 //!   `options.gravity`, a vector (9.81 down by default), and which the first node given to it

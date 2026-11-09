@@ -1,0 +1,4 @@
+{
+    "globals": ["quarry"],
+    "lint": { "BuiltinGlobalWrite": false }
+}

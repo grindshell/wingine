@@ -337,7 +337,8 @@ layers.
 
 A tilemap moves with its node, but doesn't turn or stretch, so it has no `rotation`, `scale_x` or
 `scale_y`, and its layers are where it is, so they have no `x`, `y` or `anchor` either. A cell
-blocks movement if it holds a solid tile on any layer.
+blocks movement if it holds a solid tile on any layer, and a tilemap added to a
+[physics world](api/physics.md) is solid there.
 
 ### Tileset files
 

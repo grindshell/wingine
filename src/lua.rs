@@ -155,11 +155,27 @@
 //!   node out of its scene, after which using it is an error apart from `node:is_removed()` and
 //!   `tostring`.
 //! - A `PhysicsWorld`, with the `physics` feature, is userdata for a [`crate::physics::World`] of
-//!   a scene's nodes, from `physics.world()`, whose nodes are all of one scene and none in a 3D
-//!   view. `world:add(node, options)` makes the node solid where it covers, as `node:contains`
-//!   tests, or with `options.edges`, only along its edges, or with `options.sensor`, a sensor,
-//!   solid nowhere but telling what's in it; adding it again changes which.
-//!   Colliders follow their nodes as they move, and go when their nodes are removed.
+//!   a scene's nodes, from `physics.world(options)`, whose nodes are all of one scene and none in
+//!   a 3D view; `options.metre` is how many of the scene's units make a metre (16 by default),
+//!   which Rapier tunes itself for and densities are of a square of, and `options.gravity` how
+//!   fast dynamic bodies falling speed up, down the scene (9.81 metres a second each second by
+//!   default). `world:add(node, options)` makes the node solid where it covers, as
+//!   `node:contains` tests, or with `options.edges`, only along its edges, or with
+//!   `options.sensor`, a sensor, solid nowhere but telling what's in it; adding it again changes
+//!   which. A tile map, or a tile layer, is solid where its solid tiles are, merged into as few
+//!   boxes as rows make, and takes no options. `options.body`, `"fixed"` (the default),
+//!   `"dynamic"` or `"kinematic"`, gives it a body, shaped by `options.shape`, `"box"` (what it
+//!   covers, stretched as it is) or `"circle"` (inside that, as wide as its widest side), of
+//!   `options.density`, `friction` and `bounce`; a fixed box is the collider that covers it.
+//!   `options.character`, `{ width, height, step, slope, mass }`, any of them left out, makes it a
+//!   character, a kinematic box standing on its position. Bodies that move are placed by where
+//!   the node is and how it's turned, so the nodes around them may move them but not turn or
+//!   stretch them. Colliders follow their nodes as they move, and go when their nodes are removed.
+//!   `world:step(dt)` brings colliders up to date with nodes scripts moved, moves the world on,
+//!   and moves and turns dynamic bodies' nodes to their bodies. `world:walk(node, dx, dy)` walks a
+//!   character, moving its node, and returns how far it moved and whether it's on the ground.
+//!   `world:velocity(node)`, `world:set_velocity(node, vx, vy)`, `world:push(node, x, y)` and
+//!   `world:is_resting(node)` read and change a body's motion, in pairs of numbers.
 //!   `world:remove(node)` makes it solid nowhere. `world:move(node, dx, dy, box)` moves the node
 //!   by up to `dx`, `dy` in the scene, as the `Rect` `box` around its position slides, stopping
 //!   at what's solid and sliding along it, without its own collider or sensors in the way, and

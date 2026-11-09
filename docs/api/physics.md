@@ -1,12 +1,13 @@
 # `physics`
 
-Physics among a scene's nodes, by [Rapier](https://rapier.rs): in 2D, nodes made solid where
-they're drawn, and characters that walk among them, stopping at what's solid and sliding along
-it, as the player walks around the [garden](../../examples/garden); and in [3D views](scene.md),
-bodies that fall, tumble and come to rest, and characters that walk up stairs and slopes among
-them, pushing what's in their way, as the player runs around the
-[course](../../examples/course). In both, rays, overlaps and sensors tell where things are.
-Everything here works any time.
+Physics among a scene's nodes, by [Rapier](https://rapier.rs). In 2D: nodes made solid where
+they're drawn and tile maps where their tiles are, characters seen from above that slide along
+what they bump into, as the player walks around the [garden](../../examples/garden), and bodies
+that fall, roll and stack, with characters seen from the side walking among them, as the player
+climbs out of the [quarry](../../examples/quarry). In [3D views](scene.md), bodies that fall,
+tumble and come to rest, and characters that walk up stairs and slopes among them, pushing what's
+in their way, as the player runs around the [course](../../examples/course). In both, rays,
+overlaps and sensors tell where things are. Everything here works any time.
 
 Physics is the same to the bit on every platform, so a game that replays inputs, as
 [`exact`](exact.md) lets one, plays out the same everywhere.
@@ -14,9 +15,13 @@ Physics is the same to the bit on every platform, so a game that replays inputs,
 ## In 2D
 
 A physics world holds nodes of one [scene](scene.md), each solid where it's drawn, turned,
-stretched and mirrored as it is, the area `node:contains` tests, or only along its edges.
-Colliders follow their nodes: a node that moves, turns or changes size is solid where it is now,
-and one removed from its scene is solid nowhere. Whether a node is shown doesn't matter.
+stretched and mirrored as it is, the area `node:contains` tests, or only along its edges. A tile
+map is solid where its tiles are [solid](scene.md), on any of its layers, and a tile layer where
+its own are. Colliders follow their nodes: a node that moves, turns or changes size is solid
+where it is now, a tile map whose tiles a script sets is solid where they are now, and a node
+removed from its scene is solid nowhere. Whether a node is shown doesn't matter.
+
+Seen from above, as in the garden, a character slides among them with `world:move`:
 
 ```lua
 local level = scene.load("level.scene.luau")
@@ -54,6 +59,80 @@ function draw()
 end
 ```
 
+### Bodies and characters in 2D
+
+Nodes can have bodies, as in 3D: fixed, the default, dynamic or kinematic.
+
+- **Dynamic** bodies fall, slide, roll, bounce and stack, as `world:step` moves the world on, and
+  they move and turn their nodes. Each is a box, what its node covers, stretched as it is, or a
+  circle inside that, as wide as its widest side. A script that moves a dynamic body's node puts
+  the body there.
+- **Kinematic** bodies go where their nodes are put, pushing dynamic bodies out of the way and
+  carrying what stands on them, as a lift does.
+- A **character** is a kinematic box walked by `world:walk`, standing on its node's position. It
+  walks along the ground, up steps and slopes it can climb, down them without leaving the ground,
+  and along with what it stands on, a lift or a crate, as that moves, pushing dynamic bodies it
+  walks into. The game keeps how fast it's falling, and makes it jump.
+
+`world:move` slides a node without pushing anything, bodies included, as a character seen from
+above walks; `world:walk` is for characters seen from the side, which stand on things and push
+them.
+
+A scene's units are usually pixels, which Rapier, tuned for metres, needs told about: a world's
+`metre` is how many of them make one, 16 by default, so a crate 16 pixels across is a metre
+across and, at a density of 1, weighs 1. Gravity pulls down the scene at 9.81 metres a second
+each second, 157 pixels at 16 to a metre, unless the world says otherwise; games usually want
+more, and those seen from above, none.
+
+```lua
+local level = scene.load("level.scene.luau")
+local player = level:find("player")
+
+local GRAVITY = 600
+local world = physics.world({ gravity = GRAVITY })
+-- The level's tile map is solid where its tiles are.
+world:add(level:find("map"))
+for _, crate in level:tagged("crate") do
+    world:add(crate, { body = "dynamic", friction = 0.6 })
+end
+world:add(level:find("boulder"), { body = "dynamic", shape = "circle" })
+world:add(level:find("lift"), { body = "kinematic" })
+world:add(player, { character = { width = 8, height = 14, step = 4 } })
+
+input.bind("left", { "Left", "A" })
+input.bind("right", { "Right", "D" })
+input.bind("jump", { "Space" })
+
+local SPEED = 90
+local JUMP = 230
+-- How fast the player is falling, in pixels a second: rising while it's less than 0.
+local falling = 0
+local grounded = false
+
+function update(dt: number)
+    if grounded and input.pressed("jump") then
+        falling = -JUMP
+    end
+    falling += GRAVITY * dt
+    local across = input.axis("left", "right") * SPEED * dt
+    local _, _, on_ground = world:walk(player, across, falling * dt)
+    grounded = on_ground
+    if grounded then
+        falling = 0
+    end
+    world:step(dt)
+end
+
+function draw()
+    graphics.clear("#000000")
+    graphics.draw_scene(level)
+end
+```
+
+A body that moves may be inside nodes that move it, but not ones that turn or stretch it, so it's
+placed only by where it is and how it's turned. Fixed nodes can be anywhere. Bodies go when their
+nodes are removed from their scene.
+
 ### Where things are in 2D
 
 The world answers questions about where things are, by its colliders, in the scene's
@@ -68,8 +147,11 @@ coordinates:
   the area beside a sign.
 
 They find only nodes in the world, so a character a sensor should notice is added too, solid
-where it's drawn; its own collider isn't in its way as it moves. They never find sensors, and
-return nodes in the order they were added. The garden throws seeds this way:
+where it's drawn; its own collider isn't in its way as it moves. They find nodes where they are
+now, moved by scripts since the last step too, but a kinematic body that isn't a sensor, a
+character's among them, where the last step took it until the next takes it to its node. They
+never find sensors, and return nodes in the order they were added. The garden throws seeds this
+way:
 
 ```lua
 world:add(player)
@@ -224,12 +306,15 @@ end
 ### `physics.world`
 
 ```lua
-physics.world(): PhysicsWorld
+physics.world(options: { metre: number?, gravity: number? }?): PhysicsWorld
 ```
 
-Returns an empty 2D physics world. The first node given to it, to `add` or `move`, makes it a
-world of that node's scene, and giving it a node of another scene is an error. Nodes in 3D views
-have no place in one: they go in a world from `physics.world_3d`.
+Returns an empty 2D physics world, with `metre` of the scene's units to a metre, 16 by default,
+which Rapier tunes itself for and densities are of a square of, and whose dynamic bodies fall
+down the scene with `gravity`, in its units a second each second: by default 9.81 metres' worth,
+as Earth's gravity does. `metre` must be more than 0. The first node given to it, to `add` or
+`move`, makes it a world of that node's scene, and giving it a node of another scene is an error.
+Nodes in 3D views have no place in one: they go in a world from `physics.world_3d`.
 
 ### `physics.world_3d`
 
@@ -248,7 +333,7 @@ An engine built without its `physics` feature has no physics worlds: both functi
 ### `world:add`
 
 ```lua
-world:add(node: SceneNode, options: { edges: boolean?, sensor: boolean? }?)
+world:add(node: SceneNode, options: ColliderOptions?)
 ```
 
 Makes `node` solid where it's drawn: all of what it covers, or with `edges = true`, only its edges,
@@ -257,7 +342,38 @@ which keep what's inside in and what's outside out, as a fence around a field do
 [`world:inside`](#worldinside) tells what's in, which can't also be only its edges. Only the node
 is in the world, not the nodes inside it, and a plain node covers nothing, so it's nowhere.
 
-Adding a node again changes how solid it is.
+A tile map is solid where its solid tiles are, on any of its layers, and a tile layer where its
+own are, merged into as few boxes as its rows make, so what slides along a floor has no seams to
+catch on. They take no options.
+
+`options`, all of them optional:
+
+| Option | |
+|---|---|
+| `edges` | Only its edges are solid when `true`. Only for a fixed box. |
+| `sensor` | Makes it a sensor when `true`: an area nothing bumps into. A sensor is fixed or kinematic, not dynamic. |
+| `body` | `"fixed"` (the default), `"dynamic"` or `"kinematic"`. |
+| `shape` | `"box"`, what it covers, stretched as it is, the default; or `"circle"`, the circle inside that as wide as its widest side. A fixed box is turned with its node as it's drawn; other bodies are turned by the body. |
+| `density` | How heavy each square metre of it is: 1 by default. With its shape, it makes a dynamic body's mass. |
+| `friction` | How much it grips what slides along it, from 0 for ice: 0.5 by default. |
+| `bounce` | How much it bounces, from 0, not at all, the default, to 1, as fast as it hit. |
+| `character` | Makes it a character, which `world:walk` walks, of a kinematic box: a table of how it's sized and walks, below. |
+
+A character's table, all of it optional:
+
+| Option | |
+|---|---|
+| `width` | How wide its box is: by default, as wide as what its node covers. |
+| `height` | How tall it is, up from its node's position, its feet: by default, as tall as what its node covers. |
+| `step` | The highest it steps up, as onto a stair: a third of its height by default. |
+| `slope` | The steepest slope it walks up and stands on, in radians: 45 degrees (`math.pi / 4`) by default. Steeper slopes are walls to it. |
+| `mass` | How heavy it is, for how hard it pushes dynamic bodies: 1 by default. |
+
+A character's box is never turned, so a character can waddle or mirror without its feet changing.
+A plain node covers nothing to shape a body by, but can be a character with a `width` and a
+`height`.
+
+Adding a node again changes how solid it is, or gives it a new body.
 
 ### `world:remove`
 
@@ -266,6 +382,77 @@ world:remove(node: SceneNode)
 ```
 
 Makes `node` solid nowhere, if it was. Removing a node from its scene does this too.
+
+### `world:step`
+
+```lua
+world:step(dt: number)
+```
+
+Moves the world on by `dt` seconds, a frame's `update` time: dynamic bodies fall, roll, push
+each other and come to rest, moving and turning their nodes, and kinematic bodies move to where
+their nodes are. Colliders first follow their nodes, if scripts have moved them or the nodes
+they're in. Steps are taken as in 3D: those longer than a sixtieth of a second in equal parts,
+and the same every update with an `update_rate` of 60.
+
+### `world:walk`
+
+```lua
+world:walk(node: SceneNode, dx: number, dy: number): (number, number, boolean)
+```
+
+Walks the character `node` by up to `dx`, `dy`, and returns how far it moved and whether it's on
+the ground. `dy` is down the scene, so a character falls by a `dy` more than 0. On the ground,
+and not rising, it's first carried along with what it stands on, as far as that moved where it
+stands in the last step, across, up or down, as a lift carries it, then walks across by `dx`: up
+steps no higher than its `step`, up and down slopes no steeper than its `slope`, staying on the
+ground as it goes down them, and sliding along walls and steeper slopes; or off a ledge, falling
+by `dy`. Off the ground, or rising, it moves as `dx` and `dy` say, landing on what it can stand
+on, sliding down what's too steep, and stopping at ceilings. It stops a hundredth of a unit short
+of what it hits, and its own body isn't in its way.
+
+Dynamic bodies it walks into are pushed along at the speed it walks, taken over the last step's
+time, so call it in `update`, with `world:step` after. A script that moves a character's node
+itself, rather than walking it, puts its body there at once.
+
+### `world:velocity`
+
+```lua
+world:velocity(node: SceneNode): (number, number)
+```
+
+Returns how fast `node`'s body is moving, in units a second, across and down. A fixed node's
+isn't.
+
+### `world:set_velocity`
+
+```lua
+world:set_velocity(node: SceneNode, vx: number, vy: number)
+```
+
+Sets how fast `node`'s dynamic body is moving. Bodies of other kinds don't change.
+
+### `world:push`
+
+```lua
+world:push(node: SceneNode, x: number, y: number)
+```
+
+Pushes `node`'s dynamic body through its middle, changing its velocity by the impulse `x`, `y`
+over its mass, as a kick does. Bodies of other kinds don't change.
+
+### `world:is_resting`
+
+```lua
+world:is_resting(node: SceneNode): boolean
+```
+
+Returns whether `node`'s body is at rest: always for a fixed one, for a kinematic one while it
+isn't moving or turning, and for a dynamic one once it has been still for a couple of seconds,
+after which the world leaves it alone until something touches it.
+
+Using `walk`, `velocity`, `set_velocity`, `push`, `is_resting` or `inside` on a node that isn't in
+the world is an error, as is walking a node that isn't a character.
 
 ### `world:move`
 
@@ -286,7 +473,8 @@ and stretches it, so it moves `dx`, `dy` in the scene wherever it is.
 
 A box that starts inside something solid moves only out of it or along it. The node itself isn't
 in its way, so a character can be solid, for others to bump into and sensors to find, and still
-move. Sensors aren't in its way either.
+move. Sensors aren't in its way either. Bodies are, and it doesn't push them: a character seen
+from the side, which does, walks with [`world:walk`](#worldwalk).
 
 ### `world:ray`
 

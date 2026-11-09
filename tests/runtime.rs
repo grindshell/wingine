@@ -3426,6 +3426,309 @@ mod physics {
         assert!(err.contains("not both"), "{err}");
     }
 
+    /// A building site seen from the side: a tile map 128 by 64 with a wall of stone down its left
+    /// 16 and a floor whose top is at 48, and on a layer of its own, a stone from 112 to 128 across
+    /// and 16 to 32 down; a crate 16 across standing at 40, 20; a ball 16 across around 64, 20; a
+    /// lift 32 across, its top at 34, its middle at 96; a pebble in a group at 20; a stone in a
+    /// turned node; a walker on the floor; and a plain node.
+    const SITE: &str = r##"return {
+    format = 3,
+    children = {
+        {
+            name = "map", kind = "tilemap", tileset = "stone.tileset.luau", columns = 8, rows = 4,
+            children = {
+                {
+                    name = "ground", kind = "tile_layer", legend = { X = "stone", ["."] = "sand" },
+                    tiles = { "X.......", "X.......", "X.......", "XXXXXXXX" },
+                },
+                {
+                    name = "moss", kind = "tile_layer", legend = { X = "stone" },
+                    tiles = { "        ", "       X", "        ", "        " },
+                },
+            },
+        },
+        { name = "crate", kind = "area", x = 40, y = 20, width = 16, height = 16, pivot = { 8, 16 } },
+        { name = "ball", kind = "area", x = 64, y = 20, width = 16, height = 16, pivot = { 8, 8 } },
+        { name = "lift", kind = "area", x = 96, y = 34, width = 32, height = 4, pivot = { 16, 0 } },
+        {
+            name = "group", kind = "node", x = 20,
+            children = {
+                { name = "pebble", kind = "area", y = 10, width = 4, height = 4, pivot = { 2, 4 } },
+            },
+        },
+        {
+            name = "turned", kind = "node", rotation = 0.5,
+            children = { { name = "stone", kind = "area", width = 4, height = 4 } },
+        },
+        { name = "walker", kind = "node", x = 24, y = 48 },
+        { name = "label", kind = "node" },
+    },
+}"##;
+
+    const STONE: &str = r##"return {
+    format = 3,
+    tile_width = 16,
+    tile_height = 16,
+    sheets = { tiles = { path = "stone.png", tile_width = 16, tile_height = 16 } },
+    tiles = {
+        stone = { sheet = "tiles", cell = { 0, 0 }, solid = true },
+        sand = { sheet = "tiles", cell = { 0, 0 } },
+    },
+}"##;
+
+    /// The site, loaded as `site`, its crate, ball, lift and walker as globals, and its map in
+    /// `world`, whose gravity pulls down at 160, after which `setup` runs.
+    fn site(test: &str, setup: &str) -> Simulation<LuauGame> {
+        let main = format!(
+            "site = scene.load('site.scene.luau')
+            crate = site:find('crate')
+            ball = site:find('ball')
+            lift = site:find('lift')
+            walker = site:find('walker')
+            world = physics.world({{ gravity = 160 }})
+            world:add(site:find('map'))
+            function run(frames)
+                for _ = 1, frames do
+                    world:step(1 / 60)
+                end
+            end
+            {setup}"
+        );
+        let folder = game(
+            test,
+            &[
+                ("site.scene.luau", SITE),
+                ("stone.tileset.luau", STONE),
+                ("main.luau", &main),
+            ],
+        );
+        write_png(&folder.join("stone.png"), 16, 16, &[RED; 256]);
+        simulation(&folder)
+    }
+
+    #[test]
+    fn tilemaps_are_solid_where_their_tiles_are() {
+        let mut simulation = site("physics_tiles", "");
+        // The wall down the map's left, its floor, and the stone on its other layer.
+        let (name, distance, at) = hit_2d(&mut simulation, "world:ray(60, 5, -1, 0)").unwrap();
+        assert_eq!(name, "map");
+        assert!(
+            near(distance, 44.0) && near_4(at, [16.0, 5.0, 1.0, 0.0]),
+            "{at:?}"
+        );
+        let (_, distance, _) = hit_2d(&mut simulation, "world:ray(60, 5, 0, 1)").unwrap();
+        assert!(near(distance, 43.0), "{distance}");
+        let (_, distance, _) = hit_2d(&mut simulation, "world:ray(60, 24, 1, 0)").unwrap();
+        assert!(near(distance, 52.0), "{distance}");
+        // Its tiles as they're set, and the map where it's moved.
+        simulation.exec("site:find('map/ground'):set_tile(3, 0, 'stone')");
+        let (_, distance, _) = hit_2d(&mut simulation, "world:ray(100, 5, -1, 0)").unwrap();
+        assert!(near(distance, 36.0), "{distance}");
+        simulation.exec("site:find('map'):set_position(0, 10)");
+        let (_, distance, _) = hit_2d(&mut simulation, "world:ray(100, 5, 0, 1)").unwrap();
+        assert!(near(distance, 53.0), "{distance}");
+        // A layer is solid only where its own tiles are.
+        simulation.exec(
+            "world:remove(site:find('map'))
+            world:add(site:find('map/moss'))",
+        );
+        assert_eq!(hit_2d(&mut simulation, "world:ray(100, 5, 0, 1)"), None);
+        let (name, distance, _) = hit_2d(&mut simulation, "world:ray(60, 34, 1, 0)").unwrap();
+        assert!(name == "moss" && near(distance, 52.0), "{name}, {distance}");
+        let err = simulation
+            .try_exec("world:add(site:find('map'), { body = 'dynamic' })")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("takes no options"), "{err}");
+    }
+
+    #[test]
+    fn dynamic_nodes_fall_and_turn_their_nodes() {
+        let mut simulation = site(
+            "physics_dynamic_2d",
+            "world:add(crate, { body = 'dynamic' })
+            world:add(ball, { body = 'dynamic', shape = 'circle' })",
+        );
+        simulation.exec("run(180)");
+        // On the floor: the crate stands on its position, and the ball's is its middle.
+        let (x, y): (f32, f32) = simulation.eval("crate:position()");
+        assert!(near(x, 40.0) && (y - 48.0).abs() < 0.3, "{x}, {y}");
+        let (_, y): (f32, f32) = simulation.eval("ball:position()");
+        assert!((y - 40.0).abs() < 0.3, "{y}");
+        let (vx, vy): (f32, f32) = simulation.eval("world:velocity(crate)");
+        assert!(vx.abs() < 0.5 && vy.abs() < 0.5, "{vx}, {vy}");
+        // Rolled to the right, the ball turns clockwise; pushed, the crate slides.
+        simulation.exec(
+            "world:set_velocity(ball, 40, 0)
+            world:push(crate, -30, 0)
+            run(20)",
+        );
+        let (x, _): (f32, f32) = simulation.eval("ball:position()");
+        assert!(x > 70.0, "{x}");
+        assert!(simulation.eval::<f32>("ball:rotation()") > 0.1);
+        let (x, _): (f32, f32) = simulation.eval("crate:position()");
+        assert!(x < 39.0, "{x}");
+        // Put back up by a script, it falls from there.
+        simulation.exec(
+            "crate:set_position(40, 10)
+            run(1)",
+        );
+        let (_, y): (f32, f32) = simulation.eval("crate:position()");
+        assert!(y < 12.0, "{y}");
+        simulation.exec("run(300)");
+        assert!(simulation.eval::<bool>("world:is_resting(crate)"));
+    }
+
+    #[test]
+    fn bodies_in_2d_follow_the_nodes_they_are_in() {
+        let mut simulation = site(
+            "physics_dynamic_parents",
+            "world:add(site:find('group/pebble'), { body = 'dynamic' })",
+        );
+        simulation.exec(
+            "site:find('group'):set_position(30, 0)
+            run(1)",
+        );
+        let (x, y): (f32, f32) = simulation.eval("site:find('group/pebble'):world_position()");
+        assert!(near(x, 30.0) && y > 10.0, "{x}, {y}");
+        let err = simulation
+            .try_exec("world:add(site:find('turned/stone'), { body = 'dynamic' })")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("turns or stretches"), "{err}");
+        // A fixed one can be anywhere.
+        simulation.exec("world:add(site:find('turned/stone'))");
+    }
+
+    #[test]
+    fn kinematic_nodes_go_where_they_are_put_carrying_what_is_on_them() {
+        let mut simulation = site(
+            "physics_kinematic_2d",
+            "world:add(lift, { body = 'kinematic' })
+            ball:set_position(96, 20)
+            world:add(ball, { body = 'dynamic', shape = 'circle' })
+            world:add(walker, { character = { width = 8, height = 14 } })
+            walker:set_position(84, 34)",
+        );
+        simulation.exec("run(120)");
+        let (_, y): (f32, f32) = simulation.eval("ball:position()");
+        assert!((y - 26.0).abs() < 0.3, "{y}");
+        // Up by 15, carrying the ball, and the walker standing on it, by its walks.
+        simulation.exec(
+            "for i = 1, 30 do
+                lift:set_position(96, 34 - i / 2)
+                world:walk(walker, 0, 1)
+                world:step(1 / 60)
+            end",
+        );
+        let (_, y): (f32, f32) = simulation.eval("ball:position()");
+        assert!((y - 11.0).abs() < 1.0, "{y}");
+        let (x, y): (f32, f32) = simulation.eval("walker:position()");
+        assert!(
+            near(x, 84.0) && (y - 19.5).abs() < 0.1,
+            "a frame behind: {x}, {y}"
+        );
+    }
+
+    #[test]
+    fn characters_walk_stop_and_land_in_2d() {
+        let mut simulation = site(
+            "physics_characters_2d",
+            "world:add(walker, { character = { width = 8, height = 14 } })",
+        );
+        let (dx, dy, grounded): (f32, f32, bool) = simulation.eval("world:walk(walker, 20, 1)");
+        assert!(near(dx, 20.0) && near(dy, 0.0) && grounded, "{dx}, {dy}");
+        // Into the wall down the map's left, its side a hundredth of a pixel from it.
+        simulation.exec("world:walk(walker, -40, 1)");
+        let (x, _): (f32, f32) = simulation.eval("walker:position()");
+        assert!(near(x, 20.01), "{x}");
+        // Off the ground, it falls, and lands.
+        simulation.exec("walker:set_position(60, 10)");
+        let (_, _, grounded): (f32, f32, bool) = simulation.eval("world:walk(walker, 0, 10)");
+        assert!(!grounded);
+        let (_, dy, grounded): (f32, f32, bool) = simulation.eval("world:walk(walker, 0, 50)");
+        assert!(grounded && near(dy, 28.0 - 0.01), "{dy}");
+        let err = simulation
+            .try_exec("world:add(crate) world:walk(crate, 1, 0)")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("isn't a character"), "{err}");
+    }
+
+    #[test]
+    fn fixed_nodes_can_be_circles_and_of_materials() {
+        let mut simulation = site(
+            "physics_fixed_2d",
+            "world:add(ball, { shape = 'circle' })
+            world:add(crate, { friction = 0, bounce = 1 })",
+        );
+        let (name, distance, at) = hit_2d(&mut simulation, "world:ray(64, 0, 0, 1)").unwrap();
+        assert_eq!(name, "ball");
+        assert!(
+            near(distance, 12.0) && near_4(at, [64.0, 12.0, 0.0, -1.0]),
+            "{at:?}"
+        );
+        let err = simulation
+            .try_exec("world:add(crate, { friction = -1 })")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("friction must be 0 or more"), "{err}");
+    }
+
+    #[test]
+    fn bodies_in_2d_say_what_is_wrong() {
+        let mut simulation = site("physics_body_errors_2d", "");
+        let error = |simulation: &mut Simulation<LuauGame>, code: &str| {
+            simulation.try_exec(code).unwrap_err().to_string()
+        };
+        for (code, expected) in [
+            (
+                "world:add(crate, { body = 'floating' })",
+                "\"fixed\", \"dynamic\"",
+            ),
+            (
+                "world:add(crate, { shape = 'ball' })",
+                "\"box\" or \"circle\"",
+            ),
+            (
+                "world:add(crate, { body = 'dynamic', edges = true })",
+                "only a fixed box",
+            ),
+            (
+                "world:add(crate, { body = 'dynamic', sensor = true })",
+                "doesn't fall",
+            ),
+            (
+                "world:add(crate, { body = 'dynamic', density = 0 })",
+                "density must be more than 0",
+            ),
+            (
+                "world:add(walker, { character = { width = 8, height = 8 }, body = 'fixed' })",
+                "kinematic",
+            ),
+            (
+                "world:add(walker, { character = { width = 8, height = 8 }, shape = 'circle' })",
+                "not a shape",
+            ),
+            (
+                "world:add(walker, { character = { width = 8, height = 8 }, sensor = true })",
+                "can't be a sensor",
+            ),
+            ("world:add(walker, { character = {} })", "give it a width"),
+            (
+                "world:add(site:find('label'), { body = 'dynamic' })",
+                "covers nothing",
+            ),
+            ("world:velocity(crate)", "isn't in the physics world"),
+            ("world:walk(walker, 0 / 0, 0)", "finite"),
+            ("physics.world({ metre = 0 })", "more than 0"),
+            ("physics.world({ gravity = 1 / 0 })", "finite"),
+        ] {
+            let err = error(&mut simulation, code);
+            assert!(err.contains(expected), "{code}: {err}");
+        }
+    }
+
     /// A 3D view of a pen: a floor whose top is at `y` 0, a wall across `x` from 2 to 2.5, a crate
     /// half a unit across held up at 2, a turned group with a box in it, a group at -4 with a
     /// block half a unit across standing in it, and a walker.

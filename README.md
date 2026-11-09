@@ -27,8 +27,9 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **Rigged characters** animated by clips of keyframes, layered and crossfaded.
 - **Grid movement** from tile to tile, and **sprite animation**.
 - **Physics** with [Rapier](https://rapier.rs), the same to the bit on every platform: solid
-  scene nodes and characters that slide along them in 2D; falling, tumbling bodies and characters
-  that climb stairs in 3D; and rays, overlaps and sensors in both.
+  scene nodes and tile maps, bodies that fall, roll and stack, lifts that carry what's on them,
+  and characters that climb steps and slopes, pushing what they walk into, in 2D and 3D; and
+  rays, overlaps and sensors in both.
 - **Text** in a built-in pixel font, bitmap fonts and TrueType fonts, wrapped and revealed a
   glyph at a time.
 - **Input** from the keyboard, mouse and gamepads, bound to named actions players can rebind.
@@ -69,6 +70,7 @@ need ALSA's library (`libasound2`) and glibc 2.35 or newer.
 | [Orchard](#orchard) | Luau, around a rigged character | `cargo run -- examples/orchard` |
 | [Cellar](#cellar) | Luau, in 2.5D | `cargo run -- examples/cellar` |
 | [Course](#course) | Luau, in 3D with physics | `cargo run -- examples/course` |
+| [Quarry](#quarry) | Luau, in 2D with physics | `cargo run -- examples/quarry` |
 | [Lettering](#lettering) | Luau, around fonts | `cargo run -- examples/lettering` |
 | [Sprites](#sprites) | Rust, with Luau scripts | `cargo run --example sprites` |
 | [Shapes](#shapes) | Rust | `cargo run --example shapes` |
@@ -192,6 +194,18 @@ from Kenney's [Prototype Kit](https://kenney.nl/assets/prototype-kit) and made s
 
 Walk with the arrow keys or a stick, jump with Space, and zoom with the mouse wheel. The player
 climbs the stairs, pushes crates over, and casts a shadow where a jump will land.
+
+### Quarry
+
+[`examples/quarry`](examples/quarry) is a level seen from the side, made physical by a
+[2D physics world](docs/api/physics.md#bodies-and-characters-in-2d): a tile map solid where its
+tiles are, crates that fall and stack, a boulder that rolls down a slope, and a lift that
+carries what's on it.
+
+![A crate bridging the pit, another against the ledge, and the player following the boulder down the slope](docs/screenshots/quarry.png)
+
+Run with the arrow keys and jump with Space: push a crate against the ledge to climb it, and
+ride the lift up to the door.
 
 ### Lettering
 

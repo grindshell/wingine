@@ -1008,7 +1008,9 @@ impl Node {
     }
 
     fn update_local(&mut self) {
-        self.local = Affine::from_parts(self.position, self.rotation, self.scale);
+        // With the same sines on every platform, so what physics places by nodes plays out the
+        // same everywhere.
+        self.local = Affine::from_parts_exact(self.position, self.rotation, self.scale);
         if let Some(spatial) = &mut self.spatial {
             let Placement3 {
                 z,
@@ -1763,7 +1765,7 @@ impl Scene {
             let turned = if node.kind.only_moves() {
                 Affine::IDENTITY
             } else {
-                Affine::from_parts([0.0, 0.0], node.rotation, node.scale)
+                Affine::from_parts_exact([0.0, 0.0], node.rotation, node.scale)
             };
             // Where what it covers starts, from its origin, and how far it reaches: for a plain
             // node, whose origin is at the start of its space, as far as its children reach past
@@ -1796,7 +1798,7 @@ impl Scene {
             }
             let [x, y] = node.position;
             let local =
-                Affine::from_parts([origin[0] + x, origin[1] + y], node.rotation, node.scale);
+                Affine::from_parts_exact([origin[0] + x, origin[1] + y], node.rotation, node.scale);
             slots.push(Placed {
                 transform: local,
                 rect,

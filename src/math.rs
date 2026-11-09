@@ -74,6 +74,23 @@ impl Affine {
         } else {
             rotation.sin_cos()
         };
+        Self::turned(translation, sin, cos, scale)
+    }
+
+    /// [`Affine::from_parts`], with the sine and cosine from `libm`, which gives the same bits on
+    /// every platform, where the platform's C library's may differ in the last: for what physics
+    /// is placed by, such as scene nodes, so it plays out the same everywhere. It's slower, so
+    /// what's drawn many times a frame uses [`Affine::from_parts`].
+    pub fn from_parts_exact(translation: [f32; 2], rotation: f32, scale: [f32; 2]) -> Self {
+        let (sin, cos) = if rotation == 0.0 {
+            (0.0, 1.0)
+        } else {
+            libm::sincosf(rotation)
+        };
+        Self::turned(translation, sin, cos, scale)
+    }
+
+    fn turned(translation: [f32; 2], sin: f32, cos: f32, scale: [f32; 2]) -> Self {
         Self {
             x_axis: [cos * scale[0], sin * scale[0]],
             y_axis: [-sin * scale[1], cos * scale[1]],
@@ -442,6 +459,21 @@ mod tests {
         assert_near(transform.apply([1.0, 0.0]), [10.0, 22.0]);
         // (0, 1) scales to (0, 3) and turns to (-3, 0).
         assert_near(transform.apply([0.0, 1.0]), [7.0, 20.0]);
+    }
+
+    #[test]
+    fn exact_transforms_are_the_same_as_others_to_within_rounding() {
+        for rotation in [0.0, 0.3, FRAC_PI_2, -2.5, 7.0] {
+            let quick = Affine::from_parts([10.0, 20.0], rotation, [2.0, -3.0]);
+            let exact = Affine::from_parts_exact([10.0, 20.0], rotation, [2.0, -3.0]);
+            for point in [[1.0, 0.0], [0.0, 1.0], [-4.0, 9.0]] {
+                assert_near(exact.apply(point), quick.apply(point));
+            }
+        }
+        // Unturned, exactly.
+        let unturned = Affine::from_parts_exact([1.0, 2.0], 0.0, [3.0, 4.0]);
+        assert_eq!(unturned.x_axis, [3.0, 0.0]);
+        assert_eq!(unturned.y_axis, [-0.0, 4.0]);
     }
 
     #[test]

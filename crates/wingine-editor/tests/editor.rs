@@ -255,6 +255,7 @@ fn every_example_scene_opens_without_errors() {
         "cellar",
         "course",
         "lettering",
+        "quarry",
     ] {
         let mut simulation = editor(Some(examples().join(game)));
         let scenes = simulation

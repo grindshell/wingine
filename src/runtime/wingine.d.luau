@@ -175,14 +175,55 @@ type MeshData = {
     indices: { number },
 }
 
---- How `world:add` makes a node solid.
+--- A 2D physics world, for `physics.world`.
+type WorldOptions = {
+    --- How many of the scene's units make a metre, which Rapier tunes itself for and densities
+    --- are of a square of. By default, 16.
+    metre: number?,
+    --- How fast dynamic bodies falling speed up each second, down the scene, in its units. By
+    --- default, 9.81 metres' worth, as Earth's gravity does; 0 for a game seen from above.
+    gravity: number?,
+}
+
+--- How `world:add` makes a node solid in 2D, or gives it a body. A tile map or a tile layer is
+--- solid where its solid tiles are, and takes none of these.
 type ColliderOptions = {
     --- Whether only the node's edges are solid, keeping what's inside in and what's outside out,
-    --- rather than all of it. By default, false.
+    --- rather than all of it. Only for a fixed box. By default, false.
     edges: boolean?,
-    --- Makes it a sensor: an area nothing bumps into, which `world:inside` tells what's in. Not
-    --- with `edges`.
+    --- Makes it a sensor: an area nothing bumps into, which `world:inside` tells what's in. Fixed
+    --- or kinematic, and not with `edges`.
     sensor: boolean?,
+    --- How it moves: not at all (`"fixed"`, the default), as it's pushed and falls
+    --- (`"dynamic"`), or where its node is put (`"kinematic"`, a character's).
+    body: ("fixed" | "dynamic" | "kinematic")?,
+    --- What it's shaped as, from what its node covers: that (`"box"`, the default), or the circle
+    --- inside it as wide as its widest side (`"circle"`).
+    shape: ("box" | "circle")?,
+    --- How heavy each square metre of it is. By default, 1.
+    density: number?,
+    --- How much it grips what slides along it, from 0 for ice. By default, 0.5.
+    friction: number?,
+    --- How much it bounces, from 0 for not at all to 1 for as fast as it hit. By default, 0.
+    bounce: number?,
+    --- Makes it a character, which `world:walk` walks: an upright box, kinematic.
+    character: CharacterOptions2d?,
+}
+
+--- A 2D character's size and how it walks, for `ColliderOptions.character`.
+type CharacterOptions2d = {
+    --- How wide its box is. By default, as wide as what its node covers.
+    width: number?,
+    --- How tall it is, from its feet, its node's position. By default, as tall as what its node
+    --- covers.
+    height: number?,
+    --- The highest it steps up, as onto a stair. By default, a third of its height.
+    step: number?,
+    --- The steepest slope it walks up and stands on, in radians. By default, 45 degrees
+    --- (`math.pi / 4`).
+    slope: number?,
+    --- How heavy it is, for how hard it pushes dynamic bodies. By default, 1.
+    mass: number?,
 }
 
 --- A 3D physics world, for `physics.world_3d`.
@@ -643,14 +684,31 @@ declare extern type SceneNode with
     function set_tile(self, column: number, row: number, name: string?): ()
 end
 
---- Colliders covering nodes of one scene as they're drawn, which follow the nodes as they move and
---- go when they do, and nodes moved among them, from `physics.world()`.
+--- Colliders covering nodes of one scene as they're drawn, or tile maps' solid tiles, and bodies,
+--- which follow the nodes as they move and go when they do, nodes moved and characters walked
+--- among them, from `physics.world()`. Dynamic bodies move their nodes as the world steps.
 declare extern type PhysicsWorld with
     --- Makes `node` solid where it's drawn, turned and stretched as it is, or with `edges`, only
-    --- along its edges. Adding a node again changes how solid it is.
+    --- along its edges, or gives it a body. A tile map is solid where its solid tiles are. Adding
+    --- a node again changes how solid it is.
     function add(self, node: SceneNode, options: ColliderOptions?): ()
     --- Makes `node` solid nowhere, if it was.
     function remove(self, node: SceneNode): ()
+    --- Moves the world on by `dt` seconds: dynamic bodies fall, roll and come to rest, moving and
+    --- turning their nodes, and kinematic bodies go where their nodes are.
+    function step(self, dt: number): ()
+    --- Walks the character `node` by up to `dx`, `dy`, along the ground, up steps and slopes, and
+    --- along with what it stands on, and returns how far it moved and whether it's on the ground.
+    function walk(self, node: SceneNode, dx: number, dy: number): (number, number, boolean)
+    --- How fast `node`'s body is moving, in units a second.
+    function velocity(self, node: SceneNode): (number, number)
+    --- Sets how fast `node`'s dynamic body is moving.
+    function set_velocity(self, node: SceneNode, vx: number, vy: number): ()
+    --- Pushes `node`'s dynamic body through its middle, changing its velocity by the impulse over
+    --- its mass.
+    function push(self, node: SceneNode, x: number, y: number): ()
+    --- Whether `node`'s body is at rest.
+    function is_resting(self, node: SceneNode): boolean
     --- Moves `node` by up to `dx`, `dy` in the scene, as `box` around its position does, stopping
     --- at what's solid and sliding along it, and returns how far it moved.
     function move(self, node: SceneNode, dx: number, dy: number, box: Rect): (number, number)
@@ -995,11 +1053,11 @@ declare grid: {
     opposite: (direction: Direction) -> Direction,
 }
 
---- Collision among a scene's nodes, and bodies and characters in its 3D views.
+--- Bodies and characters among a scene's nodes, in 2D and in its 3D views.
 declare physics: {
     --- Returns an empty physics world, which the first node given to it makes a world of that
     --- node's scene.
-    world: () -> PhysicsWorld,
+    world: (options: WorldOptions?) -> PhysicsWorld,
     --- Returns an empty 3D physics world, which the first node given to it makes a world of the
     --- 3D view that node is in.
     world_3d: (options: World3dOptions?) -> PhysicsWorld3d,
