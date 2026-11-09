@@ -9,7 +9,8 @@ systems, and don't build more 3D features unless asked.
 
 Wingine has what its examples need: tilemaps and batched sprites, meshes and glTF models in 3D
 views picked by boxes, sprite animation, a camera, keyboard, mouse and gamepad input bound to
-actions, grid movement, physics with Rapier (collision in 2D; bodies and characters in 3D views), text, audio, saves, Luau scripting with tasks, native libraries written
+actions, grid movement, physics with Rapier (collision in 2D; bodies and characters in 3D views), text in
+the built-in font, bitmap fonts and TrueType fonts, audio, saves, Luau scripting with tasks, native libraries written
 in Rust, scenes (levels, screens and rigged characters), menus over scenes' nodes, egui
 interfaces, and an editor built on
 the engine. Each feature is finished with a game or example that uses it, with tests.
@@ -37,6 +38,7 @@ networking or 3D pipelines.
 | Gamepads | `gilrs` | Read by the window; simulated without one |
 | Models | `gltf` | glTF 2.0 files, behind the default `models` feature |
 | Physics | `rapier2d`, `rapier3d` | Behind the default `physics` feature |
+| Fonts | `ab_glyph` | TrueType and OpenType fonts, rasterized as text needs their glyphs |
 
 - Rust edition 2024.
 - Licensed under MIT or Apache 2.0, at the user's option (`LICENSE-MIT`, `LICENSE-APACHE`), which
@@ -255,13 +257,28 @@ networking or 3D pipelines.
   one. Luau has `graphics.load_model` (cached by path in `runtime/graphics.rs`, as textures are),
   `graphics.draw_model` (`draw_mesh`'s options but `sprite`), `mesh:bounds()` and
   `model:bounds()`, two vectors, and `graphics.hit_box`.
-- `src/graphics/font.rs` and `default_font.rs`: `Font` (glyphs packed into one texture, with
-  their metrics) and `TextLayout`. `Font::layout` wraps text between words to a width
+- `src/graphics/font.rs` and `default_font.rs`: `Font` and `TextLayout`. A font's glyphs are
+  known from the start, in one texture (`Metrics`: the built-in font, and bitmap fonts, cut from a
+  font file's PNG by `bitmap_metrics`, each as wide as its ink unless monospace), or are a
+  TrueType or OpenType font's at one size (`Face`, the file parsed by `ab_glyph`, and `FaceSize`),
+  rasterized the first time layout asks for them (`FaceSize::glyph`), white with coverage as alpha,
+  or opaque or clear if not smooth, and shelf-packed (`Shelves`) into pages (`Atlas`), textures
+  made and written by `GlyphPages` (`renderer.rs`, holding clones of the device and queue), whose
+  writes land before the frame's draw calls, so a glyph first laid out as a frame draws shows in
+  it. `Font::scaled` rasterizes a vector font again at the new size; a face keeps its last few
+  sizes (`KEPT_SIZES`), so a font scaled in every frame's drawing isn't rasterized each time.
+  Characters a font lacks draw as its `?`. Layout (the `Glyphs` trait, over a `Source`) places
+  glyphs where the pen is, rounded to whole pixels, kerned by a vector font's `kern` table within
+  words, and each `PlacedGlyph` names its page, which drawing looks up (`LastPage`). `Font::layout`
+  wraps text between words to a width
   (`layout_aligned` also lines its lines up by an `Align`, moving each by whole pixels), and
   `Canvas::draw_text_layout` draws a range of its glyphs, which is how dialogue reveals text
-  without words jumping lines. The built-in pixel font is authored in `default_font.rs` as rows of
-  `#` and `.`, and built into a texture when the `Context` is created. Layout logic is separate
-  from the texture (`Metrics`), so its unit tests don't need a GPU.
+  without words jumping lines. `Context::load_font` reads a font file (`scene::FontFile`, whose
+  paths are from its own folder) and `load_vector_font` a `.ttf` or `.otf` with `FontSettings`;
+  `Font::files` lists what each read. The built-in pixel font is authored in `default_font.rs` as
+  rows of `#` and `.`, and built into a texture when the `Context` is created. Layout logic is
+  separate from the textures, so its unit tests, and those of bitmap fonts, packing and
+  rasterizing (from Hack's bytes), don't need a GPU.
 - `src/tilemap.rs`: `Tilemap`, a grid of cells in layers, built from a `Tileset` of `Tile`s
   (a sprite, a tint, and whether it's solid). Layers draw in order, culled to what the canvas
   shows, and `draw_layer` lets games draw characters between them. `is_solid` is the collision
@@ -399,8 +416,9 @@ networking or 3D pipelines.
   early return; tests call `Simulation::reload`. The module docs are the
   reference for script authors; the engine types those tables hand out (sprites, animations,
   meshes, tilemaps, grid movers, text layouts, scene nodes, physics worlds) are userdata, documented with their
-  methods in `src/lua.rs`. Sprite sheets, scenes and `graphics.load_model` share one cache of
-  images and models (`Textures`), so each is read once. `wingine.d.luau` (`runtime::DEFINITIONS`) declares that API's types, with short docs, as
+  methods in `src/lua.rs`. Sprite sheets, scenes, `graphics.load_font` and `graphics.load_model`
+  share one cache of images, fonts and models (`Textures`), so each is read once; a TrueType font
+  loaded again at another size shares its file (`Font::at_size`). `wingine.d.luau` (`runtime::DEFINITIONS`) declares that API's types, with short docs, as
   a definitions file for luau-lsp (`declare extern type ... with` for userdata, `declare name: {}`
   for tables; methods can't be generic there, so generic ones are properties of generic function
   types); `tests/runtime.rs` checks it declares exactly the functions the tables hold, and
@@ -421,7 +439,8 @@ networking or 3D pipelines.
   into `Value`s (`node_fields`), setting the fields and reading it again, so overrides are
   checked as files are (`NodeDef::overridden` does the same for tools, and `NodeDef::fields`
   gives the values); sprites then name sheets `file#sheet`, since nodes from many files are
-  together. `Build` then makes the live nodes, loading sheets, tilesets and model files and
+  together. `Build` then makes the live nodes, loading sheets, tilesets, the font files text names
+  (`TextDef::font`, through `Assets::font`; `file.rs` reads them as `FontFile`s) and model files and
   making the meshes of shapes through `Assets` (`FolderAssets` reads a folder; the runtime caches
   files), and sharing a mesh between nodes of one shape. `Scene` keeps nodes in slots with
   generations, so `NodeId`s of removed nodes never reach nodes added since; each node keeps its
@@ -533,7 +552,8 @@ networking or 3D pipelines.
   rename and move nodes, keeping names unique and clips' tracks pointed at their nodes, and paint
   tile layers' cells, keeping their legends to the characters used), and a
   preview `Scene`, built again from the file whenever it changes, through `AssetCache`
-  (`project.rs`), which rereads a file only when its modified time changes; painting changes the
+  (`project.rs`), which rereads a file only when its modified time changes (a font when its file
+  or the image or font it names does, `Font::files`); painting changes the
   preview's tiles alike instead (`Document::edit_with_preview`), so strokes don't rebuild it. A
   selection can be a node inside an instance, by its path of names (`Document::select_inner`):
   the Scene dock lists an instance's nodes from the preview, `instance.rs` finds the node in the
@@ -541,7 +561,8 @@ networking or 3D pipelines.
   the instance's override made, writing back as the override whatever differs from the scene's
   node. Docks return actions
   that the editor applies, each a change of its own; the Inspector edits a copy of the node and
-  puts it back only if it changed. The viewport renders the preview into a `GuiCanvas` with
+  puts it back only if it changed; text's font is a choice of the built-in font or the game's
+  `*.font.luau` files (`font_choice`). The viewport renders the preview into a `GuiCanvas` with
   `Scene::draw_with_size` at the game's canvas size (from `conf.luau`), mapping between the
   scene and the window as `Camera` does (`ViewMap`), and picks what can be seen before areas,
   plain nodes' origins and tilemaps, clicking again in place reaching the next node down. With a
@@ -624,7 +645,9 @@ networking or 3D pipelines.
   `graphics.draw_sprite_sliced`, and the panels of `title.scene.luau` (the title's name and menu),
   `dialogue.scene.luau` and `bag.scene.luau` (the bag's stats) show it, fitting rows that
   `title.luau`, `dialogue.luau` and `bag.luau` copy from a hidden one with `node:add`. The game
-  opens on `title.luau`, a title screen whose woods are drawn in code, whose menu is a `ui.menu`
+  opens on `title.luau`, a title screen whose woods are drawn in code, whose name is in a bitmap
+  font drawn for it pixel by pixel (`title.png`, white glyphs with serifs, capitals 11 pixels
+  tall, described by `title.font.luau`), whose menu is a `ui.menu`
   of its panel's rows, and whose Continue (offered when there's a save) restores the save
   `progress`, which `progress.luau` writes after every event
   (`run_event`) once the title has closed: the player's state, where they are, and each visited
@@ -732,6 +755,17 @@ networking or 3D pipelines.
   brought it (`course.zoom`, `input.wheel`). The scene
   file is in the canonical layout, and `tests/course.rs` checks it stays so. The game's state is
   the global `course`, its physics world `course.world`.
+- `examples/lettering/`: a type specimen, written in Luau at the window's 640x360 rather than a
+  fixed resolution, so its TrueType text is rasterized at the pixels it's shown at.
+  `lettering.scene.luau` is most of it, text nodes in a stack naming their font files in
+  `fonts/`: the built-in font, plain and scaled, a copy of the RPG's title font, and Hack
+  (`Hack-Regular.ttf`, from egui's default fonts, MIT and Bitstream Vera licensed, with its
+  license beside it), smooth and crisp, writing Greek and Cyrillic too. `main.luau` draws a sample
+  line in Hack that Up and Down resize (`font:scaled`, `lettering.size`), and a paragraph that
+  reveals itself a glyph at a time (`lettering.shown`), then again. Its own tests are in
+  `lettering.test.luau`, one against `screenshots/specimen.png`, which `tests/lettering.rs` runs,
+  checking too that each line is in its font and the scene file is canonical. The game's state is
+  the global `lettering`.
 - `src/math.rs`: geometry types: `Rect`, `Affine` and `Affine3`, 2D and 3D transforms that
   compose with `*`, and `Bounds3`, a box in 3D.
 - `examples/`: small runnable programs that exercise engine features, plus their assets.
@@ -804,7 +838,8 @@ networking or 3D pipelines.
   typing into a focused field, input egui takes not reaching the game (the mouse wheel's turns
   over its windows too), and the debug key.
 - `tests/runtime.rs`: tests for the Luau runtime, with small games written to temporary folders,
-  their settings, icons, covering the screen and scaling, the mouse wheel, the controls pressed and
+  their settings, icons, fonts (bitmap and TrueType, from files and in scenes, and the errors),
+  covering the screen and scaling, the mouse wheel, the controls pressed and
   what actions are bound to, voices of the sounds they play, their saves, their 3D views, models
   and
   picking, scenes' views and their nodes, menus over
@@ -833,7 +868,8 @@ networking or 3D pipelines.
   plays a whole match and checks a hash of it, pinned, so CI checks it's the same to the bit on
   Windows and Linux; a change to how Pong plays changes the hash.
 - `tests/rpg.rs`: tests for the `rpg` example, the same way, playing through the quest, using
-  its debug panel, its title menu and bag's panels fitting what they hold, questions answered by
+  its debug panel, its title menu and bag's panels fitting what they hold, the title's name in its
+  font, questions answered by
   mouse, its scene files being in the canonical layout, and continuing a saved game in a second simulation sharing the first's
   save folder, as its controls screen's choices last too. Its `simulation()` starts a new game
   from the title screen, and `pick` picks from the title by whatever keys the actions have.
@@ -856,6 +892,9 @@ networking or 3D pipelines.
   wheel moving the camera. One plays a run and
   checks a hash of every crate's pose and the player's feet, pinned, so CI checks physics is the
   same to the bit on Windows and Linux; a change to how the course plays changes it.
+- `tests/lettering.rs`: tests for the `lettering` example: its Luau tests (saving their reference
+  screenshot again with `UPDATE_SCREENSHOTS=1`), each specimen's line in the font its node names,
+  and its scene file in the canonical layout.
 - `tests/shmup.rs`: tests for the `shmup` example, the same way: the title menu by key and by
   mouse, the shot's sound looping, pausing and stopping, its HUD's scene, the player, the bullet
   systems
@@ -970,6 +1009,7 @@ cargo run -- examples/garden
 cargo run -- examples/orchard
 cargo run -- examples/cellar
 cargo run -- examples/course
+cargo run -- examples/lettering
 cargo run --example meshes
 cargo run --release -- examples/shmup
 cargo build --release -p native-danmaku

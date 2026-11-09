@@ -54,6 +54,9 @@ pub enum Error {
     /// A tileset file couldn't be read, or what it describes couldn't be loaded.
     #[error("tileset {}: {message}", .path.display())]
     Tileset { path: PathBuf, message: String },
+    /// A font file couldn't be read, or what it describes couldn't be drawn.
+    #[error("font {}: {message}", .path.display())]
+    Font { path: PathBuf, message: String },
     /// A scene or tileset couldn't be written as a file.
     #[error("failed to write a scene: {0}")]
     WriteScene(String),

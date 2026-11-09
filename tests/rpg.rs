@@ -1294,6 +1294,15 @@ fn the_title_menu_fits_its_choices_and_scene_files_are_canonical() {
     assert_eq!((y, width, height), (80.0, 6.0 + 8.0 + label + 6.0, 30.0));
     assert_eq!(x, 160.0 - (width / 2.0).floor());
     assert!(simulation.eval::<bool>(&format!("{menu}:find('choice_1/pointer'):is_visible()")));
+
+    // The game's name is in the title's own font, `title.font.luau`, whose lines are 15 apart.
+    let (width, height): (f64, f64) = simulation.eval("rpg.title.scene:find('name'):size()");
+    assert_eq!(height, 15.0);
+    let (x, _, _, _) = bounds(&mut simulation, "rpg.title.scene:find('name')");
+    assert!(
+        (x + width / 2.0 - 160.0).abs() <= 0.5,
+        "centered: {x}, {width}"
+    );
 }
 
 #[test]

@@ -84,7 +84,7 @@ mod tests {
 
     use wingine::{
         Result,
-        graphics::{Color, Mesh, Model, Texture},
+        graphics::{Color, Font, Mesh, Model, Texture},
         scene::{SceneFile, Shape, TilesetFile},
     };
 
@@ -104,6 +104,10 @@ mod tests {
 
         fn tileset(&mut self, path: &str) -> Result<Rc<TilesetFile>> {
             unreachable!("no tilesets are read: {path}")
+        }
+
+        fn font(&mut self, path: &str) -> Result<Font> {
+            unreachable!("no fonts are read: {path}")
         }
 
         fn model(&mut self, path: &str) -> Result<Model> {

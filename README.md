@@ -46,8 +46,9 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
   characters that walk up stairs and slopes among them, pushing what's in their way; and in both,
   rays, overlaps and sensors that tell where things are.
 - **Sprite animation**, such as walk cycles.
-- **Text** in a built-in pixel font, wrapped to a width and revealed a little at a time for
-  dialogue.
+- **Text** in a built-in pixel font, bitmap fonts drawn in PNGs, and TrueType and OpenType fonts,
+  smooth or crisp, whose glyphs are rasterized as text first needs them, so any language the font
+  has works; wrapped to a width and revealed a little at a time for dialogue.
 - **Input** from the keyboard, mouse and gamepads, with keys and buttons bound to named actions,
   which players can choose for themselves, sticks and triggers read as far as they're pushed, and
   the mouse wheel.
@@ -99,6 +100,7 @@ need ALSA's library (`libasound2`) and glibc 2.35 or newer.
 | [Orchard](#orchard) | Luau, around a rigged character | `cargo run -- examples/orchard` |
 | [Cellar](#cellar) | Luau, in 2.5D | `cargo run -- examples/cellar` |
 | [Course](#course) | Luau, in 3D with physics | `cargo run -- examples/course` |
+| [Lettering](#lettering) | Luau, around fonts | `cargo run -- examples/lettering` |
 | [Sprites](#sprites) | Rust, with Luau scripts | `cargo run --example sprites` |
 | [Shapes](#shapes) | Rust | `cargo run --example shapes` |
 | [Meshes](#meshes) | Rust, in 3D | `cargo run --example meshes` |
@@ -127,7 +129,10 @@ between maps.
 The maps in [`maps/`](examples/rpg/maps) are [scenes](docs/scenes.md): tilemaps over the tiles of
 [`world.tileset.luau`](examples/rpg/world.tileset.luau), with the places, exits, characters and
 foes on them marked out as nodes. The story, battles, items and shop each have a script of their
-own. The tileset is Kenney's [1-bit Pack](https://kenney.nl/assets/1-bit-pack).
+own. The tileset is Kenney's [1-bit Pack](https://kenney.nl/assets/1-bit-pack). The title's name
+is in a font drawn for it, [`title.png`](examples/rpg/title.png), a
+[bitmap font](docs/api/graphics.md#font-files) described by
+[`title.font.luau`](examples/rpg/title.font.luau).
 
 ### Shmup
 
@@ -300,6 +305,20 @@ character that walks up the stairs and the slope, along the walls, and into the 
 them: off the platform, or into the stack, which topples. A ray straight down puts its shadow on
 whatever is below, so a jump shows where it lands, and a sensor under the course catches what
 falls off.
+
+### Lettering
+
+[`examples/lettering`](examples/lettering) is a type specimen, written in Luau: the fonts Wingine
+writes in. The built-in pixel font; a bitmap font drawn pixel by pixel in a PNG for the RPG's
+title, its glyphs as wide as their ink; and [Hack](https://sourcefoundry.org/hack/), a TrueType
+font, smooth and crisp, whose glyphs are rasterized the first time text needs them, so it writes
+Greek and Cyrillic as readily as English. Its scene's text nodes name their
+[font files](docs/api/graphics.md#font-files).
+
+![The fonts of the lettering example](docs/screenshots/lettering.png)
+
+Up and Down make the sample line bigger and smaller, rasterizing Hack again at each size, and the
+paragraph at the bottom reveals itself a glyph at a time.
 
 ### Sprites
 

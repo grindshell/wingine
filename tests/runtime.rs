@@ -1183,6 +1183,217 @@ fn fonts_measure_and_scale() {
     assert!(simulation.eval::<bool>("zero_scale_fails"));
 }
 
+/// A bitmap font of two glyphs in cells 2x3: `a` covers its cell, and `b` its left column.
+const AB_FONT: &str = "return {
+    format = 3,
+    image = 'ab.png',
+    cell = { 2, 3 },
+    characters = 'ab',
+    space = 2,
+    line_height = 4,
+}";
+
+/// Writes [`AB_FONT`]'s image to `folder`.
+fn write_ab_font_image(folder: &Path) {
+    let clear = [0; 4];
+    let row = [WHITE, WHITE, WHITE, clear];
+    write_png(&folder.join("ab.png"), 4, 3, &[row, row, row].concat());
+}
+
+#[test]
+fn bitmap_fonts_load_from_font_files_and_draw() {
+    let folder = game(
+        "bitmap-fonts",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            ("ab.font.luau", AB_FONT),
+            (
+                "label.scene.luau",
+                "return { format = 3, children = {
+                    { name = 'label', kind = 'text', text = 'ab a', font = 'ab.font.luau' },
+                } }",
+            ),
+            (
+                "main.luau",
+                "local font = graphics.load_font('ab.font.luau')
+                width, height = font:measure('ab a')
+                line_height = font:line_height()
+                big_width = font:scaled(2):measure('ab a')
+                local label = scene.load('label.scene.luau'):find('label')
+                label_width, label_height = label:size()
+
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.draw_text(font, 'ab a', 1, 1, '#ffffff')
+                    -- What the font lacks draws as nothing, without a `?`.
+                    graphics.draw_text(font, 'zz', 1, 10, '#ffffff')
+                end",
+            ),
+        ],
+    );
+    write_ab_font_image(&folder);
+
+    let mut simulation = simulation(&folder);
+    // `a` 2 wide and a texel after it, `b` 1, a space of 2 after its texel, and `a`.
+    assert_eq!(simulation.eval::<(f32, f32)>("width, height"), (9.0, 4.0));
+    assert_eq!(simulation.eval::<f32>("line_height"), 4.0);
+    assert_eq!(simulation.eval::<f32>("big_width"), 18.0);
+    assert_eq!(
+        simulation.eval::<(f32, f32)>("label_width, label_height"),
+        (9.0, 4.0),
+        "scenes' text names its font file"
+    );
+
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    let row: Vec<bool> = (0..11).map(|x| image.pixel(x, 2) == WHITE).collect();
+    let expected = [0, 1, 1, 0, 1, 0, 0, 0, 1, 1, 0].map(|ink| ink == 1);
+    assert_eq!(row, expected);
+    assert_eq!(image.pixel(1, 4), BLACK, "a cell's height");
+    assert!(
+        (0..20).all(|x| image.pixel(x, 11) == BLACK),
+        "nothing for `z`"
+    );
+}
+
+/// Hack, a TrueType font, copied into `folder` from the lettering example.
+fn copy_hack(folder: &Path) {
+    let hack = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/lettering/fonts/Hack-Regular.ttf"
+    );
+    fs::copy(hack, folder.join("Hack-Regular.ttf")).unwrap();
+}
+
+#[test]
+fn truetype_fonts_load_at_a_size_and_scale_sharply() {
+    let folder = game(
+        "truetype-fonts",
+        &[
+            ("conf.luau", "return { width = 64, height = 40 }"),
+            (
+                "hack.font.luau",
+                "return { format = 3, file = 'Hack-Regular.ttf', size = 13, smooth = false }",
+            ),
+            (
+                "main.luau",
+                "local font = graphics.load_font('Hack-Regular.ttf', { size = 13 })
+                local crisp = graphics.load_font('hack.font.luau')
+                line_height = font:line_height()
+                scaled_line_height = font:scaled(2):line_height()
+                loaded_line_height = graphics.load_font('Hack-Regular.ttf', { size = 26 }):line_height()
+                width = font:measure('Hello')
+                crisp_width = crisp:measure('Hello')
+                -- Hack has no Chinese, so it draws its `?`.
+                missing_width = font:measure('\u{4e2d}')
+                question_width = font:measure('?')
+
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.draw_text(font, 'Ωж?a', 0, 0, '#ffffff')
+                    graphics.draw_text(crisp, 'Ωж?a', 0, 20, '#ffffff')
+                end",
+            ),
+        ],
+    );
+    copy_hack(&folder);
+
+    let mut simulation = simulation(&folder);
+    // Hack's ascent and descent are 2384 of its 2048 units to the em.
+    assert_eq!(simulation.eval::<f32>("line_height"), 15.0);
+    assert_eq!(simulation.eval::<f32>("scaled_line_height"), 30.0);
+    assert_eq!(simulation.eval::<f32>("loaded_line_height"), 30.0);
+    let width: f32 = simulation.eval("width");
+    // Five glyphs, each advancing 0.6 of an em, the last's ink short of its advance.
+    assert!((34.0..40.0).contains(&width), "{width}");
+    assert_eq!(simulation.eval::<f32>("crisp_width"), width);
+    assert_eq!(
+        simulation.eval::<f32>("missing_width"),
+        simulation.eval::<f32>("question_width")
+    );
+
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    let pixels = |top: u32| {
+        let rows = (top..top + 16).flat_map(|y| (0..64).map(move |x| (x, y)));
+        rows.map(|(x, y)| image.pixel(x, y)[0]).collect::<Vec<u8>>()
+    };
+    let smooth = pixels(0);
+    let crisp = pixels(20);
+    assert!(smooth.contains(&255), "drawn");
+    assert!(
+        smooth.iter().any(|&v| v > 0 && v < 255),
+        "smooth edges are partly covered"
+    );
+    assert!(crisp.contains(&255), "drawn");
+    assert!(
+        crisp.iter().all(|&v| v == 0 || v == 255),
+        "crisp pixels are opaque or clear"
+    );
+}
+
+#[test]
+fn fonts_that_cannot_load_are_errors() {
+    let folder = game(
+        "font-errors",
+        &[
+            ("ab.font.luau", AB_FONT),
+            (
+                "no-cell.font.luau",
+                "return { format = 3, image = 'ab.png' }",
+            ),
+            (
+                "too-many.font.luau",
+                "return { format = 3, image = 'ab.png', cell = { 2, 3 }, characters = 'abc' }",
+            ),
+            ("notes.txt", "Not a font."),
+            ("main.luau", ""),
+        ],
+    );
+    write_ab_font_image(&folder);
+    copy_hack(&folder);
+
+    let mut simulation = simulation(&folder);
+    for (code, problem) in [
+        (
+            "graphics.load_font('Hack-Regular.ttf')",
+            "which needs settings",
+        ),
+        (
+            "graphics.load_font('ab.font.luau', { size = 3 })",
+            "holds its own settings",
+        ),
+        (
+            "graphics.load_font('Hack-Regular.ttf', { size = 0 })",
+            "must be a positive number",
+        ),
+        (
+            "graphics.load_font('Hack-Regular.ttf', {})",
+            "have a `size`",
+        ),
+        (
+            "graphics.load_font('Hack-Regular.ttf', { size = 12, smoth = false })",
+            "not `smoth`",
+        ),
+        (
+            "graphics.load_font('notes.txt', { size = 12 })",
+            "isn't a TrueType or OpenType font",
+        ),
+        ("graphics.load_font('no-cell.font.luau')", "has a `cell`"),
+        (
+            "graphics.load_font('too-many.font.luau')",
+            "`c` would be in column 0 and row 1",
+        ),
+        (
+            "graphics.load_font('missing.font.luau')",
+            "missing.font.luau",
+        ),
+    ] {
+        let err = simulation.try_exec(code).unwrap_err().to_string();
+        assert!(err.contains(problem), "{code}: {err}");
+    }
+}
+
 /// Writes a PNG `width` by `height` pixels to `path`, with `pixels` row by row.
 fn write_png(path: &Path, width: u32, height: u32, pixels: &[[u8; 4]]) {
     let image = image::RgbaImage::from_raw(width, height, pixels.concat()).unwrap();

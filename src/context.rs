@@ -1,15 +1,20 @@
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use crate::{
     Error, Fullscreen, Result, Waker,
     app::Redraws,
     audio::Audio,
     graphics::{
-        Font, Mesh, MeshData, Resolution, Scaling, Texture, gpu::Gpu, renderer::Renderer,
-        screen::Screen,
+        Font, FontSettings, Mesh, MeshData, Resolution, Scaling, Texture, gpu::Gpu,
+        renderer::Renderer, screen::Screen,
     },
     input::Input,
     save::Saves,
+    scene::FontFile,
 };
 #[cfg(feature = "models")]
 use crate::{
@@ -18,7 +23,7 @@ use crate::{
 };
 
 /// Engine services available to a game: input, audio, saves, the canvas size, the built-in font,
-/// asset loading, and how long frames take.
+/// loading textures, fonts and models, and how long frames take.
 pub struct Context {
     pub(crate) gpu: Gpu,
     pub(crate) renderer: Renderer,
@@ -222,6 +227,81 @@ impl Context {
             image.height(),
             image.as_raw(),
         ))
+    }
+
+    /// Loads a font file, `*.font.luau` by convention: a bitmap font, its glyphs drawn in a PNG
+    /// divided into cells, or a TrueType or OpenType font at a size, each named by its path from
+    /// the font file's folder. See [`scene`](crate::scene) for the format.
+    pub fn load_font(&mut self, path: impl AsRef<Path>) -> Result<Font> {
+        let path = path.as_ref();
+        let folder = path.parent().unwrap_or(Path::new(""));
+        match FontFile::read(path)? {
+            FontFile::Bitmap(def) => {
+                let image_path = folder.join(&def.image);
+                let bytes = crate::files::read(&image_path).map_err(|source| Error::ReadFile {
+                    path: image_path.clone(),
+                    source,
+                })?;
+                let image = image::load_from_memory(&bytes)
+                    .map_err(|source| Error::LoadImage {
+                        path: image_path.clone(),
+                        source,
+                    })?
+                    .into_rgba8();
+                let files = vec![path.to_owned(), image_path];
+                Font::bitmap(
+                    &self.renderer,
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    &def,
+                    &image,
+                    files,
+                )
+                .map_err(|message| Error::Font {
+                    path: path.to_owned(),
+                    message,
+                })
+            }
+            FontFile::Vector(def) => {
+                let file = folder.join(&def.file);
+                let settings = FontSettings {
+                    size: def.size,
+                    smooth: def.smooth,
+                };
+                let files = vec![path.to_owned(), file.clone()];
+                self.vector_font(&file, settings, files)
+            }
+        }
+    }
+
+    /// Loads a TrueType or OpenType font file, `.ttf` or `.otf`, to draw as `settings` say. Its
+    /// glyphs are rasterized as text first needs them, so it can hold as many as it likes.
+    /// Characters it lacks draw as its `?`.
+    pub fn load_vector_font(
+        &mut self,
+        path: impl AsRef<Path>,
+        settings: FontSettings,
+    ) -> Result<Font> {
+        let path = path.as_ref();
+        self.vector_font(path, settings, vec![path.to_owned()])
+    }
+
+    /// The TrueType or OpenType font at `path`, read from `files`.
+    fn vector_font(
+        &mut self,
+        path: &Path,
+        settings: FontSettings,
+        files: Vec<PathBuf>,
+    ) -> Result<Font> {
+        let bytes = crate::files::read(path).map_err(|source| Error::ReadFile {
+            path: path.to_owned(),
+            source,
+        })?;
+        let pages = self.renderer.glyph_pages(&self.gpu.device, &self.gpu.queue);
+        Font::vector(bytes, settings, files, pages).map_err(|message| Error::Font {
+            path: path.to_owned(),
+            message,
+        })
     }
 
     /// Loads a model file, glTF 2.0 as `.glb` or `.gltf`, with the files it names beside it, for

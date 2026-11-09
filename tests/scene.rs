@@ -6,7 +6,7 @@ use std::{collections::HashMap, f32::consts::FRAC_PI_2, fs, path::Path, rc::Rc};
 
 use wingine::{
     Context, Error, Result,
-    graphics::{Color, Mesh, Model, Texture},
+    graphics::{Color, Font, Mesh, Model, Texture},
     headless::Headless,
     math::Rect,
     scene::{Assets, Kind, Scene, SceneFile, Shape, TilesetFile, Value},
@@ -17,7 +17,7 @@ const TILESET: &str = concat!(
     "/examples/kenney_1-bit-pack_transparent-packed.png"
 );
 
-/// The examples' folder, which scenes' model files are in.
+/// The examples' folder, which scenes' model and font files are in.
 const EXAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
 
 /// A garden: a mill whose sails are inside it, a hidden flower bed with a flower, and areas.
@@ -75,6 +75,10 @@ impl Assets for Files<'_> {
     fn tileset(&mut self, path: &str) -> Result<Rc<TilesetFile>> {
         let source = self.files.get(path).unwrap_or_else(|| panic!("no {path}"));
         TilesetFile::parse(source, path).map(Rc::new)
+    }
+
+    fn font(&mut self, path: &str) -> Result<Font> {
+        self.ctx.load_font(Path::new(EXAMPLES).join(path))
     }
 
     fn model(&mut self, path: &str) -> Result<Model> {
@@ -731,6 +735,44 @@ fn sprite(scene: &Scene, path: &str) -> (wingine::graphics::Sprite, Color) {
         panic!("{path} is a sprite");
     };
     (sprite.sprite.clone(), sprite.tint)
+}
+
+#[test]
+fn text_is_in_the_font_its_file_names_through_instances_too() {
+    let label = r#"return { format = 3, children = {
+        { name = "label", kind = "text", text = "Hi" },
+    } }"#;
+    let screen = r#"return { format = 3, children = {
+        { name = "title", kind = "text", text = "Hi", font = "rpg/title.font.luau" },
+        { name = "plain", kind = "instance", scene = "label.scene.luau" },
+        {
+            name = "fancy", kind = "instance", scene = "label.scene.luau",
+            overrides = { label = { font = "rpg/title.font.luau", font_scale = 2 } },
+        },
+    } }"#;
+    let mut headless = headless();
+    let files = [("label.scene.luau", label), ("screen.scene.luau", screen)];
+    let scene = load(&mut headless, &files, "screen.scene.luau").unwrap();
+    let height = |path: &str| {
+        let id = scene.find(scene.root(), path).unwrap();
+        scene.bounds(id).unwrap().h
+    };
+    // The RPG title's font's lines are 15 apart, and the built-in font's 10.
+    assert_eq!(height("title"), 15.0);
+    assert_eq!(height("plain/label"), 10.0);
+    assert_eq!(height("fancy/label"), 30.0, "overridden, and scaled");
+
+    let missing = r#"return { format = 3, children = {
+        { name = "title", kind = "text", text = "Hi", font = "rpg/missing.font.luau" },
+    } }"#;
+    let err = load(
+        &mut headless,
+        &[("missing.scene.luau", missing)],
+        "missing.scene.luau",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("missing.font.luau"), "{err}");
 }
 
 #[test]

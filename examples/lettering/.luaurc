@@ -1,0 +1,4 @@
+{
+    "globals": ["lettering"],
+    "lint": { "BuiltinGlobalWrite": false }
+}

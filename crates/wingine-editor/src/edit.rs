@@ -407,6 +407,7 @@ pub fn new_node(kind: &str, showing: Showing) -> NodeDef {
         }),
         "text" => KindDef::Text(TextDef {
             text: "Text".into(),
+            font: None,
             font_scale: 1.0,
             wrap: None,
             align: Align::Left,

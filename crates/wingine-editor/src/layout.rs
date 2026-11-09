@@ -317,6 +317,7 @@ mod tests {
             "score",
             KindDef::Text(TextDef {
                 text: "000".into(),
+                font: None,
                 font_scale: 1.0,
                 wrap: None,
                 align: Align::Left,

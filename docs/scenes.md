@@ -123,9 +123,10 @@ Each kind has fields of its own:
   `tint`, a color its colors are multiplied by.
 - **`rect`**: a filled rectangle, `width` by `height`, of `color`. Optionally `stretch`, to grow
   with its parent: see [Laying out screens](#laying-out-screens).
-- **`text`**: `text` in the built-in font, `font_scale` times its size (1 by default), wrapped
-  between words to `wrap` if given, in `color`, and lined up by `align`: `"left"`, the default,
-  `"center"` or `"right"`. Text moves with its node, but doesn't turn or stretch.
+- **`text`**: `text` in `font`, a [font file](api/graphics.md#font-files) by its path from the
+  game's folder (the built-in font without one), `font_scale` times its size (1 by default),
+  wrapped between words to `wrap` if given, in `color`, and lined up by `align`: `"left"`, the
+  default, `"center"` or `"right"`. Text moves with its node, but doesn't turn or stretch.
 - **`area`**: a rectangle `width` by `height` that doesn't draw, for marking out part of a scene:
   where the player can't walk, where something happens, a door to another scene, a button to
   click. Like a rect, it may `stretch`.

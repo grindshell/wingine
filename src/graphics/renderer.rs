@@ -291,6 +291,17 @@ impl Renderer {
         )
     }
 
+    /// What a vector font makes the pages of its glyphs with, and writes glyphs to them by, as
+    /// text first needs them.
+    pub fn glyph_pages(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> GlyphPages {
+        GlyphPages {
+            device: device.clone(),
+            queue: queue.clone(),
+            layout: self.texture_layout.clone(),
+            sampler: self.sampler.clone(),
+        }
+    }
+
     /// Creates a texture this renderer can both render into and draw with.
     pub fn create_render_target(
         &self,
@@ -812,6 +823,69 @@ fn create_texture(
     );
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     bind_texture(device, layout, sampler, &texture, &view)
+}
+
+/// Makes the pages a vector font's glyphs are drawn from, clear until glyphs are written to them,
+/// and writes the glyphs. Writes reach the GPU before the commands of the frame they're made in,
+/// so a glyph first laid out as a frame draws shows in it.
+#[derive(Clone)]
+pub(crate) struct GlyphPages {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+}
+
+impl GlyphPages {
+    /// A clear page `size` texels across and down, and the texture to write glyphs to.
+    pub fn create(&self, size: u32) -> (wgpu::Texture, Texture) {
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("glyphs"),
+            size: wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bound = bind_texture(&self.device, &self.layout, &self.sampler, &texture, &view);
+        (texture, bound)
+    }
+
+    /// Writes `rgba`, tightly packed rows of `[width, height]` texels, to `page` at `[x, y]`.
+    pub fn write(
+        &self,
+        page: &wgpu::Texture,
+        [x, y]: [u32; 2],
+        [width, height]: [u32; 2],
+        rgba: &[u8],
+    ) {
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: page,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
 }
 
 /// Wraps `texture`, through `view`, as a [`Texture`] the quad pipeline can draw with. Its format

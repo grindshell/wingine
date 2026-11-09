@@ -112,6 +112,12 @@
 //!   default at the start of each frame, draws in canvas pixels, as for a HUD.
 //! - `graphics.size()` returns the canvas's width and height.
 //! - `graphics.default_font()` returns the built-in pixel font.
+//! - `graphics.load_font(path, settings)` loads a font. Without `settings`, `path` is a font file,
+//!   `*.font.luau` by convention: a bitmap font, its glyphs drawn in a PNG, or a TrueType or
+//!   OpenType font at a size (see `wingine::scene` for the format). With them, it's a `.ttf` or
+//!   `.otf` file itself, and `settings` is a table of `size`, how many pixels its em is, and
+//!   `smooth`, true by default, or false for each pixel to be opaque or clear, so a pixel font
+//!   stays crisp. Each file is read once: loading one again, even at another size, reuses it.
 //! - `graphics.color(color, opacity)` returns `color`, such as a hex string or a table, as a
 //!   number `0xRRGGBBAA`, which passes faster: a string or table is read again each time it's
 //!   passed, which costs more than drawing a sprite, so code that draws a lot makes its colors
@@ -421,7 +427,7 @@ use crate::lua::mlua::luau::FsRequirer as FileRequirer;
 use crate::watch::Watcher;
 use crate::{
     Context, Error, Game, Result, WindowConfig, WindowIcon,
-    graphics::{Canvas, Color, Font, Model, Resolution, Texture},
+    graphics::{Canvas, Color, Font, FontSettings, Model, Resolution, Texture},
     lua::{
         Scripts, mlua,
         mlua::{
@@ -1119,14 +1125,18 @@ impl Require for Requirer {
     }
 }
 
-/// The images and model files a game has loaded, by path, so each is read once however many
-/// sprite sheets, scenes and scripts use it.
+/// The images, fonts and model files a game has loaded, by path, so each is read once however
+/// many sprite sheets, scenes and scripts use it.
 #[derive(Clone, Default)]
 struct Textures(Rc<Loaded>);
 
 #[derive(Default)]
 struct Loaded {
     textures: RefCell<HashMap<PathBuf, Texture>>,
+    fonts: RefCell<HashMap<PathBuf, Font>>,
+    /// TrueType and OpenType fonts by path and whether they're smooth, at the size they were
+    /// first loaded at; other sizes share their files.
+    vector_fonts: RefCell<HashMap<(PathBuf, bool), Font>>,
     models: RefCell<HashMap<PathBuf, Model>>,
 }
 
@@ -1139,6 +1149,39 @@ impl Textures {
         let texture = ctx.load_texture(&path)?;
         self.0.textures.borrow_mut().insert(path, texture.clone());
         Ok(texture)
+    }
+
+    /// The font file at `path`, loading it if it hasn't been.
+    fn font(&self, ctx: &mut Context, path: PathBuf) -> Result<Font> {
+        if let Some(font) = self.0.fonts.borrow().get(&path) {
+            return Ok(font.clone());
+        }
+        let font = ctx.load_font(&path)?;
+        self.0.fonts.borrow_mut().insert(path, font.clone());
+        Ok(font)
+    }
+
+    /// The TrueType or OpenType font at `path`, drawn as `settings` say, loading it if it hasn't
+    /// been as smooth or crisp, and otherwise sharing its file with the size loaded first.
+    fn vector_font(
+        &self,
+        ctx: &mut Context,
+        path: PathBuf,
+        settings: FontSettings,
+    ) -> Result<Font> {
+        let key = (path, settings.smooth);
+        if let Some(font) = self.0.vector_fonts.borrow().get(&key) {
+            return match font.at_size(settings.size) {
+                Some(font) => font.map_err(|message| Error::Font {
+                    path: key.0.clone(),
+                    message,
+                }),
+                None => Ok(font.clone()),
+            };
+        }
+        let font = ctx.load_vector_font(&key.0, settings)?;
+        self.0.vector_fonts.borrow_mut().insert(key, font.clone());
+        Ok(font)
     }
 
     /// The model file at `path`, loading it if it hasn't been.

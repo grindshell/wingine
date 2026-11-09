@@ -247,7 +247,15 @@ fn double_clicking_a_scene_opens_it_in_a_tab() {
 
 #[test]
 fn every_example_scene_opens_without_errors() {
-    for game in ["garden", "orchard", "rpg", "shmup", "cellar", "course"] {
+    for game in [
+        "garden",
+        "orchard",
+        "rpg",
+        "shmup",
+        "cellar",
+        "course",
+        "lettering",
+    ] {
         let mut simulation = editor(Some(examples().join(game)));
         let scenes = simulation
             .game()
@@ -273,6 +281,51 @@ fn every_example_scene_opens_without_errors() {
             simulation.game().output().lines()
         );
     }
+}
+
+#[test]
+fn the_inspector_chooses_the_font_text_is_in() {
+    let mut simulation = editor(Some(copy_of("rpg", "fonts_chosen")));
+    simulation
+        .game_mut()
+        .open_scene("title.scene.luau")
+        .unwrap();
+    simulation.run_frames(2);
+    select(&mut simulation, "tagline");
+    let height = |simulation: &Simulation<Editor>| {
+        let scene = simulation
+            .game()
+            .document()
+            .unwrap()
+            .preview
+            .as_ref()
+            .unwrap();
+        let id = scene.find(scene.root(), "tagline").unwrap();
+        scene.bounds(id).unwrap().h
+    };
+    assert_eq!(height(&simulation), 10.0, "the built-in font's line");
+
+    // The font's choice, after its label, offers the built-in font and the game's font files.
+    let choices = simulation.gui_rects("font");
+    let [x, y] = middle(*choices.last().expect("a choice of font"));
+    simulation.click(MouseButton::Left, x, y);
+    simulation.run_frames(2);
+    let offered = simulation.gui_rects("title.font.luau");
+    let title = offered.iter().find(|rect| rect.x > x - 100.0);
+    let [x, y] = middle(*title.expect("the title's font is offered"));
+    simulation.click(MouseButton::Left, x, y);
+    simulation.run_frames(2);
+
+    let KindDef::Text(text) = &node(&simulation, "tagline").kind else {
+        panic!("the tagline is text");
+    };
+    assert_eq!(text.font.as_deref(), Some("title.font.luau"));
+    assert_eq!(height(&simulation), 15.0, "the title font's line");
+    control(&mut simulation, Key::Z);
+    let KindDef::Text(text) = &node(&simulation, "tagline").kind else {
+        panic!("the tagline is text");
+    };
+    assert_eq!(text.font, None, "back to the built-in font");
 }
 
 #[test]

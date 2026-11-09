@@ -10,7 +10,7 @@ use std::{
 
 use wingine::{
     Context, Waker,
-    graphics::{Mesh, Model, Resolution, Texture},
+    graphics::{Font, Mesh, Model, Resolution, Texture},
     runtime::{self, Config},
     scene::{self, Assets, SceneFile, Shape, TilesetFile},
     watch::Watcher,
@@ -171,13 +171,15 @@ pub fn watch(folder: PathBuf, waker: Waker) -> Watcher {
     Watcher::new(folder, WATCH_INTERVAL, waker)
 }
 
-/// The images, scene files, tileset files and model files scenes use, each read once and again
-/// only when its file changes, and the meshes of their shapes.
+/// The images, scene files, tileset files, fonts and model files scenes use, each read once and
+/// again only when its file changes, and the meshes of their shapes.
 #[derive(Default)]
 pub struct AssetCache {
     textures: HashMap<PathBuf, (Option<SystemTime>, Texture)>,
     scenes: HashMap<PathBuf, (Option<SystemTime>, Rc<SceneFile>)>,
     tilesets: HashMap<PathBuf, (Option<SystemTime>, Rc<TilesetFile>)>,
+    /// With when each of the files it read last changed: the font file, then its image or font.
+    fonts: HashMap<PathBuf, (Vec<Option<SystemTime>>, Font)>,
     /// With when the model file and each of the files beside it that it read last changed.
     models: HashMap<PathBuf, (Vec<Option<SystemTime>>, Model)>,
     /// Meshes by their shapes, so a preview built again doesn't make its shapes' meshes again.
@@ -249,6 +251,27 @@ impl Assets for Loader<'_> {
         cached(&mut self.cache.tilesets, self.folder.join(path), |path| {
             TilesetFile::read(path).map(Rc::new)
         })
+    }
+
+    /// The font file at `path`, read again if it or the image or font it names has changed.
+    fn font(&mut self, path: &str) -> wingine::Result<Font> {
+        let path = self.folder.join(path);
+        let changes = |font: &Font| {
+            let files = font.files().iter();
+            files.map(|file| modified(file)).collect::<Vec<_>>()
+        };
+        if let Some((when, font)) = self.cache.fonts.get(&path)
+            && *when == changes(font)
+        {
+            return Ok(font.clone());
+        }
+        // Its own time is taken before it's read, so a change while it's read reads it again.
+        let own = modified(&path);
+        let font = self.ctx.load_font(&path)?;
+        let beside = font.files().iter().skip(1).map(|file| modified(file));
+        let when = std::iter::once(own).chain(beside).collect::<Vec<_>>();
+        self.cache.fonts.insert(path, (when, font.clone()));
+        Ok(font)
     }
 
     /// The model file at `path`, read again if it or any file beside it that it read, such as a

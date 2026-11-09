@@ -1,10 +1,14 @@
-//! What scene and tileset files hold, and reading them.
+//! What scene, tileset and font files hold, and reading them.
 //!
 //! A file runs as Luau with nothing in scope, and what it returns is turned into plain [`Value`]s
-//! first, then read into a [`SceneFile`] or a [`TilesetFile`]. Instances' overrides are checked
-//! by the same reading: the node they change, as plain values, with their fields put in.
+//! first, then read into a [`SceneFile`], a [`TilesetFile`] or a [`FontFile`]. Instances'
+//! overrides are checked by the same reading: the node they change, as plain values, with their
+//! fields put in.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::Path,
+};
 
 use super::{
     MAX_NODE_DEPTH,
@@ -20,7 +24,7 @@ use crate::{
     },
 };
 
-/// The version of the scene and tileset formats this engine writes, their `format`. It reads
+/// The version of the scene, tileset and font formats this engine writes, their `format`. It reads
 /// files of this format and every one before it: format 2 added 3D views and their nodes, and
 /// format 3 stacks and panels.
 pub const FORMAT: u32 = 3;
@@ -336,10 +340,12 @@ pub struct RectDef {
     pub color: Color,
 }
 
-/// Text in the built-in font.
+/// Text in a font: a font file's, or the built-in one's.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextDef {
     pub text: String,
+    /// The font file it's in, by its path from the game's folder, or the built-in font.
+    pub font: Option<String>,
     /// How many times the font's size it's drawn, such as 2 for a title.
     pub font_scale: f32,
     /// The width it wraps to between words, if any.
@@ -603,6 +609,82 @@ pub struct TileDef {
     pub props: Props,
 }
 
+/// What a font file holds, named `*.font.luau` by convention: a bitmap font, whose glyphs are
+/// drawn in an image, or a TrueType or OpenType font file at a size. See the [module docs](super)
+/// for the format.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FontFile {
+    Bitmap(BitmapFontDef),
+    Vector(VectorFontDef),
+}
+
+/// A font whose glyphs are drawn in an image, divided into cells as a sprite sheet is.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BitmapFontDef {
+    /// The image, by its path from the font file's folder.
+    pub image: String,
+    /// How many texels across and down each cell is.
+    pub cell: [u32; 2],
+    /// Which character each cell draws.
+    pub characters: FontCharacters,
+    /// How many texels of space follow each glyph.
+    pub spacing: u32,
+    /// How far a space moves the pen.
+    pub space: u32,
+    /// How far it is from the top of one line to the top of the next.
+    pub line_height: u32,
+    /// Whether every glyph is a whole cell wide, rather than as wide as its ink.
+    pub monospace: bool,
+}
+
+/// Which character each of a bitmap font's cells draws, a space for a cell it skips.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FontCharacters {
+    /// One string, cell by cell, left to right, carrying on down a row at the image's right edge.
+    Cells(String),
+    /// A string for each row of cells, from the top.
+    Rows(Vec<String>),
+}
+
+impl FontCharacters {
+    /// Each character with its cell's column and row, given how many columns of cells there are,
+    /// skipping cells marked by spaces.
+    pub fn cells(&self, columns: u32) -> Vec<(char, [u32; 2])> {
+        fn index(i: usize) -> u32 {
+            u32::try_from(i).unwrap_or(u32::MAX)
+        }
+        let columns = columns.max(1) as usize;
+        let cells: Vec<(char, [u32; 2])> = match self {
+            Self::Cells(characters) => characters
+                .chars()
+                .enumerate()
+                .map(|(i, c)| (c, [index(i % columns), index(i / columns)]))
+                .collect(),
+            Self::Rows(rows) => rows
+                .iter()
+                .enumerate()
+                .flat_map(|(row, characters)| {
+                    let cells = characters.chars().enumerate();
+                    cells.map(move |(column, c)| (c, [index(column), index(row)]))
+                })
+                .collect(),
+        };
+        cells.into_iter().filter(|&(c, _)| c != ' ').collect()
+    }
+}
+
+/// A TrueType or OpenType font file, rasterized at a size.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VectorFontDef {
+    /// The font file, by its path from the font file's folder.
+    pub file: String,
+    /// How many pixels its em is: the size a pixel font made as one is drawn at to fit its pixels.
+    pub size: f32,
+    /// Whether pixels its outlines partly cover are partly opaque, or each opaque or clear,
+    /// whichever is nearer, so a pixel font stays crisp.
+    pub smooth: bool,
+}
+
 /// Data for the game, by name.
 pub type Props = BTreeMap<String, Value>;
 
@@ -657,6 +739,25 @@ impl TilesetFile {
             message,
         };
         read_tileset(evaluate(source, path).map_err(error)?).map_err(error)
+    }
+}
+
+impl FontFile {
+    /// Reads the font file at `path`.
+    pub fn read(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        Self::parse(&read_file(path)?, path)
+    }
+
+    /// Reads a font from `source`, the contents of a font file, naming it `path` in errors, as
+    /// [`SceneFile::parse`] reads a scene.
+    pub fn parse(source: &str, path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let error = |message: String| Error::Font {
+            path: path.to_owned(),
+            message,
+        };
+        read_font(evaluate(source, path).map_err(error)?).map_err(error)
     }
 }
 
@@ -1037,6 +1138,104 @@ fn read_tile(def: Value, sheets: &BTreeMap<String, SheetDef>) -> Result<TileDef,
     })
 }
 
+fn read_font(font: Value) -> Result<FontFile, String> {
+    let mut fields = Fields::new(font, "a font")?;
+    check_format(fields.take("format"), "font")?;
+    let font = match (fields.take("image"), fields.take("file")) {
+        (Some(image), None) => FontFile::Bitmap(read_bitmap_font(image, &mut fields)?),
+        (None, Some(file)) => {
+            let file = string(file, "file")?;
+            let size = fields
+                .take("size")
+                .ok_or("a font with a `file` has a `size`, how many pixels its em is")?;
+            let size = positive(finite(size, "size")?, "size")?;
+            let smooth = match fields.take("smooth") {
+                Some(smooth) => boolean(smooth, "smooth")?,
+                None => true,
+            };
+            FontFile::Vector(VectorFontDef { file, size, smooth })
+        }
+        (Some(_), Some(_)) => {
+            return Err("a font has an `image` of its glyphs or a font `file`, not both".into());
+        }
+        (None, None) => {
+            return Err(
+                "a font has an `image` of its glyphs, or a TrueType or OpenType `file`".into(),
+            );
+        }
+    };
+    fields.finish("a font")?;
+    Ok(font)
+}
+
+/// A bitmap font's fields, but its `image`.
+fn read_bitmap_font(image: Value, fields: &mut Fields) -> Result<BitmapFontDef, String> {
+    let image = string(image, "image")?;
+    let [width, height] = match fields.take("cell") {
+        Some(value) => match <[Value; 2]>::try_from(list(value, "cell")?) {
+            Ok([width, height]) => [
+                positive_whole(width, "cell")?,
+                positive_whole(height, "cell")?,
+            ],
+            Err(_) => return Err("`cell` must be a width and a height, { width, height }".into()),
+        },
+        None => return Err("a font with an `image` has a `cell`, { width, height }".into()),
+    };
+    let characters = match fields.take("characters") {
+        Some(Value::String(characters)) => FontCharacters::Cells(characters),
+        Some(Value::List(rows)) => FontCharacters::Rows(
+            rows.into_iter()
+                .map(|row| string(row, "characters"))
+                .collect::<Result<_, _>>()?,
+        ),
+        Some(value) => {
+            return Err(format!(
+                "`characters` must be a string, or a list of them, one for each row of cells, not {}",
+                describe_value(&value)
+            ));
+        }
+        None => return Err("a font with an `image` has its `characters`".into()),
+    };
+    let mut seen = HashSet::new();
+    for (c, _) in characters.cells(u32::MAX) {
+        if c.is_control() {
+            return Err(format!(
+                "`characters` can't hold control characters, such as {}",
+                c.escape_default()
+            ));
+        }
+        if !seen.insert(c) {
+            return Err(format!("`characters` has `{c}` twice"));
+        }
+    }
+    let monospace = match fields.take("monospace") {
+        Some(monospace) => boolean(monospace, "monospace")?,
+        None => false,
+    };
+    let spacing = match fields.take("spacing") {
+        Some(spacing) => whole(spacing, "spacing")?,
+        None => 1,
+    };
+    let space = match fields.take("space") {
+        Some(space) => whole(space, "space")?,
+        None if monospace => width.saturating_add(spacing),
+        None => width.div_ceil(2),
+    };
+    let line_height = match fields.take("line_height") {
+        Some(line_height) => positive_whole(line_height, "line_height")?,
+        None => height.saturating_add(1),
+    };
+    Ok(BitmapFontDef {
+        image,
+        cell: [width, height],
+        characters,
+        spacing,
+        space,
+        line_height,
+        monospace,
+    })
+}
+
 fn check_format(format: Option<Value>, what: &str) -> Result<(), String> {
     let Some(format) = format else {
         return Err(format!(
@@ -1337,6 +1536,10 @@ fn read_kind(
         }),
         "text" => {
             let text = fields.take("text").ok_or("a text node has a `text`")?;
+            let font = match fields.take("font") {
+                Some(font) => Some(string(font, "font")?),
+                None => None,
+            };
             let font_scale = match fields.take("font_scale") {
                 Some(scale) => finite(scale, "font_scale")?,
                 None => 1.0,
@@ -1359,6 +1562,7 @@ fn read_kind(
             };
             KindDef::Text(TextDef {
                 text: string(text, "text")?,
+                font,
                 font_scale,
                 wrap,
                 align,
@@ -2076,6 +2280,9 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
         }
         KindDef::Text(text) => {
             set("text", string(&text.text));
+            if let Some(font) = &text.font {
+                set("font", string(font));
+            }
             set("font_scale", number(text.font_scale));
             if let Some(wrap) = text.wrap {
                 set("wrap", number(wrap));
@@ -2426,7 +2633,7 @@ mod tests {
                         name = "pond", kind = "rect", anchor = { 0.5, 1 }, width = 48, height = 32,
                         stretch = { 1, 0 }, color = "#21406a80",
                     },
-                    { name = "title", kind = "text", text = "Hi", font_scale = 2, wrap = 100, align = "center" },
+                    { name = "title", kind = "text", text = "Hi", font = "fonts/title.font.luau", font_scale = 2, wrap = 100, align = "center" },
                     { name = "gate", kind = "area", width = 16, height = 8, props = { to = "town" } },
                     {
                         name = "map", kind = "tilemap", x = 8, tileset = "world.tileset.luau",
@@ -2491,6 +2698,7 @@ mod tests {
             scene.children[2].kind,
             KindDef::Text(TextDef {
                 text: "Hi".into(),
+                font: Some("fonts/title.font.luau".into()),
                 font_scale: 2.0,
                 wrap: Some(100.0),
                 align: Align::Center,
@@ -3348,5 +3556,119 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("a tileset has a `tile_height`"), "{err}");
+    }
+
+    #[test]
+    fn font_files_describe_bitmap_and_truetype_fonts() {
+        let font = |source: &str| FontFile::parse(source, "title.font.luau");
+        let bitmap = font(
+            "return { format = 3, image = 'title.png', cell = { 10, 12 },
+                characters = { 'AB C', 'é?' } }",
+        )
+        .unwrap();
+        let FontFile::Bitmap(def) = bitmap else {
+            panic!("a bitmap font: {bitmap:?}");
+        };
+        assert_eq!(def.image, "title.png");
+        assert_eq!(def.cell, [10, 12]);
+        assert_eq!(
+            (def.spacing, def.space, def.line_height),
+            (1, 5, 13),
+            "defaults"
+        );
+        assert!(!def.monospace);
+        assert_eq!(
+            def.characters.cells(16),
+            [
+                ('A', [0, 0]),
+                ('B', [1, 0]),
+                ('C', [3, 0]),
+                ('é', [0, 1]),
+                ('?', [1, 1])
+            ],
+            "a space skips a cell"
+        );
+
+        let FontFile::Bitmap(def) = font(
+            "return { format = 3, image = 'digits.png', cell = { 5, 7 }, characters = '0123',
+                monospace = true, spacing = 2, line_height = 9 }",
+        )
+        .unwrap() else {
+            panic!("a bitmap font");
+        };
+        assert_eq!((def.spacing, def.space, def.line_height), (2, 7, 9));
+        assert_eq!(
+            def.characters.cells(3)[3],
+            ('3', [0, 1]),
+            "on to the next row"
+        );
+
+        assert_eq!(
+            font("return { format = 3, file = 'Hack.ttf', size = 13 }").unwrap(),
+            FontFile::Vector(VectorFontDef {
+                file: "Hack.ttf".into(),
+                size: 13.0,
+                smooth: true,
+            })
+        );
+        assert_eq!(
+            font("return { format = 3, file = 'pixel.ttf', size = 8, smooth = false }").unwrap(),
+            FontFile::Vector(VectorFontDef {
+                file: "pixel.ttf".into(),
+                size: 8.0,
+                smooth: false,
+            })
+        );
+    }
+
+    #[test]
+    fn font_files_that_cannot_be_read_are_errors() {
+        for (source, problem) in [
+            ("return { image = 'a.png' }", "the font has no `format`"),
+            (
+                "return { format = 3 }",
+                "an `image` of its glyphs, or a TrueType",
+            ),
+            (
+                "return { format = 3, image = 'a.png', file = 'a.ttf' }",
+                "not both",
+            ),
+            ("return { format = 3, image = 'a.png' }", "has a `cell`"),
+            (
+                "return { format = 3, image = 'a.png', cell = { 0, 8 }, characters = 'a' }",
+                "`cell` must be at least 1",
+            ),
+            (
+                "return { format = 3, image = 'a.png', cell = { 8, 8 } }",
+                "has its `characters`",
+            ),
+            (
+                "return { format = 3, image = 'a.png', cell = { 8, 8 }, characters = 7 }",
+                "`characters` must be a string, or a list of them",
+            ),
+            (
+                "return { format = 3, image = 'a.png', cell = { 8, 8 }, characters = { 'ab', 'ca' } }",
+                "`characters` has `a` twice",
+            ),
+            (
+                "return { format = 3, image = 'a.png', cell = { 8, 8 }, characters = 'a\\tb' }",
+                "can't hold control characters",
+            ),
+            ("return { format = 3, file = 'a.ttf' }", "has a `size`"),
+            (
+                "return { format = 3, file = 'a.ttf', size = -1 }",
+                "`size` must be above 0",
+            ),
+            (
+                "return { format = 3, file = 'a.ttf', size = 8, cell = { 8, 8 } }",
+                "a font has no field `cell`",
+            ),
+        ] {
+            let err = FontFile::parse(source, "f.font.luau")
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(problem), "{source}: {err}");
+            assert!(err.starts_with("font f.font.luau: "), "{err}");
+        }
     }
 }

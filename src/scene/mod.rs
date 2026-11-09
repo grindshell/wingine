@@ -131,7 +131,8 @@
 //!   `{ 0, 0 }` by default, is the fractions of its parent's width and height added to its own,
 //!   so it grows and shrinks with its parent: a rect `width = 0` with `stretch = { 1, 0 }` is as
 //!   wide as its parent, and one `width = -16` is 16 narrower. It's never less than nothing.
-//! - `text`: `text` in the built-in font, `font_scale` times its size (1 by default), wrapped
+//! - `text`: `text` in `font`, the font file at that path from the game's folder (the built-in
+//!   font without one; see below), `font_scale` times its size (1 by default), wrapped
 //!   between words to `wrap` if given, in `color` (white by default). `align`, `"left"` by
 //!   default, `"center"` or `"right"`, lines its lines up along their left edges, about their
 //!   middles or along their right edges, and puts that edge or middle at the node's origin, so
@@ -360,6 +361,34 @@
 //! sheets, is stretched to. A tile may have a `tint`, be `solid`, so that a cell holding it on any
 //! layer blocks movement, and have `props` of its own.
 //!
+//! A font file, named `*.font.luau` by convention, is plain data too ([`FontFile`]), naming the
+//! files it's made of by their paths from its own folder. A bitmap font's glyphs are drawn in a
+//! PNG, `image`, divided into cells `cell = { width, height }` texels from its top-left corner:
+//!
+//! ```lua
+//! return {
+//!     format = 3,
+//!     image = "title.png",
+//!     cell = { 14, 14 },
+//!     characters = { "ABCDEFGHIJKLMNOP", "QRSTUVWXYZ" },
+//!     space = 5,
+//! }
+//! ```
+//!
+//! `characters` is which character each cell draws: a string for each row of cells, or one string
+//! read cell by cell, on to the next row at the image's right edge. A space skips a cell. Each
+//! glyph is as wide as its ink, from its cell's leftmost column with anything in it to its
+//! rightmost, unless `monospace` is true, and as tall as its cell, its top at the top of the line.
+//! Optionally, `spacing` is the texels after each glyph (1), `space` how far a space moves the pen
+//! (half a cell, rounded up, or a whole cell and its spacing if monospace), and `line_height` from
+//! one line's top to the next's (a cell's height and 1). A TrueType or OpenType font is its
+//! `file`, its `size`, how many pixels its em is, and whether it's `smooth` (true by default), as
+//! [`Context::load_vector_font`] takes them:
+//!
+//! ```lua
+//! return { format = 3, file = "Hack-Regular.ttf", size = 13 }
+//! ```
+//!
 //! Nodes draw in order, each before its children, so later ones are on top. A [`Scene`] is a
 //! scene loaded to play: its nodes, which a game finds by path or tag, moves, turns, changes,
 //! poses, adds and removes, drawn with [`Scene::draw`], which fits it to the canvas. A scene drawn
@@ -379,10 +408,10 @@ use std::{
 
 pub use clip::{Clip, Interpolation, KeyValue, Keys, Property, Track};
 pub use file::{
-    AreaDef, BillboardDef, CellDef, FORMAT, InstanceDef, KindDef, MeshDef, ModelDef, NodeDef,
-    PanelDef, PanelFill, PanelLookDef, Placement3, Props, RectDef, SceneFile, Shape, SheetDef,
-    SpriteDef, Stack, StackDirection, TextDef, TileDef, TileLayerDef, TilemapDef, TilesetFile,
-    Value, View3dDef,
+    AreaDef, BillboardDef, BitmapFontDef, CellDef, FORMAT, FontCharacters, FontFile, InstanceDef,
+    KindDef, MeshDef, ModelDef, NodeDef, PanelDef, PanelFill, PanelLookDef, Placement3, Props,
+    RectDef, SceneFile, Shape, SheetDef, SpriteDef, Stack, StackDirection, TextDef, TileDef,
+    TileLayerDef, TilemapDef, TilesetFile, Value, VectorFontDef, View3dDef,
 };
 pub(crate) use file::{evaluate_any, plain};
 pub(crate) use writer::write_value;
@@ -438,14 +467,16 @@ impl TilesetFile {
 pub(crate) const MAX_NODE_DEPTH: usize = 200;
 
 /// Where the files and images a scene uses come from as it's built: the scene files its
-/// instances place, the tileset files its tilemaps use, the images of its sheets and the model
-/// files of its model nodes, each by its path as the file names it, and the meshes of its mesh
-/// nodes' shapes. [`FolderAssets`] reads them from a game's folder; a game can keep them loaded
-/// instead.
+/// instances place, the tileset files its tilemaps use, the images of its sheets, the font files
+/// of its text and the model files of its model nodes, each by its path as the file names it,
+/// and the meshes of its mesh nodes' shapes. [`FolderAssets`] reads them from a game's folder; a
+/// game can keep them loaded instead.
 pub trait Assets {
     fn texture(&mut self, path: &str) -> Result<Texture>;
     fn scene(&mut self, path: &str) -> Result<Rc<SceneFile>>;
     fn tileset(&mut self, path: &str) -> Result<Rc<TilesetFile>>;
+    /// The font file at `path`, as [`Context::load_font`] loads one.
+    fn font(&mut self, path: &str) -> Result<Font>;
     fn model(&mut self, path: &str) -> Result<Model>;
     /// The mesh of `shape`, as [`Context::create_mesh`] makes one of [`Shape::mesh_data`].
     fn mesh(&mut self, shape: &Shape) -> Result<Mesh>;
@@ -468,6 +499,10 @@ impl Assets for FolderAssets<'_> {
 
     fn tileset(&mut self, path: &str) -> Result<Rc<TilesetFile>> {
         TilesetFile::read(self.folder.join(path)).map(Rc::new)
+    }
+
+    fn font(&mut self, path: &str) -> Result<Font> {
+        self.ctx.load_font(self.folder.join(path))
     }
 
     fn model(&mut self, path: &str) -> Result<Model> {
@@ -1239,6 +1274,7 @@ impl Scene {
             path,
             font,
             assets,
+            fonts: HashMap::new(),
             sheet_defs: sheets,
             sheets: HashMap::new(),
             tilesets: HashMap::new(),
@@ -2736,12 +2772,13 @@ fn children_at<'a>(nodes: &'a [NodeDef], at: &[usize]) -> &'a [NodeDef] {
     at.iter().fold(nodes, |nodes, &i| &nodes[i].children)
 }
 
-/// What building a scene's nodes needs: the scene file's path, for errors, the font for its text,
-/// where its tilesets and images come from, and the sheets and tilesets loaded so far.
+/// What building a scene's nodes needs: the scene file's path, for errors, the font for text that
+/// names none, where its tilesets, images and fonts come from, and those loaded so far.
 struct Build<'a> {
     path: &'a str,
     font: &'a Font,
     assets: &'a mut dyn Assets,
+    fonts: HashMap<String, Font>,
     /// Every sheet of every file, by `file#sheet`, from [`Expand`].
     sheet_defs: BTreeMap<String, SheetDef>,
     sheets: HashMap<String, SpriteSheet>,
@@ -2820,6 +2857,16 @@ impl Build<'_> {
         Ok((tileset, kinds))
     }
 
+    /// The font file at `path`, loading it if it hasn't been.
+    fn font_file(&mut self, path: &str) -> Result<Font> {
+        if let Some(font) = self.fonts.get(path) {
+            return Ok(font.clone());
+        }
+        let font = self.assets.font(path)?;
+        self.fonts.insert(path.to_owned(), font.clone());
+        Ok(font)
+    }
+
     /// What the node at `node` shows, as `def` describes it.
     fn kind(&mut self, def: &KindDef, node: &str) -> Result<Kind> {
         let kind = match def {
@@ -2845,8 +2892,11 @@ impl Build<'_> {
                 color: rect.color,
             }),
             KindDef::Text(text) => {
-                let font = self
-                    .font
+                let font = match &text.font {
+                    Some(path) => self.font_file(path)?,
+                    None => self.font.clone(),
+                };
+                let font = font
                     .try_scaled(text.font_scale)
                     .map_err(|err| self.error(node, &err))?;
                 Kind::Text(TextNode {

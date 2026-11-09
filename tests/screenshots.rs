@@ -15,8 +15,8 @@ use image::{RgbaImage, imageops};
 use wingine::{
     Context,
     graphics::{
-        Camera, Camera3d, Canvas, Color, Lighting, Mesh, MeshData, MeshVertex, Model, Resolution,
-        Scaling, SpriteSheet, Texture, View3d,
+        Align, Camera, Camera3d, Canvas, Color, Font, Lighting, Mesh, MeshData, MeshVertex, Model,
+        Resolution, Scaling, SpriteSheet, Texture, View3d,
     },
     headless::{Comparison, Headless, Image},
     math::{Affine, Affine3, Rect},
@@ -33,7 +33,7 @@ const TILESET: &str = concat!(
     "/examples/kenney_1-bit-pack_transparent-packed.png"
 );
 
-/// The examples' folder, which scenes' model files are in.
+/// The examples' folder, which scenes' model and font files are in.
 const EXAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
 
 /// The RPG's frame for its panels: 5 texels square, a border a texel wide, its corners cut.
@@ -674,6 +674,9 @@ fn load_scene(headless: &mut Headless, files: &[(&'static str, &'static str)]) -
         fn tileset(&mut self, path: &str) -> wingine::Result<Rc<TilesetFile>> {
             TilesetFile::parse(self.source(path), path).map(Rc::new)
         }
+        fn font(&mut self, path: &str) -> wingine::Result<Font> {
+            self.ctx.load_font(Path::new(EXAMPLES).join(path))
+        }
         fn model(&mut self, path: &str) -> wingine::Result<Model> {
             wingine::scene::load_model(self.ctx, &Path::new(EXAMPLES).join(path))
         }
@@ -948,6 +951,44 @@ fn text() {
         })
         .unwrap();
     assert_screenshot(&headless.adapter_name(), "text", frame);
+}
+
+/// Fonts loaded from files: the RPG title's bitmap font, its glyphs as wide as their ink, and
+/// Hack, a TrueType font, smooth, crisp, scaled (rasterized again at the larger size), and laid
+/// out centered and wrapped. Hack's glyphs are rasterized as each is first drawn, into the same
+/// frame.
+#[test]
+fn text_in_loaded_fonts() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let title = ctx
+        .load_font(Path::new(EXAMPLES).join("rpg/title.font.luau"))
+        .unwrap();
+    let hack = ctx
+        .load_font(Path::new(EXAMPLES).join("lettering/fonts/hack.font.luau"))
+        .unwrap();
+    let crisp = ctx
+        .load_font(Path::new(EXAMPLES).join("lettering/fonts/hack-crisp.font.luau"))
+        .unwrap();
+    let wrapped = hack.layout_aligned(
+        "Centered, and wrapped between words.",
+        Some(150.0),
+        Align::Center,
+    );
+    let frame = headless
+        .render(260, 140, |canvas| {
+            canvas.clear(Color::rgb8(0x14, 0x18, 0x2c));
+            let gold = Color::rgb8(0xf2, 0xc1, 0x4e);
+            canvas.draw_text(&title, "The Stone Shrine", [4.0, 2.0], gold);
+            canvas.draw_text(&title, "0123456789 &?! éöñ", [4.0, 18.0], Color::WHITE);
+            canvas.draw_text(&hack, "Smooth: AVA Ωж To?", [4.0, 38.0], Color::WHITE);
+            canvas.draw_text(&crisp, "Crisp: AVA Ωж To?", [4.0, 54.0], Color::WHITE);
+            let large = Color::rgb8(0x9f, 0xd8, 0xa0);
+            canvas.draw_text(&hack.scaled(1.5), "Scaled 1.5", [4.0, 70.0], large);
+            canvas.draw_text_layout(&wrapped, .., [55.0, 96.0], Color::WHITE);
+        })
+        .unwrap();
+    assert_screenshot(&headless.adapter_name(), "text_in_loaded_fonts", frame);
 }
 
 /// A cube turned to show three sides and a sphere, lit by the default sun: tops brightest, then

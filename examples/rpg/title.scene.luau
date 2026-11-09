@@ -14,7 +14,7 @@ return {
             y = 28,
             anchor = { 0.5, 0 },
             text = "The Stone Shrine",
-            font_scale = 2,
+            font = "title.font.luau",
             align = "center",
             color = "#f2c14e",
         },

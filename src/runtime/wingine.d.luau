@@ -56,6 +56,16 @@ type PlaySettings = {
     fade_in: number?,
 }
 
+--- How `graphics.load_font` draws a TrueType or OpenType font.
+type FontSettings = {
+    --- How many pixels its em is. A pixel font made as a TrueType font is drawn at the size it was
+    --- made for, or a whole number of times it, to fit its pixels.
+    size: number,
+    --- Whether pixels its outlines partly cover are partly opaque, or each opaque or clear, so a
+    --- pixel font stays crisp. By default, true.
+    smooth: boolean?,
+}
+
 --- A kind of tile, for `tileset:add`.
 type Tile = {
     --- The sprite drawn, stretched to fill the cell.
@@ -377,9 +387,11 @@ declare extern type Animation with
     function flipped_y(self): Animation
 end
 
---- A font to draw text with, such as the built-in pixel font, `graphics.default_font()`.
+--- A font to draw text with: the built-in pixel font, `graphics.default_font()`, or one from
+--- `graphics.load_font`.
 declare extern type Font with
-    --- Returns the font drawn `scale` times as large. Whole numbers keep a pixel font crisp.
+    --- Returns the font drawn `scale` times as large. Whole numbers keep a pixel font crisp; a
+    --- TrueType or OpenType font is rasterized at the new size, so it stays sharp at any.
     function scaled(self, scale: number): Font
     --- Returns the width and height of `text`, drawn without wrapping. The width runs to the edge
     --- of the ink, so text centers exactly.
@@ -823,6 +835,10 @@ declare graphics: {
     new_animation: (frames: { Sprite }, frame_time: number) -> Animation,
     --- Returns the built-in pixel font.
     default_font: () -> Font,
+    --- Loads a font. Without `settings`, `path` is a font file (`*.font.luau`): a bitmap font,
+    --- its glyphs drawn in a PNG, or a TrueType or OpenType font at a size. With them, it's a
+    --- `.ttf` or `.otf` file, drawn as they say.
+    load_font: (path: string, settings: FontSettings?) -> Font,
     --- Begins a 3D view, over what was drawn before. Meshes and billboards drawn after go in it,
     --- until anything else is drawn, which goes over it.
     begin_3d: (view: View3d) -> (),

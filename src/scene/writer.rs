@@ -377,6 +377,9 @@ impl Writer {
             }
             KindDef::Text(text) => {
                 self.field("text", &quoted(&text.text));
+                if let Some(font) = &text.font {
+                    self.field("font", &quoted(font));
+                }
                 if text.font_scale != 1.0 {
                     self.number_field("font_scale", text.font_scale)?;
                 }
@@ -816,7 +819,8 @@ mod tests {
             "return { format = 1, children = {
                 { name = 'a', kind = 'rect', width = 0.1, height = 1e-7, x = 123456.789,
                   rotation = 3.14159, color = { r = 0.5, g = 0.25, b = 1, a = 0.3 } },
-                { name = 'b', kind = 'text', text = '\\0\\1 bell\\a', wrap = 64, font_scale = 3 },
+                { name = 'b', kind = 'text', text = '\\0\\1 bell\\a', wrap = 64, font_scale = 3,
+                  font = 'fonts/d\\195\\169j\\195\\160.font.luau' },
             } }",
         );
         let written = scene.to_luau().unwrap();
@@ -998,6 +1002,7 @@ mod tests {
                     y = 2,
                     anchor = { 1, 0 },
                     text = "0",
+                    font = "fonts/digits.font.luau",
                     align = "right",
                 },
             },

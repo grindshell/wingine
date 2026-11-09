@@ -24,7 +24,7 @@ pub use camera::Camera;
 pub use camera3d::{Camera3d, Projection, Ray};
 pub use canvas::Canvas;
 pub use color::Color;
-pub use font::{Align, Font, TextLayout};
+pub use font::{Align, Font, FontSettings, TextLayout};
 pub use mesh::{Mesh, MeshData, MeshVertex};
 pub use model::{Model, ModelPart};
 pub use screen::{Resolution, Scaling};

@@ -1182,6 +1182,7 @@ impl Game for Editor {
                 let tilesets = project.files_ending(".tileset.luau");
                 let scenes = project.files_ending(".scene.luau");
                 let models = project.model_files();
+                let fonts = project.files_ending(".font.luau");
                 let Some(document) = self.documents.get_mut(self.current) else {
                     ui.weak("Open a scene to see its nodes' fields.");
                     return;
@@ -1194,6 +1195,7 @@ impl Game for Editor {
                     tilesets: &tilesets,
                     scenes: &scenes,
                     models: &models,
+                    fonts: &fonts,
                 };
                 self.inspector.ui(ui, document, &mut services);
             });

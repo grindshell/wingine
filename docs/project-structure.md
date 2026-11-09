@@ -14,6 +14,10 @@ my-game/
 ├── level.scene.luau   scenes, laid out as data (see Scenes)
 ├── player.test.luau   tests, which `wingine test` runs (see Running games)
 ├── sprites.png        images, sounds and music, wherever the game likes
+├── fonts/
+│   ├── title.font.luau   a font: a bitmap font's glyphs in a PNG, or a TrueType font at a size
+│   ├── title.png
+│   └── Body.ttf
 ├── sounds/
 │   ├── jump.wav
 │   └── music.ogg

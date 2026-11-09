@@ -7,7 +7,7 @@ use mlua::{Lua, Table};
 use super::{Lent, Textures};
 use crate::{
     Context, Result,
-    graphics::{Mesh, Model, Texture},
+    graphics::{Font, Mesh, Model, Texture},
     lua::SceneNode,
     scene::{Assets, Scene, SceneFile, Shape, TilesetFile},
 };
@@ -126,6 +126,10 @@ impl Assets for GameAssets<'_> {
 
     fn tileset(&mut self, path: &str) -> Result<Rc<TilesetFile>> {
         self.files.tileset(path)
+    }
+
+    fn font(&mut self, path: &str) -> Result<Font> {
+        self.textures.font(self.ctx, self.files.folder.join(path))
     }
 
     fn model(&mut self, path: &str) -> Result<Model> {

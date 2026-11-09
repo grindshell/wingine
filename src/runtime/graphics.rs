@@ -8,8 +8,8 @@ use super::{Lent, Textures};
 use crate::{
     Context,
     graphics::{
-        Animation, Camera, Camera3d, Canvas, Color, Font, Lighting, Mesh, MeshData, MeshVertex,
-        Model, Ray, Sprite, SpriteSheet, TextLayout, View3d,
+        Animation, Camera, Camera3d, Canvas, Color, Font, FontSettings, Lighting, Mesh, MeshData,
+        MeshVertex, Model, Ray, Sprite, SpriteSheet, TextLayout, View3d,
     },
     lua::{SceneNode, check_layer, packed_color, vector3},
     math::{Affine3, Bounds3, Rect},
@@ -61,6 +61,42 @@ fn slice_edges(slice: mlua::Value) -> mlua::Result<[f32; 4]> {
         ));
     }
     Ok(edges)
+}
+
+/// `graphics.load_font`'s `settings`: `size`, and whether it's `smooth`, true by default.
+fn font_settings(settings: &Table) -> mlua::Result<FontSettings> {
+    for pair in settings.pairs::<mlua::Value, mlua::Value>() {
+        let (key, _) = pair?;
+        let known = key
+            .as_string()
+            .is_some_and(|key| matches!(&*key.as_bytes(), b"size" | b"smooth"));
+        if !known {
+            return Err(mlua::Error::runtime(format!(
+                "a font's settings are `size` and `smooth`, not `{}`",
+                key.to_string()?
+            )));
+        }
+    }
+    let size: Option<f32> = settings
+        .get("size")
+        .context("a font's `size` is a number, how many pixels its em is")?;
+    let size = size.ok_or_else(|| {
+        mlua::Error::runtime(
+            "a TrueType or OpenType font's settings have a `size`, how many pixels its em is",
+        )
+    })?;
+    if !(size.is_finite() && size > 0.0) {
+        return Err(mlua::Error::runtime(format!(
+            "a font's `size` must be a positive number, not {size}"
+        )));
+    }
+    let smooth: Option<bool> = settings
+        .get("smooth")
+        .context("a font's `smooth` is true or false")?;
+    Ok(FontSettings {
+        size,
+        smooth: smooth.unwrap_or(true),
+    })
 }
 
 /// The table, loading files relative to `folder`, and images through `textures`.
@@ -279,6 +315,38 @@ pub(super) fn module(
         "default_font",
         lua.create_function(move |_, ()| Ok(default_font.clone()))?,
     )?;
+    graphics.set("load_font", {
+        let lent = lent.clone();
+        let root = folder.to_owned();
+        let fonts = textures.clone();
+        lua.create_function(move |_, (path, settings): (String, Option<Table>)| {
+            let settings = settings
+                .map(|settings| font_settings(&settings))
+                .transpose()?;
+            match (path.ends_with(".luau"), settings.is_some()) {
+                (true, true) => {
+                    return Err(mlua::Error::runtime(format!(
+                        "{path} is a font file, which holds its own settings: load it without any"
+                    )));
+                }
+                (false, false) => {
+                    return Err(mlua::Error::runtime(format!(
+                        "{path} isn't a font file (`*.font.luau`), so it's loaded as a TrueType \
+                         or OpenType font, which needs settings: {{ size = ... }}"
+                    )));
+                }
+                _ => {}
+            }
+            let path = root.join(path);
+            // Through the context even when loaded already, so this works at the same times
+            // either way.
+            lent.context(|ctx| match settings {
+                Some(settings) => fonts.vector_font(ctx, path, settings),
+                None => fonts.font(ctx, path),
+            })?
+            .map_err(mlua::Error::external)
+        })?
+    })?;
     graphics.set("frame_stats", {
         let lent = lent.clone();
         lua.create_function(move |lua, ()| {

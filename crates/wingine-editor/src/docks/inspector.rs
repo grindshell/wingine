@@ -41,6 +41,7 @@ pub struct Services<'a> {
     pub tilesets: &'a [String],
     pub scenes: &'a [String],
     pub models: &'a [String],
+    pub fonts: &'a [String],
 }
 
 #[derive(Default)]
@@ -523,6 +524,9 @@ impl Inspector {
                 grid(ui, "text", |ui| {
                     over.label(ui, "text", &["text"]);
                     ui.add(egui::TextEdit::multiline(&mut text.text).desired_rows(2));
+                    ui.end_row();
+                    over.label(ui, "font", &["font"]);
+                    font_choice(ui, &mut text.font, services.fonts);
                     ui.end_row();
                     over.label(ui, "font scale", &["font_scale"]);
                     ui.add(
@@ -1287,6 +1291,26 @@ fn color(ui: &mut egui::Ui, color: &mut Color) {
         *color = Color::rgba8(r, g, b, a);
     }
 }
+
+/// A choice of the built-in font or one of the project's font `files` for `font`.
+fn font_choice(ui: &mut egui::Ui, font: &mut Option<String>, files: &[String]) {
+    let choice = egui::ComboBox::from_id_salt("font")
+        .selected_text(font.as_deref().unwrap_or(BUILT_IN_FONT))
+        .width(180.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(font, None, BUILT_IN_FONT);
+            for file in files {
+                ui.selectable_value(font, Some(file.clone()), file);
+            }
+        });
+    // egui doesn't carry the label beside it over to it.
+    choice
+        .response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "font"));
+}
+
+/// What the Inspector calls the font text has without a font file.
+const BUILT_IN_FONT: &str = "Built-in";
 
 /// A choice of one of the project's `files` for `path`, or what it is if it's none of them.
 fn file_choice(ui: &mut egui::Ui, id: impl egui::AsIdSalt, path: &mut String, files: &[String]) {

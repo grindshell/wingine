@@ -398,8 +398,9 @@ impl Canvas {
     /// starts a new line. The position is rounded to whole units, so pixel fonts stay crisp.
     pub fn draw_text(&mut self, font: &Font, text: &str, position: [f32; 2], color: Color) {
         let origin = position.map(f32::round);
+        let mut page = LastPage::default();
         font.place_glyphs(text, |glyph| {
-            self.push_glyph(font.texture(), glyph, origin, color);
+            self.push_glyph(page.texture(font, glyph.page), glyph, origin, color);
         });
     }
 
@@ -416,8 +417,10 @@ impl Canvas {
     ) {
         let origin = position.map(f32::round);
         let range = clamp_range(glyphs, layout.glyph_count());
+        let mut page = LastPage::default();
         for glyph in &layout.glyphs()[range] {
-            self.push_glyph(layout.font().texture(), *glyph, origin, color);
+            let texture = page.texture(layout.font(), glyph.page);
+            self.push_glyph(texture, *glyph, origin, color);
         }
     }
 
@@ -482,6 +485,20 @@ impl Canvas {
                 uv,
                 color,
             }));
+    }
+}
+
+/// The page of a font that glyphs were last drawn from, so a run of glyphs from one page looks
+/// its texture up once.
+#[derive(Default)]
+struct LastPage(Option<(u32, Texture)>);
+
+impl LastPage {
+    fn texture(&mut self, font: &Font, page: u32) -> &Texture {
+        if self.0.as_ref().is_some_and(|(last, _)| *last != page) {
+            self.0 = None;
+        }
+        &self.0.get_or_insert_with(|| (page, font.page(page))).1
     }
 }
 

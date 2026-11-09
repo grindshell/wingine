@@ -59,9 +59,10 @@
 //! - A [`Rect`] is a table `{ x, y, width, height }`.
 //! - [`PlaySettings`] are a table with any of `volume`, `speed`, `pan`, `looping` (a boolean) and
 //!   `fade_in` (seconds); the rest, or all of them for `nil`, keep their defaults.
-//! - A [`Font`] is userdata with the methods `font:scaled(scale)`, `font:measure(text)` (its
-//!   width and height), `font:line_height()` and `font:layout(text, max_width)`, which lays text
-//!   out once to draw a little at a time, wrapping it to `max_width` if given. The
+//! - A [`Font`] is userdata with the methods `font:scaled(scale)` (a TrueType or OpenType font
+//!   rasterized at the new size, so it stays sharp), `font:measure(text)` (its width and height),
+//!   `font:line_height()` and `font:layout(text, max_width)`, which lays text out once to draw a
+//!   little at a time, wrapping it to `max_width` if given. The
 //!   [`TextLayout`] it returns has `layout:size()`, `layout:glyph_count()` and
 //!   `layout:line_count()`.
 //! - A [`Sound`] is userdata with `sound:duration()`, in seconds.

@@ -19,8 +19,8 @@ functions work only in `draw`.
 - [Sprites](#sprites): [`load_sprite_sheet`](#graphicsload_sprite_sheet),
   [`SpriteSheet`](#spritesheet), [`Sprite`](#sprite)
 - [Animation](#animation): [`new_animation`](#graphicsnew_animation), [`Animation`](#animation-1)
-- [Text](#text): [`default_font`](#graphicsdefault_font), [`Font`](#font),
-  [`TextLayout`](#textlayout)
+- [Text](#text): [`default_font`](#graphicsdefault_font), [`load_font`](#graphicsload_font),
+  [font files](#font-files), [`Font`](#font), [`TextLayout`](#textlayout)
 - [3D views](#3d-views): [`begin_3d`](#graphicsbegin_3d), [`draw_mesh`](#graphicsdraw_mesh),
   [`draw_model`](#graphicsdraw_model), [`draw_billboard`](#graphicsdraw_billboard),
   [`project`](#graphicsproject), [`ray`](#graphicsray), [`hit_box`](#graphicshit_box)
@@ -571,8 +571,12 @@ Returns a copy with every frame mirrored top to bottom.
 ## Text
 
 The engine has one font built in: a pixel font of printable ASCII, the ellipsis (`…`) and en and
-em dashes (`–`, `—`), with capitals 7 pixels tall and lines 10 pixels apart. Characters it lacks draw as `?`. Measured widths run to the edge of the last
-letter's ink, so text centers exactly.
+em dashes (`–`, `—`), with capitals 7 pixels tall and lines 10 pixels apart. Games load fonts of
+their own too: bitmap fonts, their glyphs drawn in a PNG, and TrueType and OpenType fonts, whose
+glyphs are rasterized the first time text needs them, so a font of thousands of characters costs
+only those drawn. Characters a font lacks draw as its `?`. Measured widths run to the edge of the
+last letter's ink, so text centers exactly. The [lettering example](../../examples/lettering)
+shows each kind.
 
 ### `graphics.default_font`
 
@@ -581,6 +585,92 @@ graphics.default_font(): Font
 ```
 
 Returns the built-in pixel font.
+
+### `graphics.load_font`
+
+```lua
+graphics.load_font(path: string, settings: FontSettings?): Font
+```
+
+Loads a font. Without `settings`, `path` is a [font file](#font-files), `*.font.luau`, which
+describes a bitmap font or a TrueType or OpenType font at a size, as a scene's text nodes name
+them. With `settings`, `path` is a `.ttf` or `.otf` file, drawn as they say:
+
+- `size`, required: how many pixels its em is, as CSS's `font-size` counts them. A pixel font made
+  as a TrueType font is drawn at the size it was made for, or a whole number of times it, to fit
+  its pixels.
+- `smooth`: whether pixels its outlines partly cover are partly opaque, as text usually is, or
+  each opaque or clear, whichever is nearer, so a pixel font stays crisp. By default, true.
+
+Each file is read once: loading it again, even at another size, reuses it. Fonts load while the
+game loads and updates, not in `draw`.
+
+```lua
+local title = graphics.load_font("fonts/title.font.luau")
+local body = graphics.load_font("fonts/Hack-Regular.ttf", { size = 13 })
+
+function draw()
+    graphics.draw_text(title, "The Stone Shrine", 8, 8, "#f2c14e")
+    graphics.draw_text(body, "Ελληνικά, Кириллица", 8, 32, "#ffffff")
+end
+```
+
+TrueType and OpenType glyphs go where the pen is, rounded to whole pixels, with their baselines on
+a whole pixel, and pairs of letters are kerned by the font's `kern` table. Text in them is drawn at
+the canvas's pixels, so a game whose fixed resolution is scaled up draws it scaled up too: draw at
+the window's resolution for text as sharp as the screen.
+
+### Font files
+
+A font file, `*.font.luau` by convention, is plain data as a scene file is: Luau that returns a
+table, with no calls or variables. Its paths are from the font file's own folder. A bitmap font's
+glyphs are drawn in a PNG divided into cells, as a sprite sheet is:
+
+```lua
+return {
+    format = 3,
+    image = "title.png",
+    cell = { 14, 14 },
+    characters = {
+        "ABCDEFGHIJKLMNOP",
+        "QRSTUVWXYZ",
+        "abcdefghijklmnop",
+        "qrstuvwxyz",
+        "0123456789",
+        ".,!?'-:&éöñ",
+    },
+    space = 5,
+}
+```
+
+- `image`: the PNG.
+- `cell`: each cell's width and height, `{ width, height }`, counting from its top-left corner.
+- `characters`: which character each cell draws, a string for each row of cells, or one string
+  read cell by cell, on to the next row at the image's right edge. A space skips a cell.
+- `spacing`: the texels of space after each glyph, 1 by default.
+- `space`: how far a space moves the pen, half a cell by default (rounded up).
+- `line_height`: from the top of one line to the top of the next, a cell's height and 1 by
+  default.
+- `monospace`: true keeps every glyph a whole cell wide. By default, each is as wide as its ink,
+  from the leftmost column of its cell with anything in it to the rightmost, so `i` is narrower
+  than `m`.
+
+Each glyph is drawn with the top of its cell at the top of the line, so letters line up as
+they're drawn in their cells: draw every baseline on the same row of its cell. Glyphs keep the
+image's colors, and text's color tints them, so white glyphs take any color. A cell listed with
+nothing in it is an error, as is a character past the image's cells or listed twice.
+
+A TrueType or OpenType font file names the font and how it's drawn, as `graphics.load_font`'s
+`settings` do:
+
+```lua
+return {
+    format = 3,
+    file = "Hack-Regular.ttf",
+    size = 13,
+    smooth = false,
+}
+```
 
 ### `Font`
 
@@ -591,7 +681,8 @@ font:scaled(scale: number): Font
 ```
 
 Returns the font drawn `scale` times as large, such as for a title. Whole numbers keep a pixel
-font crisp. `scale` must be above 0.
+font crisp. A TrueType or OpenType font is rasterized again at the new size, so it stays sharp at
+any. `scale` must be above 0.
 
 #### `font:measure`
 

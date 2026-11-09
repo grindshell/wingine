@@ -80,7 +80,8 @@ The **Inspector** shows the selected node's fields, as scene files name them:
   `scale_y`, and its `anchor`, if it has one. Drag a number to change it, or click it to type one.
 - **Its kind's fields**: a sprite's sheet and cell (**Pick…** shows the sheet to click a cell
   in), its size, stretch, pivot and tint; a rect's size, stretch, pivot and color; text's text,
-  scale, wrap, alignment, pivot and color; an area's size, stretch and pivot; a stack's width
+  font (**Built-in**, or one of the game's `*.font.luau` files), scale, wrap, alignment, pivot
+  and color; an area's size, stretch and pivot; a stack's width
   and height, each its own or **fits** what it holds, its stretch, direction, gap, padding and
   pivot, and a panel's too, with its look: a fill's color and border, or a sprite's sheet, cell,
   slice and tint; a tilemap's tileset and size, which resizes its layers; an instance's scene,

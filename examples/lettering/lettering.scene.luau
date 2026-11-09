@@ -1,0 +1,66 @@
+return {
+    format = 3,
+    children = {
+        {
+            name = "title",
+            kind = "text",
+            y = 12,
+            anchor = { 0.5, 0 },
+            text = "Lettering",
+            font = "fonts/title.font.luau",
+            font_scale = 2,
+            align = "center",
+            color = "#f2c14e",
+        },
+        {
+            name = "specimens",
+            kind = "stack",
+            x = 24,
+            y = 64,
+            gap = 8,
+            children = {
+                {
+                    name = "built_in",
+                    kind = "text",
+                    text = "The built-in pixel font: printable ASCII and a little punctuation.",
+                    color = "#e8e4dc",
+                },
+                {
+                    name = "built_in_large",
+                    kind = "text",
+                    text = "Twice its size",
+                    font_scale = 2,
+                    color = "#e8e4dc",
+                },
+                {
+                    name = "bitmap",
+                    kind = "text",
+                    text = "A bitmap font: The Stone Shrine & a café in Köln",
+                    font = "fonts/title.font.luau",
+                    color = "#f2c14e",
+                },
+                {
+                    name = "smooth",
+                    kind = "text",
+                    text = "Hack, a TrueType font, at 13 pixels to the em and smooth.",
+                    font = "fonts/hack.font.luau",
+                    color = "#e8e4dc",
+                },
+                {
+                    name = "crisp",
+                    kind = "text",
+                    text = "The same, crisp: each pixel opaque or clear, as pixel fonts want.",
+                    font = "fonts/hack-crisp.font.luau",
+                    color = "#e8e4dc",
+                },
+                {
+                    name = "scripts",
+                    kind = "text",
+                    text = "Ελληνικά, Кириллица, Français: whatever characters the font has.",
+                    font = "fonts/hack.font.luau",
+                    color = "#9fd8a0",
+                },
+            },
+        },
+    },
+}
