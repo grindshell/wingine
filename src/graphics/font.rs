@@ -10,6 +10,7 @@ use image::RgbaImage;
 
 use super::{
     Texture, default_font,
+    gpu::texture_size_problem,
     renderer::{GlyphPages, Renderer},
 };
 use crate::{math::Rect, scene::BitmapFontDef};
@@ -191,6 +192,9 @@ impl Font {
     ) -> Result<Self, String> {
         let metrics = bitmap_metrics(def, image)?;
         let (width, height) = image.dimensions();
+        if let Some(problem) = texture_size_problem(device, "its image", [width, height]) {
+            return Err(problem);
+        }
         let texture = renderer.create_texture(device, queue, width, height, image.as_raw());
         Ok(Self::fixed(texture, metrics, files))
     }

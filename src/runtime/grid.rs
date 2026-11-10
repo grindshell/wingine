@@ -15,7 +15,11 @@ pub(super) fn module(lua: &Lua) -> mlua::Result<Table> {
     grid.set(
         "neighbor",
         lua.create_function(|_, (direction, column, row): (Direction, i32, i32)| {
-            let [column, row] = direction.neighbor([column, row]);
+            let [column, row] = direction.checked_neighbor([column, row]).ok_or_else(|| {
+                mlua::Error::runtime(format!(
+                    "tile {column}, {row} has no neighbor that way: it's at the edge"
+                ))
+            })?;
             Ok((column, row))
         })?,
     )?;

@@ -1911,11 +1911,12 @@ impl mlua::UserData for GridMover {
                     if mover.is_moving() {
                         return Ok(false);
                     }
-                    direction.neighbor(mover.tile())
+                    direction.checked_neighbor(mover.tile())
                 };
-                let is_blocked = match blocked {
-                    Some(blocked) => blocked.call::<bool>((next[0], next[1]))?,
-                    None => false,
+                // Without a next tile, `step` only turns.
+                let is_blocked = match (next, blocked) {
+                    (Some([column, row]), Some(blocked)) => blocked.call::<bool>((column, row))?,
+                    _ => false,
                 };
                 let mut mover = this.borrow_mut::<GridMover>()?;
                 Ok(mover.step(direction, |_| is_blocked))

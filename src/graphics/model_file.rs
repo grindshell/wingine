@@ -14,6 +14,8 @@ use std::{
 };
 
 use ::gltf::{
+    Semantic,
+    accessor::{DataType, Dimensions},
     buffer, image as gltf_image,
     material::AlphaMode,
     mesh::Mode,
@@ -24,7 +26,7 @@ use image::RgbaImage;
 use super::{Color, MeshData, MeshVertex};
 use crate::math::{Affine3, cross3, normalize3, sub3};
 
-/// How deeply a file's nodes may nest, so one whose nodes loop is an error, not a crash.
+/// How deeply a file's nodes may nest, so a deep chain of them is an error, not a stack overflow.
 const MAX_DEPTH: u32 = 256;
 
 /// What a model file holds that the engine draws.
@@ -85,8 +87,20 @@ pub(crate) fn read(bytes: &[u8], folder: &Path) -> Result<ModelData, String> {
             required.join(", ")
         ));
     }
-    let document =
-        ::gltf::Document::from_json(unchecked.into_json()).map_err(|err| err.to_string())?;
+    let json = unchecked.into_json();
+    // Validating looks up a primitive's positions without checking they're there, panicking.
+    for (m, mesh) in json.meshes.iter().enumerate() {
+        for (p, primitive) in mesh.primitives.iter().enumerate() {
+            let mut named = primitive.attributes.values().chain(&primitive.indices);
+            if let Some(index) = named.find(|index| index.value() >= json.accessors.len()) {
+                return Err(format!(
+                    "mesh {m}, part {p}: it names accessor {}, which isn't there",
+                    index.value()
+                ));
+            }
+        }
+    }
+    let document = ::gltf::Document::from_json(json).map_err(|err| err.to_string())?;
     let mut files = Vec::new();
     let buffers = document
         .buffers()
@@ -110,6 +124,7 @@ pub(crate) fn read(bytes: &[u8], folder: &Path) -> Result<ModelData, String> {
     let mut reader = Reader {
         buffers,
         folder,
+        placed: HashSet::new(),
         meshes: HashMap::new(),
         textures: HashMap::new(),
         data: ModelData {
@@ -146,6 +161,9 @@ pub(crate) fn read(bytes: &[u8], folder: &Path) -> Result<ModelData, String> {
 struct Reader<'a> {
     buffers: Vec<Vec<u8>>,
     folder: &'a Path,
+    /// The file's nodes placed so far. Each is in one place: a node under two parents, or in a
+    /// loop, is an error, since nodes under several could be placed exponentially many times.
+    placed: HashSet<usize>,
     /// The meshes read so far, in `data.meshes`, by the file's mesh and the primitive of it.
     meshes: HashMap<(usize, usize), usize>,
     /// The textures made so far, in `data.textures`, by the file's image, whether its alpha is
@@ -158,7 +176,13 @@ impl Reader<'_> {
     /// Adds the parts of `node` and the nodes inside it, placed in `parent`.
     fn node(&mut self, node: &::gltf::Node, parent: Affine3, depth: u32) -> Result<(), String> {
         if depth > MAX_DEPTH {
-            return Err("its nodes nest too deeply, or in a loop".to_owned());
+            return Err("its nodes nest too deeply".to_owned());
+        }
+        if !self.placed.insert(node.index()) {
+            return Err(format!(
+                "{} is in two places, under two parents or in a loop",
+                named("node", node.index(), node.name())
+            ));
         }
         let transform = parent * affine(node.transform().matrix());
         if let Some(mesh) = node.mesh() {
@@ -282,21 +306,6 @@ impl Reader<'_> {
 
 /// The triangles of `primitive`, its material's base color made part of its vertices' colors.
 fn mesh_data(primitive: &::gltf::Primitive, buffers: &[Vec<u8>]) -> Result<MeshData, String> {
-    let reader = primitive.reader(|buffer| buffers.get(buffer.index()).map(Vec::as_slice));
-    let positions: Vec<[f32; 3]> = reader
-        .read_positions()
-        .ok_or("it has no positions")?
-        .collect();
-    let count = positions.len();
-    let indices: Vec<u32> = match reader.read_indices() {
-        Some(indices) => indices.into_u32().collect(),
-        None => (0..count as u32).collect(),
-    };
-    let triangles = triangles(primitive.mode(), &indices)?;
-    if let Some(index) = triangles.iter().find(|&&index| index as usize >= count) {
-        return Err(format!("index {index} is past its {count} vertices"));
-    }
-
     let material = primitive.material();
     let pbr = material.pbr_metallic_roughness();
     let factor = pbr.base_color_factor();
@@ -310,6 +319,27 @@ fn mesh_data(primitive: &::gltf::Primitive, buffers: &[Vec<u8>]) -> Result<MeshD
             .and_then(|transform| transform.tex_coord());
         picked.unwrap_or(info.tex_coord())
     });
+    check_accessors(primitive, set, buffers)?;
+
+    let reader = primitive.reader(|buffer| buffers.get(buffer.index()).map(Vec::as_slice));
+    let positions: Vec<[f32; 3]> = reader
+        .read_positions()
+        .ok_or("it has no positions")?
+        .collect();
+    let count = positions.len();
+    let indices: Vec<u32> = match primitive.indices() {
+        Some(_) => reader
+            .read_indices()
+            .ok_or("its indices aren't in its buffers")?
+            .into_u32()
+            .collect(),
+        None => (0..count as u32).collect(),
+    };
+    let triangles = triangles(primitive.mode(), &indices)?;
+    if let Some(index) = triangles.iter().find(|&&index| index as usize >= count) {
+        return Err(format!("index {index} is past its {count} vertices"));
+    }
+
     let uvs: Vec<[f32; 2]> = reader
         .read_tex_coords(set)
         .map(|uvs| match &transform {
@@ -367,6 +397,125 @@ fn mesh_data(primitive: &::gltf::Primitive, buffers: &[Vec<u8>]) -> Result<MeshD
             data
         }
     })
+}
+
+/// Checks the accessors of `primitive` that [`mesh_data`] reads, with texture coordinates `set`,
+/// can be read from `buffers`: the `gltf` crate panics, rather than failing, on an accessor of a
+/// type it doesn't expect, that's empty, or whose items overlap.
+fn check_accessors(
+    primitive: &::gltf::Primitive,
+    set: u32,
+    buffers: &[Vec<u8>],
+) -> Result<(), String> {
+    use DataType::{F32, U8, U16, U32};
+    use Dimensions::{Scalar, Vec2, Vec3, Vec4};
+    let accessors: [(_, _, &[_]); 5] = [
+        (
+            primitive.get(&Semantic::Positions),
+            "positions",
+            &[(F32, Vec3)],
+        ),
+        (primitive.get(&Semantic::Normals), "normals", &[(F32, Vec3)]),
+        (
+            primitive.get(&Semantic::TexCoords(set)),
+            "texture coordinates",
+            &[(F32, Vec2), (U8, Vec2), (U16, Vec2)],
+        ),
+        (
+            primitive.get(&Semantic::Colors(0)),
+            "colors",
+            &[
+                (F32, Vec3),
+                (U8, Vec3),
+                (U16, Vec3),
+                (F32, Vec4),
+                (U8, Vec4),
+                (U16, Vec4),
+            ],
+        ),
+        (
+            primitive.indices(),
+            "indices",
+            &[(U8, Scalar), (U16, Scalar), (U32, Scalar)],
+        ),
+    ];
+    for (accessor, what, kinds) in accessors {
+        let Some(accessor) = accessor else {
+            continue;
+        };
+        let kind = (accessor.data_type(), accessor.dimensions());
+        if !kinds.contains(&kind) {
+            return Err(format!(
+                "its {what} are {:?} of {:?}, which they can't be",
+                kind.1, kind.0
+            ));
+        }
+        let count = accessor.count();
+        let size = accessor.size();
+        if count == 0 {
+            return Err(format!("its {what} are empty"));
+        }
+        if let Some(view) = accessor.view() {
+            check_items(&view, accessor.offset(), count, size, buffers)
+                .map_err(|err| format!("its {what}: {err}"))?;
+        }
+        if let Some(sparse) = accessor.sparse() {
+            let changed = sparse.count();
+            if !(1..=count).contains(&changed) {
+                return Err(format!(
+                    "its {what} change {changed} of their {count} sparsely"
+                ));
+            }
+            let indices = sparse.indices();
+            let index_size = indices.index_type().size();
+            check_items(
+                &indices.view(),
+                indices.offset(),
+                changed,
+                index_size,
+                buffers,
+            )
+            .map_err(|err| format!("its {what}' sparse indices: {err}"))?;
+            let values = sparse.values();
+            check_items(&values.view(), values.offset(), changed, size, buffers)
+                .map_err(|err| format!("its {what}' sparse values: {err}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Checks `count` items, at least 1, each `size` bytes, from `offset` in `view` are inside it
+/// without overlapping, and `view` is inside its buffer, of `buffers`.
+fn check_items(
+    view: &buffer::View,
+    offset: usize,
+    count: usize,
+    size: usize,
+    buffers: &[Vec<u8>],
+) -> Result<(), String> {
+    let stride = view.stride().unwrap_or(size);
+    if stride < size {
+        return Err(format!("its items are {size} bytes, but {stride} apart"));
+    }
+    let end = (count - 1)
+        .checked_mul(stride)
+        .and_then(|end| end.checked_add(size))
+        .and_then(|end| end.checked_add(offset));
+    if end.is_none_or(|end| end > view.length()) {
+        return Err(format!(
+            "they run past the end of buffer view {}",
+            view.index()
+        ));
+    }
+    let view_end = view.offset().checked_add(view.length());
+    let buffer = buffers.get(view.buffer().index()).map_or(0, Vec::len);
+    if view_end.is_none_or(|end| end > buffer) {
+        return Err(format!(
+            "buffer view {} runs past the end of its buffer",
+            view.index()
+        ));
+    }
+    Ok(())
 }
 
 /// `uv` moved as `KHR_texture_transform` moves it: scaled, turned `rotation` radians, then
@@ -936,6 +1085,103 @@ mod tests {
             "without indices, each three vertices are a triangle"
         );
         assert!(read_str("not a model").is_err());
+    }
+
+    #[test]
+    fn broken_accessors_are_errors_not_panics() {
+        // A triangle, its positions' accessor and view first, then its indices'.
+        let [positions, indices] = [0, 1];
+        let fresh = || {
+            let mut buffer = Buffer::new();
+            assert_eq!(triangle(&mut buffer), (positions, indices));
+            buffer
+        };
+        let at = format!(r#""POSITION":{positions}"#);
+        let read_mesh = |buffer: &Buffer, attributes: &str| {
+            read_str(&buffer.gltf(&format!(
+                r#""meshes":[{{"primitives":[{{"attributes":{{{attributes}}},"indices":{indices}}}]}}],"nodes":[{{"mesh":0}}]"#
+            )))
+        };
+
+        let err = read_mesh(&fresh(), r#""POSITION":99"#).unwrap_err();
+        assert_eq!(
+            err,
+            "mesh 0, part 0: it names accessor 99, which isn't there"
+        );
+
+        let mut buffer = fresh();
+        buffer.accessors[indices] = buffer.accessors[indices].replace("5123", "5126");
+        let err = read_mesh(&buffer, &at).unwrap_err();
+        assert_eq!(
+            err,
+            "mesh 0, part 0: its indices are Scalar of F32, which they can't be"
+        );
+
+        let mut buffer = fresh();
+        buffer.accessors[indices] =
+            buffer.accessors[indices].replace(r#""count":3"#, r#""count":0"#);
+        let err = read_mesh(&buffer, &at).unwrap_err();
+        assert_eq!(err, "mesh 0, part 0: its indices are empty");
+
+        let mut buffer = fresh();
+        buffer.accessors[indices] =
+            buffer.accessors[indices].replace(r#""count":3"#, r#""count":5"#);
+        let err = read_mesh(&buffer, &at).unwrap_err();
+        assert_eq!(
+            err,
+            "mesh 0, part 0: its indices: they run past the end of buffer view 1"
+        );
+
+        let mut buffer = fresh();
+        buffer.views[positions] = buffer.views[positions].replace('}', r#","byteStride":4}"#);
+        let err = read_mesh(&buffer, &at).unwrap_err();
+        assert_eq!(
+            err,
+            "mesh 0, part 0: its positions: its items are 12 bytes, but 4 apart"
+        );
+
+        let mut buffer = fresh();
+        let colors = buffer.floats(&[1.0; 6], "VEC2", 2);
+        let err = read_mesh(&buffer, &format!(r#"{at},"COLOR_0":{colors}"#)).unwrap_err();
+        assert_eq!(
+            err,
+            "mesh 0, part 0: its colors are Vec2 of F32, which they can't be"
+        );
+    }
+
+    #[test]
+    fn nodes_are_each_in_one_place() {
+        let mut buffer = Buffer::new();
+        let (positions, indices) = triangle(&mut buffer);
+        let tree = |nodes: &str| {
+            read_str(&buffer.gltf(&format!(
+                r#""meshes":[{{"primitives":[{{"attributes":{{"POSITION":{positions}}},"indices":{indices}}}]}}],"nodes":[{nodes}],"scenes":[{{"nodes":[0]}}],"scene":0"#
+            )))
+        };
+        let err = tree(r#"{"children":[1,1]},{"mesh":0,"name":"leaf"}"#).unwrap_err();
+        assert_eq!(
+            err,
+            "node 1, `leaf` is in two places, under two parents or in a loop"
+        );
+        let err = tree(r#"{"children":[1]},{"children":[0]}"#).unwrap_err();
+        assert_eq!(
+            err,
+            "node 0 is in two places, under two parents or in a loop"
+        );
+        // Each node twice under the one before: placed every time, it'd be 2^40 times.
+        let chain: Vec<String> = (1..=40)
+            .map(|next| format!(r#"{{"mesh":0,"children":[{next},{next}]}}"#))
+            .chain([r#"{"mesh":0}"#.to_owned()])
+            .collect();
+        assert!(tree(&chain.join(",")).is_err());
+        let deep: Vec<String> = (1..=300)
+            .map(|next| format!(r#"{{"children":[{next}]}}"#))
+            .chain(["{}".to_owned()])
+            .collect();
+        assert_eq!(
+            tree(&deep.join(",")).unwrap_err(),
+            "its nodes nest too deeply"
+        );
     }
 
     #[test]

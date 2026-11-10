@@ -25,7 +25,7 @@ use crate::{
     Context, Error, Result,
     graphics::{
         Blend, Camera3d, Canvas, Color, Lighting, Mesh, MeshData, MeshVertex, Projection, Sprite,
-        View3d,
+        View3d, gpu::texture_size_problem,
     },
     lua::is_identifier,
     math::{Affine3, Rect},
@@ -1215,11 +1215,8 @@ mod host {
     ) -> *mut abi::Sprite {
         // SAFETY: the library's promise.
         let ctx = unsafe { context_mut(ctx) };
-        let limit = ctx.gpu.device.limits().max_texture_dimension_2d;
-        if !(1..=limit).contains(&width) || !(1..=limit).contains(&height) {
-            super::set_error(format!(
-                "a sprite is from 1x1 to {limit}x{limit} pixels, not {width}x{height}"
-            ));
+        if let Some(problem) = texture_size_problem(&ctx.gpu.device, "a sprite", [width, height]) {
+            super::set_error(problem);
             return ptr::null_mut();
         }
         let len = width as usize * height as usize * 4;

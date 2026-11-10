@@ -9,8 +9,10 @@ use crate::{
     app::Redraws,
     audio::Audio,
     graphics::{
-        Font, FontSettings, Mesh, MeshData, Resolution, Scaling, Texture, gpu::Gpu,
-        renderer::Renderer, screen::Screen,
+        Font, FontSettings, Mesh, MeshData, Resolution, Scaling, Texture,
+        gpu::{Gpu, texture_size_problem},
+        renderer::Renderer,
+        screen::Screen,
     },
     input::Input,
     save::Saves,
@@ -220,6 +222,13 @@ impl Context {
             let bytes = crate::files::read(path).map_err(|err| error(err.into()))?;
             image::load_from_memory(&bytes).map_err(error)?.into_rgba8()
         };
+        let size = [image.width(), image.height()];
+        if let Some(message) = texture_size_problem(&self.gpu.device, "an image", size) {
+            return Err(Error::Image {
+                path: path.to_owned(),
+                message,
+            });
+        }
         Ok(self.renderer.create_texture(
             &self.gpu.device,
             &self.gpu.queue,
@@ -328,6 +337,12 @@ impl Context {
         };
         let folder = path.parent().unwrap_or(Path::new(""));
         let data = model_file::read(&bytes, folder).map_err(error)?;
+        for texture in &data.textures {
+            let size = [texture.image.width(), texture.image.height()];
+            if let Some(problem) = texture_size_problem(&self.gpu.device, "a texture", size) {
+                return Err(error(problem));
+            }
+        }
         let meshes = data
             .meshes
             .iter()
@@ -366,5 +381,32 @@ impl Context {
             })
             .collect();
         Ok(Model::read_from(parts, data.files))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use image::RgbaImage;
+
+    use crate::{Error, headless::Headless, save::TemporaryFolder};
+
+    #[test]
+    fn images_larger_than_the_gpu_takes_are_errors() {
+        let mut headless = Headless::new().expect("a GPU adapter is available");
+        let ctx = headless.context();
+        let limit = ctx.gpu.device.limits().max_texture_dimension_2d;
+        let folder = TemporaryFolder::new();
+        std::fs::create_dir(folder.path()).unwrap();
+        let [fits, tall] = ["fits.png", "tall.png"].map(|name| folder.path().join(name));
+        RgbaImage::new(limit, 1).save(&fits).unwrap();
+        RgbaImage::new(1, limit + 1).save(&tall).unwrap();
+        assert_eq!(ctx.load_texture(&fits).unwrap().width(), limit);
+        let err = ctx.load_texture(&tall).unwrap_err();
+        assert!(matches!(err, Error::Image { .. }), "{err}");
+        let message = format!(
+            "an image is from 1x1 to {limit}x{limit} pixels, not 1x{}",
+            limit + 1
+        );
+        assert!(err.to_string().ends_with(&message), "{err}");
     }
 }

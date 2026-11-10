@@ -63,7 +63,8 @@ grid.neighbor(direction: Direction, column: number, row: number): (number, numbe
 ```
 
 Returns the column and row of the next tile from `column`, `row` in `direction`. Rows grow
-downward, so `"up"` is the row before.
+downward, so `"up"` is the row before. Tiles are numbered from -2,147,483,648 to 2,147,483,647, so
+there's none past those, and asking for one fails.
 
 ### `grid.opposite`
 

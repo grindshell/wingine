@@ -861,6 +861,9 @@ impl<G: Game> State<G> {
         init: impl FnOnce(&mut Context) -> Result<G>,
     ) -> Result<Self> {
         let timestep = Timestep::new(config.update_rate);
+        if let Some(problem) = config.resolution.problem(&gpu.device) {
+            return Err(Error::WindowConfig(problem));
+        }
         let surface = WindowSurface::new(&gpu, window.clone(), surface, config.vsync);
         let renderer = Renderer::new(&gpu.device, &gpu.queue, surface.view_format());
         let mut ctx = Context::new(gpu, renderer, Audio::new());

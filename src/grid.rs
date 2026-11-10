@@ -32,9 +32,24 @@ impl Direction {
     }
 
     /// The tile next to `tile` this way.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, if there's none: `tile` is at the edge of the tiles an `i32` numbers.
+    /// [`Direction::checked_neighbor`] doesn't.
     pub const fn neighbor(self, [column, row]: [i32; 2]) -> [i32; 2] {
         let [dx, dy] = self.offset();
         [column + dx, row + dy]
+    }
+
+    /// The tile next to `tile` this way, or `None` if there's none: `tile` is at the edge of the
+    /// tiles an `i32` numbers.
+    pub const fn checked_neighbor(self, [column, row]: [i32; 2]) -> Option<[i32; 2]> {
+        let [dx, dy] = self.offset();
+        match (column.checked_add(dx), row.checked_add(dy)) {
+            (Some(column), Some(row)) => Some([column, row]),
+            _ => None,
+        }
     }
 }
 
@@ -163,6 +178,7 @@ impl GridMover {
     /// Turns toward `direction` and starts stepping onto the next tile that way, unless
     /// `blocked` says that tile can't be entered, such as with
     /// [`Tilemap::is_solid`](crate::tilemap::Tilemap::is_solid). Returns whether a step started.
+    /// There's no tile past the edge of those an `i32` numbers, so that way is blocked.
     ///
     /// Does nothing while a step is under way.
     pub fn step(&mut self, direction: Direction, blocked: impl FnOnce([i32; 2]) -> bool) -> bool {
@@ -170,7 +186,9 @@ impl GridMover {
             return false;
         }
         self.facing = direction;
-        let next = direction.neighbor(self.tile);
+        let Some(next) = direction.checked_neighbor(self.tile) else {
+            return false;
+        };
         if blocked(next) {
             return false;
         }
@@ -211,7 +229,24 @@ mod tests {
         for direction in Direction::ALL {
             let there = direction.neighbor([0, 0]);
             assert_eq!(direction.opposite().neighbor(there), [0, 0]);
+            assert_eq!(direction.checked_neighbor([0, 0]), Some(there));
         }
+    }
+
+    #[test]
+    fn there_are_no_tiles_past_the_edge_of_the_numbers() {
+        let edge = [i32::MAX, i32::MIN];
+        assert_eq!(Direction::Right.checked_neighbor(edge), None);
+        assert_eq!(Direction::Up.checked_neighbor(edge), None);
+        assert_eq!(
+            Direction::Left.checked_neighbor(edge),
+            Some([i32::MAX - 1, i32::MIN])
+        );
+        let mut mover = GridMover::new(edge, 0.5);
+        assert!(!mover.step(Direction::Right, open), "that way is blocked");
+        assert_eq!(mover.facing(), Direction::Right, "but it turns");
+        assert_eq!(mover.tile(), edge);
+        assert!(mover.step(Direction::Down, open));
     }
 
     #[test]

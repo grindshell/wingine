@@ -20,6 +20,9 @@ use crate::{
 /// long or shorter, so particles move alike at any frame rate.
 pub const STEP: f32 = 1.0 / 60.0;
 
+/// The most steps one advance takes, a minute's: a longer one takes longer steps.
+const MAX_STEPS: u32 = 3600;
+
 /// What an emitter sends out, how often, and how its particles move and look as they age.
 ///
 /// Ranges, such as `lifetime`, are the least and the most a particle gets, each getting a value
@@ -348,9 +351,10 @@ impl Particles {
     }
 
     /// Moves its particles on by `dt` seconds, ending those whose lives are over, and sends new
-    /// ones out at its rate while emitting, in steps of at most [`STEP`]. Particles sent out as
-    /// its origin moved since it last advanced are spread along the way it went. The first time
-    /// it advances, it first runs its `warmup`.
+    /// ones out at its rate while emitting, in steps of at most [`STEP`], or for more than a
+    /// minute, in a minute's worth of longer steps, so a huge `dt` can't stall the game. Particles
+    /// sent out as its origin moved since it last advanced are spread along the way it went. The
+    /// first time it advances, it first runs its `warmup`.
     pub fn advance(&mut self, dt: f32) {
         if !self.warmed {
             self.warmed = true;
@@ -364,8 +368,8 @@ impl Particles {
             return;
         }
         // Not `ceil`, a call into the math library; a hair over a whole number of steps, from
-        // rounding, isn't another step.
-        let steps = ((dt / STEP - 1e-3) as u32 + 1).max(1);
+        // rounding, isn't another step. The cast saturates.
+        let steps = ((dt / STEP - 1e-3) as u32).saturating_add(1).min(MAX_STEPS);
         let part = dt / steps as f32;
         let end = self.origin.translation;
         let start = self.last.unwrap_or(end);
@@ -594,6 +598,29 @@ mod tests {
         // Each a step older than the next, flying right.
         let xs: Vec<f32> = once.live().iter().map(|p| p.position[0]).collect();
         assert!(xs.windows(2).all(|pair| pair[0] > pair[1]), "{xs:?}");
+    }
+
+    #[test]
+    fn a_huge_time_is_taken_in_a_minutes_worth_of_steps() {
+        let settings = ParticleSettings {
+            rate: 60.0,
+            lifetime: [1.0e9, 1.0e9],
+            limit: 500,
+            ..ParticleSettings::default()
+        };
+        // Steps of a sixtieth would be billions, or past what a `u32` counts. Longer ones send out
+        // more each, as many as its limit holds.
+        for dt in [1.0e9, 1.0e30, f32::MAX] {
+            let mut particles = emitter(settings.clone());
+            particles.advance(dt);
+            assert_eq!(particles.count(), 500);
+        }
+        // A minute is still a step a sixtieth.
+        let mut minute = emitter(settings.clone());
+        minute.advance(60.0);
+        let mut stepped = emitter(settings);
+        run(&mut stepped, 3600);
+        assert_eq!(minute.live(), stepped.live());
     }
 
     #[test]

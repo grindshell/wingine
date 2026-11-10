@@ -34,6 +34,19 @@ pub const FORMAT: u32 = 4;
 /// that builds a table holding itself would otherwise never finish being read.
 const MAX_DEPTH: usize = 200;
 
+/// How many values plain data may hold, counting a table each time it's reached. Files and saves
+/// come nowhere near, but one holding the same table twice in each of a few dozen nested tables
+/// holds it exponentially many times, and would otherwise never finish being read.
+const MAX_VALUES: usize = 4_000_000;
+
+/// How many times running a file may loop or call before it's stopped: files are plain values,
+/// so even one written to build its tables with loops comes nowhere near, but one that loops
+/// forever would otherwise never finish.
+const MAX_INTERRUPTS: u32 = 1_000_000;
+
+/// How much memory running a file may take, in bytes, before it's stopped.
+const MAX_MEMORY: usize = 256 << 20;
+
 /// What a scene file holds: the sprite sheets its sprites come from, the scene's own props, its
 /// nodes, and clips that pose them. See the [module docs](super) for the format.
 ///
@@ -836,7 +849,7 @@ fn read_file(path: &Path) -> Result<String> {
 /// Runs the Luau `source` with nothing in scope, and returns what it returns, which must be a
 /// table, as plain data.
 fn evaluate(source: &str, path: &Path) -> Result<Value, String> {
-    let lua = mlua::Lua::new();
+    let lua = file_lua()?;
     let value = run(&lua, source, path)?;
     if !value.is_table() {
         return Err(format!(
@@ -850,9 +863,28 @@ fn evaluate(source: &str, path: &Path) -> Result<Value, String> {
 /// Runs the Luau `source` with nothing in scope, and returns what it returns as plain data,
 /// whatever kind of value it is, as a save file holds.
 pub(crate) fn evaluate_any(source: &str, path: &Path) -> Result<Value, String> {
-    let lua = mlua::Lua::new();
+    let lua = file_lua()?;
     let value = run(&lua, source, path)?;
     plain(value, "what the file returns")
+}
+
+/// A Luau VM to run a file in, which stops it if it runs too long or takes too much memory, as a
+/// file that isn't plain values may.
+fn file_lua() -> Result<mlua::Lua, String> {
+    let lua = mlua::Lua::new();
+    lua.set_memory_limit(MAX_MEMORY)
+        .map_err(|err| err.to_string())?;
+    let interrupts = std::sync::atomic::AtomicU32::new(0);
+    lua.set_interrupt(move |_| {
+        if interrupts.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < MAX_INTERRUPTS {
+            Ok(mlua::VmState::Continue)
+        } else {
+            Err(mlua::Error::runtime(
+                "it runs too long: a file holds values, and must not loop for long",
+            ))
+        }
+    });
+    Ok(lua)
 }
 
 /// Runs the Luau `source` with nothing in scope, and returns what it returns.
@@ -862,17 +894,31 @@ fn run(lua: &mlua::Lua, source: &str, path: &Path) -> Result<mlua::Value, String
         .set_mode(ChunkMode::Text)
         .set_environment(lua.create_table().map_err(|err| err.to_string())?)
         .eval()
-        .map_err(|err| err.to_string())
+        .map_err(|err| match err {
+            mlua::Error::MemoryError(_) => format!(
+                "it takes more than {} MiB of memory to run",
+                MAX_MEMORY >> 20
+            ),
+            err => err.to_string(),
+        })
 }
 
 /// `value` as plain data, which errors call `what`, such as "the file's table", and its fields by
 /// their paths from it.
 pub(crate) fn plain(value: mlua::Value, what: &str) -> Result<Value, String> {
-    plain_at(value, what, "", 0)
+    let mut values = 0;
+    plain_at(value, what, "", 0, &mut values)
 }
 
 /// `value` as plain data. `at` is where it is in `root`, such as `children[2].props`, for errors.
-fn plain_at(value: mlua::Value, root: &str, at: &str, depth: usize) -> Result<Value, String> {
+/// `values` counts those read so far.
+fn plain_at(
+    value: mlua::Value,
+    root: &str,
+    at: &str,
+    depth: usize,
+    values: &mut usize,
+) -> Result<Value, String> {
     let here = || {
         if at.is_empty() {
             root.to_owned()
@@ -884,6 +930,13 @@ fn plain_at(value: mlua::Value, root: &str, at: &str, depth: usize) -> Result<Va
         return Err(format!(
             "{} nests tables more than {MAX_DEPTH} deep, too deep to read",
             here()
+        ));
+    }
+    *values += 1;
+    if *values > MAX_VALUES {
+        return Err(format!(
+            "{root} holds more than {MAX_VALUES} values, counting a table each time it's in \
+             another: too many to read"
         ));
     }
     match value {
@@ -908,7 +961,8 @@ fn plain_at(value: mlua::Value, root: &str, at: &str, depth: usize) -> Result<Va
                             return Err(format!("{} has a key that isn't UTF-8", here()));
                         };
                         let key = key.to_owned();
-                        let value = plain_at(value, root, &field_path(at, &key), depth + 1)?;
+                        let at = field_path(at, &key);
+                        let value = plain_at(value, root, &at, depth + 1, values)?;
                         strings.insert(key, value);
                     }
                     mlua::Value::Integer(_) | mlua::Value::Number(_) => {
@@ -918,7 +972,7 @@ fn plain_at(value: mlua::Value, root: &str, at: &str, depth: usize) -> Result<Va
                             _ => unreachable!(),
                         };
                         let at = format!("{at}[{index}]");
-                        let value = plain_at(value, root, &at, depth + 1)?;
+                        let value = plain_at(value, root, &at, depth + 1, values)?;
                         numbers.push((index, value));
                     }
                     key => {
@@ -3898,6 +3952,29 @@ mod tests {
              return { format = 1, children = { node } }",
         );
         assert!(err.contains("too deep"), "{err}");
+    }
+
+    #[test]
+    fn files_that_would_never_finish_being_read_are_stopped() {
+        let err = error("while true do end return { format = 1 }");
+        assert!(err.contains("runs too long"), "{err}");
+        let err = error("local function f() return f() + 1 end return f()");
+        assert!(
+            err.contains("runs too long") || err.contains("stack"),
+            "{err}"
+        );
+        // Strings still have their methods.
+        let err = error("return { format = 1, props = { s = ('x'):rep(1e9) } }");
+        assert!(err.contains("MiB of memory"), "{err}");
+        // Each table twice in the one around it, 60 deep: read every time, it's 2^60 tables.
+        let err = error(
+            "local t = {} for _ = 1, 60 do t = { t, t } end
+             return { format = 1, props = { t = t } }",
+        );
+        assert!(err.contains("too many to read"), "{err}");
+        // Saves are read the same way.
+        let err = evaluate_any("while true do end", Path::new("save.luau")).unwrap_err();
+        assert!(err.contains("runs too long"), "{err}");
     }
 
     #[test]

@@ -200,7 +200,7 @@
 //!   isn't moving. A step that starts as another ends picks up the time left over, so walking
 //!   keeps an even pace.
 //! - `grid.neighbor(direction, column, row)` returns the column and row of the next tile in
-//!   `direction`.
+//!   `direction`, failing past the edge of the tiles an `i32` numbers.
 //! - `grid.opposite(direction)`
 //!
 //! `physics`, for bodies and characters among a scene's nodes, in 2D and in 3D views, anywhere:

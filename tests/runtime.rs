@@ -2381,7 +2381,13 @@ fn grid_movers_walk_from_tile_to_tile() {
             opposite = grid.opposite('up')
             zero_step_time_fails = not pcall(function() grid.new_mover(0, 0, 0) end)
             bad_frame_times_fail = not pcall(function() mover:update(0 / 0) end)
-                and not pcall(function() mover:update(-0.1) end)",
+                and not pcall(function() mover:update(-0.1) end)
+
+            -- There are no tiles past the edge of the numbers.
+            past_the_edge_fails = not pcall(function() grid.neighbor('right', 2147483647, 0) end)
+            local edge = grid.new_mover(2147483647, 0, 0.5)
+            edge_step = edge:step('right', function() edge_asked = true return false end)
+            edge_facing = edge:facing()",
         )],
     );
     let mut simulation = simulation(&folder);
@@ -2402,6 +2408,9 @@ fn grid_movers_walk_from_tile_to_tile() {
     assert_eq!(simulation.eval::<String>("opposite"), "down");
     assert!(simulation.eval::<bool>("zero_step_time_fails"));
     assert!(simulation.eval::<bool>("bad_frame_times_fail"));
+    assert!(simulation.eval::<bool>("past_the_edge_fails"));
+    assert!(simulation.eval::<bool>("not edge_step and edge_asked == nil"));
+    assert_eq!(simulation.eval::<String>("edge_facing"), "right");
 }
 
 #[test]

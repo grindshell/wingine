@@ -76,6 +76,22 @@ fn simulation() -> Simulation<Probe> {
 }
 
 #[test]
+fn a_fixed_resolution_larger_than_the_gpu_renders_is_an_error() {
+    let config = WindowConfig {
+        resolution: Resolution::Fixed {
+            width: 100_000,
+            height: 16,
+        },
+        ..config()
+    };
+    let err = Simulation::new(&config, |_| Ok(Probe::default()))
+        .err()
+        .expect("it's too wide");
+    assert!(matches!(err, Error::WindowConfig(_)), "{err}");
+    assert!(err.to_string().ends_with("not 100000x16"), "{err}");
+}
+
+#[test]
 fn a_tap_is_pressed_once_and_held_for_one_frame() {
     let mut simulation = simulation();
     simulation.tap(Key::Space);

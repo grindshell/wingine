@@ -23,6 +23,13 @@ pub enum Error {
         path: PathBuf,
         source: image::ImageError,
     },
+    /// An image was read, but can't be a texture: it's larger than the GPU takes.
+    #[error("image {}: {message}", .path.display())]
+    Image { path: PathBuf, message: String },
+    /// A window's configuration asks for what the GPU can't do, such as a fixed resolution larger
+    /// than it renders.
+    #[error("invalid window configuration: {0}")]
+    WindowConfig(String),
     /// An image can't be a window's icon.
     #[error("invalid icon: {0}")]
     Icon(String),

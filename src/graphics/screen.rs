@@ -47,6 +47,18 @@ impl Scaling {
     }
 }
 
+impl Resolution {
+    /// Why the GPU of `device` can't render a canvas at this resolution, if it can't.
+    pub(crate) fn problem(self, device: &wgpu::Device) -> Option<String> {
+        match self {
+            Self::Window => None,
+            Self::Fixed { width, height } => {
+                super::gpu::texture_size_problem(device, "a fixed resolution", [width, height])
+            }
+        }
+    }
+}
+
 /// Draws finished canvases onto an output (the window, or a headless frame) at a [`Resolution`],
 /// scaled as its [`Scaling`] says.
 pub(crate) struct Screen {

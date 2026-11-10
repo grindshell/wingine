@@ -64,7 +64,14 @@ impl Headless {
     /// [`Context::set_scaling`] scales a fixed one.
     ///
     /// [`WindowConfig::resolution`]: crate::WindowConfig::resolution
+    ///
+    /// # Panics
+    ///
+    /// If it's a fixed resolution smaller than 1x1, or larger than the GPU renders.
     pub fn set_resolution(&mut self, resolution: Resolution) {
+        if let Some(problem) = resolution.problem(&self.ctx.gpu.device) {
+            panic!("{problem}");
+        }
         self.ctx.screen.set_resolution(resolution);
     }
 
@@ -302,6 +309,9 @@ impl<G: Game> Simulation<G> {
                 Some(folder)
             }
         };
+        if let Some(problem) = config.resolution.problem(&headless.ctx.gpu.device) {
+            return Err(Error::WindowConfig(problem));
+        }
         headless.set_resolution(config.resolution);
         headless.ctx.set_scaling(config.scaling);
         // Noted, as the game sets it: frames keep the window's size.
