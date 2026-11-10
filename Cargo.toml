@@ -123,3 +123,7 @@ harness = false
 name = "physics"
 harness = false
 required-features = ["physics"]
+
+[[bench]]
+name = "scenes"
+harness = false

@@ -1,4 +1,7 @@
-use std::ops::Range;
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+};
 
 use bytemuck::{Pod, Zeroable};
 
@@ -233,21 +236,129 @@ pub(crate) struct MeshDraw {
 }
 
 impl MeshDraw {
-    /// Whether `next`, drawn right after this, is drawn in the same draw call, as instances of
-    /// one mesh: it's the same mesh, showing the same texture, drawn the same way round.
-    pub fn joins(&self, next: &MeshDraw) -> bool {
-        let same_mesh = match (&self.mesh, &next.mesh) {
-            (Some(mesh), Some(next)) => mesh.same_as(next),
-            (mesh, next) => mesh.is_none() && next.is_none(),
-        };
-        let same_texture = match (&self.texture, &next.texture) {
-            (Some(texture), Some(next)) => texture.same_as(next),
-            (texture, next) => texture.is_none() && next.is_none(),
-        };
-        same_mesh
-            && same_texture
-            && self.mirrored == next.mirrored
-            && self.double_sided == next.double_sided
+    /// What it's drawn as: draws of the same kind, the same mesh showing the same texture drawn
+    /// the same way round, are drawn in one draw call, as instances of one mesh.
+    fn kind(&self) -> DrawKind {
+        DrawKind {
+            mesh: self.mesh.as_ref().map_or(0, Mesh::id),
+            texture: self.texture.as_ref().map_or(0, Texture::id),
+            mirrored: self.mirrored,
+            double_sided: self.double_sided,
+        }
+    }
+}
+
+/// The kind of a [`MeshDraw`]: its mesh's and texture's IDs, 0 for none, and which way round
+/// it's drawn.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct DrawKind {
+    mesh: usize,
+    texture: usize,
+    mirrored: bool,
+    double_sided: bool,
+}
+
+/// The order a 3D view's meshes draw in: draws of a kind together, so each kind is one draw call,
+/// the kinds in the order each was first drawn, and each kind's in the order they were drawn, so
+/// the order is the same every frame. Nothing in a view blends, and each view has a depth buffer,
+/// so the order shows only in which of two surfaces at the same depth is in front. Kept from frame
+/// to frame for what it allocates.
+#[derive(Default)]
+pub(crate) struct MeshOrder {
+    /// Whether the draws draw in the order they were drawn, each kind's together already.
+    pub in_order: bool,
+    /// Unless they're in order, indices into the view's draws, in the order they draw.
+    order: Vec<u32>,
+    /// Where each run of the order that's one draw call ends.
+    pub ends: Vec<u32>,
+    kinds: HashMap<DrawKind, u32>,
+    kind_of: Vec<u32>,
+}
+
+impl MeshOrder {
+    /// Works out the order `draws` draw in.
+    pub fn arrange(&mut self, draws: &[MeshDraw]) {
+        self.kinds.clear();
+        self.kind_of.clear();
+        self.ends.clear();
+        self.order.clear();
+        // How many draws of each kind there are, in `ends` for now. Draws mostly come in runs of
+        // a kind, which needn't be hashed.
+        self.in_order = true;
+        let mut last = None;
+        for draw in draws {
+            let kind = draw.kind();
+            let index = match last {
+                Some((was, index)) if was == kind => index,
+                _ => {
+                    let next = self.ends.len() as u32;
+                    let index = *self.kinds.entry(kind).or_insert(next);
+                    if index == next {
+                        self.ends.push(0);
+                    } else if self.in_order {
+                        // The kinds so far came one after another, as many of each as counted.
+                        self.in_order = false;
+                        for (kind, &count) in self.ends.iter().enumerate() {
+                            let kinds = std::iter::repeat_n(kind as u32, count as usize);
+                            self.kind_of.extend(kinds);
+                        }
+                    }
+                    index
+                }
+            };
+            last = Some((kind, index));
+            self.ends[index as usize] += 1;
+            if !self.in_order {
+                self.kind_of.push(index);
+            }
+        }
+        if self.in_order {
+            let mut end = 0;
+            for count in &mut self.ends {
+                end += *count;
+                *count = end;
+            }
+            return;
+        }
+        // Where each kind starts, which becomes where it ends as its draws are put in order.
+        let mut start = 0;
+        for count in &mut self.ends {
+            (*count, start) = (start, start + *count);
+        }
+        self.order.resize(draws.len(), 0);
+        for (i, &kind) in self.kind_of.iter().enumerate() {
+            let at = &mut self.ends[kind as usize];
+            self.order[*at as usize] = i as u32;
+            *at += 1;
+        }
+    }
+
+    /// Which of the draws draws `position`th.
+    pub fn draw_at(&self, position: u32) -> u32 {
+        if self.in_order {
+            position
+        } else {
+            self.order[position as usize]
+        }
+    }
+
+    /// The draws in the order they draw, unless they're in order.
+    pub fn order(&self) -> &[u32] {
+        &self.order
+    }
+
+    /// How many kinds of draw `draws` are, and so how many draw calls they take.
+    pub fn kind_count(draws: &[MeshDraw]) -> usize {
+        let mut kinds = HashSet::new();
+        let mut last = None;
+        for draw in draws {
+            let kind = draw.kind();
+            if last != Some(kind) {
+                kinds.insert(kind);
+                last = Some(kind);
+            }
+        }
+        kinds.len()
     }
 }
 
@@ -290,5 +401,38 @@ mod tests {
         assert_near(middle.direction, [0.0, 0.0, -1.0]);
         // Past the rect's right edge, as though the view went on.
         assert_near(view.ray([70.0, 30.0]).origin, [4.0, 0.0, 4.9]);
+    }
+
+    #[test]
+    fn draws_of_a_kind_draw_together_in_the_order_each_kind_was_first_drawn() {
+        // Billboards of three kinds, by which way round they're drawn.
+        let draw = |mirrored, double_sided| MeshDraw {
+            mesh: None,
+            texture: None,
+            mirrored,
+            double_sided,
+        };
+        let [a, b, c] = [(false, false), (true, false), (false, true)];
+        let draws = [a, b, a, a, c, b].map(|(mirrored, sided)| draw(mirrored, sided));
+        let mut order = MeshOrder::default();
+        order.arrange(&draws);
+        assert!(!order.in_order);
+        let drawn: Vec<u32> = (0..6).map(|i| order.draw_at(i)).collect();
+        assert_eq!(drawn, [0, 2, 3, 1, 5, 4]);
+        assert_eq!(order.ends, [3, 5, 6]);
+        assert_eq!(MeshOrder::kind_count(&draws), 3);
+
+        // Kept from frame to frame, it starts again each time. Draws of each kind together
+        // already draw as they are.
+        order.arrange(&draws[2..]);
+        assert!(order.in_order);
+        assert_eq!(
+            (0..4).map(|i| order.draw_at(i)).collect::<Vec<_>>(),
+            [0, 1, 2, 3]
+        );
+        assert_eq!(order.ends, [2, 3, 4]);
+        order.arrange(&[]);
+        assert!(order.in_order && order.ends.is_empty());
+        assert_eq!(MeshOrder::kind_count(&[]), 0);
     }
 }

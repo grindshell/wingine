@@ -142,8 +142,8 @@ type FrameStats = {
     quads: number,
     --- Triangles of the meshes and billboards drawn in 3D views.
     triangles: number,
-    --- Draw calls: one for each run of quads with the same texture, and one for each run of the
-    --- same mesh, or billboards, showing the same texture.
+    --- Draw calls: one for each run of quads with the same texture, and one for each kind of mesh,
+    --- or billboard, each 3D view drew: the same mesh showing the same texture.
     draw_calls: number,
 }
 

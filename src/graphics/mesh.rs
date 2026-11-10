@@ -308,9 +308,10 @@ impl Mesh {
         self.inner.index_count
     }
 
-    /// Whether both handles refer to the same mesh on the GPU.
-    pub(crate) fn same_as(&self, other: &Mesh) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+    /// What tells the mesh on the GPU from others while handles to it are kept: handles to the
+    /// same mesh have the same. Never 0.
+    pub(crate) fn id(&self) -> usize {
+        Arc::as_ptr(&self.inner).addr()
     }
 
     pub(crate) fn vertex_buffer(&self) -> &wgpu::Buffer {

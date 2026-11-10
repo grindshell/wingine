@@ -66,6 +66,12 @@ impl Texture {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
+    /// What tells the GPU texture from others while handles to it are kept, as
+    /// [`Texture::same_as`] does. Never 0.
+    pub(crate) fn id(&self) -> usize {
+        Arc::as_ptr(&self.inner).addr()
+    }
+
     #[cfg(feature = "egui")]
     pub(crate) fn gui_view(&self) -> &wgpu::TextureView {
         &self.inner.gui_view

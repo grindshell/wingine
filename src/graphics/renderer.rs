@@ -1,4 +1,4 @@
-use std::{mem::size_of, num::NonZeroU64};
+use std::{mem::size_of, num::NonZeroU64, ops::Range};
 
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
@@ -8,7 +8,7 @@ use super::{
     camera3d::{self, Mat4},
     canvas::{Batch, Canvas, Vertex},
     mesh::GpuVertex,
-    view3d::{Instance, Segment3d},
+    view3d::{Instance, MeshOrder, Segment3d},
 };
 use crate::math::{Rect, normalize3};
 
@@ -75,12 +75,28 @@ struct MeshRenderer {
     views_buffer: wgpu::Buffer,
     views_bind_group: wgpu::BindGroup,
     view_stride: u64,
-    /// Each mesh drawn's [`Instance`].
+    /// Each mesh drawn's [`Instance`], in the order they draw.
     instance_buffer: wgpu::Buffer,
     /// The most recently used last.
     depth_textures: Vec<DepthTexture>,
     /// The quad billboards are drawn as.
     billboard: Mesh,
+    /// What works out the order each view's meshes draw in, as they're uploaded.
+    order: MeshOrder,
+    /// The instances, in the order they draw, as they're uploaded.
+    instances: Vec<Instance>,
+    /// Each draw call of meshes, the views' in turn.
+    runs: Vec<MeshRun>,
+    /// Each view's draw calls, in `runs`.
+    view_runs: Vec<Range<usize>>,
+}
+
+/// Meshes drawn in one draw call, as instances of one mesh.
+struct MeshRun {
+    /// Where their instances are in the instance buffer.
+    instances: Range<u32>,
+    /// One of them, in the canvas's `mesh_draws`, whose mesh, texture and way round they share.
+    draw: u32,
 }
 
 struct DepthTexture {
@@ -434,7 +450,6 @@ impl Renderer {
                 target,
                 depth,
                 index,
-                segment,
                 viewport,
                 canvas,
                 &self.white,
@@ -610,6 +625,10 @@ impl MeshRenderer {
             instance_buffer,
             depth_textures: Vec::new(),
             billboard: Mesh::new(device, &MeshData::billboard()).expect("a quad can be drawn"),
+            order: MeshOrder::default(),
+            instances: Vec::new(),
+            runs: Vec::new(),
+            view_runs: Vec::new(),
         }
     }
 
@@ -641,7 +660,45 @@ impl MeshRenderer {
         }
         queue.write_buffer(&self.views_buffer, 0, &views);
 
-        let instances: &[u8] = bytemuck::cast_slice(&canvas.instances);
+        // Each view's draws of a kind together, so they're one draw call. Until a view's draws
+        // aren't in order already, the canvas's instances are uploaded as they are.
+        self.instances.clear();
+        self.runs.clear();
+        self.view_runs.clear();
+        let mut in_order = true;
+        for segment in &canvas.segments {
+            let Range { start, end } = segment.draws.clone();
+            self.order
+                .arrange(&canvas.mesh_draws[start as usize..end as usize]);
+            let first_run = self.runs.len();
+            let mut run_start = 0;
+            for &run_end in &self.order.ends {
+                self.runs.push(MeshRun {
+                    instances: start + run_start..start + run_end,
+                    draw: start + self.order.draw_at(run_start),
+                });
+                run_start = run_end;
+            }
+            self.view_runs.push(first_run..self.runs.len());
+            if !self.order.in_order && in_order {
+                in_order = false;
+                self.instances
+                    .extend_from_slice(&canvas.instances[..start as usize]);
+            }
+            let instances = &canvas.instances[start as usize..end as usize];
+            if self.order.in_order && !in_order {
+                self.instances.extend_from_slice(instances);
+            } else if !self.order.in_order {
+                let order = self.order.order().iter();
+                self.instances.extend(order.map(|&i| instances[i as usize]));
+            }
+        }
+        let instances = if in_order {
+            &canvas.instances
+        } else {
+            &self.instances
+        };
+        let instances: &[u8] = bytemuck::cast_slice(instances);
         ensure_capacity(
             device,
             &mut self.instance_buffer,
@@ -683,7 +740,7 @@ impl MeshRenderer {
         view
     }
 
-    /// Draws the meshes of `segment`, the `index`th of `canvas`'s 3D views, onto `target` at
+    /// Draws the meshes of the `index`th of `canvas`'s 3D views, as uploaded, onto `target` at
     /// `viewport`, in a pass of its own that keeps what's on the target and clears `depth`.
     #[expect(clippy::too_many_arguments)]
     fn draw(
@@ -692,7 +749,6 @@ impl MeshRenderer {
         target: &wgpu::TextureView,
         depth: &wgpu::TextureView,
         index: usize,
-        segment: &Segment3d,
         viewport: &Viewport,
         canvas: &Canvas,
         white: &Texture,
@@ -725,12 +781,10 @@ impl MeshRenderer {
         pass.set_scissor_rect(x, y, width, height);
         let offset = (index as u64 * self.view_stride) as u32;
         pass.set_bind_group(0, &self.views_bind_group, &[offset]);
-        // Each draw's instance is the one at its index among the canvas's.
         pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         let mut pipeline = None;
-        let mut first = segment.draws.start;
-        for run in canvas.mesh_runs(segment) {
-            let draw = &run[0];
+        for run in &self.runs[self.view_runs[index].clone()] {
+            let draw = &canvas.mesh_draws[run.draw as usize];
             let wanted = (draw.double_sided, draw.mirrored);
             if pipeline != Some(wanted) {
                 let [sides, winding] = [draw.double_sided, draw.mirrored].map(usize::from);
@@ -742,9 +796,7 @@ impl MeshRenderer {
             let mesh = draw.mesh.as_ref().unwrap_or(&self.billboard);
             pass.set_vertex_buffer(0, mesh.vertex_buffer().slice(..));
             pass.set_index_buffer(mesh.index_buffer().slice(..), wgpu::IndexFormat::Uint32);
-            let end = first + run.len() as u32;
-            pass.draw_indexed(0..mesh.index_count(), 0, first..end);
-            first = end;
+            pass.draw_indexed(0..mesh.index_count(), 0, run.instances.clone());
         }
     }
 }

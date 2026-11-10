@@ -481,7 +481,8 @@ pub(crate) const MAX_NODE_DEPTH: usize = 200;
 /// instances place, the tileset files its tilemaps use, the images of its sheets, the font files
 /// of its text and the model files of its model nodes, each by its path as the file names it,
 /// and the meshes of its mesh nodes' shapes. [`FolderAssets`] reads them from a game's folder; a
-/// game can keep them loaded instead.
+/// game can keep them loaded instead. Building a scene asks for each scene file once, however
+/// many instances place it.
 pub trait Assets {
     fn texture(&mut self, path: &str) -> Result<Texture>;
     fn scene(&mut self, path: &str) -> Result<Rc<SceneFile>>;
@@ -1365,6 +1366,7 @@ impl Scene {
             assets: &mut *assets,
             stack: vec![path.to_owned()],
             sheets: BTreeMap::new(),
+            scenes: HashMap::new(),
         };
         let nodes = expand.file(file, path)?;
         let sheets = expand.sheets;
@@ -2328,6 +2330,9 @@ impl Scene {
         // Copied emitters start over, their randomness from their own paths, so copies of a torch
         // don't flicker in step, or carry their source's particles.
         for node in self.descendants(id) {
+            if !matches!(self.node(node).kind, Kind::Particles(_)) {
+                continue;
+            }
             let path = self.path(node);
             if let Kind::Particles(particles) = &mut self.node_mut(node).kind {
                 particles.particles.restart(seed_for(&path));
@@ -2346,9 +2351,36 @@ impl Scene {
     /// children.
     fn copy(&mut self, parent: NodeId, source: &Scene, from: NodeId) -> NodeId {
         let original = source.node(from);
+        // All but its children, which are copied after it.
+        let Node {
+            name,
+            parent: _,
+            children: _,
+            position,
+            rotation,
+            scale,
+            local,
+            anchor,
+            spatial,
+            visible,
+            tags,
+            props,
+            kind,
+        } = original;
         let node = Node {
+            name: name.clone(),
+            parent: None,
             children: Vec::new(),
-            ..original.clone()
+            position: *position,
+            rotation: *rotation,
+            scale: *scale,
+            local: *local,
+            anchor: *anchor,
+            spatial: *spatial,
+            visible: *visible,
+            tags: tags.clone(),
+            props: props.clone(),
+            kind: kind.clone(),
         };
         let id = self.attach(node, parent);
         for &child in &original.children {
@@ -2391,9 +2423,72 @@ impl Scene {
     /// Particles advance whether their nodes are visible or not. Scenes keep no time of their
     /// own, so particles move only when a game advances them.
     pub fn advance_particles(&mut self, id: NodeId, dt: f32) {
-        for node in self.descendants(id) {
-            if let Some(particles) = self.placed_particles(node) {
-                particles.advance(dt);
+        let emitters: Vec<NodeId> = self
+            .descendants(id)
+            .into_iter()
+            .filter(|&node| matches!(self.node(node).kind, Kind::Particles(_)))
+            .collect();
+        if emitters.is_empty() {
+            return;
+        }
+        // Each laid out in one walk down from `id`, only into nodes holding emitters, rather than
+        // laying out every node above each, and the stacks they're in.
+        let mut on_the_way = vec![false; self.slots.len()];
+        for &emitter in &emitters {
+            let mut at = emitter;
+            while !on_the_way[at.index as usize] {
+                on_the_way[at.index as usize] = true;
+                match self.node(at).parent.filter(|_| at != id) {
+                    Some(parent) => at = parent,
+                    None => break,
+                }
+            }
+        }
+        let mut placed = Vec::with_capacity(emitters.len());
+        self.place_emitters(id, self.placed(id), &on_the_way, &mut placed);
+        for (node, at) in placed {
+            let Some(Kind::Particles(particles)) =
+                self.get_mut_unrevised(node).map(|node| &mut node.kind)
+            else {
+                continue;
+            };
+            let particles = &mut particles.particles;
+            particles.set_origin(at.transform, at.rect.unwrap_or_default());
+            particles.advance(dt);
+        }
+    }
+
+    /// Where each particles node in `id`, laid out at `placed`, is laid out, into `found`, in
+    /// the order they draw, looking only in the nodes `on_the_way` marks, by slot.
+    fn place_emitters(
+        &self,
+        id: NodeId,
+        placed: Placed,
+        on_the_way: &[bool],
+        found: &mut Vec<(NodeId, Placed)>,
+    ) {
+        let node = self.node(id);
+        if let Kind::Particles(_) = node.kind {
+            found.push((id, placed));
+        }
+        let leads = |child: &NodeId| on_the_way[child.index as usize];
+        if !node.children.iter().any(leads) {
+            return;
+        }
+        match node.kind.stack() {
+            Some(stack) => {
+                let (slots, _) = self.lay_out_stack(id, stack, placed.inner);
+                for (child, slot) in node.children.iter().zip(slots) {
+                    if leads(child) {
+                        self.place_emitters(*child, placed.within(slot), on_the_way, found);
+                    }
+                }
+            }
+            None => {
+                for child in node.children.iter().filter(|child| leads(child)) {
+                    let at = self.child_placed(&placed, *child);
+                    self.place_emitters(*child, at, on_the_way, found);
+                }
             }
         }
     }
@@ -2720,6 +2815,9 @@ struct Expand<'a> {
     stack: Vec<String>,
     /// Every sheet of every file, by [`sheet_key`].
     sheets: BTreeMap<String, SheetDef>,
+    /// The scene files instances have placed so far, by path, so a file placed many times is
+    /// read once.
+    scenes: HashMap<String, Rc<SceneFile>>,
 }
 
 /// Work left to expand a file. Children finish before their node, and an instance's placed
@@ -2757,6 +2855,16 @@ fn split_sheet_key(key: &str) -> Option<(&str, &str)> {
 }
 
 impl Expand<'_> {
+    /// The scene file at `path`, read the first time it's asked for.
+    fn scene(&mut self, path: &str) -> Result<Rc<SceneFile>> {
+        if let Some(scene) = self.scenes.get(path) {
+            return Ok(Rc::clone(scene));
+        }
+        let scene = self.assets.scene(path)?;
+        self.scenes.insert(path.to_owned(), Rc::clone(&scene));
+        Ok(scene)
+    }
+
     /// The nodes of `file`, at `path`, expanded without recursing through nodes or instances.
     fn file(&mut self, file: &SceneFile, path: &str) -> Result<Vec<NodeDef>> {
         let mut steps = Vec::new();
@@ -2783,7 +2891,7 @@ impl Expand<'_> {
                                 ),
                             });
                         }
-                        let placed = self.assets.scene(&scene)?;
+                        let placed = self.scene(&scene)?;
                         self.stack.push(scene.clone());
                         steps.push(ExpandStep::Instance {
                             node,
@@ -2991,7 +3099,7 @@ impl Expand<'_> {
     /// places, through their instances. `file` if it can't tell.
     fn file_of(&mut self, file: &str, target: &str) -> String {
         let mut from = file.to_owned();
-        let Ok(mut scene) = self.assets.scene(&from) else {
+        let Ok(mut scene) = self.scene(&from) else {
             return from;
         };
         // The indices of the nodes the path leads through, in `scene`.
@@ -3010,7 +3118,7 @@ impl Expand<'_> {
                 },
                 None => return file.to_owned(),
             };
-            let Ok(placed_scene) = self.assets.scene(&placed) else {
+            let Ok(placed_scene) = self.scene(&placed) else {
                 return file.to_owned();
             };
             let Some(i) = placed_scene.children.iter().position(|n| n.name == name) else {

@@ -103,7 +103,8 @@ own right.
   records a `View3d` and starts the next batch of quads empty, so 2D never joins across a view;
   `Renderer::render` draws each view in a pass of its own with a depth buffer. Right-handed, `y`
   up, as glTF. Texels under half opaque are discarded and nothing blends, so billboards need no
-  sorting. Runs of the same mesh and texture are one instanced draw. `model_file::read` reads
+  sorting, and a view's draws of the same mesh and texture are one instanced draw wherever they
+  were drawn, each kind in the order it was first drawn (`MeshOrder`). `model_file::read` reads
   glTF without a GPU into `ModelData`. Picking is by boxes (`Bounds3`, `Ray::hit_box`), not
   triangles. Luau's points are native `vector`s; `draw_mesh` and `draw_billboard` add to the view
   begun last only while nothing else has been drawn since (`Canvas::open_view`).
@@ -226,7 +227,8 @@ own right.
 - Drawing nodes carry a `blend`, which `draw_tree` sets before each, and `draw_from` restores the
   canvas's after. Particles nodes are laid out as areas (their rect is where particles start, 0 by
   0 by default) and keep their emitter's state; scenes keep no time, so games call
-  `advance_particles`. Particle settings are read by the file reader for files and for Luau alike
+  `advance_particles`, which lays emitters out in one walk down through the nodes holding them.
+  Particle settings are read by the file reader for files and for Luau alike
   (`file::particle_settings`, through `plain`), so both take the same fields with the same errors.
 - Scripts hold nodes as `lua::SceneNode`, an `Rc<RefCell<Scene>>` and a `NodeId`.
 
@@ -284,9 +286,11 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
   `Simulation::eval` and `exec`, and run their own Luau tests through `runtime::testing::run`.
 - `benches/drawing.rs`: what drawing sprites and text costs from Rust, Luau and native libraries;
   `physics.rs`, what Luau worlds' steps, tiles, queries and walks cost, and Rust steps of a
-  sixtieth and a 59.94 Hz frame. CI doesn't run them. Their numbers shift by a third with unrelated changes, and
-  by a quarter between runs of one build, so run each a few times. A build started before an edit
-  is newer than it, so touch the sources before rebuilding to measure.
+  sixtieth and a 59.94 Hz frame; `scenes.rs`, what posing, adding, loading instanced scenes and
+  moving particles in stacks cost. CI doesn't run them. Their numbers shift by a third with
+  unrelated changes, and by a quarter between runs of one build, so run each a few times, and
+  compare builds by running them in turn. A build started before an edit is newer than it, so
+  touch the sources before rebuilding to measure.
 - `docs/`: the user docs, restating the module docs for game authors, with `docs/api/` the API
   reference. Change the docs, the module docs and `wingine.d.luau` together; `docs/editor.md`
   follows the editor. Check docs' examples by running them headlessly.

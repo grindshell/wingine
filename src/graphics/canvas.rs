@@ -6,7 +6,7 @@ use super::{
     Blend, Camera, Canvas3d, Color, Font, Mesh, Sprite, TextLayout, Texture, View3d,
     camera::Transform,
     font::PlacedGlyph,
-    view3d::{Instance, MeshDraw, Segment3d},
+    view3d::{Instance, MeshDraw, MeshOrder, Segment3d},
 };
 use crate::{
     FrameStats,
@@ -127,23 +127,19 @@ impl Canvas {
     }
 
     /// The draw calls rendering what was drawn so far this frame will take: one for each run of
-    /// quads with the same texture, and one for each run of a 3D view's meshes that are the same
-    /// mesh showing the same texture.
+    /// quads with the same texture, and one for each kind of mesh drawn in each 3D view, the same
+    /// mesh showing the same texture: see [`MeshOrder`].
     pub(crate) fn draw_call_count(&self) -> u32 {
         let quads = self.batches.iter().filter(|b| !b.quads.is_empty()).count();
         let meshes: usize = self
             .segments
             .iter()
-            .map(|segment| self.mesh_runs(segment).count())
+            .map(|segment| {
+                let Range { start, end } = segment.draws.clone();
+                MeshOrder::kind_count(&self.mesh_draws[start as usize..end as usize])
+            })
             .sum();
         (quads + meshes) as u32
-    }
-
-    /// The runs of `segment`'s meshes that draw in one draw call each, as instances of a mesh:
-    /// see [`MeshDraw::joins`].
-    pub(crate) fn mesh_runs(&self, segment: &Segment3d) -> impl Iterator<Item = &[MeshDraw]> {
-        let Range { start, end } = segment.draws.clone();
-        self.mesh_draws[start as usize..end as usize].chunk_by(MeshDraw::joins)
     }
 
     /// The triangles of the meshes drawn so far this frame.

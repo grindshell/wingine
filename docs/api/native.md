@@ -479,8 +479,8 @@ particles.draw_3d() -- billboards, from the library, in the same view
 
 Drawing in a view when none is open, because none was begun this frame or something else has been
 drawn since, is an error. A batch of draws is one call into the engine, which is why these take
-slices, and since its draws are of one mesh or sprite, one draw call for each run of them that
-mirror, or don't. 3D positions are right-handed with `y` up, as for scripts.
+slices, and since its draws are of one mesh or sprite, they take a draw call for those that mirror
+and one for those that don't, drawn with the view's other draws of that mesh. 3D positions are right-handed with `y` up, as for scripts.
 
 ### `Mesh`
 

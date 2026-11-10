@@ -158,6 +158,7 @@ fn main() {
         ("sprites", Shape::Sprite),
         ("billboards in a 3D view", Shape::Billboard),
         ("cubes in a 3D view", Shape::Cube),
+        ("cubes and posts in turn in a 3D view", Shape::CubesAndPosts),
     ] {
         let mut simulation =
             Simulation::new(&config(), |ctx| RustGame::load(ctx, &image, shape)).unwrap();
@@ -165,9 +166,10 @@ fn main() {
         let draw = draw_time(&mut simulation);
         let render = median(&mut simulation, |stats| stats.render);
         let frame = median(&mut simulation, |stats| stats.frame);
+        let draw_calls = simulation.context().frame_stats().draw_calls;
         println!(
             "Rendering {SPRITES} {what}: {:.3} ms drawing, {:.3} ms rendering on the CPU, \
-             {:.3} ms for the whole frame waiting for the GPU",
+             {:.3} ms for the whole frame waiting for the GPU, {draw_calls} draw calls",
             draw * 1000.0,
             render * 1000.0,
             frame * 1000.0
@@ -269,6 +271,8 @@ enum Shape {
     Billboard,
     /// A cube showing the sprite in a 3D view.
     Cube,
+    /// Cubes and posts, a mesh of their own, in turn, as tables of two parts would be.
+    CubesAndPosts,
     /// The sprite as particles of an emitter, each colored and sized by its age, unturned.
     Particles,
     /// [`TEXT`] in lines of [`SPRITES`] characters in all, in the built-in font.
@@ -294,6 +298,7 @@ const WRAP: f32 = 120.0;
 struct RustGame {
     sprite: Sprite,
     cube: Mesh,
+    post: Mesh,
     /// [`SPRITES`] still particles over the canvas, of every age, for [`Shape::Particles`].
     particles: Particles,
     /// What text is drawn in.
@@ -305,6 +310,7 @@ impl RustGame {
     fn load(ctx: &mut Context, image: &std::path::Path, shape: Shape) -> wingine::Result<Self> {
         let sprite = ctx.load_texture(image)?.sprite();
         let cube = ctx.create_mesh(&MeshData::cube(0.5))?;
+        let post = ctx.create_mesh(&MeshData::cuboid([0.2, 1.0, 0.2]))?;
         let settings = ParticleSettings {
             rate: SPRITES as f32,
             limit: SPRITES,
@@ -326,6 +332,7 @@ impl RustGame {
         Ok(Self {
             sprite,
             cube,
+            post,
             particles,
             font,
             shape,
@@ -336,7 +343,7 @@ impl RustGame {
 impl Game for RustGame {
     fn draw(&mut self, canvas: &mut Canvas) {
         let tint = Color::rgb8(0xff, 0x80, 0x40);
-        if let Shape::Billboard | Shape::Cube = self.shape {
+        if let Shape::Billboard | Shape::Cube | Shape::CubesAndPosts = self.shape {
             // A grid on the ground, 100 by 100, seen from above at an angle.
             let camera = Camera3d::perspective([50.0, 60.0, 130.0], [50.0, 0.0, 50.0], 0.8);
             let view = View3d::new(camera, Rect::new(0.0, 0.0, 320.0, 180.0));
@@ -346,6 +353,10 @@ impl Game for RustGame {
                 match self.shape {
                     Shape::Billboard => {
                         world.draw_billboard(&self.sprite, at, [0.8, 0.8], Color::WHITE);
+                    }
+                    Shape::CubesAndPosts if i % 2 == 1 => {
+                        let placed = Affine3::from_translation(at);
+                        world.draw_mesh(&self.post, placed, Some(&self.sprite), tint);
                     }
                     _ => {
                         let placed = Affine3::from_translation(at);
@@ -383,6 +394,7 @@ impl Game for RustGame {
                 Shape::Rect => canvas.fill_rect(dest, tint),
                 Shape::Billboard
                 | Shape::Cube
+                | Shape::CubesAndPosts
                 | Shape::Particles
                 | Shape::Text
                 | Shape::VectorText

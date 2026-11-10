@@ -148,8 +148,9 @@ impl Canvas {
 
     /// Draws `mesh` as each of `draws` says, showing `sprite`, or white without one, in the 3D
     /// view begun last, whether the library or the script began it. One call draws them all, with
-    /// a draw call for each run of them whose transforms mirror them, or don't. Fails if no view
-    /// is open: if none was begun this frame, or anything else was drawn since.
+    /// a draw call for those whose transforms mirror them and one for the rest, shared with the
+    /// view's other draws of the mesh showing the sprite's texture. Fails if no view is open: if
+    /// none was begun this frame, or anything else was drawn since.
     pub fn draw_meshes(
         &mut self,
         mesh: &Mesh,

@@ -67,7 +67,7 @@ pub struct FrameStats {
     /// The triangles of the meshes the game drew in 3D views.
     pub triangles: u32,
     /// The draw calls they took: one for each run of quads drawn with the same texture, and one
-    /// for each run of a 3D view's meshes that are the same mesh showing the same texture.
+    /// for each kind of mesh each 3D view drew, the same mesh showing the same texture.
     pub draw_calls: u32,
 }
 
