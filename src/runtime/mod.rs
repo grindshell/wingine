@@ -374,7 +374,9 @@
 //! - `ui:separator()` and `ui:space(amount)`.
 //!
 //! A `Ui` works only until the function it was passed to returns, and inside a container's
-//! function, only the `Ui` it's passed works. Without the `egui` feature, `gui` isn't called.
+//! function, only the `Ui` it's passed works. Containers hold any others, their own kind too.
+//! Tab reaches the interface only while one of its widgets has keyboard focus, so a game can use
+//! it while its interface shows. Without the `egui` feature, `gui` isn't called.
 //!
 //! An error while the game loads ends [`run`] with that error. An error in `update`, `gui`,
 //! `draw` or `close_requested` stops the game and shows the error in the window, and a stopped

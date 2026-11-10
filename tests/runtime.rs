@@ -4547,6 +4547,51 @@ mod gui {
     }
 
     #[test]
+    fn tab_is_the_games_unless_a_field_has_focus() {
+        // In a panel, whose first widget that takes focus is a field, as an editor's might be.
+        let mut simulation = interface(
+            "gui_tab",
+            "tabs = 0
+            presses = 0
+            first = ''
+            second = ''
+            function update()
+                if input.key_pressed('Tab') then
+                    tabs += 1
+                end
+                if input.key_pressed('A') then
+                    presses += 1
+                end
+            end",
+            "ui:panel('left', function(ui)
+                first = ui:text_input(first, 'First')
+                second = ui:text_input(second, 'Second')
+            end)",
+        );
+        // With no field focused, Tab is the game's, and focuses nothing: the keys after it are
+        // the game's too, and type into no field.
+        simulation.tap(Key::Tab);
+        simulation.step();
+        simulation.tap(Key::A);
+        simulation.step();
+        assert_eq!(simulation.eval::<u32>("tabs"), 1);
+        assert_eq!(simulation.eval::<u32>("presses"), 1);
+        assert_eq!(simulation.eval::<String>("first"), "");
+
+        // With one focused, Tab moves to the next, and the game doesn't see it.
+        simulation.click_gui("First");
+        simulation.type_text("a");
+        simulation.step();
+        simulation.tap(Key::Tab);
+        simulation.step();
+        simulation.type_text("b");
+        simulation.step();
+        assert_eq!(simulation.eval::<u32>("tabs"), 1);
+        assert_eq!(simulation.eval::<String>("first"), "a");
+        assert_eq!(simulation.eval::<String>("second"), "b");
+    }
+
+    #[test]
     fn widgets_return_what_they_were_changed_to() {
         let mut simulation = interface(
             "gui_widgets",
@@ -4806,6 +4851,79 @@ mod gui {
             value.x > name.x && (value.y - name.y).abs() < 4.0,
             "{name:?} {value:?}"
         );
+    }
+
+    #[test]
+    fn containers_hold_others_of_their_kind() {
+        let simulation = interface(
+            "gui_nested",
+            "",
+            "ui:window('Nested', function(ui)
+                ui:enabled(true, function(ui)
+                    ui:enabled(false, function(ui)
+                        ui:button('Twice disabled')
+                    end)
+                end)
+                ui:horizontal(function(ui)
+                    ui:horizontal(function(ui)
+                        ui:label('Left')
+                        ui:label('Right')
+                    end)
+                end)
+                ui:vertical(function(ui)
+                    ui:vertical(function(ui)
+                        ui:group(function(ui)
+                            ui:group(function(ui)
+                                ui:collapsing('Outer', function(ui) end)
+                                ui:scroll(function(ui)
+                                    ui:scroll(function(ui)
+                                        ui:label('Deep')
+                                    end)
+                                end)
+                            end)
+                        end)
+                    end)
+                end)
+                ui:grid('outer', function(ui)
+                    ui:grid('inner', function(ui)
+                        ui:label('Cell')
+                        ui:end_row()
+                    end)
+                    ui:end_row()
+                end)
+            end)",
+        );
+        for label in ["Twice disabled", "Left", "Right", "Deep", "Cell", "Outer"] {
+            assert!(simulation.gui_rect(label).is_some(), "{label}");
+        }
+        let left = simulation.gui_rect("Left").unwrap();
+        let right = simulation.gui_rect("Right").unwrap();
+        assert!(
+            right.x > left.x && (right.y - left.y).abs() < 4.0,
+            "{left:?} {right:?}"
+        );
+    }
+
+    #[test]
+    fn a_ui_used_inside_its_own_container_fails() {
+        let folder = game(
+            "gui_outer_busy",
+            &[
+                ("conf.luau", WINDOW),
+                (
+                    "main.luau",
+                    "function gui(ui: Ui)
+                        ui:window('Busy', function(inner)
+                            ui:label('The outer one')
+                        end)
+                    end",
+                ),
+            ],
+        );
+        let mut simulation = simulation(&folder);
+        simulation.run_frames(2);
+        let err = stopped_with(&simulation);
+        assert!(err.contains("borrow"), "{err}");
     }
 
     #[test]

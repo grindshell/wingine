@@ -119,8 +119,11 @@ own right.
   of them, which is why textures keep their format without sRGB among their view formats.
   egui expects premultiplied colors, so `Context::gui_texture` shows a copy drawn through the quad
   pipeline, as `GuiCanvas` does.
-  Events egui wants don't reach `Input`. `GuiCanvas` renders a `Canvas` into a texture egui
-  shows. Simulations turn on AccessKit, so tests find widgets by label.
+  Events egui wants don't reach `Input`. Tab reaches egui only while one of its widgets has focus
+  (`Gui::hears_key`), since egui focuses its first widget on Tab even when none has focus, which
+  would take Tab, and the keys after it, from a game showing an interface. `GuiCanvas` renders a
+  `Canvas` into a texture egui shows. Simulations turn on AccessKit, so tests find widgets by
+  label.
 - `src/audio.rs`: `Audio`, `Sound` and `Voice`. kira's state catches up only when its mixer
   renders, so `Audio` keeps what the game asked of each voice (`Playing`), and a voice is over as
   soon as it's stopped. Headless, and without a sound device, audio plays to a silent mixer
@@ -189,7 +192,9 @@ own right.
 - `Textures` caches images, fonts and models by path, so each is read once.
 - `ui.menu` and `audio.play` hand out userdata holding the `Lent`, so they're documented with
   their tables. A game's `gui(ui)` gets egui's `Ui` borrowed through `Lua::scope`, so a `Ui` kept
-  past its call fails rather than dangle.
+  past its call fails rather than dangle. `Ui`'s methods are functions that borrow the `Ui`
+  they're called on, not mlua mutable methods, which refuse to run inside themselves, so a
+  container can hold another of its kind.
 - `LuauGame::reload` loads a whole new game in place, after the old one's `reloading` returns
   plain data for the new one's `window.reloaded()`. A game that fails to load becomes a stopped
   game holding that data for the next reload. `--watch` reloads on changes.
@@ -272,8 +277,11 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
 - `tests/`: a file per area (`runtime`, `scene`, `screenshots`, `simulation`, `testing`, `gui`,
   `export`, `native`) and per example game. Games' tests check their Luau state through
   `Simulation::eval` and `exec`, and run their own Luau tests through `runtime::testing::run`.
-- `benches/drawing.rs`: what drawing costs from Rust, Luau and native libraries. CI doesn't run
-  it. Its numbers shift by a third with unrelated changes, so compare runs of the same build.
+- `benches/drawing.rs`: what drawing costs from Rust, Luau and native libraries; `physics.rs`,
+  what Luau worlds' steps, tiles, queries and walks cost, and Rust steps of a sixtieth and a
+  59.94 Hz frame. CI doesn't run them. Their numbers shift by a third with unrelated changes, and
+  by a quarter between runs of one build, so run each a few times. A build started before an edit
+  is newer than it, so touch the sources before rebuilding to measure.
 - `docs/`: the user docs, restating the module docs for game authors, with `docs/api/` the API
   reference. Change the docs, the module docs and `wingine.d.luau` together; `docs/editor.md`
   follows the editor. Check docs' examples by running them headlessly.

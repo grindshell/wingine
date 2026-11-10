@@ -6,7 +6,7 @@
 //! the `Ui` inside them, in a scope of its own, while their own `Ui` stays borrowed: inside, a
 //! script uses the `Ui` it's given.
 
-use mlua::{FromLuaMulti, Function, IntoLuaMulti, Lua, Table, UserDataRef, Value};
+use mlua::{AnyUserData, FromLuaMulti, Function, IntoLuaMulti, Lua, Table, UserDataRef, Value};
 
 use super::Lent;
 use crate::{
@@ -63,7 +63,13 @@ impl Methods<'_, '_> {
     {
         use mlua::UserDataMethods;
         self.names.push(name);
-        self.registry.add_method_mut(name, method);
+        // A function borrowing the `Ui` it's called on, rather than a mutable method, which mlua
+        // refuses to call while it's running: so a container can hold another of its kind, whose
+        // own `Ui` the inner call borrows.
+        self.registry
+            .add_function(name, move |lua, (this, args): (AnyUserData, A)| {
+                this.borrow_mut_scoped::<egui::Ui, _>(|ui| method(lua, ui, args))?
+            });
     }
 }
 

@@ -556,12 +556,17 @@ where
         let Some(state) = self.state.as_mut() else {
             return;
         };
-        // Whether egui wants the event to itself, such as a click on one of its windows.
+        // Whether egui wants the event to itself, such as a click on one of its windows. A key
+        // egui doesn't hear (Tab, unless one of its widgets has focus) is the game's alone.
         #[cfg(feature = "egui")]
-        let to_gui = state
-            .gui_window
-            .on_window_event(&state.window, &event)
-            .consumed;
+        let to_gui = if hidden_from_gui(&event, &state.ctx.gui) {
+            false
+        } else {
+            state
+                .gui_window
+                .on_window_event(&state.window, &event)
+                .consumed
+        };
         #[cfg(not(feature = "egui"))]
         let to_gui = false;
         if state.redraw == Redraw::OnDemand && changes_frame(&event) {
@@ -651,6 +656,19 @@ where
             None => ControlFlow::Wait,
         };
         event_loop.set_control_flow(control_flow);
+    }
+}
+
+/// Whether `event` is a key egui doesn't hear (see [`Gui::hears_key`](crate::gui::Gui::hears_key)),
+/// which then goes to the game alone.
+#[cfg(feature = "egui")]
+fn hidden_from_gui(event: &WindowEvent, gui: &crate::gui::Gui) -> bool {
+    match event {
+        WindowEvent::KeyboardInput { event, .. } => match event.physical_key {
+            PhysicalKey::Code(code) => Key::from_winit(code).is_some_and(|key| !gui.hears_key(key)),
+            PhysicalKey::Unidentified(_) => false,
+        },
+        _ => false,
     }
 }
 

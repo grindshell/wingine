@@ -537,9 +537,11 @@ impl<G: Game> Simulation<G> {
         #[cfg(feature = "egui")]
         {
             let gui = &mut self.headless.ctx.gui;
-            self.gui_input.key(key, true, repeat);
-            if let Some(text) = text {
-                self.gui_input.text(text);
+            if gui.hears_key(key) {
+                self.gui_input.key(key, true, repeat);
+                if let Some(text) = text {
+                    self.gui_input.text(text);
+                }
             }
             if gui.wants_keyboard() {
                 return;
@@ -575,7 +577,9 @@ impl<G: Game> Simulation<G> {
             self.repeating = None;
         }
         #[cfg(feature = "egui")]
-        self.gui_input.key(key, false, false);
+        if self.headless.ctx.gui.hears_key(key) {
+            self.gui_input.key(key, false, false);
+        }
         self.headless.ctx.input.key_up(key);
     }
 

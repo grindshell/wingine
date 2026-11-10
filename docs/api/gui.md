@@ -29,7 +29,8 @@ end
   they were clicked.
 - **Containers take a function**, which they call with the `Ui` inside them, such as a window's.
   Inside it, use that `Ui`, not the one outside: the outer one is busy until the function returns,
-  and using it is an error.
+  and using it is an error. Containers hold any others, their own kind too, such as a group
+  greyed out with `ui:enabled` inside a panel greyed out with another.
 - **A `Ui` works only during the call it's passed to.** One kept for later is an error to use.
 - **Write `function gui(ui: Ui)`**, with the type, so [luau-lsp](../editor.md#checking-scripts-with-luau-lsp)
   knows what `ui` is and checks its methods. Inside containers, it knows from the method.
@@ -37,7 +38,9 @@ end
 The interface is drawn at the window's own resolution, over the canvas and any bars, so its text
 stays sharp however small a fixed resolution is. Positions and sizes are in points, the window's
 logical pixels, not canvas pixels. Input the interface wants, such as a click on a window or keys
-typed into a text field, doesn't reach [`input`](input.md); the rest does, as usual.
+typed into a text field, doesn't reach [`input`](input.md); the rest does, as usual. Tab reaches
+the interface only while one of its widgets has keyboard focus, moving it to the next, so a game
+can use Tab for itself while its interface shows.
 
 In `gui`, the context works as in `update`: sounds play, scenes load, and so on. Drawing doesn't,
 and key presses have already been seen by `update`, which is where to read them. An error in `gui`

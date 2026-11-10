@@ -6,7 +6,8 @@
 //! resolution's scaled canvas and its bars too, so its text stays crisp however small the canvas.
 //! Input egui wants, such as a click on one of its windows or keys typed into one of its text
 //! fields, doesn't reach the game's [`Input`](crate::input::Input). Releases always do, so nothing
-//! is left held.
+//! is left held. Tab reaches egui only while one of its widgets has keyboard focus, to move it to
+//! the next, so a game can use Tab itself while its interface shows ([`Gui::hears_key`]).
 //!
 //! [`GuiCanvas`] draws with the engine into an image egui shows, such as a view of a scene in a
 //! panel, and [`Context::gui_texture`] shows a texture, such as a sprite sheet. Both are sampled
@@ -146,6 +147,14 @@ impl Gui {
     /// Whether egui wants keys pressed now, as a text field with focus does.
     pub fn wants_keyboard(&self) -> bool {
         self.egui.egui_wants_keyboard_input()
+    }
+
+    /// Whether egui hears `key` pressed or released: every key but Tab, and Tab only while one of
+    /// its widgets has keyboard focus, to move it to the next. egui answers Tab by focusing its
+    /// first widget even when none has focus, where the keys after it would then go, so a game
+    /// showing an interface couldn't use Tab itself.
+    pub fn hears_key(&self, key: Key) -> bool {
+        key != Key::Tab || self.wants_keyboard()
     }
 
     /// The rectangles, in points, of the widgets labelled `label` in the last pass, row by row
