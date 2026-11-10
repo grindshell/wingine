@@ -308,7 +308,8 @@ editor turns that warning off, and a `.luaurc` can too, with `"FunctionUnused": 
 ## Saving, undo and playing
 
 - **Ctrl+Z** undoes a change and **Ctrl+Y** (or Ctrl+Shift+Z) redoes it. A drag, or typing in a
-  field, is one change.
+  field, is one change. Undo selects what was selected before the change, and redo what was
+  selected when it was undone.
 - **Ctrl+S** saves the open scene, or in the Script screen, the script shown. A tab shows `*` while
   its scene has unsaved changes, and closing it, the editor or the game asks first. What fails to
   save stays open, and Output says why.

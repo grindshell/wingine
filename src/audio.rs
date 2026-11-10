@@ -392,23 +392,28 @@ impl Audio {
             .is_some_and(|music| is_playing(music.state()))
     }
 
-    /// Sets the volume of everything.
+    /// Sets the volume of everything. A volume that isn't a number changes nothing, and logs a
+    /// warning, as for a voice.
     pub fn set_volume(&mut self, volume: f32) {
-        self.output
-            .main_track()
-            .set_volume(decibels(volume), Tween::default());
+        if let Some(volume) = track_volume(volume) {
+            self.output
+                .main_track()
+                .set_volume(volume, Tween::default());
+        }
     }
 
-    /// Sets the volume of sound effects, apart from music.
+    /// Sets the volume of sound effects, apart from music, as [`Audio::set_volume`] does.
     pub fn set_sound_volume(&mut self, volume: f32) {
-        self.sound_track
-            .set_volume(decibels(volume), Tween::default());
+        if let Some(volume) = track_volume(volume) {
+            self.sound_track.set_volume(volume, Tween::default());
+        }
     }
 
-    /// Sets the volume of music, apart from sound effects.
+    /// Sets the volume of music, apart from sound effects, as [`Audio::set_volume`] does.
     pub fn set_music_volume(&mut self, volume: f32) {
-        self.music_track
-            .set_volume(decibels(volume), Tween::default());
+        if let Some(volume) = track_volume(volume) {
+            self.music_track.set_volume(volume, Tween::default());
+        }
     }
 
     /// Stops every sound effect and the music at once, and sets every volume back to 1, as for a
@@ -518,6 +523,16 @@ impl fmt::Debug for Sound {
 
 fn is_playing(state: PlaybackState) -> bool {
     state != PlaybackState::Stopped
+}
+
+/// A track's linear `volume` in decibels, or none, logging a warning, if it isn't a number:
+/// infinity would fill the mix with NaNs.
+fn track_volume(volume: f32) -> Option<Decibels> {
+    if let Some(problem) = setting_problem("volume", volume) {
+        log::warn!("couldn't change a volume: {problem}");
+        return None;
+    }
+    Some(decibels(volume))
 }
 
 /// A linear volume in decibels, where kira treats 60 dB down as silence.
@@ -753,5 +768,18 @@ mod tests {
         assert_eq!(decibels(0.0), Decibels::SILENCE);
         assert_eq!(decibels(1e-9), Decibels::SILENCE);
         assert_eq!(decibels(-1.0), Decibels::SILENCE);
+    }
+
+    #[test]
+    fn tracks_take_only_volumes_that_are_numbers() {
+        assert_eq!(track_volume(1.0), Some(Decibels::IDENTITY));
+        for volume in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
+            assert_eq!(track_volume(volume), None, "{volume}");
+        }
+        let mut audio = Audio::silent();
+        audio.set_volume(f32::INFINITY);
+        audio.set_sound_volume(f32::NAN);
+        audio.set_music_volume(f32::INFINITY);
+        audio.advance(FRAME);
     }
 }

@@ -136,11 +136,10 @@ pub fn run<G: Game>(
         }
         _ => None,
     };
+    // Never the game's own folder of saves: without copies, the simulation keeps a temporary
+    // folder of its own.
     let config = WindowConfig {
-        save_folder: match &saves {
-            Some(saves) => Some(saves.path().to_owned()),
-            None => config.save_folder.clone(),
-        },
+        save_folder: saves.as_ref().map(|saves| saves.path().to_owned()),
         ..config.clone()
     };
     let mut simulation = Simulation::new(&config, init)?;

@@ -5,9 +5,10 @@ use std::{cell::Cell, fs, path::Path, rc::Rc};
 use wingine::{
     Context, Game, Redraw, WindowConfig,
     graphics::{Canvas, Color},
-    gui::egui,
+    gui::{GuiCanvas, egui},
     headless::Simulation,
     input::{Key, MouseButton},
+    math::Rect,
 };
 
 /// A game with a window of controls, which counts what reaches it and what reaches the window.
@@ -341,4 +342,37 @@ fn without_a_debug_key_the_game_sees_every_key() {
     simulation.tap(Key::F3);
     assert_eq!(simulation.game().f3_presses, 1);
     assert!(simulation.gui_rect("Wingine").is_none());
+}
+
+/// A canvas shown in egui wider than the GPU's largest texture renders at that size instead, and
+/// is shown at its own.
+#[test]
+fn canvases_wider_than_the_gpu_takes_render_smaller() {
+    struct Wide {
+        canvas: GuiCanvas,
+        shown: Option<egui::Vec2>,
+    }
+    impl Game for Wide {
+        fn gui(&mut self, ctx: &mut Context, ui: &mut egui::Ui) {
+            let canvas = self.canvas.begin(1 << 20, 4);
+            canvas.fill_rect(Rect::new(0.0, 0.0, 8.0, 4.0), Color::RED);
+            let texture = self.canvas.render(ctx);
+            self.shown = Some(texture.size);
+            ui.add(egui::Image::new(texture).max_width(100.0));
+        }
+
+        fn draw(&mut self, canvas: &mut Canvas) {
+            canvas.clear(Color::BLACK);
+        }
+    }
+
+    let mut simulation = Simulation::new(&config(), |_| {
+        Ok(Wide {
+            canvas: GuiCanvas::new(),
+            shown: None,
+        })
+    })
+    .expect("a GPU adapter is available");
+    simulation.run_frames(1);
+    assert_eq!(simulation.game().shown, Some(egui::vec2(1048576.0, 4.0)));
 }

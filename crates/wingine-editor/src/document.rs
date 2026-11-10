@@ -31,12 +31,15 @@ pub struct Document {
     /// When its file was changed, as of the last time it was read or saved.
     modified: Option<SystemTime>,
     /// The file before each change, oldest first.
-    undo: Vec<SceneFile>,
+    undo: Vec<Snapshot>,
     /// The file after each change undone, latest undone last.
-    redo: Vec<SceneFile>,
+    redo: Vec<Snapshot>,
     /// The file before the change being made, while it's being made: a drag, or typing in a
     /// field, is one change.
-    before: Option<SceneFile>,
+    before: Option<Snapshot>,
+    /// How many times the file has been put back as it was, by undo or redo, or read again, which
+    /// leaves behind what panels had selected in it by index.
+    restores: u64,
     /// The selected node, or the scene itself for the empty path.
     pub selected: Option<NodePath>,
     /// A node an instance places, selected inside it: the instance's path, and the node's path of
@@ -60,6 +63,14 @@ pub struct Document {
     posed: Option<String>,
     /// Why the clip can't pose the preview, if it can't.
     pub pose_error: Option<String>,
+}
+
+/// The file as it was at a point in its history, and what was selected in it then, which undo
+/// and redo select again: nodes are selected by where they are, which a change moves.
+struct Snapshot {
+    file: SceneFile,
+    selected: Option<NodePath>,
+    inner: Option<(NodePath, String)>,
 }
 
 /// What became of a scene whose file changed on disk.
@@ -111,6 +122,7 @@ impl Document {
             undo: Vec::new(),
             redo: Vec::new(),
             before: None,
+            restores: 0,
             selected: None,
             inner: None,
             preview: None,
@@ -135,9 +147,7 @@ impl Document {
 
     /// The file, to change. Every change until [`Document::end_change`] is undone as one.
     pub fn edit(&mut self) -> &mut SceneFile {
-        if self.before.is_none() {
-            self.before = Some(self.file.clone());
-        }
+        self.begin_change();
         self.stale = true;
         &mut self.file
     }
@@ -145,10 +155,38 @@ impl Document {
     /// The file and the preview, to change alike, as painting tiles does, so the scene needn't be
     /// built again. Every change until [`Document::end_change`] is undone as one.
     pub fn edit_with_preview(&mut self) -> (&mut SceneFile, Option<&mut Scene>) {
-        if self.before.is_none() {
-            self.before = Some(self.file.clone());
-        }
+        self.begin_change();
         (&mut self.file, self.preview.as_mut())
+    }
+
+    /// Keeps the file as it is, and what's selected, to undo the change about to be made, unless
+    /// one's being made.
+    fn begin_change(&mut self) {
+        if self.before.is_none() {
+            self.before = Some(Snapshot {
+                file: self.file.clone(),
+                selected: self.selected.clone(),
+                inner: self.inner.clone(),
+            });
+        }
+    }
+
+    /// Puts the file back as `snapshot` has it, selecting what it had selected, and returns the
+    /// file and selection as they were.
+    fn restore(&mut self, snapshot: Snapshot) -> Snapshot {
+        let now = Snapshot {
+            file: mem::replace(&mut self.file, snapshot.file),
+            selected: mem::replace(&mut self.selected, snapshot.selected),
+            inner: mem::replace(&mut self.inner, snapshot.inner),
+        };
+        self.changed();
+        now
+    }
+
+    /// How many times the file has been undone, redone or read again: what a panel selected in
+    /// it by index is gone once this changes.
+    pub fn restores(&self) -> u64 {
+        self.restores
     }
 
     /// Selects the node at `path`, or the scene itself for the empty path, or nothing.
@@ -206,7 +244,7 @@ impl Document {
         let Some(before) = self.before.take() else {
             return;
         };
-        if before != self.file {
+        if before.file != self.file {
             if self.undo.len() == HISTORY {
                 self.undo.remove(0);
             }
@@ -221,32 +259,35 @@ impl Document {
     }
 
     pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty() || self.before.as_ref().is_some_and(|b| *b != self.file)
+        !self.undo.is_empty() || self.before.as_ref().is_some_and(|b| b.file != self.file)
     }
 
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
     }
 
+    /// Undoes the last change, selecting again what was selected before it.
     pub fn undo(&mut self) {
         self.end_change();
         if let Some(before) = self.undo.pop() {
-            self.redo.push(mem::replace(&mut self.file, before));
-            self.changed();
+            let after = self.restore(before);
+            self.redo.push(after);
         }
     }
 
+    /// Makes the last change undone again, selecting what was selected when it was undone.
     pub fn redo(&mut self) {
         self.end_change();
         if let Some(after) = self.redo.pop() {
-            self.undo.push(mem::replace(&mut self.file, after));
-            self.changed();
+            let before = self.restore(after);
+            self.undo.push(before);
         }
     }
 
     /// After the file changed out from under the selection: keeps it only if it's still there.
     fn changed(&mut self) {
         self.stale = true;
+        self.restores += 1;
         if let Some(path) = &self.selected
             && !path.is_empty()
             && edit::node(&self.file, path).is_none()
@@ -640,6 +681,22 @@ mod tests {
             }
         );
         assert_eq!(tracks[2].keys, Keys::Visible(vec![(0.5, true)]));
+    }
+
+    #[test]
+    fn undo_and_redo_select_what_was_selected() {
+        let mut document = document();
+        document.select(Some(vec![0]));
+        let copy = edit::duplicate(document.edit(), &[0]).unwrap();
+        document.select(Some(copy.clone()));
+        document.end_change();
+        let restores = document.restores();
+        // Not the node after the copy, where the copy was, which would be the next to delete.
+        document.undo();
+        assert_eq!(document.selected, Some(vec![0]));
+        document.redo();
+        assert_eq!(document.selected, Some(copy));
+        assert_eq!(document.restores(), restores + 2);
     }
 
     #[test]

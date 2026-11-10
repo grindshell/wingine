@@ -43,8 +43,9 @@
 //!     update_rate = 60,
 //!     -- A key that shows and hides a window of how long frames take. The game never sees it.
 //!     debug_key = "F3",
-//!     -- Names the folder the game's saves are kept in: letters, digits, `_` and `-`. By
-//!     -- default, the folder's name, with `_` for anything else.
+//!     -- Names the folder the game's saves are kept in: letters, digits, `_` and `-`, but no
+//!     -- name Windows keeps for a device, such as "con". By default, the folder's name, with `_`
+//!     -- for anything else.
 //!     identity = "pong",
 //!     -- Native libraries to load, in order, from the game's `native` folder. One marked
 //!     -- optional loads only if it's there: `if danmaku then ... end` tells whether it did.
@@ -316,10 +317,10 @@
 //! - `audio.stop_music(fade)` and `audio.music_playing()`
 //! - `audio.set_volume(volume)`, `audio.set_sound_volume(volume)` and
 //!   `audio.set_music_volume(volume)` set the volume of everything, of sound effects and of
-//!   music, where 1 is as recorded.
+//!   music, where 1 is as recorded. A volume that isn't a number is an error.
 //!
 //! `save`, for data kept between runs of the game, at any time. Each save has a name of letters,
-//! digits, `_` and `-`, and holds plain data: a boolean, number, string, or table of them, where a
+//! digits, `_` and `-`, but no name Windows keeps for a device, such as `con`, and holds plain data: a boolean, number, string, or table of them, where a
 //! table is a list or has strings for keys, as scenes' props are. See [`save`](crate::save) for
 //! where saves are kept.
 //!
@@ -622,8 +623,8 @@ fn apply_setting(
         "debug_key" => window.debug_key = Some(lua.unpack(value)?),
         "identity" => {
             let identity: String = lua.unpack(value)?;
-            if !crate::save::is_name(&identity) {
-                let message = "use only letters, digits, `_` and `-`, as it names a folder";
+            if let Some(problem) = crate::save::name_problem(&identity) {
+                let message = format!("{problem}, as it names a folder");
                 return Err(mlua::Error::runtime(message));
             }
             window.identity = identity;
@@ -676,9 +677,9 @@ fn library(lua: &mlua::Lua, entry: mlua::Value) -> mlua::Result<LibraryConfig> {
             optional: false,
         },
     };
-    if !crate::save::is_name(&library.name) {
+    if let Some(problem) = crate::save::name_problem(&library.name) {
         return Err(mlua::Error::runtime(format!(
-            "`{}` is not a library name: use only letters, digits, `_` and `-`",
+            "`{}` is not a library name: {problem}",
             library.name
         )));
     }
@@ -698,14 +699,19 @@ fn folder_name(folder: &Path) -> Option<String> {
 }
 
 /// The identity of a game in a folder called `name`, by default: the name, with `_` for whatever
-/// can't be in an identity.
+/// can't be in an identity, and after a name Windows keeps for a device.
 fn identity(name: &str) -> String {
-    name.chars()
+    let mut identity: String = name
+        .chars()
         .map(|c| match c {
             'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => c,
             _ => '_',
         })
-        .collect()
+        .collect();
+    if !crate::save::is_name(&identity) {
+        identity.push('_');
+    }
+    identity
 }
 
 /// A game written in Luau, loaded from its folder.
@@ -1330,5 +1336,16 @@ impl Lendable for Context {
 impl Lendable for Canvas {
     fn loan(loans: &Loans) -> &Loan<Self> {
         &loans.canvas
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn default_identities_name_folders_on_every_system() {
+        assert_eq!(super::identity("Café Quest 2!"), "Caf__Quest_2_");
+        assert_eq!(super::identity("con"), "con_", "a device on Windows");
+        assert_eq!(super::identity("LPT1"), "LPT1_");
+        assert_eq!(super::identity("console"), "console");
     }
 }

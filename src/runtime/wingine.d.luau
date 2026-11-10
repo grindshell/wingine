@@ -1194,8 +1194,8 @@ declare ui: {
     menu: (node: SceneNode, options: MenuOptions?) -> Menu,
 }
 
---- Data kept between runs of the game, in saves named with letters, digits, `_` and `-`. Saves
---- hold plain data: booleans, numbers, strings, and tables of them that are lists or have strings
+--- Data kept between runs of the game, in saves named with letters, digits, `_` and `-`, but no
+--- name Windows keeps for a device, such as "con". Saves hold plain data: booleans, numbers, strings, and tables of them that are lists or have strings
 --- for keys. Works at any time.
 declare save: {
     --- Writes `data` to the save `name`, replacing any.

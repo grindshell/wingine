@@ -94,9 +94,13 @@ impl Output {
     }
 }
 
-/// Logs to the Output panel, and to standard error: the editor's own messages, the engine's
-/// warnings, and errors from anywhere.
-pub struct Logger;
+/// Logs to standard error, and for the editor, to the Output panel: the editor's own messages,
+/// the engine's warnings, and errors from anywhere.
+pub struct Logger {
+    /// Whether lines go to the Output panel too, as the editor's do. A game Play runs only prints
+    /// them, for the editor to read, since nothing in its process takes them from the panel.
+    pub to_panel: bool,
+}
 
 impl log::Log for Logger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
@@ -117,6 +121,9 @@ impl log::Log for Logger {
         }
         let text = record.args().to_string();
         eprintln!("[{} {}] {text}", record.level(), record.target());
+        if !self.to_panel {
+            return;
+        }
         let level = match record.level() {
             log::Level::Error => Level::Error,
             log::Level::Warn => Level::Warning,
@@ -129,4 +136,29 @@ impl log::Log for Logger {
     }
 
     fn flush(&self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use log::Log;
+
+    use super::*;
+
+    fn logged(logger: &Logger, text: &str) -> bool {
+        logger.log(
+            &log::Record::builder()
+                .args(format_args!("{text}"))
+                .level(log::Level::Warn)
+                .target("wingine_editor::tests")
+                .build(),
+        );
+        let lines = LOGGED.lock().unwrap_or_else(PoisonError::into_inner);
+        lines.iter().any(|line| line.text == text)
+    }
+
+    #[test]
+    fn only_the_editor_keeps_lines_for_the_panel() {
+        assert!(!logged(&Logger { to_panel: false }, "a game's warning"));
+        assert!(logged(&Logger { to_panel: true }, "the editor's warning"));
+    }
 }

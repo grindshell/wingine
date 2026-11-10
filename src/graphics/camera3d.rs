@@ -269,9 +269,13 @@ impl Ray {
     }
 
     /// How far along the ray it enters `bounds`: 0 if it starts in them, or `None` if it misses
-    /// them or they're behind its origin. Picking what's under the cursor in a 3D view tries each
-    /// thing's bounds and takes the nearest hit.
+    /// them or they're behind its origin, or anything is NaN. Picking what's under the cursor in a
+    /// 3D view tries each thing's bounds and takes the nearest hit.
     pub fn hit_box(&self, bounds: &Bounds3) -> Option<f32> {
+        let values = [self.origin, self.direction, bounds.min, bounds.max];
+        if values.as_flattened().iter().any(|v| v.is_nan()) {
+            return None;
+        }
         let mut near = 0.0f32;
         let mut far = f32::INFINITY;
         for axis in 0..3 {
@@ -285,13 +289,18 @@ impl Ray {
                 continue;
             }
             let [a, b] = [(min - origin) / direction, (max - origin) / direction];
+            // From infinitely far, to infinite sides.
+            if a.is_nan() || b.is_nan() {
+                return None;
+            }
             near = near.max(a.min(b));
             far = far.min(a.max(b));
             if near > far {
                 return None;
             }
         }
-        Some(near)
+        // Infinitely far from an origin infinitely far, which it never reaches.
+        near.is_finite().then_some(near)
     }
 }
 
@@ -452,6 +461,35 @@ mod tests {
             ray([0.0, 5.0, 0.0], [1.0, -1.0, 0.0]).hit_box(&crate_),
             None
         );
+    }
+
+    #[test]
+    fn rays_of_nan_hit_nothing() {
+        let crate_ = Bounds3 {
+            min: [-1.0, 0.0, -1.0],
+            max: [1.0, 2.0, 1.0],
+        };
+        let nan = f32::NAN;
+        let rays = [
+            ([nan, 1.0, 0.0], [0.0, 0.0, -1.0]),
+            ([0.0, 1.0, 10.0], [0.0, nan, -1.0]),
+            ([0.0, 1.0, 10.0], [nan, nan, nan]),
+            // Infinitely far along an axis it goes along.
+            ([f32::INFINITY, 1.0, 0.0], [-1.0, 0.0, 0.0]),
+        ];
+        for (origin, direction) in rays {
+            let ray = Ray { origin, direction };
+            assert_eq!(ray.hit_box(&crate_), None, "{ray:?}");
+        }
+        let lost = Bounds3 {
+            min: [nan; 3],
+            max: [1.0; 3],
+        };
+        let toward = Ray {
+            origin: [0.0, 1.0, 10.0],
+            direction: [0.0, 0.0, -1.0],
+        };
+        assert_eq!(toward.hit_box(&lost), None);
     }
 
     #[test]

@@ -371,6 +371,16 @@ fn unknown_or_invalid_settings_are_errors() {
             "`identity`: runtime error: use only letters, digits",
         ),
         (
+            "device_identity",
+            "return { identity = 'Con' }",
+            "`identity`: runtime error: Windows keeps that name for a device",
+        ),
+        (
+            "device_library",
+            "return { libraries = { 'nul' } }",
+            "`nul` is not a library name: Windows keeps that name for a device",
+        ),
+        (
             "fullscreen",
             "return { fullscreen = true }",
             r#"expected "borderless", "exclusive" or nil"#,
@@ -1059,9 +1069,13 @@ fn only_plain_data_can_be_saved() {
         ("local t = {} t.t = t save.write('slot', t)", "too deep"),
         (
             "save.write('../slot', 1)",
-            "save `../slot`: a save's name may hold only letters",
+            "save `../slot`: not a save's name: use only letters",
         ),
-        ("save.read('slot 2')", "may hold only letters"),
+        ("save.read('slot 2')", "use only letters"),
+        (
+            "save.write('COM1', 1)",
+            "save `COM1`: not a save's name: Windows keeps that name for a device",
+        ),
     ] {
         let err = simulation.try_exec(code).unwrap_err().to_string();
         assert!(err.contains(message), "`{code}`: {err}");
@@ -1156,6 +1170,12 @@ fn voices_change_pause_and_stop_the_sounds_they_play() {
         ("hum:set_pan(math.huge)", "pan must be a number"),
         ("hum:set_pan('left')", "number"),
         ("audio.play(blip, { looping = true, speed = -1 })", "speed"),
+        ("audio.set_volume(math.huge)", "volume must be a number"),
+        ("audio.set_sound_volume(0/0)", "volume must be a number"),
+        (
+            "audio.set_music_volume(-math.huge)",
+            "volume must be a number",
+        ),
     ] {
         let err = simulation.try_exec(code).unwrap_err().to_string();
         assert!(err.contains(problem), "{code}: {err}");

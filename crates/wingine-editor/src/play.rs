@@ -7,8 +7,9 @@ use std::{
     io::{self, BufRead, BufReader, Read},
     path::Path,
     process::{Child, Command, ExitStatus, Stdio},
-    sync::mpsc::{self, Receiver, TryRecvError},
+    sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError},
     thread,
+    time::{Duration, Instant},
 };
 
 use wingine::Waker;
@@ -81,6 +82,24 @@ impl Play {
                     self.closed = true;
                     break;
                 }
+            }
+        }
+        lines
+    }
+
+    /// What the game printed that hasn't been taken yet, once it's ended: the lines the threads
+    /// reading its output still hold too, waiting up to `timeout` for them to read the last.
+    pub fn last_lines(&mut self, timeout: Duration) -> Vec<String> {
+        let deadline = Instant::now() + timeout;
+        let mut lines = Vec::new();
+        while !self.closed {
+            match self
+                .lines
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            {
+                Ok(line) => lines.push(line),
+                Err(RecvTimeoutError::Disconnected) => self.closed = true,
+                Err(RecvTimeoutError::Timeout) => break,
             }
         }
         lines

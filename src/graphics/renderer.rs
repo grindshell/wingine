@@ -4,7 +4,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use super::{
-    Blend, Mesh, MeshData, Texture,
+    Blend, Color, Mesh, MeshData, Texture,
     camera3d::{self, Mat4},
     canvas::{Batch, Canvas, Vertex},
     mesh::GpuVertex,
@@ -343,6 +343,37 @@ impl Renderer {
         target: &wgpu::TextureView,
         target_size: [u32; 2],
     ) {
+        let clear = canvas.clear_color;
+        self.render_cleared(device, queue, canvas, target, target_size, clear);
+    }
+
+    /// Renders `canvas` as [`render`](Self::render) does, onto a target that's then drawn as
+    /// though opaque: its clear color is opaque, so the target's stays so, and drawing it again
+    /// shows its colors as a window would, which ignores alpha.
+    pub fn render_opaque(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        canvas: &Canvas,
+        target: &wgpu::TextureView,
+        target_size: [u32; 2],
+    ) {
+        let clear = Color {
+            a: 1.0,
+            ..canvas.clear_color
+        };
+        self.render_cleared(device, queue, canvas, target, target_size, clear);
+    }
+
+    fn render_cleared(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        canvas: &Canvas,
+        target: &wgpu::TextureView,
+        target_size: [u32; 2],
+        clear: Color,
+    ) {
         let globals = Globals {
             view_proj: ortho(canvas.width(), canvas.height()),
         };
@@ -379,7 +410,7 @@ impl Renderer {
         }
         let depth = has_3d.then(|| self.meshes.depth_view(device, target_size));
 
-        let [r, g, b, a] = canvas.clear_color.to_linear().map(f64::from);
+        let [r, g, b, a] = clear.to_linear().map(f64::from);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("frame"),
         });

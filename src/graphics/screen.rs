@@ -160,7 +160,9 @@ impl Screen {
         let target = self
             .target
             .get_or_insert_with(|| renderer.create_render_target(device, width, height));
-        renderer.render(device, queue, canvas, &target.view, [width, height]);
+        // Drawn through the quad pipeline, which multiplies colors by their alpha again, so it
+        // must stay opaque, as a window's frame is.
+        renderer.render_opaque(device, queue, canvas, &target.view, [width, height]);
 
         // `begin` clears to black, which fills the bars around the scaled canvas.
         self.present

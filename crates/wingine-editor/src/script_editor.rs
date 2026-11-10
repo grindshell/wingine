@@ -83,7 +83,16 @@ struct Hover {
     /// The bytes of the word under the pointer, and since when it's been there.
     target: Option<(Range<usize>, f64)>,
     request: Option<RequestId>,
-    contents: Option<String>,
+    /// What the server answered, once it has: nothing for a word it has nothing to say about,
+    /// such as a keyword, which isn't asked about again.
+    contents: Option<Option<String>>,
+}
+
+impl Hover {
+    /// What the server said, if it's said something.
+    fn text(&self) -> Option<&str> {
+        self.contents.as_ref().and_then(Option::as_deref)
+    }
 }
 
 pub struct ScriptEditor {
@@ -296,7 +305,12 @@ impl ScriptEditor {
 
     /// What the server said the name under the pointer is.
     pub fn hover_text(&self) -> Option<&str> {
-        self.hover.contents.as_deref()
+        self.hover.text()
+    }
+
+    /// Whether the server has answered for the name under the pointer, even with nothing.
+    pub fn hover_answered(&self) -> bool {
+        self.hover.contents.is_some()
     }
 
     /// The call the cursor is in, as the server wrote it.
@@ -351,7 +365,7 @@ impl ScriptEditor {
                 Event::Hover { id, contents } => {
                     if self.hover.request == Some(id) {
                         self.hover.request = None;
-                        self.hover.contents = contents;
+                        self.hover.contents = Some(contents);
                     }
                 }
                 Event::Completions { id, mut items } => {
@@ -1250,7 +1264,7 @@ fn show_hover(
         })
         .map(|(_, problem)| problem)
         .collect();
-    if problems.is_empty() && hover.contents.is_none() {
+    if problems.is_empty() && hover.text().is_none() {
         return;
     }
     let first = text[..word.start].chars().count();
@@ -1275,7 +1289,7 @@ fn show_hover(
             };
             ui.colored_label(color, &problem.message);
         }
-        if let Some(contents) = &hover.contents {
+        if let Some(contents) = hover.text() {
             if !problems.is_empty() {
                 ui.separator();
             }

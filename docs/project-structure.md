@@ -340,8 +340,8 @@ return { debug_key = "F3" }
 ### `identity`
 
 The name of the folder the game's [saves](api/save.md) are kept in, such as `"my-game"`, of
-letters, digits, `_` and `-`. By default, the name of the game's folder, with `_` in place of
-anything else. Games that save should give one, so that renaming the game's folder, or another
+letters, digits, `_` and `-`, but not a name Windows keeps for a device, such as `con`. By default,
+the name of the game's folder, with `_` in place of anything else. Games that save should give one, so that renaming the game's folder, or another
 game whose folder has the same name, doesn't change which saves it finds:
 
 ```lua
@@ -383,7 +383,8 @@ named as its platform names libraries:
 | macOS | `native/libparticles.dylib` |
 
 So a game that runs everywhere ships each library three times, built on each platform. Names may
-hold letters, digits, `_` and `-`.
+hold letters, digits, `_` and `-`, and can't be a name Windows keeps for a device, such as `con`,
+`nul` or `com1`, on any system.
 
 The engine loads the listed libraries in order, before `main.luau` runs, so their tables are
 there from the script's first line:

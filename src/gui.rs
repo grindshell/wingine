@@ -32,7 +32,7 @@ use egui::load::SizedTexture;
 
 use crate::{
     Context, Game,
-    graphics::{Canvas, Texture, WeakTexture, renderer::RenderTarget},
+    graphics::{Canvas, Color, Texture, WeakTexture, renderer::RenderTarget},
     input::{Key, MouseButton},
     math::Rect,
 };
@@ -65,7 +65,7 @@ pub(crate) struct Gui {
     /// The widgets the last pass laid out, by label, in points, when labels are enabled.
     labels: Vec<(String, egui::Rect)>,
     /// Engine textures shown in egui, and the IDs they're shown with.
-    shown: Vec<(WeakTexture, egui::TextureId)>,
+    shown: Vec<Shown>,
     /// The IDs of dropped [`GuiCanvas`]es, to free.
     dropped: Rc<RefCell<Vec<egui::TextureId>>>,
     pub debug_key: Option<Key>,
@@ -227,10 +227,10 @@ impl Gui {
         for id in &dropped {
             renderer.free_texture(id);
         }
-        shown.retain(|(texture, id)| {
-            let alive = texture.is_alive();
+        shown.retain(|shown| {
+            let alive = shown.texture.is_alive();
             if !alive {
-                renderer.free_texture(id);
+                renderer.free_texture(&shown.id);
             }
             alive
         });
@@ -456,19 +456,24 @@ impl GuiCanvas {
 
     /// Renders what was drawn since [`GuiCanvas::begin`], and returns the texture holding it,
     /// sized in pixels: show it at that size divided by
-    /// [`egui::Context::pixels_per_point`] to show each pixel as one of the screen's.
+    /// [`egui::Context::pixels_per_point`] to show each pixel as one of the screen's. A frame
+    /// wider or taller than the GPU's largest texture renders at that size, and is stretched to
+    /// its own.
     pub fn render(&mut self, ctx: &mut Context) -> SizedTexture {
         let size = [self.canvas.width(), self.canvas.height()].map(|v| v as u32);
         let Context {
             gpu, renderer, gui, ..
         } = ctx;
         let device = &gpu.device;
+        let limit = device.limits().max_texture_dimension_2d;
+        let texture_size = size.map(|v| v.clamp(1, limit));
         if self
             .target
             .as_ref()
-            .is_none_or(|target| target.size != size)
+            .is_none_or(|target| target.size != texture_size)
         {
-            let render = renderer.create_render_target(device, size[0], size[1]);
+            let [width, height] = texture_size;
+            let render = renderer.create_render_target(device, width, height);
             let gui_renderer = gui.renderer(device);
             match &mut self.target {
                 Some(target) => {
@@ -479,7 +484,7 @@ impl GuiCanvas {
                         target.id,
                     );
                     target.render = render;
-                    target.size = size;
+                    target.size = texture_size;
                 }
                 None => {
                     let id = gui_renderer.register_native_texture(
@@ -489,7 +494,7 @@ impl GuiCanvas {
                     );
                     self.target = Some(Target {
                         render,
-                        size,
+                        size: texture_size,
                         id,
                         dropped: gui.dropped.clone(),
                     });
@@ -497,7 +502,8 @@ impl GuiCanvas {
             }
         }
         let target = self.target.as_ref().expect("created above");
-        renderer.render(device, &gpu.queue, &self.canvas, &target.render.view, size);
+        let view = &target.render.view;
+        renderer.render(device, &gpu.queue, &self.canvas, view, texture_size);
         SizedTexture::new(target.id, egui::vec2(size[0] as f32, size[1] as f32))
     }
 }
@@ -505,25 +511,56 @@ impl GuiCanvas {
 impl Context {
     /// `texture`, for egui to show, sized in texels. Showing the same texture again reuses its
     /// ID, until the texture is dropped.
+    ///
+    /// egui shows a copy of the texture as it was when first shown, with its colors multiplied
+    /// by their alpha, as egui blends them.
     pub fn gui_texture(&mut self, texture: &Texture) -> SizedTexture {
         let size = egui::vec2(texture.width() as f32, texture.height() as f32);
         let shown = self
             .gui
             .shown
             .iter()
-            .find(|(shown, _)| shown.is_alive() && shown.is(texture));
-        if let Some(&(_, id)) = shown {
-            return SizedTexture::new(id, size);
+            .find(|shown| shown.texture.is_alive() && shown.texture.is(texture));
+        if let Some(shown) = shown {
+            return SizedTexture::new(shown.id, size);
         }
-        let device = &self.gpu.device;
-        let id = self.gui.renderer(device).register_native_texture(
+        let Context {
+            gpu, renderer, gui, ..
+        } = self;
+        let device = &gpu.device;
+        // Drawn through the quad pipeline, which multiplies colors by their alpha, onto a clear
+        // target.
+        let [width, height] = [texture.width(), texture.height()];
+        let copy = renderer.create_render_target(device, width, height);
+        let mut canvas = Canvas::new();
+        canvas.begin(width as f32, height as f32);
+        canvas.clear(Color::TRANSPARENT);
+        canvas.draw_sprite(
+            &texture.sprite(),
+            Rect::new(0.0, 0.0, size.x, size.y),
+            Color::WHITE,
+        );
+        renderer.render(device, &gpu.queue, &canvas, &copy.view, [width, height]);
+        let id = gui.renderer(device).register_native_texture(
             device,
-            texture.gui_view(),
+            copy.texture.gui_view(),
             wgpu::FilterMode::Nearest,
         );
-        self.gui.shown.push((texture.downgrade(), id));
+        gui.shown.push(Shown {
+            texture: texture.downgrade(),
+            id,
+            _copy: copy,
+        });
         SizedTexture::new(id, size)
     }
+}
+
+/// An engine texture shown in egui, by [`Context::gui_texture`].
+struct Shown {
+    texture: WeakTexture,
+    id: egui::TextureId,
+    /// The copy egui shows, with its colors premultiplied.
+    _copy: RenderTarget,
 }
 
 /// Input for egui gathered between a simulation's frames, from its simulated keys, mouse and

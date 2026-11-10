@@ -712,7 +712,7 @@ const TOWN: &str = r##"return {
         },
         {
             name = "child", kind = "instance", x = 80, scene = "villager.scene.luau",
-            overrides = { body = { scale_x = 0.5, scale_y = 0.5 } },
+            overrides = { body = { scale_x = 0.5, scale_y = 0.5 }, ["body/hat"] = { props = {} } },
         },
         {
             name = "family", kind = "instance", scene = "family.scene.luau",
@@ -735,6 +735,48 @@ fn sprite(scene: &Scene, path: &str) -> (wingine::graphics::Sprite, Color) {
         panic!("{path} is a sprite");
     };
     (sprite.sprite.clone(), sprite.tint)
+}
+
+#[test]
+fn sheets_named_with_any_characters_are_overridden() {
+    let villager = r##"return {
+        format = 1,
+        sheets = { ["people#1"] = { path = "tiles.png", tile_width = 16, tile_height = 16 } },
+        children = { { name = "body", kind = "sprite", sheet = "people#1", cell = { 25, 0 } } },
+    }"##;
+    let town = r##"return {
+        format = 1,
+        children = {
+            {
+                name = "elder", kind = "instance", scene = "villager.scene.luau",
+                overrides = { body = { sheet = "people#1", cell = { 24, 0 } } },
+            },
+            {
+                name = "lost", kind = "instance", scene = "villager.scene.luau",
+                overrides = { body = { sheet = "people#2" } },
+            },
+        },
+    }"##;
+    let files = [("villager.scene.luau", villager), ("town.scene.luau", town)];
+    let err = load(&mut headless(), &files, "town.scene.luau")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains(
+            "node `lost`: overriding `body`: there's no sheet `people#2` in \
+             `villager.scene.luau`'s `sheets`"
+        ),
+        "{err}"
+    );
+
+    let town = town.replace("people#2", "people#1");
+    let files = [
+        ("villager.scene.luau", villager),
+        ("town.scene.luau", &town),
+    ];
+    let scene = load(&mut headless(), &files, "town.scene.luau").unwrap();
+    let (body, _) = sprite(&scene, "elder/body");
+    assert_eq!(body.region().x, 24.0 * 16.0);
 }
 
 #[test]
@@ -817,6 +859,12 @@ fn instances_place_scenes_with_overrides() {
     assert_eq!(scene.node(child_body).scale(), [0.5, 0.5]);
     let (_, tint) = sprite(&scene, "child/body");
     assert_eq!(tint, Color::WHITE, "each instance changes only itself");
+    let child_hat = scene.find(root, "child/body/hat").unwrap();
+    assert_eq!(
+        scene.node(child_hat).props()["brim"],
+        Value::Number(1.0),
+        "no props changed are none lost"
+    );
 
     let (_, tint) = sprite(&scene, "family/mother/body");
     assert_eq!(

@@ -2,8 +2,8 @@ use std::ops::Range;
 
 use bytemuck::{Pod, Zeroable};
 
-use super::{Camera3d, Canvas, Color, Mesh, Model, Ray, Sprite, Texture};
-use crate::math::{Affine3, Rect, scale3};
+use super::{Camera3d, Canvas, Color, Mesh, Model, Projection, Ray, Sprite, Texture};
+use crate::math::{Affine3, Rect, dot3, scale3, sub3};
 
 /// What a 3D view shows, where on the canvas, and how it's lit: see [`Canvas::begin_3d`].
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -127,8 +127,10 @@ impl Canvas3d<'_> {
     /// Draws `sprite` standing upright with the middle of its bottom edge at `position`, `size`
     /// world units wide and tall, turned to face the camera across the ground, as characters do
     /// in 2.5D games: it stays upright in the world however far the camera looks down, and turns
-    /// with the world in the view as the camera rolls. A negative width mirrors it. It's lit as the ground is, whichever way it faces, and hides what's behind it as meshes
-    /// do, so pixels of the sprite less than half opaque aren't drawn.
+    /// with the world in the view as the camera rolls. One a camera in perspective would see from
+    /// behind, as below one looking steeply down, turns around to face it. A negative width
+    /// mirrors it. It's lit as the ground is, whichever way it faces, and hides what's behind it as
+    /// meshes do, so pixels of the sprite less than half opaque aren't drawn.
     pub fn draw_billboard(
         &mut self,
         sprite: &Sprite,
@@ -140,7 +142,16 @@ impl Canvas3d<'_> {
             return;
         }
         let segment = self.canvas.segments.last().expect("begin_3d adds one");
-        let (right, facing) = segment.billboard_axes;
+        let (mut right, mut facing) = segment.billboard_axes;
+        // A camera in perspective sees one behind it across the ground from behind, as when it
+        // looks steeply down on one below it, so that one turns around to face it.
+        let camera = &segment.view.camera;
+        if let Projection::Perspective { .. } = camera.projection
+            && dot3(sub3(camera.position, position), facing) < 0.0
+        {
+            right = scale3(right, -1.0);
+            facing = scale3(facing, -1.0);
+        }
         let transform = Affine3 {
             x_axis: scale3(right, size[0]),
             y_axis: [0.0, size[1], 0.0],

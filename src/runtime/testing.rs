@@ -499,9 +499,13 @@ fn run_file(
             written: Vec::new(),
         };
         let result = runner.run(&mut simulation, &tests[index]);
+        // The VM closes with the simulation, while it holds the GPU the textures its globals hold
+        // are on: so the runner's handle on the VM, and the tests' functions, go first.
+        let written = std::mem::take(&mut runner.written);
+        drop(runner);
         drop(tests);
         drop(simulation);
-        record(outcome(Some(name), result.err(), runner.written));
+        record(outcome(Some(name), result.err(), written));
     }
     filtered_out
 }

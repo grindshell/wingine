@@ -42,6 +42,9 @@ pub struct Animation {
     focus_rename: bool,
     /// The scene and clip shown last, to forget the selected key when they change.
     shown: Option<(String, String)>,
+    /// The scene's [`Document::restores`] when it was shown last, to forget the selected key when
+    /// a change is undone or redone, which may move or take it.
+    restores: u64,
     /// Whether the pointer was over the panel last frame.
     hovered: bool,
 }
@@ -58,6 +61,7 @@ impl Default for Animation {
             renaming: None,
             focus_rename: false,
             shown: None,
+            restores: 0,
             hovered: false,
         }
     }
@@ -87,6 +91,11 @@ impl Scale {
 }
 
 impl Animation {
+    /// The selected key, by its track's index in the clip shown and its own in the track.
+    pub fn selected_key(&self) -> Option<(usize, usize)> {
+        self.selected
+    }
+
     /// Whether Delete is the selected key's: while the pointer's over the panel with a key
     /// selected.
     pub fn wants_delete(&self) -> bool {
@@ -144,6 +153,11 @@ impl Animation {
             self.dragging = None;
             self.renaming = None;
             self.playing = false;
+        }
+        if document.restores() != self.restores {
+            self.restores = document.restores();
+            self.selected = None;
+            self.dragging = None;
         }
 
         // A clip starting to play moves on from the next frame, not by the time before it.
@@ -649,6 +663,9 @@ fn number(
         egui::DragValue::new(value)
             .speed(0.01)
             .range(range)
+            // A value from the file outside it, such as a shorter duration, stays as it is until
+            // it's changed.
+            .clamp_existing_to_range(false)
             .max_decimals(4)
             .suffix(" s"),
     );

@@ -413,6 +413,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     path::Path,
     rc::Rc,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 pub use clip::{Clip, Interpolation, KeyValue, Keys, Property, Track};
@@ -550,6 +551,8 @@ pub fn load_model(ctx: &mut Context, path: &Path) -> Result<Model> {
 /// the images they show.
 #[derive(Clone, Debug)]
 pub struct Scene {
+    /// Which scene its nodes' IDs are of: one of its own, or the one it was cloned from.
+    id: u64,
     slots: Vec<Slot>,
     /// Slots whose nodes were removed, for new nodes.
     free: Vec<u32>,
@@ -557,7 +560,7 @@ pub struct Scene {
 }
 
 /// Where a node is kept, and how many nodes have been kept there before it, so an ID of a removed
-/// node never reaches one added since.
+/// node never reaches one added since. A slot whose count would start again is never used again.
 #[derive(Clone, Debug)]
 struct Slot {
     generation: u32,
@@ -567,8 +570,15 @@ struct Slot {
 /// Which node of a [`Scene`] is meant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NodeId {
+    scene: u64,
     index: u32,
     generation: u32,
+}
+
+/// An ID for a new scene's nodes, which no other scene's have.
+fn new_scene_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// A node of a [`Scene`].
@@ -1349,16 +1359,8 @@ impl Scene {
         };
         let nodes = expand.file(file, path)?;
         let sheets = expand.sheets;
-        let mut root = Node::new(String::new(), Kind::Node);
-        root.props = file.props.clone();
-        let mut scene = Self {
-            slots: vec![Slot {
-                generation: 0,
-                node: Some(root),
-            }],
-            free: Vec::new(),
-            size: [0.0, 0.0],
-        };
+        let mut scene = Self::empty([0.0, 0.0]);
+        scene.node_mut(scene.root()).props = file.props.clone();
         let mut build = Build {
             path,
             font,
@@ -1375,6 +1377,19 @@ impl Scene {
             scene.build(&mut build, node, root, "", false)?;
         }
         Ok(scene)
+    }
+
+    /// A scene of only its root, `size` in size.
+    fn empty(size: [f32; 2]) -> Self {
+        Self {
+            id: new_scene_id(),
+            slots: vec![Slot {
+                generation: 0,
+                node: Some(Node::new(String::new(), Kind::Node)),
+            }],
+            free: Vec::new(),
+            size,
+        }
     }
 
     /// Reads the scene file at `path` in `folder`, and the files and images it uses from
@@ -1462,6 +1477,7 @@ impl Scene {
                 let slot = &mut self.slots[index as usize];
                 slot.node = Some(node);
                 NodeId {
+                    scene: self.id,
                     index,
                     generation: slot.generation,
                 }
@@ -1474,6 +1490,7 @@ impl Scene {
                     node: Some(node),
                 });
                 NodeId {
+                    scene: self.id,
                     index,
                     generation: 0,
                 }
@@ -1486,24 +1503,26 @@ impl Scene {
     /// The node at the top of the tree, which holds the scene's props.
     pub fn root(&self) -> NodeId {
         NodeId {
+            scene: self.id,
             index: 0,
             generation: 0,
         }
     }
 
     /// The node `id`, if it's in the scene: it hasn't been removed, and isn't from another scene.
+    /// A clone of a scene has its nodes' IDs, as a copy of the same nodes, until either adds one.
     pub fn get(&self, id: NodeId) -> Option<&Node> {
         let slot = self.slots.get(id.index as usize)?;
         slot.node
             .as_ref()
-            .filter(|_| slot.generation == id.generation)
+            .filter(|_| id.scene == self.id && slot.generation == id.generation)
     }
 
     pub fn get_mut(&mut self, id: NodeId) -> Option<&mut Node> {
         let slot = self.slots.get_mut(id.index as usize)?;
         slot.node
             .as_mut()
-            .filter(|_| slot.generation == id.generation)
+            .filter(|_| id.scene == self.id && slot.generation == id.generation)
     }
 
     /// Whether `id` is a node of the scene, which hasn't been removed.
@@ -2291,14 +2310,7 @@ impl Scene {
     /// A scene holding only a copy of `id` and everything inside it, under a new root, for
     /// adding a copy of part of a scene to itself.
     pub fn copy_of(&self, id: NodeId) -> (Scene, NodeId) {
-        let mut scene = Scene {
-            slots: vec![Slot {
-                generation: 0,
-                node: Some(Node::new(String::new(), Kind::Node)),
-            }],
-            free: Vec::new(),
-            size: self.size,
-        };
+        let mut scene = Scene::empty(self.size);
         let root = scene.root();
         let copy = scene.copy(root, self, id);
         (scene, copy)
@@ -2314,8 +2326,11 @@ impl Scene {
         for removed in self.descendants(id) {
             let slot = &mut self.slots[removed.index as usize];
             slot.node = None;
-            slot.generation = slot.generation.wrapping_add(1);
-            self.free.push(removed.index);
+            // A slot whose generations have run out is left empty, so no ID leads to it again.
+            if let Some(generation) = slot.generation.checked_add(1) {
+                slot.generation = generation;
+                self.free.push(removed.index);
+            }
         }
         Ok(())
     }
@@ -2479,6 +2494,9 @@ impl Scene {
                     return;
                 }
                 Kind::Panel(panel) => {
+                    // Panels have no blend mode of their own, so draw normally whatever drew
+                    // before them.
+                    canvas.set_blend(Blend::Normal);
                     if transform.bounds(rect).overlaps(&visible) {
                         draw_panel(canvas, &panel.look, rect, transform);
                     }
@@ -2641,13 +2659,13 @@ fn fill_layer(map: &mut TilemapNode, layer: &TileLayerDef) -> Result<TileLayerNo
 }
 
 /// Instances, expanded: the nodes of the scene files they place in their stead, with their
-/// overrides made. Sprites then name their sheets by `file#sheet`, since nodes from different
-/// files are together.
+/// overrides made. Sprites then name their sheets by their files too ([`sheet_key`]), since
+/// nodes from different files are together.
 struct Expand<'a> {
     assets: &'a mut dyn Assets,
     /// The scene files being expanded, innermost last, to catch one that places itself.
     stack: Vec<String>,
-    /// Every sheet of every file, by `file#sheet`.
+    /// Every sheet of every file, by [`sheet_key`].
     sheets: BTreeMap<String, SheetDef>,
 }
 
@@ -2672,8 +2690,17 @@ enum ExpandStep {
     Error(Error),
 }
 
+/// The key of the sheet `sheet` of the file at `file` among the sheets of every file: the length
+/// of the file's path, then the path and the name, so either can hold any character and the key
+/// still splits as it was made ([`split_sheet_key`]).
 fn sheet_key(file: &str, sheet: &str) -> String {
-    format!("{file}#{sheet}")
+    format!("{}:{file}{sheet}", file.len())
+}
+
+/// The file and the name of the sheet whose key is `key`, if it's one [`sheet_key`] made.
+fn split_sheet_key(key: &str) -> Option<(&str, &str)> {
+    let (length, rest) = key.split_once(':')?;
+    rest.split_at_checked(length.parse().ok()?)
 }
 
 impl Expand<'_> {
@@ -2885,11 +2912,15 @@ impl Expand<'_> {
                 }) => Some(&sprite.sheet),
                 _ => None,
             };
-            let from = match shown.and_then(|key| key.rsplit_once('#')) {
+            let from = match shown.and_then(|key| split_sheet_key(key)) {
                 Some((from, _)) => from.to_owned(),
                 None => self.file_of(file, target),
             };
-            *sheet = sheet_key(&from, sheet);
+            let key = sheet_key(&from, sheet);
+            if !self.sheets.contains_key(&key) {
+                return Err(format!("there's no sheet `{sheet}` in `{from}`'s `sheets`"));
+            }
+            *sheet = key;
         }
         let inside = file::Parent {
             path: &parent,
@@ -2952,7 +2983,7 @@ struct Build<'a> {
     font: &'a Font,
     assets: &'a mut dyn Assets,
     fonts: HashMap<String, Font>,
-    /// Every sheet of every file, by `file#sheet`, from [`Expand`].
+    /// Every sheet of every file, by [`sheet_key`], from [`Expand`].
     sheet_defs: BTreeMap<String, SheetDef>,
     sheets: HashMap<String, SpriteSheet>,
     tilesets: HashMap<String, (Tileset, Rc<TileKinds>)>,
@@ -2969,11 +3000,11 @@ impl Build<'_> {
         }
     }
 
-    /// The sprite sheet `key`, `file#sheet`, loading it if it hasn't been.
+    /// The sprite sheet whose [`sheet_key`] is `key`, loading it if it hasn't been.
     fn sheet(&mut self, key: &str, node: &str) -> Result<&SpriteSheet> {
         if !self.sheets.contains_key(key) {
             let Some(def) = self.sheet_defs.get(key) else {
-                let (_, name) = key.rsplit_once('#').unwrap_or(("", key));
+                let (_, name) = split_sheet_key(key).unwrap_or(("", key));
                 return Err(self.error(node, &format!("there's no sheet `{name}` in the scene")));
             };
             let texture = self.assets.texture(&def.path)?;
@@ -3202,5 +3233,37 @@ impl Build<'_> {
         let model = self.assets.model(path)?;
         self.models.insert(path.to_owned(), model.clone());
         Ok(model)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slots_are_left_empty_before_their_generations_start_again() {
+        let mut scene = Scene::empty([0.0, 0.0]);
+        let root = scene.root();
+        let first = scene.attach(Node::new("a".into(), Kind::Node), root);
+        scene.slots[first.index as usize].generation = u32::MAX;
+        let last = NodeId {
+            generation: u32::MAX,
+            ..first
+        };
+        scene.remove(last).unwrap();
+        let next = scene.attach(Node::new("b".into(), Kind::Node), root);
+        assert_ne!(next.index, first.index, "a slot of its own");
+        assert!(!scene.contains_node(first) && !scene.contains_node(last));
+    }
+
+    #[test]
+    fn ids_lead_only_to_their_own_scenes_nodes() {
+        let [mut a, mut b] = [(); 2].map(|_| Scene::empty([0.0, 0.0]));
+        let in_a = a.attach(Node::new("a".into(), Kind::Node), a.root());
+        let in_b = b.attach(Node::new("b".into(), Kind::Node), b.root());
+        assert!(a.get(in_b).is_none() && b.get(in_a).is_none());
+        assert!(a.get(b.root()).is_none());
+        // A clone is a copy of the same nodes.
+        assert_eq!(a.clone().node(in_a).name(), "a");
     }
 }

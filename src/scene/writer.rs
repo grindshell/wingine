@@ -11,8 +11,8 @@ use std::{collections::BTreeMap, fmt::Write};
 use super::{
     clip::{Clip, Interpolation, Keys, Track},
     file::{
-        FORMAT, KindDef, NodeDef, PanelLookDef, Placement3, SceneFile, Shape, SheetDef, Stack,
-        StackDirection, TileDef, TilesetFile, Value,
+        self, FORMAT, KindDef, NodeDef, PanelLookDef, Placement3, SceneFile, Shape, SheetDef,
+        Stack, StackDirection, TileDef, TilesetFile, Value,
     },
 };
 use crate::{
@@ -35,7 +35,7 @@ pub(super) fn write(scene: &SceneFile) -> Result<String, String> {
             .map_err(|err| format!("the scene's props: {err}"))?;
         writer.end_field();
     }
-    writer.children(&scene.children, "")?;
+    writer.children(&scene.children, "", false)?;
     if !scene.clips.is_empty() {
         writer.key("clips");
         writer.open();
@@ -276,8 +276,9 @@ impl Writer {
         Ok(())
     }
 
-    /// The `children` field of the node at `parent`, or of the scene for `""`, if it has any.
-    fn children(&mut self, children: &[NodeDef], parent: &str) -> Result<(), String> {
+    /// The `children` field of the node at `parent`, or of the scene for `""`, if it has any:
+    /// placed in 3D if `in_3d`, as children of a view or of a node placed in 3D are.
+    fn children(&mut self, children: &[NodeDef], parent: &str, in_3d: bool) -> Result<(), String> {
         if children.is_empty() {
             return Ok(());
         }
@@ -290,7 +291,7 @@ impl Writer {
                 format!("{parent}/{}", child.name)
             };
             self.indent();
-            self.node(child, &path)?;
+            self.node(child, &path, in_3d)?;
             self.end_field();
         }
         self.close();
@@ -298,15 +299,21 @@ impl Writer {
         Ok(())
     }
 
-    fn node(&mut self, node: &NodeDef, path: &str) -> Result<(), String> {
+    /// A node, which is in 3D if `in_3d`, as [`Writer::children`] says.
+    fn node(&mut self, node: &NodeDef, path: &str, in_3d: bool) -> Result<(), String> {
         let at = |err: String| format!("node `{path}`: {err}");
         self.open();
         self.field("name", &quoted(&node.name));
-        self.field("kind", &quoted(node.kind.name()));
+        let kind = node.kind.name();
+        self.field("kind", &quoted(kind));
+        // A node placed in 3D by nothing but its own fields, as a plain node at the top of a file
+        // of props for views is, keeps one even at its default, to be read back in 3D.
+        let placed_by_itself = !in_3d && file::can_be_3d(kind) && !file::is_3d_kind(kind);
+        let keep_z = placed_by_itself && node.placement3 == Some(Placement3::default());
         let z = node.placement3.map(|placement| placement.z);
         for (key, value) in [("x", Some(node.x)), ("y", Some(node.y)), ("z", z)] {
             if let Some(value) = value
-                && value != 0.0
+                && (value != 0.0 || (key == "z" && keep_z))
             {
                 self.number_field(key, value).map_err(at)?;
             }
@@ -347,7 +354,8 @@ impl Writer {
                 .map_err(|err| at(format!("props: {err}")))?;
             self.end_field();
         }
-        self.children(&node.children, path)?;
+        let holds_3d = matches!(node.kind, KindDef::View3d(_)) || node.placement3.is_some();
+        self.children(&node.children, path, holds_3d)?;
         self.close();
         Ok(())
     }
@@ -1489,5 +1497,29 @@ mod tests {
         // Written and read back from Rust, every field the same.
         let written = scene.to_luau().unwrap();
         assert_eq!(parse(&written), scene);
+    }
+
+    #[test]
+    fn nodes_placed_in_3d_only_by_their_own_fields_stay_so() {
+        // A file of props for views: a plain node and an instance placed in 3D at their
+        // defaults, a group that isn't, and a mesh and a node inside the node, which are.
+        let props = parse(
+            "return { format = 4, children = {
+                { name = 'stand', kind = 'node', z = 0, children = {
+                    { name = 'box', kind = 'mesh', shape = 'cuboid' },
+                    { name = 'spot', kind = 'node' },
+                } },
+                { name = 'lamp', kind = 'instance', scene = 'lamp.scene.luau', yaw = 0 },
+                { name = 'group', kind = 'node' },
+            } }",
+        );
+        let [stand, lamp, group] = &props.children[..] else {
+            panic!("{:?}", props.children);
+        };
+        assert!(stand.placement3.is_some() && lamp.placement3.is_some());
+        assert!(group.placement3.is_none());
+        let written = props.to_luau().unwrap();
+        assert_eq!(parse(&written), props, "{written}");
+        assert_eq!(written.matches("z = 0").count(), 2, "{written}");
     }
 }

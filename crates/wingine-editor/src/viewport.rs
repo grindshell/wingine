@@ -145,8 +145,11 @@ pub enum Action {
     },
 }
 
-/// Painting a tile layer while a button is held.
+/// Painting a tile layer while a button is held. It ends when the layer isn't painted in a frame,
+/// as when it's no longer selected.
 struct Stroke {
+    /// The layer painted.
+    layer: NodePath,
     tool: TileTool,
     /// The tile put down, by its name, or none to empty cells.
     tile: Option<String>,
@@ -619,12 +622,17 @@ impl Viewport {
             || self.resize(ui, &response, &map, document, tilemap.as_ref())
             || self.size_node(ui, &response, &map, document)
             || self.size_canvas(ui, &response, &map, canvas_size);
-        if !busy {
-            match (&layer, &tilemap) {
-                (Some(layer), Some((_, grid))) => {
-                    self.paint(ui, &response, &map, document, layer, *grid, tiles);
+        match (&layer, &tilemap) {
+            (Some(layer), Some((_, grid))) if !busy => {
+                self.paint(ui, &response, &map, document, layer, *grid, tiles);
+            }
+            _ => {
+                // A stroke left unpainted, by Escape, Delete or undo taking its layer away, mustn't
+                // draw from its last cell when one's painted again.
+                self.stroke = None;
+                if !busy {
+                    self.interact(ui, &response, &map, document);
                 }
-                _ => self.interact(ui, &response, &map, document),
             }
         }
 
@@ -892,6 +900,14 @@ impl Viewport {
         grid: Grid,
         tiles: &mut Tiles,
     ) {
+        // A stroke on another layer, selected since, ends.
+        if self
+            .stroke
+            .as_ref()
+            .is_some_and(|stroke| stroke.layer != *layer)
+        {
+            self.stroke = None;
+        }
         let (primary, secondary) = (egui::PointerButton::Primary, egui::PointerButton::Secondary);
         let (down, pressed, erasing, control) = ui.input(|input| {
             let pointer = &input.pointer;
@@ -955,6 +971,7 @@ impl Viewport {
                         paint_cells(document, layer, grid, vec![cell], tile.as_deref());
                     }
                     self.stroke = Some(Stroke {
+                        layer: layer.clone(),
                         tool,
                         tile,
                         from: cell,

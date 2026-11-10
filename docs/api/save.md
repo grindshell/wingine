@@ -3,7 +3,8 @@
 Data kept between runs of the game, such as the player's progress or their settings.
 
 A game keeps any number of saves, each with a name of letters, digits, `_` and `-`, such as
-`"progress"` or `"slot-2"`. A save holds plain data: a boolean, number, string, or table of them,
+`"progress"` or `"slot-2"`, but not a name Windows keeps for a device, such as `"con"`, `"nul"` or
+`"com1"`, on any system, so saves work on every one. A save holds plain data: a boolean, number, string, or table of them,
 where a table is a list or has strings for keys, nested as deep as needed. That's what a scene's
 props hold, and saves are files of Luau like scene files, written the same way, so they're easy to
 read.

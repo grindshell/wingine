@@ -751,19 +751,22 @@ trait Glyphs {
                 if i > 0 {
                     spaces += space;
                 }
-                let word_ink = self.ink_width(scale, word);
-                if word_ink == 0.0 {
+                let (ink, advance) = self.measure(scale, word, cursor.pen + spaces);
+                let Some(mut ink) = ink else {
+                    // A word of other spaces, such as no-break ones, is space too.
+                    spaces += advance;
                     continue;
-                }
-                if !cursor.line_is_empty() && (cursor.pen + spaces).round() + word_ink > max_width {
+                };
+                if !cursor.line_is_empty() && ink > max_width {
                     cursor.new_line();
+                    ink = self.measure(scale, word, cursor.pen).0.unwrap_or(ink);
                 } else {
                     cursor.pen += spaces;
                 }
                 spaces = 0.0;
                 // Only a word that doesn't fit even where a line starts breaks between
                 // characters: one too long for any line, or one after leading spaces.
-                let breakable = cursor.pen.round() + word_ink > max_width;
+                let breakable = ink > max_width;
                 let mut before = None;
                 for c in word.chars().filter(|c| !c.is_control()) {
                     let Some(glyph) = self.glyph(c) else {
@@ -829,24 +832,30 @@ trait Glyphs {
         (glyphs, size, lines)
     }
 
-    /// How far the ink of `word` reaches from where it starts, as [`Glyphs::lay_out`] places it.
-    fn ink_width(&self, scale: f32, word: &str) -> f32 {
-        let mut pen = 0.0f32;
-        let mut ink: f32 = 0.0;
+    /// Where the ink of `word` ends, placed as [`Glyphs::lay_out`] places it from the pen at
+    /// `start`, if it has any, and how far it moves the pen.
+    fn measure(&self, scale: f32, word: &str, start: f32) -> (Option<f32>, f32) {
+        let mut pen = start;
+        let mut advance = 0.0f32;
+        let mut ink: Option<f32> = None;
         let mut before = None;
         for c in word.chars().filter(|c| !c.is_control()) {
             if let Some(glyph) = self.glyph(c) {
                 if let Some(before) = before {
-                    pen += self.kern(before, c) * scale;
+                    let kern = self.kern(before, c) * scale;
+                    pen += kern;
+                    advance += kern;
                 }
                 before = Some(c);
                 if glyph.has_ink() {
-                    ink = ink.max(pen.round() + scale_rect(glyph.bounds, scale).right());
+                    let right = pen.round() + scale_rect(glyph.bounds, scale).right();
+                    ink = Some(ink.map_or(right, |ink| ink.max(right)));
                 }
                 pen += glyph.advance * scale;
+                advance += glyph.advance * scale;
             }
         }
-        ink
+        (ink, advance)
     }
 }
 
@@ -985,7 +994,8 @@ mod tests {
     use crate::scene::FontCharacters;
 
     /// Metrics for a font whose glyphs are each 3x4 with a 1px gap, except `i` (1 wide) and a
-    /// descending `g`; a space is 2 wide. Lines are 6 apart. `?` stands in for anything else.
+    /// descending `g`; a space is 2 wide, and a no-break space 3. Lines are 6 apart. `?` stands in
+    /// for anything else.
     fn metrics() -> Metrics {
         let glyph = |w, h| Glyph {
             bounds: Rect::new(0.0, 0.0, w, h),
@@ -997,6 +1007,7 @@ mod tests {
         glyphs.insert('i', glyph(1.0, 4.0));
         glyphs.insert('g', glyph(3.0, 6.0));
         glyphs.insert(' ', Glyph::blank(2.0));
+        glyphs.insert('\u{a0}', Glyph::blank(3.0));
         Metrics {
             glyphs,
             fallback: Some(glyph(3.0, 4.0)),
@@ -1184,11 +1195,36 @@ mod tests {
         let (size, _) = font.lay_out(1.0, "aabb", None, |g, _| xs.push(g.rect.x));
         assert_eq!(xs, [0.0, 3.0, 5.0, 9.0]);
         assert_eq!(size[0], 12.0, "to the last glyph's ink, where it's drawn");
-        assert_eq!(font.ink_width(1.0, "aabb"), 12.0, "measured as it's placed");
+        let (ink, advance) = font.measure(1.0, "aabb", 0.0);
+        assert_eq!(ink, Some(12.0), "measured as it's placed");
+        assert!((advance - 12.1).abs() < 1e-5, "{advance}");
         // Words don't kern across spaces.
         let mut xs = Vec::new();
         font.lay_out(1.0, "a b", None, |g, _| xs.push(g.rect.x));
         assert_eq!(xs, [0.0, 5.0]);
+    }
+
+    #[test]
+    fn words_wrap_by_where_their_ink_ends_from_the_pen() {
+        let font = Kerned(metrics());
+        // After "a ", the pen is at 5.4, so "aa" is drawn at 5 and 9, its ink ending at 12,
+        // though from 5 it would end at 11 if each pen were rounded from where the word begins.
+        for (max_width, lines, width) in [(12.0, 1, 12.0), (11.0, 2, 6.0)] {
+            let (size, laid) = font.lay_out(1.0, "a aa", Some(max_width), |_, _| {});
+            assert_eq!((laid, size[0]), (lines, width), "{max_width} wide");
+        }
+    }
+
+    #[test]
+    fn words_of_other_spaces_move_the_pen() {
+        // A no-break space is 3 wide, beside the space of 2 between words.
+        let (rects, _, _) = lay_out("a \u{a0} b", None);
+        assert_eq!(rects[1].x, 11.0);
+        let (rects, _, _) = lay_out("a\u{a0}b", None);
+        assert_eq!(rects[1].x, 7.0);
+        // Dropped where a line wraps, as spaces are.
+        let (rects, _, lines) = lay_out("ab \u{a0} cd", Some(16.0));
+        assert_eq!((rects[2].x, lines), (0.0, 2));
     }
 
     /// A bitmap font's image: cells 4x3, two across and two down, with ink in each column set

@@ -447,6 +447,26 @@ fn a_script_starts_from_copies_of_saves() {
         "the run never writes the saves it started from"
     );
 
+    // Without `saves`, a run starts with none, even for a game whose window keeps them in a
+    // folder of its own, which it leaves as it was.
+    fs::write(&script, "wait 2\n").unwrap();
+    let own = WindowConfig {
+        save_folder: Some(start.clone()),
+        ..config()
+    };
+    let seen = RefCell::new(None);
+    wingine::script::run(
+        &own,
+        |ctx| {
+            *seen.borrow_mut() = Some(ctx.saves().list()?);
+            Ok(Saver)
+        },
+        &script,
+    )
+    .unwrap();
+    assert_eq!(seen.take(), Some(Vec::new()));
+    assert_eq!(Saves::in_folder(&start).list().unwrap(), ["career"]);
+
     fs::write(&script, "saves nowhere\n").unwrap();
     let err = wingine::script::run(&config(), |_| Ok(Saver), &script).unwrap_err();
     assert!(
@@ -516,6 +536,32 @@ fn an_update_rate_sets_how_often_frames_update() {
     assert_eq!(simulation.game().updates, 6);
     assert_eq!(simulation.game().space_presses, 1);
     assert_eq!(simulation.game().space_held_frames, 6);
+}
+
+/// With an update rate and frames on demand, a frame too soon after the last for an update, as
+/// one for input may be, asks for another when an update falls due, so the game sees the input
+/// without waiting for more.
+#[test]
+fn frames_without_an_update_want_one_when_it_falls_due() {
+    let config = WindowConfig {
+        redraw: Redraw::OnDemand,
+        update_rate: Some(30.0),
+        ..config()
+    };
+    let mut simulation = Simulation::new(&config, |_| Ok(Probe::default())).unwrap();
+    for _ in 0..4 {
+        simulation.step();
+    }
+    let updates = simulation.game().updates;
+    simulation.key_down(Key::Space);
+    simulation.step();
+    assert_eq!(simulation.game().updates, updates, "too soon for an update");
+    let wait = simulation.next_frame_in().expect("a frame is wanted");
+    assert!(wait <= 1.0 / 30.0, "{wait}");
+    simulation.key_up(Key::Space);
+    simulation.step();
+    assert_eq!(simulation.game().updates, updates + 1);
+    assert_eq!(simulation.game().space_presses, 1);
 }
 
 #[test]

@@ -94,8 +94,9 @@ own right.
   blending premultiplied colors (normal is premultiplied alpha blending, which renders as straight
   alpha did); rotation, transforms, slicing, outlines, lines
   and circles are worked out on the CPU as quads are recorded. Vertices are 20 bytes, colors
-  sRGB bytes made linear in the shader. A fixed resolution renders offscreen, then onto the
-  output as its `Scaling` says. Sprites aren't instanced: rendering is a fifth of the shmup's
+  sRGB bytes made linear in the shader. A fixed resolution renders offscreen, its target cleared
+  opaque since drawing it onto the output premultiplies again, then onto the output as its
+  `Scaling` says. Sprites aren't instanced: rendering is a fifth of the shmup's
   frame, so it isn't the limit. An `Animation` doesn't keep time; games ask it for the frame at a
   time. Shaders are WGSL files beside the code that loads them.
 - 3D (`camera3d.rs`, `mesh.rs`, `view3d.rs`, `model.rs`, `model_file.rs`): `Canvas::begin_3d`
@@ -116,6 +117,8 @@ own right.
 - `src/gui.rs`: egui over games (`wingine::gui` re-exports egui). egui blends in sRGB, so it
   renders through a non-sRGB view of the frame and samples engine textures through non-sRGB views
   of them, which is why textures keep their format without sRGB among their view formats.
+  egui expects premultiplied colors, so `Context::gui_texture` shows a copy drawn through the quad
+  pipeline, as `GuiCanvas` does.
   Events egui wants don't reach `Input`. `GuiCanvas` renders a `Canvas` into a texture egui
   shows. Simulations turn on AccessKit, so tests find widgets by label.
 - `src/audio.rs`: `Audio`, `Sound` and `Voice`. kira's state catches up only when its mixer
@@ -207,7 +210,8 @@ own right.
   canonical layout. The module docs are the formats' reference.
 - `Scene::new` expands instances, applying overrides by writing the node back to values, setting
   the fields and reading it again, so overrides are checked as files are; then builds live nodes
-  through `Assets`. `NodeId`s have generations, so removed nodes' ids never reach new ones.
+  through `Assets`. `NodeId`s name their scene and have generations, so an id never reaches
+  another scene's node or one added since its own was removed.
 - Layout walks down from the root: anchors and stretch place nodes in their parent's rect, stacks
   and panels place their children and fit what they hold, and 3D views' children are placed in
   3D (`placement3`). `Scene::pose` applies `Clip`s, finding every track's node before changing any.

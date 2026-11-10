@@ -14,11 +14,14 @@ use wingine::{Redraw, WindowConfig};
 use wingine_editor::{Editor, docks::output::Logger};
 
 fn main() -> ExitCode {
-    static LOGGER: Logger = Logger;
-    log::set_logger(&LOGGER).expect("nothing else sets a logger");
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    // A game played prints what it logs for the editor to read, keeping none of it.
+    static EDITOR: Logger = Logger { to_panel: true };
+    static GAME: Logger = Logger { to_panel: false };
+    let playing = args.first().is_some_and(|flag| flag == "--run");
+    log::set_logger(if playing { &GAME } else { &EDITOR }).expect("nothing else sets a logger");
     log::set_max_level(log::LevelFilter::Info);
 
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
     let result = match args.as_slice() {
         [flag, folder] if flag == "--run" => wingine::runtime::run_watching(folder),
         [] => run(None),

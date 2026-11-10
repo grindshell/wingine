@@ -34,13 +34,31 @@ use crate::{
 /// The extension of save files.
 const EXTENSION: &str = "luau";
 
-/// Whether `name` can name a save, a game's save folder or a native library: it's part of a file
-/// name, so it may hold only letters, digits, `_` and `-`.
+/// Whether `name` can name a save, a game's save folder or a native library: see
+/// [`name_problem`].
 pub(crate) fn is_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    name_problem(name).is_none()
+}
+
+/// Why `name` can't name a save, a game's save folder or a native library, if it can't, said as
+/// what to do. It's part of a file name, so it may hold only letters, digits, `_` and `-`, and
+/// can't be a name Windows keeps for a device, such as `con` or `com1`, in any case, on any
+/// system, so a game's saves and files work on every one.
+pub(crate) fn name_problem(name: &str) -> Option<&'static str> {
+    let allowed = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    if name.is_empty() || !name.chars().all(allowed) {
+        return Some("use only letters, digits, `_` and `-`");
+    }
+    let lower = name.to_ascii_lowercase();
+    let numbered = |prefix: &str| {
+        lower
+            .strip_prefix(prefix)
+            .is_some_and(|digit| digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit())
+    };
+    let device = matches!(lower.as_str(), "con" | "prn" | "aux" | "nul")
+        || numbered("com")
+        || numbered("lpt");
+    device.then_some("Windows keeps that name for a device: use another")
 }
 
 /// A game's saves, in a folder of its own. See the [module docs](self).
@@ -75,16 +93,15 @@ impl Saves {
     ///
     /// # Panics
     ///
-    /// If the identity isn't a name of letters, digits, `_` and `-`.
+    /// If the identity isn't a name of letters, digits, `_` and `-`, or names a device on Windows.
     pub(crate) fn for_window(config: &WindowConfig) -> Self {
         if let Some(folder) = &config.save_folder {
             return Self::in_folder(folder);
         }
         let identity = &config.identity;
-        assert!(
-            is_name(identity),
-            "`{identity}` can't name a game's saves: use only letters, digits, `_` and `-`"
-        );
+        if let Some(problem) = name_problem(identity) {
+            panic!("`{identity}` can't name a game's saves: {problem}");
+        }
         if cfg!(target_arch = "wasm32") {
             return Self::in_folder(Path::new("Wingine").join(identity));
         }
@@ -223,10 +240,10 @@ impl Saves {
     /// The path of the save `name`'s file, or `None` for saves with nowhere to go. Fails if
     /// `name` isn't a save's name, whether or not there's a folder.
     fn path(&self, name: &str) -> Result<Option<PathBuf>> {
-        if !is_name(name) {
+        if let Some(problem) = name_problem(name) {
             return Err(Error::Save {
                 name: name.to_owned(),
-                message: "a save's name may hold only letters, digits, `_` and `-`".to_owned(),
+                message: format!("not a save's name: {problem}"),
             });
         }
         let folder = self.folder();
@@ -513,6 +530,15 @@ mod tests {
             assert!(err.to_string().contains("only letters, digits"), "{err}");
             assert!(saves.read(name).is_err(), "{name}");
             assert!(saves.remove(name).is_err(), "{name}");
+        }
+        // Names of devices on Windows, on every system.
+        for name in ["con", "NUL", "Aux", "prn", "com1", "LPT9", "com0"] {
+            let err = saves.write(name, &Value::Bool(true)).unwrap_err();
+            assert!(err.to_string().contains("for a device"), "{err}");
+            assert!(saves.read(name).is_err(), "{name}");
+        }
+        for name in ["console", "com", "com10", "lpt", "nul_", "comx"] {
+            assert!(is_name(name), "{name}");
         }
         assert!(saves.folder().is_some_and(|folder| !folder.exists()));
     }

@@ -838,6 +838,41 @@ fn scene_blend() {
     assert_screenshot(&headless.adapter_name(), "scene_blend", frame);
 }
 
+/// A panel draws normally after a node that draws added, even one off the canvas.
+#[test]
+fn panels_draw_normally_after_other_blend_modes() {
+    let alone = r##"return {
+        format = 4,
+        children = {
+            {
+                name = "panel", kind = "panel", x = 4, y = 4, width = 24, height = 16,
+                color = "#4050a0c0", border = 1, border_color = "#f2d3ab",
+            },
+        },
+    }"##;
+    let after_glow = r##"return {
+        format = 4,
+        children = {
+            { name = "glow", kind = "rect", x = -40, width = 8, height = 8, blend = "add" },
+            {
+                name = "panel", kind = "panel", x = 4, y = 4, width = 24, height = 16,
+                color = "#4050a0c0", border = 1, border_color = "#f2d3ab",
+            },
+        },
+    }"##;
+    let mut headless = headless();
+    let [alone, after_glow] = [alone, after_glow].map(|source| {
+        let mut scene = load_scene(&mut headless, &[("panel.scene.luau", source)]);
+        headless
+            .render(32, 24, |canvas| {
+                canvas.clear(Color::rgb8(0x3e, 0x6b, 0x3f));
+                scene.draw(canvas);
+            })
+            .unwrap()
+    });
+    assert!(alone == after_glow);
+}
+
 /// Solid fills and sprites interleaved, so batches switch texture several times. Draw order must
 /// hold across the switches.
 #[test]
@@ -915,6 +950,34 @@ fn fixed_resolution() {
         })
         .unwrap();
     assert_screenshot(&headless.adapter_name(), "fixed_resolution", frame);
+}
+
+/// A fixed resolution shows a translucent clear, and what's drawn translucent over it, as the
+/// window's resolution does: the window shows colors, not how opaque they are.
+#[test]
+fn fixed_resolution_shows_translucent_clears_as_the_window_does() {
+    let draw = |canvas: &mut Canvas| {
+        canvas.clear(Color::rgba8(0x40, 0x80, 0xc0, 0x80));
+        canvas.fill_rect(
+            Rect::new(4.0, 2.0, 8.0, 4.0),
+            Color::rgba8(0xf0, 0xc0, 0x30, 0xa0),
+        );
+    };
+    let mut headless = headless();
+    let window = headless.render(16, 8, draw).unwrap();
+    headless.set_resolution(Resolution::Fixed {
+        width: 16,
+        height: 8,
+    });
+    let fixed = headless.render(16, 8, draw).unwrap();
+    // A window shows no alpha, which only the frame of its own resolution keeps.
+    for (fixed, window) in fixed.pixels().chunks(4).zip(window.pixels().chunks(4)) {
+        let differs = (0..3).any(|i| fixed[i].abs_diff(window[i]) > 2);
+        assert!(
+            !differs,
+            "{fixed:?} at a fixed resolution, {window:?} at the window's"
+        );
+    }
 }
 
 /// What the scaled fixed resolutions draw on their 30x15 canvas: single texels, which show how
@@ -1512,6 +1575,32 @@ fn meshes_billboards() {
     assert_screenshot_allowing(&headless.adapter_name(), "meshes_billboards", frame, 16);
 }
 
+/// A billboard below a camera in perspective looking steeply down, but behind where it looks
+/// across the ground, turns to face it rather than showing its back, which isn't drawn.
+#[test]
+fn meshes_billboards_below_the_camera() {
+    let mut headless = headless();
+    let sheet = SpriteSheet::new(headless.context().load_texture(TILESET).unwrap(), 16, 16);
+    let tree = sheet.sprite(0, 1);
+    let background = Color::rgb8(0x10, 0x10, 0x18);
+    let frame = headless
+        .render(64, 64, |canvas| {
+            canvas.clear(background);
+            let camera = Camera3d::perspective([0.0, 2.0, 0.0], [0.0, 0.0, -0.5], 1.5);
+            let view = View3d {
+                lighting: Lighting::UNLIT,
+                ..View3d::new(camera, Rect::new(0.0, 0.0, 64.0, 64.0))
+            };
+            canvas
+                .begin_3d(view)
+                .draw_billboard(&tree, [0.0, 0.0, 0.8], [1.0, 1.0], Color::WHITE);
+        })
+        .unwrap();
+    let corner = frame.pixel(0, 0);
+    let shown = frame.pixels().chunks(4).filter(|p| *p != corner).count();
+    assert!(shown > 30, "the billboard shows only {shown} pixels");
+}
+
 /// Billboards face the camera however it's rolled about the way it looks, standing upright in
 /// the world, so the view turns with the camera: rolled a half turn, it shows them upside down,
 /// and a quarter turn, on their sides. A negative width still mirrors them.
@@ -1757,6 +1846,58 @@ fn gui() {
     simulation.run_for(0.5);
     let frame = simulation.screenshot().unwrap();
     assert_screenshot(&simulation.adapter_name(), "gui", frame);
+}
+
+/// egui shows an engine texture's colors multiplied by their alpha, as it blends them: a clear
+/// texel that holds a color shows nothing, and a half-opaque one about half its color.
+#[cfg(feature = "egui")]
+#[test]
+fn gui_textures_blend_as_egui_does() {
+    use wingine::{Game, WindowConfig, graphics::Canvas, gui::egui, headless::Simulation};
+
+    struct Shown {
+        texture: Texture,
+    }
+    impl Game for Shown {
+        fn gui(&mut self, ctx: &mut Context, ui: &mut egui::Ui) {
+            let shown = ctx.gui_texture(&self.texture);
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(32.0, 16.0));
+            let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
+            ui.painter().image(shown.id, rect, uv, egui::Color32::WHITE);
+        }
+
+        fn draw(&mut self, canvas: &mut Canvas) {
+            canvas.clear(Color::BLACK);
+        }
+    }
+
+    let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join("gui_textures");
+    fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("texels.png");
+    let mut texels = RgbaImage::new(2, 1);
+    texels.put_pixel(0, 0, image::Rgba([255, 255, 255, 0]));
+    texels.put_pixel(1, 0, image::Rgba([255, 0, 0, 128]));
+    texels.save(&path).unwrap();
+    let config = WindowConfig {
+        width: 32,
+        height: 16,
+        ..Default::default()
+    };
+    let mut simulation = Simulation::new(&config, |ctx| {
+        Ok(Shown {
+            texture: ctx.load_texture(&path)?,
+        })
+    })
+    .expect("a GPU adapter is available");
+    simulation.run_frames(1);
+    let frame = simulation.screenshot().unwrap();
+    assert_eq!(frame.pixel(8, 8)[..3], [0, 0, 0], "the clear texel");
+    // Half of red's light, which is about three quarters of its sRGB.
+    let [r, g, b, _] = frame.pixel(24, 8);
+    assert!(
+        (180..=196).contains(&r) && g == 0 && b == 0,
+        "{r}, {g}, {b}"
+    );
 }
 
 fn headless() -> Headless {

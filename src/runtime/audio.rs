@@ -63,10 +63,15 @@ pub(super) fn module(lua: &Lua, lent: &Lent, folder: &Path) -> mlua::Result<Tabl
     Ok(audio)
 }
 
-/// A function setting a volume with `set`.
+/// A function setting a volume with `set`, which fails for a volume that isn't a number.
 fn volume_setter(lua: &Lua, lent: &Lent, set: fn(&mut Audio, f32)) -> mlua::Result<Function> {
     let lent = lent.clone();
-    lua.create_function(move |_, volume: f32| lent.context(|ctx| set(ctx.audio(), volume)))
+    lua.create_function(move |_, volume: f32| {
+        if let Some(problem) = setting_problem("volume", volume) {
+            return Err(mlua::Error::runtime(problem));
+        }
+        lent.context(|ctx| set(ctx.audio(), volume))
+    })
 }
 
 /// A function doing `act` over a fade of seconds it takes, 0 if it's left out.

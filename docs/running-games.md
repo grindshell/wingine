@@ -502,7 +502,9 @@ shortcuts to it, as its window does.
 Zip the folder and ship it. It runs on the platform it was exported on, so export on each one the
 game ships for, with any [native libraries](native-libraries.md) the game loads built there in
 its `native` folder; `export` warns about a library the game needs that isn't. An export goes into
-a new or empty folder, never over anything.
+a new or empty folder, never over anything. A game whose identity is `game` or `licenses` can't be
+exported, since its executable would have the name of a folder beside it; a link in the game's
+folder back to a folder it's in isn't copied, and `export` warns about it.
 
 `licenses/` holds wingine's licenses, which a game built on it ships, and
 `THIRD-PARTY-NOTICES.txt`, those of the crates wingine is built of, copied from beside the

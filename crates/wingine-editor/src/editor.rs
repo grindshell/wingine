@@ -9,6 +9,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     rc::Rc,
+    time::Duration,
 };
 
 use wingine::{
@@ -40,6 +41,9 @@ use crate::{
 
 /// How often the editor looks again for a game that has closed its output to end, in seconds.
 const ENDING_CHECK_TIME: f32 = 0.05;
+
+/// The longest the editor waits for the last of what a game that's ended printed to be read.
+const LAST_OUTPUT_TIME: Duration = Duration::from_millis(500);
 
 /// The big views in the middle of the editor, switched between at the top.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -362,13 +366,20 @@ impl Editor {
     pub fn stop(&mut self) {
         if let Some(mut play) = self.play.take() {
             play.stop();
-            self.take_play_output(&mut play);
+            self.take_last_play_output(&mut play);
             self.output.push(Level::Info, "Stopped the game.");
         }
     }
 
     fn take_play_output(&mut self, play: &mut Play) {
         for line in play.lines() {
+            self.output.push_game_line(line);
+        }
+    }
+
+    /// Takes what a game that's ended printed, the last of it still being read too.
+    fn take_last_play_output(&mut self, play: &mut Play) {
+        for line in play.last_lines(LAST_OUTPUT_TIME) {
             self.output.push_game_line(line);
         }
     }
@@ -1027,6 +1038,7 @@ impl Game for Editor {
             self.take_play_output(&mut play);
             match play.exited() {
                 Some(status) => {
+                    self.take_last_play_output(&mut play);
                     let message = match status.code() {
                         Some(0) => "The game ended.".to_owned(),
                         Some(code) => format!("The game ended with code {code}."),

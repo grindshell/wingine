@@ -182,8 +182,8 @@ impl Inspector {
                     ui.end_row();
                     ui.label("tile size");
                     ui.horizontal(|ui| {
-                        ui.add(egui::DragValue::new(&mut sheet.tile_width).range(1..=4096));
-                        ui.add(egui::DragValue::new(&mut sheet.tile_height).range(1..=4096));
+                        ui.add(ranged(&mut sheet.tile_width, 1..=4096));
+                        ui.add(ranged(&mut sheet.tile_height, 1..=4096));
                     });
                     ui.end_row();
                 });
@@ -536,11 +536,7 @@ impl Inspector {
                     font_choice(ui, &mut text.font, services.fonts);
                     ui.end_row();
                     over.label(ui, "font scale", &["font_scale"]);
-                    ui.add(
-                        egui::DragValue::new(&mut text.font_scale)
-                            .speed(0.05)
-                            .range(0.1..=64.0),
-                    );
+                    ui.add(ranged(&mut text.font_scale, 0.1..=64.0).speed(0.05));
                     ui.end_row();
                     over.label(ui, "wrap", &["wrap"]);
                     ui.horizontal(|ui| {
@@ -549,7 +545,7 @@ impl Inspector {
                             text.wrap = wraps.then_some(100.0);
                         }
                         if let Some(wrap) = &mut text.wrap {
-                            ui.add(egui::DragValue::new(wrap).range(1.0..=f32::MAX));
+                            ui.add(ranged(wrap, 1.0..=f32::MAX));
                         }
                     });
                     ui.end_row();
@@ -592,10 +588,10 @@ impl Inspector {
                     file_choice(ui, "tileset", &mut map.tileset, services.tilesets);
                     ui.end_row();
                     over.label(ui, "columns", &["columns"]);
-                    ui.add(egui::DragValue::new(&mut map.columns).range(1..=4096));
+                    ui.add(ranged(&mut map.columns, 1..=4096));
                     ui.end_row();
                     over.label(ui, "rows", &["rows"]);
-                    ui.add(egui::DragValue::new(&mut map.rows).range(1..=4096));
+                    ui.add(ranged(&mut map.rows, 1..=4096));
                     ui.end_row();
                 });
             }),
@@ -954,7 +950,7 @@ fn particle_fields(ui: &mut egui::Ui, settings: &mut ParticleSettings, over: &mu
     settings.rate = settings.rate.max(0.0);
     ui.end_row();
     over.label(ui, "limit", &["limit"]);
-    ui.add(egui::DragValue::new(&mut settings.limit).range(1..=100_000));
+    ui.add(ranged(&mut settings.limit, 1..=100_000));
     ui.end_row();
     over.label(ui, "warmup", &["warmup"]);
     number(ui, "warmup", &mut settings.warmup, 0.05);
@@ -1376,6 +1372,17 @@ fn grid(ui: &mut egui::Ui, id: impl egui::AsIdSalt, add_contents: impl FnOnce(&m
         .show(ui, add_contents);
 }
 
+/// A field for a number that drags and is typed within `range`. A value outside it, as a file
+/// may have, stays as it is until it's changed, rather than changing the file just by showing it.
+fn ranged<Num: egui::emath::Numeric>(
+    value: &mut Num,
+    range: std::ops::RangeInclusive<Num>,
+) -> egui::DragValue<'_> {
+    egui::DragValue::new(value)
+        .range(range)
+        .clamp_existing_to_range(false)
+}
+
 /// A field for a number, named `name` for screen readers and tests as its label names it on
 /// screen: egui doesn't carry a label's text over to what it labels.
 fn number(ui: &mut egui::Ui, name: &str, value: &mut f32, speed: f32) -> egui::Response {
@@ -1425,7 +1432,7 @@ fn transform(ui: &mut egui::Ui, node: &mut NodeDef, over: &mut Marks) {
             }
             if let Some(anchor) = &mut node.anchor {
                 for value in anchor {
-                    ui.add(egui::DragValue::new(value).speed(0.01).range(0.0..=1.0));
+                    ui.add(ranged(value, 0.0..=1.0).speed(0.01));
                 }
             }
         });

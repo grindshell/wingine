@@ -3,6 +3,7 @@
 
 use std::{
     f32::consts::FRAC_PI_2,
+    ffi::OsStr,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -27,6 +28,7 @@ use wingine_editor::{
     edit,
     editor::{BottomTab, MainScreen},
     lsp::{self, Severity},
+    play::Play,
     project::AssetCache,
     viewport::Tool,
 };
@@ -576,6 +578,50 @@ fn painting_a_tile_layer_in_strokes() {
     assert!(!simulation.game().document().unwrap().is_dirty());
 }
 
+/// A stroke whose layer stops being selected while it's painted ends there, rather than drawing a
+/// line from its last cell when the layer is painted again.
+#[test]
+fn strokes_end_when_their_layer_is_deselected() {
+    let mut simulation = village("stroke_deselected");
+    choose_tile(&mut simulation, "water");
+    let [x, y] = cell_middle(&simulation, [2, 1]);
+    simulation.move_mouse(x, y);
+    simulation.mouse_down(MouseButton::Left);
+    simulation.step();
+    assert_eq!(floor_cell(&simulation, [2, 1]).as_deref(), Some("water"));
+    simulation.tap(Key::Escape);
+    simulation.step();
+    assert_eq!(simulation.game().document().unwrap().selected, None);
+    // Let go off the viewport, so it's no click that selects.
+    simulation.move_mouse(4.0, 4.0);
+    simulation.step();
+    simulation.mouse_up(MouseButton::Left);
+    simulation.run_frames(2);
+    assert_eq!(simulation.game().document().unwrap().selected, None);
+
+    // Selected again as it's pressed, in the same frame.
+    let path = edit::path_of(file(&simulation), "map/floor");
+    simulation
+        .game_mut()
+        .document_mut()
+        .unwrap()
+        .select(Some(path));
+    let [x, y] = cell_middle(&simulation, [6, 1]);
+    simulation.move_mouse(x, y);
+    simulation.mouse_down(MouseButton::Left);
+    simulation.step();
+    simulation.mouse_up(MouseButton::Left);
+    simulation.run_frames(2);
+    assert_eq!(floor_cell(&simulation, [6, 1]).as_deref(), Some("water"));
+    for column in 3..=5 {
+        assert_eq!(
+            floor_cell(&simulation, [column, 1]).as_deref(),
+            Some("grass"),
+            "column {column}"
+        );
+    }
+}
+
 #[test]
 fn filling_rectangles_and_regions_of_tiles() {
     let mut simulation = village("filling");
@@ -1116,6 +1162,27 @@ fn model_files_dropped_in_a_view_are_placed_on_the_ground() {
     assert!(!view.children.iter().any(|child| child.name == "barrel"));
 }
 
+/// The Inspector's fields drag only within their ranges, but showing a value outside one, as a
+/// file may hold, leaves it as it is.
+#[test]
+fn showing_a_node_changes_nothing() {
+    let folder = copy_of("garden", "showing_changes_nothing");
+    let odd = "return { format = 4, children = { \
+               { name = 'flag', kind = 'rect', anchor = { 1.5, 0 }, width = 8, height = 4 }, \
+               { name = 'sign', kind = 'text', text = 'Hi', font_scale = 100 } } }";
+    fs::write(folder.join("odd.scene.luau"), odd).unwrap();
+    let mut simulation = editor(Some(folder));
+    simulation.game_mut().open_scene("odd.scene.luau").unwrap();
+    simulation.run_frames(2);
+    for names in ["flag", "sign"] {
+        select(&mut simulation, names);
+        simulation.run_frames(2);
+        let document = simulation.game().document().unwrap();
+        assert!(!document.is_dirty() && !document.can_undo(), "{names}");
+    }
+    assert_eq!(node(&simulation, "flag").anchor, Some([1.5, 0.0]));
+}
+
 #[test]
 fn scenes_that_cannot_go_in_a_view_are_refused() {
     let folder = copy_of("cellar", "scenes_refused");
@@ -1554,6 +1621,17 @@ fn keys_move_and_go_on_the_timeline() {
     simulation.run_frames(2);
     assert_eq!(times(&simulation), [start[0], start[2]]);
 
+    // A key selected where undo puts another back is forgotten, not left on the other.
+    simulation.click_gui("face:cell key 2");
+    simulation.step();
+    assert_eq!(simulation.game().animation().selected_key(), Some((0, 1)));
+    control(&mut simulation, Key::Z);
+    simulation.step();
+    assert_eq!(times(&simulation), [start[0], 2.0, start[2]]);
+    assert_eq!(simulation.game().animation().selected_key(), None);
+    control(&mut simulation, Key::Y);
+    assert_eq!(times(&simulation), [start[0], start[2]]);
+
     // Over the timeline, Delete takes out the selected key rather than the selected node.
     select(&mut simulation, "hips/body/head/face");
     simulation.click_gui("face:cell key 2");
@@ -1754,6 +1832,35 @@ fn playing_runs_the_game_in_its_own_process() {
     );
 }
 
+/// Everything a game prints as it ends is read, though it ends before the editor reads it.
+#[test]
+fn the_last_lines_a_game_prints_are_read() {
+    let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join("editor/last_lines");
+    fs::create_dir_all(&folder).unwrap();
+    let main = "for i = 1, 500 do print(`line {i}`) end\n";
+    fs::write(folder.join("main.luau"), main).unwrap();
+    // Run headless, as long as it takes to start.
+    let script = folder.join("run.txt");
+    fs::write(&script, "wait 0.01s\n").unwrap();
+    let waker = Headless::new().unwrap().context().waker();
+    let mut play = Play::start(
+        Path::new(env!("CARGO_BIN_EXE_wingine-editor")),
+        &folder,
+        [(OsStr::new("WINGINE_SCRIPT"), script.as_os_str())],
+        waker,
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while play.exited().is_none() {
+        assert!(Instant::now() < deadline, "the game never ended");
+        thread::sleep(Duration::from_millis(10));
+    }
+    let lines = play.last_lines(Duration::from_secs(5));
+    let printed = lines.iter().filter(|line| line.contains("line ")).count();
+    assert_eq!(printed, 500, "{lines:?}");
+    assert!(play.is_closed());
+}
+
 #[test]
 fn the_editor_runs_frames_only_when_something_changes() {
     let mut simulation = garden(examples().join("garden"));
@@ -1947,6 +2054,16 @@ fn luau_lsp_checks_scripts_as_they_are_typed() {
     });
     let hover = simulation.game().scripts().hover_text().unwrap();
     assert!(hover.contains("default_font(): Font"), "{hover}");
+    // A keyword the server says nothing about isn't asked about again and again.
+    let at = main.find("local").unwrap() + 2;
+    let [x, y] = simulation.game().scripts().screen_pos(at).unwrap();
+    simulation.move_mouse(x, y);
+    simulation.run_frames(1);
+    wait_for(&mut simulation, "the keyword's hover", |editor| {
+        editor.scripts().hover_answered()
+    });
+    assert_eq!(simulation.game().scripts().hover_text(), None);
+    settle(&mut simulation);
     simulation.move_mouse(1.0, 1.0);
 
     // Typing a field of the engine's tables offers them, narrowed as more is typed.

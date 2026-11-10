@@ -195,6 +195,9 @@ pub struct World {
     /// The colliders added or moved since the last step, which Rapier's queries don't find where
     /// they are until they're refreshed.
     fresh: Vec<ColliderHandle>,
+    /// Whether colliders have been removed since the last step, which Rapier remembers until it
+    /// steps or detects collisions.
+    removed: bool,
     /// How long the last step was, which characters take to have been how long their walks took,
     /// for how fast they push what they walk into and how far what they stand on carries them.
     last_step: f32,
@@ -215,6 +218,7 @@ impl World {
         Self {
             rapier,
             fresh: Vec::new(),
+            removed: false,
             last_step: STEP,
         }
     }
@@ -523,8 +527,13 @@ impl World {
     ///
     /// Rapier catches up with them as it steps, and its `detect_collisions` would before then,
     /// but that forgets bodies added since its last step as the step that follows looks for them,
-    /// so it never simulates them.
+    /// so it never simulates them. A world without bodies, which only answers queries and may
+    /// never step, does detect collisions once colliders have been removed, so Rapier forgets them.
     fn refresh(&mut self) {
+        if self.removed && self.rapier.bodies.is_empty() {
+            self.rapier.detect_collisions(&(), &());
+            self.removed = false;
+        }
         for handle in self.fresh.drain(..) {
             let Some(collider) = self.rapier.colliders.get_mut(handle) else {
                 continue;
@@ -590,6 +599,7 @@ impl World {
             self.rapier.step();
         }
         self.fresh.clear();
+        self.removed = false;
         self.last_step = dt;
     }
 
@@ -800,6 +810,7 @@ impl World {
                 self.rapier.remove_collider(id.0);
             }
         }
+        self.removed = true;
     }
 
     /// How many colliders there are.
@@ -1912,6 +1923,31 @@ mod tests {
         let wall = world.add(Affine::IDENTITY, small_box(0.0, 0.0), Solid::Whole);
         assert_eq!((world.pose(wall), world.velocity(wall)), (None, [0.0; 2]));
         assert!(world.is_resting(wall));
+    }
+
+    #[test]
+    fn worlds_that_never_step_forget_what_they_remove() {
+        // Only queried, as a scene seen from above is, with colliders coming and going.
+        let mut world = World::new();
+        let keep = world.add(Affine::IDENTITY, small_box(0.0, 0.0), Solid::Whole);
+        for round in 0..3 {
+            let added: Vec<ColliderId> = (0..50)
+                .map(|i| {
+                    world.add(
+                        Affine::IDENTITY,
+                        small_box(i as f32 * 4.0, 8.0),
+                        Solid::Whole,
+                    )
+                })
+                .collect();
+            for id in added {
+                world.remove(id);
+            }
+            let found =
+                world.overlapping(Affine::IDENTITY, Rect::new(-1.0, -1.0, 400.0, 20.0), &[]);
+            assert_eq!(found, [keep], "round {round}");
+            assert!(world.rapier.colliders.take_removed().is_empty());
+        }
     }
 
     #[test]

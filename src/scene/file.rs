@@ -231,6 +231,8 @@ pub(super) fn override_node(
                     old.extend(props.clone());
                 }
             }
+            // An empty table reads as a list, and changes no props.
+            ("props", Value::List(items)) if items.is_empty() => {}
             _ => {
                 fields.insert(field.clone(), value.clone());
             }

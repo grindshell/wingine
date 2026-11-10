@@ -38,6 +38,8 @@ const LICENSE_APACHE: &str = include_str!("../../LICENSE-APACHE");
 const NOTICES: &str = "THIRD-PARTY-NOTICES.txt";
 /// The end of the names of tests' files, which don't ship.
 const TEST_SUFFIX: &str = ".test.luau";
+/// The folder of licenses beside the executable.
+const LICENSES_FOLDER: &str = "licenses";
 
 /// What [`export`] made.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,7 +58,8 @@ pub struct Exported {
 /// `executable`, a wingine, which is usually the one running (`std::env::current_exe()`).
 ///
 /// It fails without writing anything if the game's `conf.luau` doesn't read, it has no
-/// `main.luau`, or `out` exists and isn't an empty folder.
+/// `main.luau`, its identity is `game` or `licenses`, which would name the executable as a folder
+/// beside it, or `out` exists and isn't an empty folder.
 pub fn export(
     game: impl AsRef<Path>,
     out: impl AsRef<Path>,
@@ -71,6 +74,18 @@ pub fn export(
     if !game.join("main.luau").is_file() {
         return Err(refuse("it has no main.luau".into()));
     }
+    // The executable is named by the identity, beside these folders, which it can't share a name
+    // with where executables have no `.exe`, nor where names differ only by case.
+    let identity = &config.window.identity;
+    if let Some(folder) = [SHIPPED_FOLDER, LICENSES_FOLDER]
+        .into_iter()
+        .find(|folder| identity.eq_ignore_ascii_case(folder))
+    {
+        return Err(refuse(format!(
+            "its identity, `{identity}`, would name its executable as the `{folder}` folder beside \
+             it: give it another in conf.luau"
+        )));
+    }
     let occupied = match fs::read_dir(out) {
         Ok(mut entries) => entries.next().is_some(),
         Err(_) => out.exists(),
@@ -84,10 +99,16 @@ pub fn export(
     }
 
     fs::create_dir_all(out).map_err(|source| write_error(out, source))?;
-    // The export may be inside the game's folder, which mustn't copy itself.
-    let skip = fs::canonicalize(out).map_err(|source| read_error(out, source))?;
-    let mut files = 0;
-    copy_game(game, &out.join(SHIPPED_FOLDER), &skip, &mut files)?;
+    let mut warnings = Vec::new();
+    let mut copying = Copying {
+        // The export may be inside the game's folder, which mustn't copy itself.
+        skip: fs::canonicalize(out).map_err(|source| read_error(out, source))?,
+        within: vec![fs::canonicalize(game).map_err(|source| read_error(game, source))?],
+        files: 0,
+        warnings: &mut warnings,
+    };
+    copy_game(game, &out.join(SHIPPED_FOLDER), &mut copying)?;
+    let files = copying.files;
 
     let name = format!("{}{}", config.window.identity, std::env::consts::EXE_SUFFIX);
     let copied = out.join(name);
@@ -109,8 +130,7 @@ pub fn export(
         }
     }
 
-    let mut warnings = Vec::new();
-    let licenses = out.join("licenses");
+    let licenses = out.join(LICENSES_FOLDER);
     fs::create_dir_all(&licenses).map_err(|source| write_error(&licenses, source))?;
     for (name, text) in [
         ("wingine-MIT.txt", LICENSE_MIT),
@@ -155,9 +175,21 @@ pub fn export(
     })
 }
 
-/// Copies the game's folder `from` to `to`, but for hidden files and folders, tests, and `skip`,
-/// counting the files in `files`.
-fn copy_game(from: &Path, to: &Path, skip: &Path, files: &mut usize) -> Result<()> {
+/// Where copying a game's folder has got to.
+struct Copying<'a> {
+    /// The export, canonical, if it's inside the game's folder.
+    skip: PathBuf,
+    /// The folders being copied, canonical, outermost first: a link inside one leading back to
+    /// one would copy it forever.
+    within: Vec<PathBuf>,
+    /// How many files it's copied.
+    files: usize,
+    warnings: &'a mut Vec<String>,
+}
+
+/// Copies the game's folder `from` to `to`, but for hidden files and folders, tests, the export,
+/// and links back to a folder being copied.
+fn copy_game(from: &Path, to: &Path, copying: &mut Copying) -> Result<()> {
     fs::create_dir_all(to).map_err(|source| write_error(to, source))?;
     let entries = fs::read_dir(from).map_err(|source| read_error(from, source))?;
     for entry in entries {
@@ -170,14 +202,24 @@ fn copy_game(from: &Path, to: &Path, skip: &Path, files: &mut usize) -> Result<(
         let path = entry.path();
         let metadata = fs::metadata(&path).map_err(|source| read_error(&path, source))?;
         if metadata.is_dir() {
-            if fs::canonicalize(&path).is_ok_and(|canonical| canonical == skip) {
+            let canonical = fs::canonicalize(&path).map_err(|source| read_error(&path, source))?;
+            if canonical == copying.skip {
                 continue;
             }
-            copy_game(&path, &to.join(&name), skip, files)?;
+            if copying.within.contains(&canonical) {
+                copying.warnings.push(format!(
+                    "{} links to a folder it's in, so it wasn't copied",
+                    path.display()
+                ));
+                continue;
+            }
+            copying.within.push(canonical);
+            copy_game(&path, &to.join(&name), copying)?;
+            copying.within.pop();
         } else if metadata.is_file() {
             let copy = to.join(&name);
             fs::copy(&path, &copy).map_err(|source| write_error(&copy, source))?;
-            *files += 1;
+            copying.files += 1;
         }
     }
     Ok(())
@@ -585,6 +627,40 @@ mod tests {
         let err = export(game.path(), &out, &executable).unwrap_err();
         assert!(err.to_string().contains("isn't an empty folder"), "{err}");
         assert_eq!(files_in(&out), ["old.txt"]);
+
+        // An executable can't be named as the folders beside it, whatever their case.
+        for (identity, folder) in [("game", "game"), ("Licenses", "licenses")] {
+            let conf = format!("return {{ identity = '{identity}' }}");
+            let game = self::game(&[("main.luau", ""), ("conf.luau", &conf)]);
+            let out = game.path().join("out");
+            let err = export(game.path(), &out, &executable).unwrap_err();
+            let expected = format!("would name its executable as the `{folder}` folder");
+            assert!(err.to_string().contains(&expected), "{err}");
+            assert!(!out.exists(), "nothing is written");
+        }
+    }
+
+    #[test]
+    fn exports_copy_no_link_back_to_a_folder_they_copy() {
+        let game = game(&[("main.luau", ""), ("art/hero.png", "")]);
+        let link = game.path().join("art/all");
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(game.path(), &link);
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(game.path(), &link);
+        if let Err(err) = linked {
+            // Windows makes links only for administrators, or in developer mode.
+            eprintln!("couldn't make a link to test: {err}");
+            return;
+        }
+        let out = TemporaryFolder::new();
+        let out = out.path().join("out");
+        let exported = export(game.path(), &out, std::env::current_exe().unwrap()).unwrap();
+        assert_eq!(exported.files, 2);
+        assert!(out.join("game/art/hero.png").is_file());
+        assert!(!out.join("game/art/all").exists());
+        let warnings = exported.warnings.join("\n");
+        assert!(warnings.contains("links to a folder it's in"), "{warnings}");
     }
 
     #[test]

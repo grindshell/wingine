@@ -164,7 +164,9 @@ pub enum Redraw {
     /// egui asks (as its animations and blinking text cursors do), and when the game asks, with
     /// [`Context::request_redraw`] and [`Context::request_redraw_after`], or from another thread
     /// with a [`Waker`]. Gamepads don't ask for frames: they're read in the frames that come. The
-    /// first frame after a pause updates by its whole time, a quarter second at most.
+    /// first frame after a pause updates by its whole time, a quarter second at most. With an
+    /// [update rate](WindowConfig::update_rate), a frame too soon after the last for an update
+    /// asks for another when one falls due, so the game still sees what the frame came for.
     OnDemand,
 }
 
@@ -246,7 +248,7 @@ impl fmt::Debug for Waker {
 /// # Panics
 ///
 /// If `config` has an update rate that isn't above 0, or an identity that isn't letters, digits,
-/// `_` and `-`.
+/// `_` and `-`, or is a name Windows keeps for a device, such as `con`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run<G, F>(config: WindowConfig, init: F) -> Result<()>
 where
@@ -275,7 +277,7 @@ where
 /// # Panics
 ///
 /// If `config` has an update rate that isn't above 0, or an identity that isn't letters, digits,
-/// `_` and `-`.
+/// `_` and `-`, or is a name Windows keeps for a device, such as `con`.
 #[cfg(target_arch = "wasm32")]
 pub fn run<G, F>(config: WindowConfig, init: F) -> Result<()>
 where
@@ -315,6 +317,14 @@ pub(crate) fn run_frame(
 ) -> FrameStats {
     ctx.canvas_size = canvas_size;
     let (updates, dt) = timestep.updates(elapsed);
+    // With an update rate, a frame may come too soon after the last for an update, as one a window
+    // that redraws on demand runs for input may: another comes when one's due, so the game sees
+    // what this one was for without waiting for more.
+    if updates == 0
+        && let Some(wait) = timestep.until_next()
+    {
+        ctx.redraws.request_after(wait);
+    }
     let mut update = 0.0;
     for _ in 0..updates {
         let start = Instant::now();
@@ -396,6 +406,12 @@ impl Timestep {
         let updates = (self.carried / step).floor();
         self.carried -= updates * step;
         (updates as u32, step as f32)
+    }
+
+    /// How long until the next update falls due, with a fixed rate.
+    pub(crate) fn until_next(&self) -> Option<Duration> {
+        let step = self.step?;
+        Duration::try_from_secs_f64((step - self.carried).max(0.0)).ok()
     }
 }
 

@@ -273,5 +273,7 @@ audio.set_music_volume(volume: number)
 
 Sets the volume of music, apart from sound effects.
 
+A volume that isn't a number, such as `math.huge`, is an error for each of the three.
+
 Each sound's own volume multiplies with its track's and the overall volume: a sound played at
 `volume = 0.5`, with sound effects at 0.5, plays at a quarter of its amplitude.
