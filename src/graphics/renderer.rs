@@ -63,6 +63,8 @@ pub(crate) struct Renderer {
     index_buffer: wgpu::Buffer,
     index_quads: u32,
     meshes: MeshRenderer,
+    /// Where each of the canvas's 3D views is on the target, if anywhere, worked out each frame.
+    viewports: Vec<Option<Viewport>>,
 }
 
 /// What draws the meshes of 3D views.
@@ -81,6 +83,8 @@ struct MeshRenderer {
     depth_textures: Vec<DepthTexture>,
     /// The quad billboards are drawn as.
     billboard: Mesh,
+    /// Each view's [`ViewUniform`], as they're uploaded.
+    views: Vec<u8>,
     /// What works out the order each view's meshes draw in, as they're uploaded.
     order: MeshOrder,
     /// The instances, in the order they draw, as they're uploaded.
@@ -234,6 +238,7 @@ impl Renderer {
             index_buffer: create_index_buffer(device, INITIAL_QUADS),
             index_quads: INITIAL_QUADS,
             meshes,
+            viewports: Vec::new(),
         }
     }
 
@@ -411,18 +416,16 @@ impl Renderer {
             }
         }
         let canvas_size = [canvas.width(), canvas.height()];
-        let viewports: Vec<Option<Viewport>> = canvas
-            .segments
-            .iter()
-            .map(|segment| {
-                (!segment.draws.is_empty())
-                    .then(|| Viewport::new(segment.view.rect, canvas_size, target_size))
-                    .flatten()
-            })
-            .collect();
+        self.viewports.clear();
+        self.viewports.extend(canvas.segments.iter().map(|segment| {
+            (!segment.draws.is_empty())
+                .then(|| Viewport::new(segment.view.rect, canvas_size, target_size))
+                .flatten()
+        }));
+        let viewports = &self.viewports;
         let has_3d = viewports.iter().any(Option::is_some);
         if has_3d {
-            self.meshes.upload(device, queue, canvas, &viewports);
+            self.meshes.upload(device, queue, canvas, viewports);
         }
         let depth = has_3d.then(|| self.meshes.depth_view(device, target_size));
 
@@ -432,7 +435,7 @@ impl Renderer {
         });
         let mut load = wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a });
         let mut first_batch = 0;
-        for (index, (segment, viewport)) in canvas.segments.iter().zip(&viewports).enumerate() {
+        for (index, (segment, viewport)) in canvas.segments.iter().zip(viewports).enumerate() {
             let (Some(viewport), Some(depth)) = (viewport, &depth) else {
                 continue;
             };
@@ -625,6 +628,7 @@ impl MeshRenderer {
             instance_buffer,
             depth_textures: Vec::new(),
             billboard: Mesh::new(device, &MeshData::billboard()).expect("a quad can be drawn"),
+            views: Vec::new(),
             order: MeshOrder::default(),
             instances: Vec::new(),
             runs: Vec::new(),
@@ -642,7 +646,9 @@ impl MeshRenderer {
         viewports: &[Option<Viewport>],
     ) {
         let stride = self.view_stride as usize;
-        let mut views = vec![0; stride * viewports.len()];
+        let views = &mut self.views;
+        views.clear();
+        views.resize(stride * viewports.len(), 0);
         for (index, (segment, viewport)) in canvas.segments.iter().zip(viewports).enumerate() {
             let Some(viewport) = viewport else {
                 continue;
@@ -653,12 +659,12 @@ impl MeshRenderer {
                 .copy_from_slice(bytemuck::bytes_of(&uniform));
         }
         let size = self.views_buffer.size();
-        ensure_capacity(device, &mut self.views_buffer, "3d views", views.len());
+        ensure_capacity(device, &mut self.views_buffer, "3d views", self.views.len());
         if self.views_buffer.size() != size {
             self.views_bind_group =
                 views_bind_group(device, &self.views_layout, &self.views_buffer);
         }
-        queue.write_buffer(&self.views_buffer, 0, &views);
+        queue.write_buffer(&self.views_buffer, 0, &self.views);
 
         // Each view's draws of a kind together, so they're one draw call. Until a view's draws
         // aren't in order already, the canvas's instances are uploaded as they are.

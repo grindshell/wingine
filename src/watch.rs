@@ -71,7 +71,7 @@ fn fingerprint(folder: &Path) -> u64 {
             .filter_map(Result::ok)
             .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
             .collect();
-        entries.sort_by_key(fs::DirEntry::file_name);
+        entries.sort_by_cached_key(fs::DirEntry::file_name);
         for entry in entries {
             let Ok(meta) = entry.metadata() else {
                 continue;

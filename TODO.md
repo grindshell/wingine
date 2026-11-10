@@ -7,21 +7,19 @@ reviewer but not checked again.
 
 ## Performance
 
-Measure before and after with `cargo bench` (`--bench drawing`, `--bench physics` or
-`--bench scenes`) or the shmup's benchmark, as AGENTS.md asks, on the forge.
+The review's list is done. Two of its items were measured and left as they were, since the
+changes it suggested measured no quicker. Measure any change to them with `cargo bench`
+(`--bench drawing`, `physics`, `scenes` or `scripts`), as AGENTS.md asks, on the forge.
 
-- **Measured and left:** `Scene::pose` was said to repeat work per track (texture handles cloned
-  for every cell key, each number track's libm transform). On the orchard's picker it takes about
-  45 ns a track (0.43-0.47 us a pose in `--bench scenes`), and checking only the cell set at
+- [ ] **`Scene::pose`** was said to repeat work per track: texture handles cloned for every cell
+  key, and each number track's transform worked out with libm. On the orchard's picker it takes
+  about 45 ns a track (0.43-0.47 us a pose in `--bench scenes`), and checking only the cell set at
   `time` and updating each node once measured no quicker. Should posing ever show in a profile,
   finding each track's node by its path, every pose, is the likelier cost.
-- [ ] **Native method calls cost two callbacks.** `__index` on native objects
-  (`runtime/native.rs`) does a `HashMap` lookup and a `Table` clone per call. Keep the class's
-  method table in `NativeObject`.
-- [ ] **Waiting tasks resume every frame.** `wait` (`src/lua.rs`) yields and is resumed each
-  update to check its time. Have the scheduler count it down and resume only when due, in `f64`,
-  so results stay the same.
-- [ ] **Small allocations:** screenshot readback copies byte by byte (`src/headless.rs`; copy a
-  row at a time), `Watcher` sorts by `file_name` allocating each comparison (`src/watch.rs`; use
-  `sort_by_cached_key`), and `Renderer::render` allocates its `viewports` and `views` each frame
-  with a 3D view (keep them on `Renderer`).
+- [ ] **Native methods cost two callbacks.** A method call costs about 300 ns more than a function
+  call (`--bench drawing`: 540-600 ns against 250-270), which is mlua calling `__index` on the
+  object (`runtime/native.rs`). Keeping the class's method table in `NativeObject`, rather than
+  looking it up, measured no quicker: the cost is the callback. mlua finds methods without one
+  through `__namecall`, but only those its `UserData` registers, and a library's classes are only
+  known as it registers. Making them as cheap as functions means objects of another make, such as
+  a metatable for each class, which is a change to how scripts see them: ask first.

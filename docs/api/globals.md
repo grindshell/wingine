@@ -118,7 +118,8 @@ wait(seconds: number?)
 
 Pauses the task for `seconds` of game time, then carries on. Without `seconds`, it waits for the
 next update. Waits are counted in updates, so a task waits a whole number of them: at 60 updates
-a second, `wait(0.5)` waits 30 updates.
+a second, `wait(0.5)` waits 30 updates. The engine counts the time, and the task doesn't run
+again until it's up, so thousands of tasks can wait at once for next to nothing.
 
 ### `wait_until`
 

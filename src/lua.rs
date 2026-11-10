@@ -2,8 +2,9 @@
 //!
 //! [`Scripts`] holds one Luau VM. A game registers Rust functions for scripts to call, loads its
 //! script files, and starts script functions as tasks. A task is a coroutine that
-//! [`Scripts::update`] resumes once a frame, so a script reads as a sequence of steps that can
-//! wait for time to pass or for something to happen, without holding up the game:
+//! [`Scripts::update`] resumes once a frame, or for one in a `wait`, once its time has passed, so a
+//! script reads as a sequence of steps that can wait for time to pass or for something to happen,
+//! without holding up the game:
 //!
 //! ```lua
 //! function open_gate()
@@ -242,7 +243,13 @@
 //!
 //! The engine re-exports [`mlua`], which games use to register functions and convert values.
 
-use std::{cell::RefCell, fmt, path::Path, rc::Rc, str::FromStr};
+use std::{
+    cell::{Cell, RefCell},
+    fmt,
+    path::Path,
+    rc::Rc,
+    str::FromStr,
+};
 
 pub use mlua;
 use mlua::{ErrorContext, FromLua, FromLuaMulti, IntoLua, IntoLuaMulti, thread::ThreadStatus};
@@ -272,14 +279,21 @@ mod physics;
 #[cfg(feature = "physics")]
 pub use physics::{PhysicsWorld, PhysicsWorld3d};
 
-/// Built-ins written in Luau, defined before the sandbox makes the globals read-only. Each frame,
-/// `update` resumes waiting tasks with the frame's duration, which `coroutine.yield` returns.
+/// Built-ins written in Luau, defined before the sandbox makes the globals read-only, given as
+/// `...` a function telling the scheduler the seconds of a `wait` that's beginning. Each frame,
+/// `update` resumes waiting tasks with the frame's duration, which `coroutine.yield` returns, but
+/// for those in a `wait`, which it resumes only once it's counted their seconds down.
 const PRELUDE: &str = r#"
+local begin_wait = ...
+
 function wait(seconds: number?)
-    local remaining = seconds or 0
-    repeat
-        remaining -= coroutine.yield()
-    until remaining <= 0
+    -- As arithmetic, so a time that isn't a number fails here, as it did when tasks counted it.
+    local seconds = (seconds or 0) - 0
+    -- None is only the next frame, as every yield waits.
+    if not (seconds <= 0) then
+        begin_wait(seconds)
+    end
+    coroutine.yield()
 end
 
 function wait_until(condition: () -> boolean)
@@ -314,7 +328,11 @@ pub struct Scripts {
     lua: mlua::Lua,
     tasks: Vec<Task>,
     next_task: u64,
+    began_wait: BeganWait,
 }
+
+/// The seconds of the `wait` a script began as it yielded, which whatever resumed it takes.
+type BeganWait = Rc<Cell<Option<f64>>>;
 
 /// Identifies a task started by [`Scripts::spawn`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -323,14 +341,37 @@ pub struct TaskId(u64);
 struct Task {
     id: TaskId,
     thread: mlua::Thread,
+    /// The seconds left of the `wait` it's in, if it's in one.
+    waiting: Option<f64>,
 }
 
-/// Tasks started by scripts with `spawn`, until `Scripts` adds them to its own, and the first
-/// error from one that failed before it first waited, until `Scripts::update` returns it.
+/// Tasks started by scripts with `spawn`, with the seconds they `wait` if they're in a `wait`,
+/// until `Scripts` adds them to its own, and the first error from one that failed before it first
+/// waited, until `Scripts::update` returns it.
 #[derive(Default)]
 struct Spawned {
-    threads: Vec<mlua::Thread>,
+    threads: Vec<(mlua::Thread, Option<f64>)>,
     error: Option<mlua::Error>,
+}
+
+/// Resumes the task `thread` with `args`, and returns the seconds of the `wait` it began as it
+/// yielded, if it began one, from `began_wait`.
+fn resume_task(
+    thread: &mlua::Thread,
+    began_wait: &Cell<Option<f64>>,
+    args: impl IntoLuaMulti,
+) -> mlua::Result<Option<f64>> {
+    // One begun outside a task, which failed to yield, isn't this one's.
+    began_wait.set(None);
+    thread.resume::<()>(args)?;
+    Ok(began_wait.take())
+}
+
+/// Counts `seconds` of game time off `left`, of a `wait`, as `wait` did in Luau's numbers when
+/// tasks counted it: whether it's done.
+pub(crate) fn count_down(left: &mut f64, seconds: f32) -> bool {
+    *left -= f64::from(seconds);
+    *left <= 0.0
 }
 
 impl Scripts {
@@ -340,17 +381,34 @@ impl Scripts {
         // Calls between Luau functions take half as long.
         lua.set_compiler(mlua::chunk::Compiler::new().set_optimization_level(2));
         lua.set_app_data(Spawned::default());
+        let began_wait = BeganWait::default();
         let globals = lua.globals();
         globals.set("print", lua.create_function(print)?)?;
-        globals.set("spawn", lua.create_function(spawn)?)?;
+        let began = Rc::clone(&began_wait);
+        let spawn = lua.create_function(move |lua, args| spawn(lua, &began, args))?;
+        globals.set("spawn", spawn)?;
         globals.set("exact", exact_math(&lua)?)?;
-        lua.load(PRELUDE).set_name("=prelude").exec()?;
+        let began = Rc::clone(&began_wait);
+        let begin_wait = lua.create_function(move |_, seconds: f64| {
+            began.set(Some(seconds));
+            Ok(())
+        })?;
+        lua.load(PRELUDE)
+            .set_name("=prelude")
+            .call::<()>(begin_wait)?;
         lua.sandbox(true)?;
         Ok(Self {
             lua,
             tasks: Vec::new(),
             next_task: 0,
+            began_wait,
         })
+    }
+
+    /// The seconds of the `wait` a script began as it last yielded, if it began one, for whatever
+    /// resumes scripts outside the tasks, as Luau tests do. Taking it forgets it.
+    pub(crate) fn take_wait(&self) -> Option<f64> {
+        self.began_wait.take()
     }
 
     /// The underlying VM, for registering tables and userdata or converting values.
@@ -415,11 +473,11 @@ impl Scripts {
     /// or finishes. [`Scripts::update`] resumes it from then on.
     pub fn spawn(&mut self, name: &str, args: impl IntoLuaMulti) -> Result<TaskId> {
         let thread = self.lua.create_thread(self.function(name)?)?;
-        let result = thread.resume::<()>(args);
+        let result = resume_task(&thread, &self.began_wait, args);
         // Whatever it spawned has run already, so it joins the other tasks even on an error.
         self.adopt_spawned();
-        result?;
-        Ok(self.add_task(thread))
+        let waiting = result?;
+        Ok(self.add_task(thread, waiting))
     }
 
     /// Resumes every waiting task with `dt` seconds of game time passed.
@@ -438,14 +496,25 @@ impl Scripts {
     /// adopted, which have just run until they first waited.
     pub(crate) fn resume_tasks(&mut self, dt: f32) -> Result<()> {
         let mut first_error = spawned(&self.lua).error.take();
-        self.tasks
-            .retain(|task| match task.thread.resume::<()>(dt) {
-                Ok(()) => task.thread.status() == ThreadStatus::Resumable,
+        let began_wait = &self.began_wait;
+        self.tasks.retain_mut(|task| {
+            // A task in a `wait` is resumed only once its time has passed.
+            if let Some(left) = &mut task.waiting
+                && !count_down(left, dt)
+            {
+                return true;
+            }
+            match resume_task(&task.thread, began_wait, dt) {
+                Ok(waiting) => {
+                    task.waiting = waiting;
+                    task.thread.status() == ThreadStatus::Resumable
+                }
                 Err(err) => {
                     first_error.get_or_insert(err);
                     false
                 }
-            });
+            }
+        });
         self.adopt_spawned();
         let first_error = first_error.or_else(|| spawned(&self.lua).error.take());
         first_error.map_or(Ok(()), |err| Err(err.into()))
@@ -478,11 +547,17 @@ impl Scripts {
         }
     }
 
-    fn add_task(&mut self, thread: mlua::Thread) -> TaskId {
+    /// Adds `thread` to the tasks, unless it's finished, `waiting` the seconds it waits if it's in
+    /// a `wait`.
+    fn add_task(&mut self, thread: mlua::Thread, waiting: Option<f64>) -> TaskId {
         let id = TaskId(self.next_task);
         self.next_task += 1;
         if thread.status() == ThreadStatus::Resumable {
-            self.tasks.push(Task { id, thread });
+            self.tasks.push(Task {
+                id,
+                thread,
+                waiting,
+            });
         }
         id
     }
@@ -491,8 +566,8 @@ impl Scripts {
     /// [`Scripts::resume_tasks`] on.
     pub(crate) fn adopt_spawned(&mut self) {
         let threads = std::mem::take(&mut spawned(&self.lua).threads);
-        for thread in threads {
-            self.add_task(thread);
+        for (thread, waiting) in threads {
+            self.add_task(thread, waiting);
         }
     }
 }
@@ -558,17 +633,20 @@ fn print(_: &mlua::Lua, values: mlua::Variadic<mlua::Value>) -> mlua::Result<()>
     Ok(())
 }
 
-/// The `spawn` built-in.
+/// The `spawn` built-in, which learns of `wait`s begun from `began_wait`.
 fn spawn(
     lua: &mlua::Lua,
+    began_wait: &Cell<Option<f64>>,
     (function, args): (mlua::Function, mlua::MultiValue),
 ) -> mlua::Result<()> {
     let thread = lua.create_thread(function)?;
-    let result = thread.resume::<()>(args);
+    let result = resume_task(&thread, began_wait, args);
     let mut spawned = spawned(lua);
     match result {
-        Ok(()) if thread.status() == ThreadStatus::Resumable => spawned.threads.push(thread),
-        Ok(()) => {}
+        Ok(waiting) if thread.status() == ThreadStatus::Resumable => {
+            spawned.threads.push((thread, waiting));
+        }
+        Ok(_) => {}
         // It stops like a task failing later would, rather than failing its caller.
         Err(err) => {
             spawned.error.get_or_insert(err);
@@ -1977,7 +2055,7 @@ pub(crate) fn parse_hex(text: &str) -> Option<Color> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, fs, rc::Rc};
+    use std::fs;
 
     use super::*;
 
@@ -2046,6 +2124,35 @@ mod tests {
         assert_eq!(count.get(), 0);
         scripts.update(FRAME).unwrap();
         assert_eq!(count.get(), 1, "after 30 frames");
+    }
+
+    #[test]
+    fn waiting_counts_frames_of_any_length_as_luau_would() {
+        let mut scripts = scripts("function run() wait(0.3) tick() end");
+        let count = counter(&scripts);
+        scripts.spawn("run", ()).unwrap();
+        // Counted in Luau's numbers, 0.3 less three of `f32`'s 0.1, a little over a tenth, is a
+        // little under 0, so it takes three.
+        for _ in 0..2 {
+            scripts.update(0.1).unwrap();
+        }
+        assert_eq!(count.get(), 0);
+        scripts.update(0.1).unwrap();
+        assert_eq!(count.get(), 1);
+    }
+
+    #[test]
+    fn only_wait_makes_a_task_wait_out_its_time() {
+        // Yielding a number itself waits a frame, as yielding anything does.
+        let mut yielding = scripts("function run() coroutine.yield(5) tick() end");
+        let count = counter(&yielding);
+        yielding.spawn("run", ()).unwrap();
+        yielding.update(FRAME).unwrap();
+        assert_eq!(count.get(), 1);
+
+        let mut late = scripts("function run() wait('soon') end");
+        let err = late.spawn("run", ()).unwrap_err();
+        assert!(err.to_string().contains("arithmetic"), "{err}");
     }
 
     #[test]

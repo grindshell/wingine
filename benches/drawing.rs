@@ -5,7 +5,11 @@
 //! the median time `draw` took over [`FRAMES`] frames, per sprite, from the frame stats. The last
 //! cases render the frames too, for what rendering that many quads, billboards and meshes costs.
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use wingine::{
     Context, FrameStats, Game, WindowConfig,
@@ -146,6 +150,10 @@ fn main() {
         luau("native-one", each("bench.draw_one(x, y)")),
     );
     report(
+        "Luau: a native object's method per sprite",
+        luau("native-method", each("pen:draw(x, y)")),
+    );
+    report(
         "Luau: an empty Luau function per sprite",
         luau("luau-call", each("nothing(sprite, x, y)")),
     );
@@ -175,10 +183,34 @@ fn main() {
             frame * 1000.0
         );
     }
+    // Tests and scripted runs read frames back, which a screenshot renders first.
+    let config = WindowConfig {
+        width: 1280,
+        height: 720,
+        ..Default::default()
+    };
+    let mut simulation =
+        Simulation::new(&config, |ctx| RustGame::load(ctx, &image, Shape::Sprite)).unwrap();
+    simulation.run_frames(WARMUP);
+    let mut times: Vec<Duration> = (0..SCREENSHOTS)
+        .map(|_| {
+            let start = Instant::now();
+            simulation.screenshot().unwrap();
+            start.elapsed()
+        })
+        .collect();
+    times.sort();
+    println!(
+        "Simulation::screenshot of a 1280 by 720 frame of {SPRITES} sprites: {:.3} ms",
+        times[times.len() / 2].as_secs_f64() * 1000.0
+    );
     if cfg!(debug_assertions) {
         println!("(a debug build: run `cargo bench` for one built for speed)");
     }
 }
+
+/// Screenshots taken to time one.
+const SCREENSHOTS: usize = 15;
 
 fn report(case: &str, draw: f32) {
     let each = draw / SPRITES as f32 * 1e9;
@@ -252,6 +284,7 @@ fn luau_game(draw: &str) -> String {
             return made
         end
         bench.use_sprite(sprite)
+        local pen = bench.new_pen()
 
         function draw()
             {draw}
@@ -431,6 +464,7 @@ impl native::Library for Bench {
                     .draw_sprite(sprite, dest([x, y]), native::Color::WHITE);
                 Ok(())
             })
+            .function("new_pen", |_, _, ()| Ok(Pen))
             .function("draw_many", |bench, call, count: u32| {
                 let sprite = bench.sprite()?;
                 let canvas = call.canvas()?;
@@ -452,7 +486,22 @@ impl native::Library for Bench {
                 call.canvas()?.draw_sprites(sprite, draws);
                 Ok(())
             });
+        registry
+            .class::<Pen>()
+            .method("draw", |bench, _, call, (x, y): (f32, f32)| {
+                let sprite = bench.sprite()?;
+                call.canvas()?
+                    .draw_sprite(sprite, dest([x, y]), native::Color::WHITE);
+                Ok(())
+            });
     }
+}
+
+/// An object of the bench library, whose method draws the library's sprite, as `draw_one` does.
+struct Pen;
+
+impl native::Class for Pen {
+    const NAME: &str = "Pen";
 }
 
 impl Bench {

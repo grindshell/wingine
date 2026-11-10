@@ -174,9 +174,11 @@ own right.
   renders wrongly with a shared one. Frames render only for screenshots unless asked. `Image`
   compares frames (`compare`, `diff`), as screenshot tests and games' tests do.
 - `src/lua.rs`: `Scripts`, a sandboxed Luau VM with tasks (`wait`, `wait_until`, `spawn`), and
-  the conversions and userdata of engine types. `exact` holds `libm`'s math, the same bits on
-  every platform, for what must replay; `math`'s are builtins about five times quicker, for show.
-  Scripts compile at optimization level 2.
+  the conversions and userdata of engine types. `wait` tells the scheduler its seconds before it
+  yields, and the scheduler counts them down in `f64`, as `wait` once did in Luau, resuming the
+  task only once they've passed; Luau tests' runner does the same. `exact` holds `libm`'s math,
+  the same bits on every platform, for what must replay; `math`'s are builtins about five times
+  quicker, for show. Scripts compile at optimization level 2.
 - `src/save.rs`: `Saves`, files of plain values in `Wingine/<identity>` among the system's
   applications' data, each written to a file of its own then renamed over the old. Simulations
   keep theirs in a temporary folder, so tests never touch the player's.
@@ -287,10 +289,10 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
 - `benches/drawing.rs`: what drawing sprites and text costs from Rust, Luau and native libraries;
   `physics.rs`, what Luau worlds' steps, tiles, queries and walks cost, and Rust steps of a
   sixtieth and a 59.94 Hz frame; `scenes.rs`, what posing, adding, loading instanced scenes and
-  moving particles in stacks cost. CI doesn't run them. Their numbers shift by a third with
-  unrelated changes, and by a quarter between runs of one build, so run each a few times, and
-  compare builds by running them in turn. A build started before an edit is newer than it, so
-  touch the sources before rebuilding to measure.
+  moving particles in stacks cost; `scripts.rs`, what waiting tasks cost. CI doesn't run them.
+  Their numbers shift by a third with unrelated changes, and by a quarter between runs of one
+  build, so run each a few times, and compare builds by running them in turn. A build started
+  before an edit is newer than it, so touch the sources before rebuilding to measure.
 - `docs/`: the user docs, restating the module docs for game authors, with `docs/api/` the API
   reference. Change the docs, the module docs and `wingine.d.luau` together; `docs/editor.md`
   follows the editor. Check docs' examples by running them headlessly.

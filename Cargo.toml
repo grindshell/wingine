@@ -127,3 +127,7 @@ required-features = ["physics"]
 [[bench]]
 name = "scenes"
 harness = false
+
+[[bench]]
+name = "scripts"
+harness = false

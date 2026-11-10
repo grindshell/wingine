@@ -677,15 +677,26 @@ impl Runner<'_> {
             if thread.status() != ThreadStatus::Resumable {
                 return Ok(());
             }
+            let waiting = simulation.game().scripts().take_wait();
             if asked.is_empty() {
-                // As `wait` and `wait_until` yield, for a frame, whose time `wait` counts.
-                if let Err(Refusal::Raise(failure) | Refusal::Fail(failure)) =
-                    self.frames(simulation, 1)
-                {
-                    return Err(self.at(&thread, failure));
+                // As `wait_until` yields, for a frame, and `wait`, for frames until its time has
+                // passed, counted as tasks' is.
+                let frame = Simulation::<LuauGame>::FRAME_TIME;
+                let mut left = waiting;
+                loop {
+                    if let Err(Refusal::Raise(failure) | Refusal::Fail(failure)) =
+                        self.frames(simulation, 1)
+                    {
+                        return Err(self.at(&thread, failure));
+                    }
+                    let Some(left) = &mut left else {
+                        break;
+                    };
+                    if crate::lua::count_down(left, frame) {
+                        break;
+                    }
                 }
-                let dt = f64::from(Simulation::<LuauGame>::FRAME_TIME);
-                reply = MultiValue::from_vec(vec![mlua::Value::Number(dt)]);
+                reply = MultiValue::from_vec(vec![mlua::Value::Number(f64::from(frame))]);
                 continue;
             }
             let answer = self.carry_out(simulation, asked);
@@ -1083,6 +1094,8 @@ fn resume(
     args: MultiValue,
 ) -> mlua::Result<MultiValue> {
     let (game, ctx) = simulation.parts();
+    // A `wait` begun outside the test, which failed to yield, isn't the test's.
+    game.scripts().take_wait();
     let mut resumed = None;
     // Lending never fails by itself: only `resume` does.
     let _ = game.lent.lend(ctx, || {

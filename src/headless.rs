@@ -1147,11 +1147,10 @@ fn read_texture(gpu: &Gpu, texture: &wgpu::Texture) -> Result<Image> {
     let mapped = buffer
         .get_mapped_range(..)
         .map_err(|err| Error::ReadFrame(err.into()))?;
-    let pixels = mapped
-        .chunks_exact(padded_row_bytes as usize)
-        .flat_map(|row| &row[..row_bytes as usize])
-        .copied()
-        .collect();
+    let mut pixels = Vec::with_capacity(row_bytes as usize * height as usize);
+    for row in mapped.chunks_exact(padded_row_bytes as usize) {
+        pixels.extend_from_slice(&row[..row_bytes as usize]);
+    }
     Ok(Image {
         width,
         height,
