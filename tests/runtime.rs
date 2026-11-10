@@ -4713,6 +4713,57 @@ mod gui {
     }
 
     #[test]
+    fn sprite_buttons_are_clicked_and_framed_when_chosen() {
+        let folder = game(
+            "gui_sprite_button",
+            &[
+                ("conf.luau", WINDOW),
+                (
+                    "main.luau",
+                    "local sheet = graphics.load_sprite_sheet('sheet.png', 1, 1)
+                    local tiles = { { name = 'Red', sprite = sheet:sprite(0, 0) },
+                        { name = 'Blue', sprite = sheet:sprite(1, 0) } }
+                    chosen = 'Red'
+                    function draw()
+                        graphics.clear('#000000')
+                    end
+                    function gui(ui: Ui)
+                        ui:panel('left', function(ui)
+                            ui:horizontal(function(ui)
+                                for _, tile in tiles do
+                                    if ui:sprite_button(tile.sprite, tile.name,
+                                            chosen == tile.name, nil, 24, 24) then
+                                        chosen = tile.name
+                                    end
+                                end
+                            end)
+                        end)
+                    end",
+                ),
+            ],
+        );
+        write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
+        let mut simulation = simulation(&folder);
+        simulation.run_frames(2);
+        // Each shows its sprite in its middle, at the size asked for inside its frame.
+        let red = simulation.gui_rect("Red").unwrap();
+        let blue = simulation.gui_rect("Blue").unwrap();
+        assert_eq!((red.w, red.h), (28.0, 28.0));
+        let image = simulation.screenshot().unwrap();
+        let pixel = |x: f32, y: f32| image.pixel(x as u32, y as u32);
+        assert_eq!(pixel(red.x + red.w / 2.0, red.y + red.h / 2.0), RED);
+        assert_eq!(pixel(blue.x + blue.w / 2.0, blue.y + blue.h / 2.0), BLUE);
+        // The chosen one's frame is filled as a selection is, and the other's isn't.
+        assert_ne!(
+            pixel(red.x + 1.0, red.y + red.h / 2.0),
+            pixel(blue.x + 1.0, blue.y + blue.h / 2.0)
+        );
+
+        simulation.click_gui("Blue");
+        assert_eq!(simulation.eval::<String>("chosen"), "Blue");
+    }
+
+    #[test]
     fn containers_lay_out_what_their_functions_add() {
         let simulation = interface(
             "gui_containers",

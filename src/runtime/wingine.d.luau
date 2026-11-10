@@ -946,6 +946,9 @@ declare extern type Ui with
     --- Shows `sprite`, its colors multiplied by `tint`, at `width` by `height` points, or its own
     --- size.
     function sprite(self, sprite: Sprite, tint: Color?, width: number?, height: number?): ()
+    --- A button showing `sprite` as `ui:sprite` does, in a frame, named `text`, which shows when
+    --- it's hovered: returns whether it was clicked. It's framed as chosen when `selected`.
+    function sprite_button(self, sprite: Sprite, text: string, selected: boolean?, tint: Color?, width: number?, height: number?): boolean
     --- A line between what comes before and after.
     function separator(self): ()
     --- Empty space, `amount` points of it, or the usual space between widgets.

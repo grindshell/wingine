@@ -364,7 +364,9 @@
 //!   `ui:group(fn)`, `ui:collapsing(title, fn)`, `ui:scroll(fn)`, `ui:grid(name, fn)` with
 //!   `ui:end_row()`, and `ui:enabled(enabled, fn)`.
 //! - Text: `ui:label(text, color)`, `ui:heading(text)`, `ui:monospace(text)` and `ui:small(text)`.
-//! - Widgets: `ui:button(text)` returns whether it was clicked; `ui:checkbox(text, checked)`,
+//! - Widgets: `ui:button(text)` and `ui:sprite_button(sprite, text, selected, tint, width,
+//!   height)`, a sprite in a frame, named `text` and framed as chosen when `selected`, return
+//!   whether they were clicked; `ui:checkbox(text, checked)`,
 //!   `ui:radio(current, value, text)`, `ui:combo(text, current, choices)`,
 //!   `ui:slider(text, value, min, max, step)`, `ui:drag(text, value, speed, min, max)` and
 //!   `ui:text_input(text, hint)` (which also returns whether Enter was pressed) return their

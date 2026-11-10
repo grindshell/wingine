@@ -14,6 +14,19 @@ use crate::{
     gui::egui,
 };
 
+/// The points between a sprite button's sprite and the edges of its frame.
+const SPRITE_BUTTON_MARGIN: f32 = 2.0;
+
+/// `ui:sprite_button`'s arguments: its sprite, text, whether it's selected, tint, width and height.
+type SpriteButton = (
+    UserDataRef<Sprite>,
+    String,
+    Option<bool>,
+    Option<Color>,
+    Option<f32>,
+    Option<f32>,
+);
+
 /// Calls `f` with `ui`, as a `Ui` scripts can use until `f` returns.
 pub(super) fn call<R: FromLuaMulti>(lua: &Lua, ui: &mut egui::Ui, f: &Function) -> mlua::Result<R> {
     lua.scope(|scope| f.call(scope.create_any_userdata_ref_mut(ui)?))
@@ -82,6 +95,50 @@ fn add_methods(methods: &mut Methods<'_, '_>, lent: &Lent) {
                 .tint(color32(tint.unwrap_or(Color::WHITE)))
                 .paint_at(ui, rect);
             Ok(())
+        }
+    });
+    methods.add("sprite_button", {
+        let lent = lent.clone();
+        move |_, ui, (sprite, text, selected, tint, width, height): SpriteButton| {
+            let texture = lent.context(|ctx| ctx.gui_texture(sprite.texture()))?;
+            let (min, max) = sprite.uv_bounds();
+            let uv = egui::Rect::from_min_max(min.into(), max.into());
+            let size = egui::vec2(
+                width.unwrap_or(sprite.width()),
+                height.unwrap_or(sprite.height()),
+            );
+            let selected = selected.unwrap_or(false);
+            // The sprite at exactly its size, in a frame as a button has, a margin wide.
+            let (rect, response) = ui.allocate_exact_size(
+                size + egui::Vec2::splat(2.0 * SPRITE_BUTTON_MARGIN),
+                egui::Sense::click(),
+            );
+            // Named by its text, which egui doesn't know, as tests and screen readers find it.
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::Role::Button,
+                    response.enabled(),
+                    selected,
+                    text.as_str(),
+                )
+            });
+            if ui.is_rect_visible(rect) {
+                let visuals = ui.style().interact_selectable(&response, selected);
+                ui.painter().rect(
+                    rect,
+                    visuals.corner_radius,
+                    visuals.weak_bg_fill,
+                    visuals.bg_stroke,
+                    egui::StrokeKind::Inside,
+                );
+                egui::Image::new(texture)
+                    .uv(uv)
+                    .tint(color32(tint.unwrap_or(Color::WHITE)))
+                    .paint_at(ui, rect.shrink(SPRITE_BUTTON_MARGIN));
+            }
+            let clicked = response.clicked();
+            response.on_hover_text(text);
+            Ok(clicked)
         }
     });
     methods.add("separator", |_, ui, ()| {

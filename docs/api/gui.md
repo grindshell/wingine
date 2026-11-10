@@ -268,6 +268,34 @@ Shows `sprite`, its colors multiplied by `tint` (by default, white: unchanged), 
 `height` points, or its own size in texels. It's sampled as the game draws it, so pixel art stays
 crisp at any size.
 
+### `ui:sprite_button`
+
+```lua
+ui:sprite_button(
+    sprite: Sprite,
+    text: string,
+    selected: boolean?,
+    tint: Color?,
+    width: number?,
+    height: number?
+): boolean
+```
+
+A button showing `sprite` as [`ui:sprite`](#uisprite) does, in a frame: returns whether it was
+clicked. `text` names it, and shows beside the pointer while it's hovered. It's framed as chosen
+when `selected`, as for a palette of tiles or an inventory, where one is picked:
+
+```lua
+for _, tile in tiles do
+    if ui:sprite_button(tile.sprite, tile.name, tile == brush, nil, 32, 32) then
+        brush = tile
+    end
+end
+```
+
+Tests find it by its `text`, as [`sim.click_gui`](testing.md#simclick_gui) finds other widgets by
+their labels.
+
 ## Spacing
 
 ### `ui:separator`
