@@ -160,9 +160,12 @@ own right.
     scene nodes' 2D transforms take their sines from `libm` (`Affine::from_parts_exact`) so
     colliders placed by them do too.
   - Luau's worlds (`src/lua/physics.rs`, and `physics/world2d.rs` beside it) are of scene nodes,
-    re-read before each move, walk, step or query to follow what scripts moved; they give nodes
-    back in the order they were added. Tile maps are solid by `Tilemap::solid_rects`, rebuilt
-    when the map's `revision` changes.
+    re-read before each move, walk, step or query to follow what scripts moved, unless the
+    scene's `revision` (bumped by every `get_mut`, but not by particles) hasn't changed; they give
+    nodes back in the order they were added. Tile maps are solid by `Tilemap::solid_rects`,
+    reshaped only when the map's `solid_revision` changes and the boxes differ.
+  - A step up to 5% past a sixtieth is taken whole (`physics::parts`), so a 59.94 Hz display
+    doesn't double Rapier's work.
 - `src/headless.rs`: `Headless` renders a canvas to an image; `Simulation` runs a whole `Game` at
   60 fps with simulated input, egui included, and screenshots. Key repeats run in game time, and
   typing is as on a US keyboard. All simulations in a process share one GPU device, held by one

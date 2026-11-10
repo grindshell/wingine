@@ -392,8 +392,8 @@ world:step(dt: number)
 Moves the world on by `dt` seconds, a frame's `update` time: dynamic bodies fall, roll, push
 each other and come to rest, moving and turning their nodes, and kinematic bodies move to where
 their nodes are. Colliders first follow their nodes, if scripts have moved them or the nodes
-they're in. Steps are taken as in 3D: those longer than a sixtieth of a second in equal parts,
-and the same every update with an `update_rate` of 60.
+they're in. Steps are taken as in 3D: those more than a twentieth longer than a sixtieth of a
+second in equal parts, and the same every update with an `update_rate` of 60.
 
 ### `world:walk`
 
@@ -576,8 +576,9 @@ world:step(dt: number)
 Moves the world on by `dt` seconds, a frame's `update` time: dynamic bodies fall, tumble, push
 each other and come to rest, moving their nodes, and kinematic bodies move to where their nodes
 are. Bodies first follow their nodes, if scripts have moved them or the nodes they're in. Steps
-longer than a sixtieth of a second are taken in equal parts, so bodies don't pass through each
-other, and kinematic bodies go an equal part of the way in each; a game whose
+more than a twentieth longer than a sixtieth of a second are taken in equal parts, so bodies
+don't pass through each other, and kinematic bodies go an equal part of the way in each, while a
+59.94 Hz display's frames, or vsync's jitter, take one each; a game whose
 `conf.luau` sets an `update_rate` of 60 steps the same each update, so a run replays exactly.
 
 ### `world:walk`

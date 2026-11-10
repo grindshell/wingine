@@ -3839,6 +3839,29 @@ mod physics {
         assert!(simulation.eval::<bool>("world:is_resting(crate)"));
     }
 
+    /// Tiles set where the map stays as solid as it was leave what rests on it at rest: the map's
+    /// collider is reshaped only when its solid tiles change.
+    #[test]
+    fn tiles_that_change_nothing_solid_leave_bodies_at_rest() {
+        let mut simulation = site(
+            "physics_tiles_at_rest",
+            "world:add(crate, { body = 'dynamic' })",
+        );
+        simulation.exec("run(300)");
+        assert!(simulation.eval::<bool>("world:is_resting(crate)"));
+        simulation.exec(
+            "local ground = site:find('map/ground')
+            ground:set_tile(5, 0, nil)
+            ground:set_tile(6, 1, 'sand')
+            ground:set_tile(0, 3, 'stone')
+            run(1)",
+        );
+        assert!(simulation.eval::<bool>("world:is_resting(crate)"));
+        // Still solid where it was.
+        let (_, distance, _) = hit_2d(&mut simulation, "world:ray(60, 5, 0, 1)").unwrap();
+        assert!(near(distance, 43.0), "{distance}");
+    }
+
     #[test]
     fn bodies_in_2d_follow_the_nodes_they_are_in() {
         let mut simulation = site(

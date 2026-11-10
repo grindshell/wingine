@@ -23,6 +23,45 @@
 mod world2d;
 mod world3d;
 
+/// The longest step a world takes at once, in seconds: longer ones are taken in parts.
+const STEP: f32 = 1.0 / 60.0;
+
+/// How much longer than a [`STEP`] a step may be, as a share of one, and still be taken whole: a
+/// 59.94 Hz display's frames, and vsync's jitter, would take twice the work otherwise.
+const STEP_SLACK: f32 = 0.05;
+
+/// The most parts a step is taken in, so a long hitch doesn't take longer to catch up with.
+const MAX_STEPS: u32 = 16;
+
+/// How many equal parts a world takes a step of `dt` seconds in: as many as there are
+/// [`STEP`]s in it, give or take [`STEP_SLACK`], from 1 to [`MAX_STEPS`].
+fn parts(dt: f32) -> u32 {
+    (dt / STEP - STEP_SLACK).ceil().clamp(1.0, MAX_STEPS as f32) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn steps_split_only_when_well_past_a_sixtieth() {
+        for (dt, expected) in [
+            (1.0 / 60.0, 1),
+            (1.0 / 59.94, 1),
+            (1.04 / 60.0, 1),
+            (1.06 / 60.0, 2),
+            (2.0 / 60.0, 2),
+            (2.04 / 60.0, 2),
+            (1.0 / 30.0, 2),
+            (1.0 / 20.0, 3),
+            (0.001, 1),
+            (10.0, MAX_STEPS),
+        ] {
+            assert_eq!(parts(dt), expected, "{dt}");
+        }
+    }
+}
+
 pub use world2d::{Body, Character, ColliderId, Pose, RayHit, Shape, Solid, Walked, World};
 pub use world3d::{Body3d, BodyId, Character3d, Pose3d, RayHit3d, Shape3d, Walked3d, World3d};
 

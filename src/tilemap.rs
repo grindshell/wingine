@@ -116,6 +116,10 @@ pub struct Tilemap {
     layers: Vec<Vec<Option<TileId>>>,
     /// Which version of its cells it has: see [`Tilemap::revision`].
     revision: u64,
+    /// Which version of its solid cells it has, on any layer, and on each: see
+    /// [`Tilemap::solid_revision`].
+    solid_revision: u64,
+    layer_solid_revisions: Vec<u64>,
 }
 
 /// The last revision any map has had, so that no two maps' cells are of the same revision unless
@@ -135,14 +139,28 @@ impl Tilemap {
             rows,
             layers: Vec::new(),
             revision: next_revision(),
+            solid_revision: next_revision(),
+            layer_solid_revisions: Vec::new(),
         }
     }
 
     /// Which version of its cells the map has, which changes whenever a layer is added or a cell
-    /// set, and is never the same as another map's unless it's a copy: so what's worked out from
-    /// its cells, such as physics' boxes, need be worked out again only when this changes.
+    /// changes, and is never the same as another map's unless it's a copy: so what's worked out
+    /// from its cells need be worked out again only when this changes.
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Which version of its solid cells on `layer`, or with `None`, on any layer, the map has,
+    /// as [`Tilemap::revision`] says of all its cells: it changes only when a layer is added or a
+    /// cell there changes between solid and not, so what's worked out from where the map is
+    /// solid, such as [`Tilemap::solid_rects`] for physics, need be worked out again only when
+    /// this changes.
+    pub fn solid_revision(&self, layer: Option<usize>) -> u64 {
+        layer
+            .and_then(|layer| self.layer_solid_revisions.get(layer))
+            .copied()
+            .unwrap_or(self.solid_revision)
     }
 
     pub fn tileset(&self) -> &Tileset {
@@ -162,6 +180,8 @@ impl Tilemap {
         let cells = self.columns as usize * self.rows as usize;
         self.layers.push(vec![None; cells]);
         self.revision = next_revision();
+        self.solid_revision = next_revision();
+        self.layer_solid_revisions.push(self.solid_revision);
         self.layers.len() - 1
     }
 
@@ -179,7 +199,8 @@ impl Tilemap {
         self.cell_index(tile).and_then(|index| cells[index])
     }
 
-    /// Puts `id` in cell `tile` on `layer`, or with `None`, empties the cell.
+    /// Puts `id` in cell `tile` on `layer`, or with `None`, empties the cell. Putting in what's
+    /// there already changes nothing, the map's revisions included.
     ///
     /// # Panics
     ///
@@ -191,8 +212,19 @@ impl Tilemap {
                 self.columns, self.rows
             )
         });
-        self.layers[layer][index] = id;
+        let cell = &mut self.layers[layer][index];
+        if *cell == id {
+            return;
+        }
+        let tileset = &self.tileset;
+        let solid = |id: Option<TileId>| id.is_some_and(|id| tileset.tile(id).solid);
+        let solidity_changes = solid(*cell) != solid(id);
+        *cell = id;
         self.revision = next_revision();
+        if solidity_changes {
+            self.solid_revision = next_revision();
+            self.layer_solid_revisions[layer] = self.solid_revision;
+        }
     }
 
     /// Whether cell `tile` is inside the map.
@@ -497,16 +529,32 @@ mod tests {
 
     #[test]
     fn maps_change_revision_as_their_cells_do() {
-        let (mut map, [grass, _]) = map();
+        let (mut map, [grass, wall]) = map();
         let copy = map.clone();
         assert_eq!(copy.revision(), map.revision());
         map.set(0, [0, 0], Some(grass));
+        assert_eq!(copy.revision(), map.revision(), "it held grass already");
+        map.set(0, [0, 0], None);
         assert_ne!(copy.revision(), map.revision());
         let before = map.revision();
         map.add_layer();
         assert_ne!(map.revision(), before);
         let (other, _) = self::map();
         assert_ne!(other.revision(), map.revision());
+
+        // Solid cells change only with what's solid, on their layer.
+        let (mut map, [grass, _]) = self::map();
+        let solid = [None, Some(0), Some(1)].map(|layer| map.solid_revision(layer));
+        map.set(0, [0, 0], None);
+        map.set(1, [2, 1], Some(grass));
+        assert_eq!(
+            [None, Some(0), Some(1)].map(|layer| map.solid_revision(layer)),
+            solid
+        );
+        map.set(1, [2, 1], Some(wall));
+        let now = [None, Some(0), Some(1)].map(|layer| map.solid_revision(layer));
+        assert!(now[0] != solid[0] && now[1] == solid[1] && now[2] != solid[2]);
+        assert_ne!(other.solid_revision(None), map.solid_revision(None));
     }
 
     #[test]

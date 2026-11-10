@@ -4,7 +4,7 @@
 
 mod world2d;
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 pub use world2d::PhysicsWorld;
 
@@ -88,6 +88,11 @@ pub struct PhysicsWorld3d {
     view: Option<(Rc<RefCell<Scene>>, NodeId)>,
     /// The nodes with bodies, in the order they were added.
     bodies: Vec<Bodied>,
+    /// Where each of `bodies` is in it, by its body and by its node.
+    by_body: HashMap<BodyId, usize>,
+    by_node: HashMap<NodeId, usize>,
+    /// The [`Scene::revision`] the bodies last followed their nodes at.
+    followed: Option<u64>,
 }
 
 /// A node of a [`PhysicsWorld3d`] with a body.
@@ -495,6 +500,41 @@ fn shape(
     })
 }
 
+/// Brings `bodied`'s body up to date with its node, which is in `scene`. A body whose node can no
+/// longer be placed stays where it was.
+fn follow_one(world: &mut World3d, scene: &Scene, bodied: &mut Bodied) {
+    let Ok((pose, placed)) = place(scene, bodied.node, bodied.kind) else {
+        return;
+    };
+    if placed == bodied.placed {
+        return;
+    }
+    let reshaped = match (&placed, &bodied.placed) {
+        (Placed::Moving { local: now, .. }, Placed::Moving { local: was, .. }) => {
+            now.scale != was.scale
+        }
+        _ => true,
+    };
+    if reshaped {
+        let character = bodied.character.as_ref();
+        // A shape that can't be made, such as one squashed flat that falls, stays as it was.
+        if let Ok(shape) = shape(scene, bodied.node, bodied.shaped, character, &placed) {
+            let _ = world.set_shape(bodied.body, &shape);
+        }
+    }
+    match bodied.character {
+        // Upright, however its node is turned: over the next step to where it walked, and at
+        // once anywhere else, as when it starts over.
+        Some(_) if bodied.walked == Some(pose.position) => {
+            world.set_pose(bodied.body, Pose3d::at(pose.position));
+        }
+        Some(_) => world.put(bodied.body, Pose3d::at(pose.position)),
+        None if bodied.kind != BodyKind::Fixed => world.set_pose(bodied.body, pose),
+        None => {}
+    }
+    bodied.placed = placed;
+}
+
 /// The eight corners of `bounds`.
 fn corners(bounds: &Bounds3) -> [[f32; 3]; 8] {
     let [min, max] = [bounds.min, bounds.max];
@@ -564,63 +604,78 @@ impl PhysicsWorld3d {
             placed,
             walked: None,
         };
-        match self.bodies.iter_mut().find(|bodied| bodied.node == id) {
-            Some(old) => {
+        let index = match self.by_node.get(&id) {
+            Some(&index) => {
+                let old = std::mem::replace(&mut self.bodies[index], bodied);
                 self.world.remove(old.body);
-                *old = bodied;
+                self.by_body.remove(&old.body);
+                index
             }
-            None => self.bodies.push(bodied),
-        }
+            None => {
+                self.bodies.push(bodied);
+                self.by_node.insert(id, self.bodies.len() - 1);
+                self.bodies.len() - 1
+            }
+        };
+        self.by_body.insert(self.bodies[index].body, index);
         Ok(())
     }
 
+    /// Finds where each of `bodies` is in it again, after some have gone.
+    fn reindex(&mut self) {
+        self.by_body.clear();
+        self.by_node.clear();
+        for (index, bodied) in self.bodies.iter().enumerate() {
+            self.by_body.insert(bodied.body, index);
+            self.by_node.insert(bodied.node, index);
+        }
+    }
+
     /// Brings the bodies up to date with their nodes: moved, by scripts or with the nodes
-    /// they're in, reshaped, or gone. A body whose
-    /// node can no longer be placed, such as one whose parent has been turned since it was added,
-    /// stays where it was.
+    /// they're in, reshaped, or gone. A body whose node can no longer be placed, such as one whose
+    /// parent has been turned since it was added, stays where it was. Nothing is read again if the
+    /// scene hasn't changed since they last followed it, as between queries.
     fn follow(&mut self, scene: &Scene) {
+        if self.followed == Some(scene.revision()) {
+            return;
+        }
+        self.followed = Some(scene.revision());
         let world = &mut self.world;
+        let count = self.bodies.len();
         self.bodies.retain_mut(|bodied| {
             if !scene.contains_node(bodied.node) {
                 world.remove(bodied.body);
                 return false;
             }
-            let Ok((pose, placed)) = place(scene, bodied.node, bodied.kind) else {
-                return true;
-            };
-            if placed == bodied.placed {
-                return true;
-            }
-            let reshaped = match (&placed, &bodied.placed) {
-                (Placed::Moving { local: now, .. }, Placed::Moving { local: was, .. }) => {
-                    now.scale != was.scale
-                }
-                _ => true,
-            };
-            if reshaped {
-                let character = bodied.character.as_ref();
-                // A shape that can't be made, such as one squashed flat that falls, stays as it was.
-                if let Ok(shape) = shape(scene, bodied.node, bodied.shaped, character, &placed) {
-                    let _ = world.set_shape(bodied.body, &shape);
-                }
-            }
-            match bodied.character {
-                // Upright, however its node is turned: over the next step to where it walked,
-                // and at once anywhere else, as when it starts over.
-                Some(_) if bodied.walked == Some(pose.position) => {
-                    world.set_pose(bodied.body, Pose3d::at(pose.position));
-                }
-                Some(_) => world.put(bodied.body, Pose3d::at(pose.position)),
-                None if bodied.kind != BodyKind::Fixed => world.set_pose(bodied.body, pose),
-                None => {}
-            }
-            bodied.placed = placed;
+            follow_one(world, scene, bodied);
             true
         });
+        if self.bodies.len() != count {
+            self.reindex();
+        }
+    }
+
+    /// Brings the bodies of `moved` and the nodes inside them up to date, as the world moved
+    /// them, and if the rest were up to date before, `was` the scene's revision then, counts them
+    /// all as up to date: so walking a character doesn't make the next query read every node.
+    fn follow_moved(&mut self, scene: &Scene, moved: &[NodeId], was: u64) {
+        if self.followed != Some(was) {
+            return;
+        }
+        for &id in moved {
+            for inside in scene.descendants(id) {
+                if let Some(&index) = self.by_node.get(&inside) {
+                    follow_one(&mut self.world, scene, &mut self.bodies[index]);
+                }
+            }
+        }
+        self.followed = Some(scene.revision());
     }
 
     /// Moves the nodes of dynamic bodies to where their bodies are.
     fn lead(&mut self, scene: &mut Scene) {
+        let was = scene.revision();
+        let mut moved = Vec::new();
         for bodied in &mut self.bodies {
             let Placed::Moving { local, origin: was } = &mut bodied.placed else {
                 continue;
@@ -648,7 +703,9 @@ impl PhysicsWorld3d {
                 placement.roll = pose.roll;
                 let _ = node.set_placement3(placement);
             }
+            moved.push(bodied.node);
         }
+        self.follow_moved(scene, &moved, was);
     }
 
     /// The body of `node`, if it has one in this world, with which of `bodies` it is.
@@ -657,7 +714,7 @@ impl PhysicsWorld3d {
         if !Rc::ptr_eq(scene, &node.scene) {
             return None;
         }
-        self.bodies.iter().position(|bodied| bodied.node == node.id)
+        self.by_node.get(&node.id).copied()
     }
 
     /// Brings the bodies up to date with their nodes before a query, and returns their scene, or
@@ -669,10 +726,15 @@ impl PhysicsWorld3d {
 
     /// The nodes of `found`, nodes of `scene`, in the order they were added to the world.
     fn nodes(&self, scene: &Rc<RefCell<Scene>>, found: &[BodyId]) -> Vec<SceneNode> {
-        self.bodies
+        let mut indices: Vec<usize> = found
             .iter()
-            .filter(|bodied| found.contains(&bodied.body))
-            .map(|bodied| SceneNode::new(Rc::clone(scene), bodied.node))
+            .filter_map(|body| self.by_body.get(body).copied())
+            .collect();
+        indices.sort_unstable();
+        indices.dedup();
+        indices
+            .into_iter()
+            .map(|index| SceneNode::new(Rc::clone(scene), self.bodies[index].node))
             .collect()
     }
 
@@ -739,6 +801,7 @@ impl mlua::UserData for PhysicsWorld3d {
             if let Some(index) = world.body_of(&node) {
                 let bodied = world.bodies.remove(index);
                 world.world.remove(bodied.body);
+                world.reindex();
             }
             Ok(())
         });
@@ -782,7 +845,9 @@ impl mlua::UserData for PhysicsWorld3d {
                     })?
                     .map_err(mlua::Error::runtime)?;
                 let walked = world.world.walk(&character, feet, motion, Some(body));
+                let mut was = 0;
                 let feet = node.write(|scene, id| {
+                    was = scene.revision();
                     let node = scene.node_mut(id);
                     let [x, y] = node.position();
                     node.set_position([x + walked.moved[0], y + walked.moved[1]]);
@@ -796,6 +861,7 @@ impl mlua::UserData for PhysicsWorld3d {
                 if let Some(index) = world.body_of(&node) {
                     world.bodies[index].walked = feet.ok();
                 }
+                node.read(|scene, id| world.follow_moved(scene, &[id], was))?;
                 Ok((vector(walked.moved), walked.grounded))
             },
         );
@@ -851,7 +917,7 @@ impl mlua::UserData for PhysicsWorld3d {
                 };
                 let hit = world.world.cast_ray(origin, direction, distance, &except);
                 let Some((hit, bodied)) = hit.and_then(|hit| {
-                    let bodied = world.bodies.iter().find(|bodied| bodied.body == hit.body)?;
+                    let bodied = &world.bodies[*world.by_body.get(&hit.body)?];
                     Some((hit, bodied))
                 }) else {
                     return Ok(None);

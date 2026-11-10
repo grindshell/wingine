@@ -553,6 +553,8 @@ pub fn load_model(ctx: &mut Context, path: &Path) -> Result<Model> {
 pub struct Scene {
     /// Which scene its nodes' IDs are of: one of its own, or the one it was cloned from.
     id: u64,
+    /// Which version of its nodes it has: see [`Scene::revision`].
+    revision: u64,
     slots: Vec<Slot>,
     /// Slots whose nodes were removed, for new nodes.
     free: Vec<u32>,
@@ -579,6 +581,13 @@ pub struct NodeId {
 fn new_scene_id() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// A scene's next revision, which no scene has had, so no two scenes have the same one unless one
+/// is a copy of the other.
+fn next_revision() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed) + 1
 }
 
 /// A node of a [`Scene`].
@@ -1383,6 +1392,7 @@ impl Scene {
     fn empty(size: [f32; 2]) -> Self {
         Self {
             id: new_scene_id(),
+            revision: next_revision(),
             slots: vec![Slot {
                 generation: 0,
                 node: Some(Node::new(String::new(), Kind::Node)),
@@ -1418,7 +1428,20 @@ impl Scene {
     }
 
     pub fn set_size(&mut self, size: [f32; 2]) {
-        self.size = size;
+        if size != self.size {
+            self.size = size;
+            self.revision = next_revision();
+        }
+    }
+
+    /// Which version of its nodes the scene has, which changes whenever one of them may have:
+    /// with each [`Scene::get_mut`] or [`Scene::node_mut`], whatever's done with the node then,
+    /// as nodes are added or removed, and as the scene's size changes. Particles moving on, or
+    /// sent out or ended, don't change it. It's never the same as another scene's unless one's a
+    /// copy of the other, so what's worked out from where nodes are, such as a physics world's
+    /// colliders, need be worked out again only when this changes.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Adds the node `def` describes, and its children, at the end of `parent`'s children, which
@@ -1518,7 +1541,16 @@ impl Scene {
             .filter(|_| id.scene == self.id && slot.generation == id.generation)
     }
 
+    /// The node `id`, to change, if it's in the scene, as [`Scene::get`] finds it. This changes
+    /// the scene's [`Scene::revision`], whether the node is changed or not.
     pub fn get_mut(&mut self, id: NodeId) -> Option<&mut Node> {
+        self.revision = next_revision();
+        self.get_mut_unrevised(id)
+    }
+
+    /// [`Scene::get_mut`], keeping the scene's revision, for what changes nothing it stands for,
+    /// such as particles moving on.
+    fn get_mut_unrevised(&mut self, id: NodeId) -> Option<&mut Node> {
         let slot = self.slots.get_mut(id.index as usize)?;
         slot.node
             .as_mut()
@@ -1750,13 +1782,31 @@ impl Scene {
             };
         };
         let above = self.placed(parent);
+        self.placed_under(&above, parent, id)
+    }
+
+    /// Where `id`, a child of `parent`, is laid out, with `parent` laid out at `above`.
+    fn placed_under(&self, above: &Placed, parent: NodeId, id: NodeId) -> Placed {
         if let Some(stack) = self.node(parent).kind.stack() {
             let siblings = &self.node(parent).children;
             let index = siblings.iter().position(|&child| child == id);
             let (slots, _) = self.lay_out_stack(parent, stack, above.inner);
             return above.within(slots[index.expect("a node is among its parent's children")]);
         }
-        self.child_placed(&above, id)
+        self.child_placed(above, id)
+    }
+
+    /// [`Scene::transform`] of the node's parent, if it has one, and of the node, and
+    /// [`Scene::rect`] of the node, worked out in one walk up the tree rather than three.
+    #[cfg_attr(not(feature = "physics"), expect(dead_code))]
+    pub(crate) fn transforms_and_rect(&self, id: NodeId) -> (Option<Affine>, Affine, Option<Rect>) {
+        let Some(parent) = self.node(id).parent else {
+            let placed = self.placed(id);
+            return (None, placed.transform, placed.rect);
+        };
+        let above = self.placed(parent);
+        let placed = self.placed_under(&above, parent, id);
+        (Some(above.transform), placed.transform, placed.rect)
     }
 
     /// Where `id` is, as a child of a node placed at `parent` that isn't a stack.
@@ -2322,6 +2372,7 @@ impl Scene {
         let Some(parent) = self.node(id).parent else {
             return Err("a scene's root can't be removed".into());
         };
+        // Changes the revision.
         self.node_mut(parent).children.retain(|&child| child != id);
         for removed in self.descendants(id) {
             let slot = &mut self.slots[removed.index as usize];
@@ -2354,7 +2405,7 @@ impl Scene {
             return None;
         }
         let placed = self.placed(id);
-        let Kind::Particles(node) = &mut self.node_mut(id).kind else {
+        let Kind::Particles(node) = &mut self.get_mut_unrevised(id)?.kind else {
             return None;
         };
         let area = placed.rect.unwrap_or_default();
@@ -2383,7 +2434,9 @@ impl Scene {
     /// Ends the lives of the particles of `id`, and of every particles node inside it, at once.
     pub fn clear_particles(&mut self, id: NodeId) {
         for node in self.descendants(id) {
-            if let Kind::Particles(particles) = &mut self.node_mut(node).kind {
+            if let Some(Kind::Particles(particles)) =
+                self.get_mut_unrevised(node).map(|node| &mut node.kind)
+            {
                 particles.particles.clear();
             }
         }
@@ -3254,6 +3307,35 @@ mod tests {
         let next = scene.attach(Node::new("b".into(), Kind::Node), root);
         assert_ne!(next.index, first.index, "a slot of its own");
         assert!(!scene.contains_node(first) && !scene.contains_node(last));
+    }
+
+    #[test]
+    fn revisions_change_with_nodes_but_not_particles() {
+        let mut scene = Scene::empty([10.0, 10.0]);
+        let root = scene.root();
+        let mut revision = scene.revision();
+        let mut changed = |scene: &Scene| {
+            let now = scene.revision();
+            let changed = now != revision;
+            revision = now;
+            changed
+        };
+        let node = scene.attach(Node::new("a".into(), Kind::Node), root);
+        assert!(changed(&scene), "a node added");
+        scene.node_mut(node).set_position([1.0, 2.0]);
+        assert!(changed(&scene), "a node moved");
+        scene.set_size([10.0, 10.0]);
+        assert!(!changed(&scene), "the same size");
+        scene.set_size([20.0, 10.0]);
+        assert!(changed(&scene), "another size");
+        let _ = scene.transform(node);
+        assert!(!changed(&scene), "only read");
+        scene.advance_particles(root, 1.0);
+        scene.clear_particles(root);
+        assert!(!changed(&scene), "particles");
+        scene.remove(node).unwrap();
+        assert!(changed(&scene), "a node removed");
+        assert_ne!(Scene::empty([0.0; 2]).revision(), scene.revision());
     }
 
     #[test]

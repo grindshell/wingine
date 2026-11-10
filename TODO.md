@@ -7,21 +7,9 @@ reviewer but not checked again.
 
 ## Performance
 
-Measure before and after with `cargo bench` or the shmup's benchmark, as AGENTS.md asks.
+Measure before and after with `cargo bench` (`--bench drawing` or `--bench physics`) or the shmup's
+benchmark, as AGENTS.md asks, on the forge.
 
-- [ ] **Any `Tilemap::set` rebuilds the map's whole collider** (checked). `set` bumps `revision`
-  even for an unchanged cell or a decorative layer (`src/tilemap.rs`), and Luau physics
-  (`lua/physics/world2d.rs`, `follow`) reruns `solid_rects` and `set_tiles`, whose shape and
-  position changes wake every body resting on it. Return early for an unchanged cell, keep a
-  revision that changes only with solidity, skip `set_tiles` when the rects are equal, and skip
-  `set_position` when the origin hasn't moved.
-- [ ] **Physics steps split in two just past a sixtieth** (checked). `World::step` and
-  `World3d::step` allow 0.1% over `STEP` before splitting, so a 59.94 Hz display or ordinary
-  vsync jitter doubles Rapier's work for games without an `update_rate`. Allow a few percent.
-- [ ] **Every Luau physics query re-reads every collider's node from the root.** `follow`
-  (`lua/physics/world2d.rs`, `lua/physics.rs`) runs before each ray, overlap, move, walk and step,
-  with `local()` walking to the root three times per body and 3D recomputing `exact_transform`.
-  Skip it when the scene hasn't changed, and walk once in `local()`.
 - [ ] **The editor rebuilds the preview every frame of a drag.** Each `set_node` marks it stale
   (`document.rs`), so `Scene::new` runs each frame, warming particles for seconds each time (about
   660 steps an emitter in the bonfire); the dragged subtree is cloned three times a frame
@@ -57,9 +45,6 @@ Measure before and after with `cargo bench` or the shmup's benchmark, as AGENTS.
 - [ ] **Waiting tasks resume every frame.** `wait` (`src/lua.rs`) yields and is resumed each
   update to check its time. Have the scheduler count it down and resume only when due, in `f64`,
   so results stay the same.
-- [ ] **Physics allocates per cast and scans linearly.** `true_normal` builds a `Vec` per cast
-  (up to about 12 a 2D walk); `nodes()`, ray hits and `walk` find nodes by linear scans. Use an
-  iterator or array, and a map from handle to index.
 - [ ] **Small allocations:** screenshot readback copies byte by byte (`src/headless.rs`; copy a
   row at a time), `Watcher` sorts by `file_name` allocating each comparison (`src/watch.rs`; use
   `sort_by_cached_key`), and `Renderer::render` allocates its `viewports` and `views` each frame

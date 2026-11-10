@@ -1,6 +1,6 @@
 //! The 2D physics world as scripts hold it, from `physics.world()`.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use super::{excepted, followed, ray_distance};
 use crate::{
@@ -24,6 +24,11 @@ pub struct PhysicsWorld {
     scene: Option<Rc<RefCell<Scene>>>,
     /// The nodes with colliders, in the order they were added.
     covered: Vec<Covered>,
+    /// Where each of `covered` is in it, by its collider and by its node.
+    by_collider: HashMap<ColliderId, usize>,
+    by_node: HashMap<NodeId, usize>,
+    /// The [`Scene::revision`] the colliders last followed their nodes at.
+    followed: Option<u64>,
 }
 
 /// A node of a [`PhysicsWorld`] with a collider.
@@ -42,10 +47,12 @@ enum What {
         placed: Option<(Affine, Rect)>,
     },
     /// A tile map's solid tiles, on `layer` or on any, from where the map's top-left corner was,
-    /// with which revision of its cells.
+    /// as the boxes `boxes` of the solid cells' revision `revision`.
     Tiles {
         layer: Option<usize>,
-        placed: ([f32; 2], u64),
+        origin: [f32; 2],
+        revision: u64,
+        boxes: Vec<Rect>,
     },
     Body(Box<Bodied>),
 }
@@ -103,36 +110,36 @@ impl Local {
 /// or stretches it: bodies that move are placed only by where they are and how they're turned.
 fn local(scene: &Scene, id: NodeId) -> Result<Local, String> {
     let node = scene.node(id);
-    if let Some(parent) = node.parent() {
-        let transform = scene.transform(parent);
-        if transform.x_axis != [1.0, 0.0] || transform.y_axis != [0.0, 1.0] {
-            // The nearest that turns or stretches what's in it.
-            let mut turning = parent;
-            let mut at = Some(parent);
-            while let Some(above) = at {
-                let above_node = scene.node(above);
-                if above_node.rotation() != 0.0 || above_node.scale() != [1.0, 1.0] {
-                    turning = above;
-                    break;
-                }
-                at = above_node.parent();
+    let (parent_transform, transform, rect) = scene.transforms_and_rect(id);
+    if let (Some(parent), Some(parent_transform)) = (node.parent(), parent_transform)
+        && (parent_transform.x_axis != [1.0, 0.0] || parent_transform.y_axis != [0.0, 1.0])
+    {
+        // The nearest that turns or stretches what's in it.
+        let mut turning = parent;
+        let mut at = Some(parent);
+        while let Some(above) = at {
+            let above_node = scene.node(above);
+            if above_node.rotation() != 0.0 || above_node.scale() != [1.0, 1.0] {
+                turning = above;
+                break;
             }
-            return Err(format!(
-                "{} turns or stretches what's in it, so {} can't move in a physics world: only \
-                 nodes that just move what's in them can be around bodies that move",
-                scene.describe(turning),
-                scene.describe(id)
-            ));
+            at = above_node.parent();
         }
+        return Err(format!(
+            "{} turns or stretches what's in it, so {} can't move in a physics world: only \
+             nodes that just move what's in them can be around bodies that move",
+            scene.describe(turning),
+            scene.describe(id)
+        ));
     }
-    let at = scene.transform(id).translation;
+    let at = transform.translation;
     let position = node.position();
     Ok(Local {
         position,
         offset: [at[0] - position[0], at[1] - position[1]],
         rotation: node.rotation(),
         scale: node.scale(),
-        rect: scene.rect(id),
+        rect,
     })
 }
 
@@ -199,11 +206,11 @@ fn fixed_circle(
 }
 
 /// Where the top-left corner of the tile map `id` is, or of the map of the tile layer `id`, and
-/// which revision of its cells it has.
-fn tiles_placed(scene: &Scene, id: NodeId) -> ([f32; 2], u64) {
+/// which revision of its solid cells on `layer`, or on any, it has.
+fn tiles_placed(scene: &Scene, id: NodeId, layer: Option<usize>) -> ([f32; 2], u64) {
     let revision = scene
         .tilemap(id)
-        .map_or(0, |(_, tilemap)| tilemap.map.revision());
+        .map_or(0, |(_, tilemap)| tilemap.map.solid_revision(layer));
     let origin = match scene.placement(id) {
         Some((transform, rect)) => transform.apply([rect.x, rect.y]),
         None => scene.transform(id).translation,
@@ -427,6 +434,19 @@ impl PhysicsWorld {
             metre,
             scene: None,
             covered: Vec::new(),
+            by_collider: HashMap::new(),
+            by_node: HashMap::new(),
+            followed: None,
+        }
+    }
+
+    /// Finds where each of `covered` is in it again, after some have gone.
+    fn reindex(&mut self) {
+        self.by_collider.clear();
+        self.by_node.clear();
+        for (index, covered) in self.covered.iter().enumerate() {
+            self.by_collider.insert(covered.collider, index);
+            self.by_node.insert(covered.node, index);
         }
     }
 
@@ -469,10 +489,16 @@ impl PhysicsWorld {
                 (collider, What::Drawn { solid, placed })
             }
             Asked::Tiles(layer) => {
-                let placed = tiles_placed(scene, id);
+                let (origin, revision) = tiles_placed(scene, id, layer);
                 let boxes = tile_boxes(scene, id, layer);
-                let collider = self.world.add_tiles(placed.0, &boxes);
-                (collider, What::Tiles { layer, placed })
+                let collider = self.world.add_tiles(origin, &boxes);
+                let what = What::Tiles {
+                    layer,
+                    origin,
+                    revision,
+                    boxes,
+                };
+                (collider, what)
             }
             Asked::Body {
                 kind,
@@ -522,51 +548,68 @@ impl PhysicsWorld {
             collider,
             what,
         };
-        match self.covered.iter_mut().find(|covered| covered.node == id) {
-            Some(old) => {
+        let index = match self.by_node.get(&id) {
+            Some(&index) => {
+                let old = std::mem::replace(&mut self.covered[index], covered);
                 self.world.remove(old.collider);
-                *old = covered;
+                self.by_collider.remove(&old.collider);
+                index
             }
-            None => self.covered.push(covered),
-        }
+            None => {
+                self.covered.push(covered);
+                self.by_node.insert(id, self.covered.len() - 1);
+                self.covered.len() - 1
+            }
+        };
+        self.by_collider.insert(self.covered[index].collider, index);
         Ok(())
     }
 
     /// Brings the colliders up to date with their nodes: moved, by scripts or with the nodes
     /// they're in, reshaped, or gone. A body whose node can no longer be placed, such as one
-    /// whose parent has been turned since it was added, stays where it was.
+    /// whose parent has been turned since it was added, stays where it was. Nothing is read again
+    /// if the scene hasn't changed since they last followed it, as between queries.
     fn follow(&mut self, scene: &Scene) {
+        if self.followed == Some(scene.revision()) {
+            return;
+        }
+        self.followed = Some(scene.revision());
         let world = &mut self.world;
+        let count = self.covered.len();
         self.covered.retain_mut(|covered| {
             if !scene.contains_node(covered.node) {
                 world.remove(covered.collider);
                 return false;
             }
-            let (id, collider) = (covered.node, covered.collider);
-            match &mut covered.what {
-                What::Drawn { solid, placed } => {
-                    let now = scene.placement(id);
-                    if now != *placed {
-                        let (transform, rect) = now.unwrap_or((Affine::IDENTITY, Rect::default()));
-                        world.set(collider, transform, rect, *solid);
-                        *placed = now;
-                    }
-                }
-                What::Tiles { layer, placed } => {
-                    let now = tiles_placed(scene, id);
-                    if now != *placed {
-                        world.set_tiles(collider, now.0, &tile_boxes(scene, id, *layer));
-                        *placed = now;
-                    }
-                }
-                What::Body(bodied) => follow_body(world, scene, id, collider, bodied),
-            }
+            follow_one(world, scene, covered);
             true
         });
+        if self.covered.len() != count {
+            self.reindex();
+        }
+    }
+
+    /// Brings the colliders of `moved` and the nodes inside them up to date, as the world moved
+    /// them, and if the rest were up to date before, `was` the scene's revision then, counts them
+    /// all as up to date: so walking a character doesn't make the next query read every node.
+    fn follow_moved(&mut self, scene: &Scene, moved: &[NodeId], was: u64) {
+        if self.followed != Some(was) {
+            return;
+        }
+        for &id in moved {
+            for inside in scene.descendants(id) {
+                if let Some(&index) = self.by_node.get(&inside) {
+                    follow_one(&mut self.world, scene, &mut self.covered[index]);
+                }
+            }
+        }
+        self.followed = Some(scene.revision());
     }
 
     /// Moves and turns the nodes of dynamic bodies to where their bodies are.
     fn lead(&mut self, scene: &mut Scene) {
+        let was = scene.revision();
+        let mut moved = Vec::new();
         for covered in &mut self.covered {
             let What::Body(bodied) = &mut covered.what else {
                 continue;
@@ -592,7 +635,9 @@ impl PhysicsWorld {
             if let Ok(after) = local(scene, id) {
                 *placed = after;
             }
+            moved.push(id);
         }
+        self.follow_moved(scene, &moved, was);
     }
 
     /// Which of `covered` is `node`'s, if it's of this world's scene and has a collider.
@@ -601,9 +646,7 @@ impl PhysicsWorld {
         if !Rc::ptr_eq(scene, &node.scene) {
             return None;
         }
-        self.covered
-            .iter()
-            .position(|covered| covered.node == node.id)
+        self.by_node.get(&node.id).copied()
     }
 
     /// The collider of `node`, or an error saying it has none.
@@ -628,10 +671,15 @@ impl PhysicsWorld {
 
     /// The nodes of `found`, nodes of `scene`, in the order they were added to the world.
     fn nodes(&self, scene: &Rc<RefCell<Scene>>, found: &[ColliderId]) -> Vec<SceneNode> {
-        self.covered
+        let mut indices: Vec<usize> = found
             .iter()
-            .filter(|covered| found.contains(&covered.collider))
-            .map(|covered| SceneNode::new(Rc::clone(scene), covered.node))
+            .filter_map(|collider| self.by_collider.get(collider).copied())
+            .collect();
+        indices.sort_unstable();
+        indices.dedup();
+        indices
+            .into_iter()
+            .map(|index| SceneNode::new(Rc::clone(scene), self.covered[index].node))
             .collect()
     }
 
@@ -657,6 +705,45 @@ impl PhysicsWorld {
         };
         let found = query(&mut self.world, &except);
         Ok(self.nodes(&scene, &found))
+    }
+}
+
+/// Brings `covered`'s collider up to date with its node, which is in `scene`.
+fn follow_one(world: &mut World, scene: &Scene, covered: &mut Covered) {
+    let (id, collider) = (covered.node, covered.collider);
+    match &mut covered.what {
+        What::Drawn { solid, placed } => {
+            let now = scene.placement(id);
+            if now != *placed {
+                let (transform, rect) = now.unwrap_or((Affine::IDENTITY, Rect::default()));
+                world.set(collider, transform, rect, *solid);
+                *placed = now;
+            }
+        }
+        What::Tiles {
+            layer,
+            origin,
+            revision,
+            boxes,
+        } => {
+            // Reshaped only when the map's solid cells make other boxes, and moved only when it
+            // moves, since either disturbs what rests on it.
+            let (now_origin, now_revision) = tiles_placed(scene, id, *layer);
+            if now_revision != *revision {
+                *revision = now_revision;
+                let now_boxes = tile_boxes(scene, id, *layer);
+                if now_boxes != *boxes {
+                    world.set_tiles(collider, now_origin, &now_boxes);
+                    *boxes = now_boxes;
+                    *origin = now_origin;
+                }
+            }
+            if now_origin != *origin {
+                world.move_tiles(collider, now_origin);
+                *origin = now_origin;
+            }
+        }
+        What::Body(bodied) => follow_body(world, scene, id, collider, bodied),
     }
 }
 
@@ -736,6 +823,7 @@ impl mlua::UserData for PhysicsWorld {
             if let Some(index) = world.covered_of(&node) {
                 let covered = world.covered.remove(index);
                 world.world.remove(covered.collider);
+                world.reindex();
             }
             Ok(())
         });
@@ -757,13 +845,15 @@ impl mlua::UserData for PhysicsWorld {
                     let [x, y] = scene.transform(id).apply([0.0, 0.0]);
                     let at = Rect::new(x + area.x, y + area.y, area.w, area.h);
                     // The node's own collider isn't in its way.
-                    let own = world.covered.iter().find(|covered| covered.node == id);
-                    let own = own.map(|covered| covered.collider);
+                    let own = world.by_node.get(&id);
+                    let own = own.map(|&index| world.covered[index].collider);
                     world.world.slide(at, [dx, dy], own)
                 })?;
                 // Moved in the scene's coordinates, so in its parent's, by however much the
                 // parent turns and stretches it.
+                let mut was = 0;
                 let moved = node.write(|scene, id| {
+                    was = scene.revision();
                     let local = match scene.node(id).parent() {
                         Some(parent) => match scene.transform(parent).inverse() {
                             Some(inverse) => Affine {
@@ -781,6 +871,7 @@ impl mlua::UserData for PhysicsWorld {
                         .set_position([x + local[0], y + local[1]]);
                     moved
                 })?;
+                node.read(|scene, id| world.follow_moved(scene, &[id], was))?;
                 Ok((moved[0], moved[1]))
             },
         );
@@ -825,7 +916,9 @@ impl mlua::UserData for PhysicsWorld {
                     .map_err(mlua::Error::runtime)?;
                 let walked = world.world.walk(&character, feet, [dx, dy], Some(collider));
                 let [mx, my] = walked.moved;
+                let mut was = 0;
                 let at = node.write(|scene, id| {
+                    was = scene.revision();
                     let node = scene.node_mut(id);
                     let [x, y] = node.position();
                     node.set_position([x + mx, y + my]);
@@ -837,6 +930,7 @@ impl mlua::UserData for PhysicsWorld {
                 {
                     bodied.walked = at.ok();
                 }
+                node.read(|scene, id| world.follow_moved(scene, &[id], was))?;
                 Ok((mx, my, walked.grounded))
             },
         );
@@ -886,7 +980,7 @@ impl mlua::UserData for PhysicsWorld {
                 };
                 let hit = world.world.cast_ray([x, y], [dx, dy], distance, &except);
                 let Some((hit, covered)) = hit.and_then(|hit| {
-                    let covered = world.covered.iter().find(|c| c.collider == hit.collider)?;
+                    let covered = &world.covered[*world.by_collider.get(&hit.collider)?];
                     Some((hit, covered))
                 }) else {
                     return Ok(None);

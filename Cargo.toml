@@ -118,3 +118,8 @@ required-features = ["egui"]
 [[bench]]
 name = "drawing"
 harness = false
+
+[[bench]]
+name = "physics"
+harness = false
+required-features = ["physics"]

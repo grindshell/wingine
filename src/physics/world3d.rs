@@ -14,7 +14,7 @@ use rapier3d::{
     },
 };
 
-use super::{BodyKind, Material, check_material, check_sensor_kind};
+use super::{BodyKind, Material, STEP, check_material, check_sensor_kind, parts};
 use crate::math::Bounds3;
 
 /// Rapier's vectors and rotations, which are glam's.
@@ -27,12 +27,6 @@ const GAP: f32 = 0.002;
 
 /// How far below a character the ground may be for it to stand on it, unless the ground sank.
 const REACH: f32 = GAP * 4.0;
-
-/// The longest step the world takes at once, in seconds: longer ones are taken in parts.
-const STEP: f32 = 1.0 / 60.0;
-
-/// The most parts a step is taken in, so a long hitch doesn't take longer to catch up with.
-const MAX_STEPS: u32 = 16;
 
 /// The most things a character slides off in one part of its walk.
 const MAX_HITS: usize = 4;
@@ -443,15 +437,14 @@ impl World3d {
     }
 
     /// Moves the world on by `dt` seconds: dynamic bodies fall, tumble and come to rest, and
-    /// kinematic ones move where they've been put. Steps longer than a sixtieth of a second are
-    /// taken in equal parts, up to 16, so bodies don't pass through each other, and kinematic
-    /// bodies go an equal part of the way in each.
+    /// kinematic ones move where they've been put. Steps more than a twentieth longer than a
+    /// sixtieth of a second are taken in equal parts, up to 16, so bodies don't pass through each
+    /// other, and kinematic bodies go an equal part of the way in each.
     pub fn step(&mut self, dt: f32) {
         if !(dt > 0.0 && dt.is_finite()) {
             return;
         }
-        // A whole number of sixtieths, give or take a little, is that many.
-        let parts = (dt / STEP - 1.0e-3).ceil().clamp(1.0, MAX_STEPS as f32) as u32;
+        let parts = parts(dt);
         self.rapier.integration_parameters.dt = dt / parts as f32;
         // Rapier moves a kinematic body all the way to where it's been put in its next step, and
         // keeps it still in the steps after, so in parts it would go too fast, then stop.

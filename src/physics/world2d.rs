@@ -14,7 +14,7 @@ use rapier2d::{
     },
 };
 
-use super::{BodyKind, Material, check_material, check_sensor_kind};
+use super::{BodyKind, Material, STEP, check_material, check_sensor_kind, parts};
 use crate::math::{Affine, Rect};
 
 /// Rapier's vectors, which are glam's, and its poses: where something is and how it's turned.
@@ -28,12 +28,6 @@ const GAP: f32 = 0.01;
 
 /// How far below a character the ground may be for it to stand on it, unless the ground moved away.
 const REACH: f32 = GAP * 4.0;
-
-/// The longest step the world takes at once, in seconds: longer ones are taken in parts.
-const STEP: f32 = 1.0 / 60.0;
-
-/// The most parts a step is taken in, so a long hitch doesn't take longer to catch up with.
-const MAX_STEPS: u32 = 16;
 
 /// The most things a box slides off in one move. Each takes away the part of the move going into
 /// it, so in 2D, two leave nothing; more are for corners.
@@ -329,6 +323,19 @@ impl World {
         self.fresh.push(id.0);
     }
 
+    /// Moves the collider of tiles `id` to `origin`, keeping its boxes, as moving a tile map
+    /// does. Does nothing to one that's been removed, or a body's.
+    pub fn move_tiles(&mut self, id: ColliderId, origin: [f32; 2]) {
+        let Some(collider) = self.rapier.colliders.get_mut(id.0) else {
+            return;
+        };
+        if collider.parent().is_some() {
+            return;
+        }
+        collider.set_position(Isometry::from_translation(Vector::from(origin)));
+        self.fresh.push(id.0);
+    }
+
     /// Adds `body`, and returns its collider, or fails if its shape can't be made, or its material
     /// isn't one: sizes that aren't finite, a density, friction or bounce less than 0, a dynamic
     /// body with a density of 0, or with no area, or a dynamic sensor.
@@ -563,15 +570,14 @@ impl World {
     }
 
     /// Moves the world on by `dt` seconds: dynamic bodies fall, tumble and come to rest, and
-    /// kinematic ones move where they've been put. Steps longer than a sixtieth of a second are
-    /// taken in equal parts, up to 16, so bodies don't pass through each other, and kinematic
-    /// bodies go an equal part of the way in each.
+    /// kinematic ones move where they've been put. Steps more than a twentieth longer than a
+    /// sixtieth of a second are taken in equal parts, up to 16, so bodies don't pass through each
+    /// other, and kinematic bodies go an equal part of the way in each.
     pub fn step(&mut self, dt: f32) {
         if !(dt > 0.0 && dt.is_finite()) {
             return;
         }
-        // A whole number of sixtieths, give or take a little, is that many.
-        let parts = (dt / STEP - 1.0e-3).ceil().clamp(1.0, MAX_STEPS as f32) as u32;
+        let parts = parts(dt);
         self.rapier.integration_parameters.dt = dt / parts as f32;
         // Rapier moves a kinematic body all the way to where it's been put in its next step, and
         // keeps it still in the steps after, so in parts it would go too fast, then stop.
@@ -1133,29 +1139,27 @@ fn true_normal(normal: Vector, hit: &Collider) -> Vector {
     let near = |side: &Vector| normal.dot(*side) > 0.0 && normal.perp_dot(*side).abs() < HAIR;
     let rotation = hit.position().rotation;
     let shape = hit.shape();
-    // What a box hits is solid inside its sides or along them, from either side.
-    let theirs: Vec<Vector> = if let Some(polygon) = shape.as_convex_polygon() {
+    // What a box hits is solid inside its sides or along them, from either side. Found without
+    // gathering them, since every step of a walk casts several times.
+    let theirs = if let Some(polygon) = shape.as_convex_polygon() {
         polygon
             .normals()
             .iter()
             .map(|&side| rotation * side)
-            .collect()
+            .find(near)
     } else if let Some(polyline) = shape.as_polyline() {
         let normals = polyline.segments().filter_map(|segment| segment.normal());
         normals
             .flat_map(|side| [rotation * side, -(rotation * side)])
-            .collect()
+            .find(near)
     } else if shape.as_cuboid().is_some() || shape.as_compound().is_some() {
         // A box's sides, or tiles', which are boxes along the collider's axes.
-        BOX_SIDES.iter().map(|&side| rotation * side).collect()
+        BOX_SIDES.iter().map(|&side| rotation * side).find(near)
     } else {
-        Vec::new()
+        None
     };
     theirs
-        .iter()
-        .chain(&BOX_SIDES)
-        .find(|side| near(side))
-        .copied()
+        .or_else(|| BOX_SIDES.iter().copied().find(near))
         .unwrap_or(normal)
 }
 
