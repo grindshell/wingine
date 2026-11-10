@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::HashMap,
     fmt,
     path::PathBuf,
@@ -71,9 +72,24 @@ impl FontSettings {
 #[derive(Debug)]
 struct Metrics {
     glyphs: HashMap<char, Glyph>,
+    /// Those of ASCII characters, by code, found without hashing.
+    ascii: Box<[Option<Glyph>; 128]>,
     /// Drawn for characters the font lacks.
     fallback: Option<Glyph>,
     line_height: f32,
+}
+
+impl Metrics {
+    fn new(glyphs: HashMap<char, Glyph>, fallback: Option<Glyph>, line_height: f32) -> Self {
+        Self {
+            ascii: Box::new(std::array::from_fn(|code| {
+                glyphs.get(&char::from(code as u8)).copied()
+            })),
+            glyphs,
+            fallback,
+            line_height,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -86,6 +102,10 @@ struct Glyph {
     advance: f32,
     /// Which of the font's textures its image is in.
     page: u32,
+    /// What a vector font calls it, which kerning goes by, so layout needn't look it up again:
+    /// its `.notdef` for a character the font lacks, drawn as its `?`, and 0 in fonts that don't
+    /// kern.
+    id: GlyphId,
 }
 
 impl Glyph {
@@ -96,6 +116,7 @@ impl Glyph {
             uv: ([0.0; 2], [0.0; 2]),
             advance,
             page: 0,
+            id: GlyphId(0),
         }
     }
 
@@ -137,11 +158,7 @@ impl Font {
         let width = COLUMNS * cell_width;
         let height = glyphs.len().div_ceil(COLUMNS) * cell_height;
         let mut rgba = vec![0; width * height * 4];
-        let mut metrics = Metrics {
-            glyphs: HashMap::new(),
-            fallback: None,
-            line_height: default_font::LINE_HEIGHT,
-        };
+        let mut placed = HashMap::new();
         for (i, (c, rows)) in glyphs.iter().enumerate() {
             let origin = [i % COLUMNS * cell_width, i / COLUMNS * cell_height];
             for (y, row) in rows.iter().enumerate() {
@@ -164,17 +181,17 @@ impl Font {
                 uv: (min, max),
                 advance: glyph_width + 1.0,
                 page: 0,
+                id: GlyphId(0),
             };
-            metrics.glyphs.insert(*c, glyph);
+            placed.insert(*c, glyph);
         }
         for &(alias, original) in default_font::ALIASES {
-            let glyph = metrics.glyphs[&original];
-            metrics.glyphs.insert(alias, glyph);
+            let glyph = placed[&original];
+            placed.insert(alias, glyph);
         }
-        metrics
-            .glyphs
-            .insert(' ', Glyph::blank(default_font::SPACE_ADVANCE));
-        metrics.fallback = metrics.glyphs.get(&'?').copied();
+        placed.insert(' ', Glyph::blank(default_font::SPACE_ADVANCE));
+        let fallback = placed.get(&'?').copied();
+        let metrics = Metrics::new(placed, fallback, default_font::LINE_HEIGHT);
 
         let texture = renderer.create_texture(device, queue, width as u32, height as u32, &rgba);
         Self::fixed(texture, metrics, Vec::new())
@@ -313,9 +330,7 @@ impl Font {
     pub(crate) fn page(&self, page: u32) -> Texture {
         match &*self.data {
             FontData::Fixed { texture, .. } => texture.clone(),
-            FontData::Vector { sized, .. } => {
-                lock(&sized.atlas).pages[page as usize].texture.clone()
-            }
+            FontData::Vector { sized, .. } => lock(&sized.textures)[page as usize].clone(),
         }
     }
 
@@ -328,7 +343,9 @@ impl Font {
     fn glyphs(&self) -> Source<'_> {
         match &*self.data {
             FontData::Fixed { metrics, .. } => Source::Fixed(metrics),
-            FontData::Vector { face, sized } => Source::Vector(face, sized),
+            FontData::Vector { face, sized } => {
+                Source::Vector(face, sized, RefCell::new(lock(&sized.atlas)))
+            }
         }
     }
 }
@@ -390,15 +407,13 @@ fn bitmap_metrics(def: &BitmapFontDef, image: &RgbaImage) -> Result<Metrics, Str
             uv: (min, max),
             advance: glyph_width as f32 + def.spacing as f32,
             page: 0,
+            id: GlyphId(0),
         };
         glyphs.insert(c, glyph);
     }
     glyphs.insert(' ', Glyph::blank(def.space as f32));
-    Ok(Metrics {
-        fallback: glyphs.get(&'?').copied(),
-        glyphs,
-        line_height: def.line_height as f32,
-    })
+    let fallback = glyphs.get(&'?').copied();
+    Ok(Metrics::new(glyphs, fallback, def.line_height as f32))
 }
 
 /// How many sizes of a TrueType font are kept rasterized, besides those fonts in use hold, so a
@@ -464,6 +479,9 @@ struct FaceSize {
     /// How many pixels across and down its pages of glyphs are.
     page_size: u32,
     atlas: Mutex<Atlas>,
+    /// The atlas's pages' textures, apart from it, so text can be drawn from them as it's laid
+    /// out, while layout holds the atlas.
+    textures: Mutex<Vec<Texture>>,
 }
 
 impl FaceSize {
@@ -481,35 +499,37 @@ impl FaceSize {
             line_height,
             page_size: page_size(line_height),
             atlas: Mutex::default(),
+            textures: Mutex::default(),
         }
     }
 
-    /// The glyph for `c`, rasterized and put in a page the first time, its `?` if the font lacks
-    /// it, or `None` if it lacks that too.
-    fn glyph(&self, face: &Face, c: char) -> Option<Glyph> {
-        let mut atlas = lock(&self.atlas);
-        if let Some(glyph) = atlas.glyphs.get(&c) {
-            return *glyph;
+    /// The glyph for `c`, rasterized and put in a page of `atlas`, its own, the first time, its
+    /// `?` if the font lacks it, or `None` if it lacks that too.
+    fn glyph(&self, face: &Face, atlas: &mut Atlas, c: char) -> Option<Glyph> {
+        if let Some(glyph) = atlas.get(c) {
+            return glyph;
         }
         let id = face.font.glyph_id(c);
         let glyph = if id.0 != 0 {
-            Some(self.rasterize(face, &mut atlas, id))
+            Some(self.rasterize(face, atlas, id))
         } else if c != '?' {
-            drop(atlas);
-            let fallback = self.glyph(face, '?');
-            atlas = lock(&self.atlas);
-            fallback
+            // Drawn as its `?`, but kerned as what the font has for it.
+            self.glyph(face, atlas, '?')
+                .map(|glyph| Glyph { id, ..glyph })
         } else {
             None
         };
-        atlas.glyphs.insert(c, glyph);
+        atlas.set(c, glyph);
         glyph
     }
 
     /// Rasterizes the glyph `id` into a page, with its baseline on a whole pixel.
     fn rasterize(&self, face: &Face, atlas: &mut Atlas, id: GlyphId) -> Glyph {
         let advance = face.font.as_scaled(self.scale).h_advance(id);
-        let blank = Glyph::blank(advance);
+        let blank = Glyph {
+            id,
+            ..Glyph::blank(advance)
+        };
         let positioned =
             id.with_scale_and_position(self.scale, ab_glyph::point(0.0, self.baseline));
         let Some(outlined) = face.font.outline_glyph(positioned) else {
@@ -523,10 +543,11 @@ impl FaceSize {
             return blank;
         }
         let size = [width as u32, height as u32];
-        let Some((page, at)) = atlas.place(size, self.page_size, &face.pages) else {
+        let Some((page, at)) = atlas.place(size, self.page_size, &face.pages, &self.textures)
+        else {
             return blank;
         };
-        let Page { raw, shelves, .. } = &atlas.pages[page];
+        let Page { raw, shelves } = &atlas.pages[page];
         face.pages
             .write(raw, at, size, &glyph_pixels(&outlined, size, face.smooth));
         let across = shelves.size as f32;
@@ -536,6 +557,7 @@ impl FaceSize {
             uv: (min, [min[0] + width / across, min[1] + height / across]),
             advance,
             page: page as u32,
+            id,
         }
     }
 }
@@ -572,29 +594,57 @@ fn opacity(coverage: f32, smooth: bool) -> u8 {
 }
 
 /// A font size's glyphs: what each character draws, and the pages they're in.
-#[derive(Default)]
 struct Atlas {
-    /// `None` for characters the font has nothing for, not even a `?`.
+    /// Those of ASCII characters, by code, found without hashing, once they've been looked for.
+    ascii: [Option<Option<Glyph>>; 128],
+    /// Those of the rest. `None` for characters the font has nothing for, not even a `?`.
     glyphs: HashMap<char, Option<Glyph>>,
     pages: Vec<Page>,
 }
 
+impl Default for Atlas {
+    fn default() -> Self {
+        Self {
+            ascii: [None; 128],
+            glyphs: HashMap::new(),
+            pages: Vec::new(),
+        }
+    }
+}
+
 struct Page {
     raw: wgpu::Texture,
-    texture: Texture,
     /// Where the next glyph goes.
     shelves: Shelves,
 }
 
 impl Atlas {
+    /// What `c` draws, if it's been looked for.
+    fn get(&self, c: char) -> Option<Option<Glyph>> {
+        match self.ascii.get(c as usize) {
+            Some(known) => *known,
+            None => self.glyphs.get(&c).copied(),
+        }
+    }
+
+    fn set(&mut self, c: char, glyph: Option<Glyph>) {
+        match self.ascii.get_mut(c as usize) {
+            Some(known) => *known = Some(glyph),
+            None => {
+                self.glyphs.insert(c, glyph);
+            }
+        }
+    }
+
     /// Where a glyph `size` pixels across and down goes: which page and where in it, in a new
     /// page `page_size` across if the last one is full, or one of its own if it's bigger than
-    /// that.
+    /// that, whose texture goes in `textures`.
     fn place(
         &mut self,
         size: [u32; 2],
         page_size: u32,
         pages: &GlyphPages,
+        textures: &Mutex<Vec<Texture>>,
     ) -> Option<(usize, [u32; 2])> {
         if let Some(page) = self.pages.last_mut()
             && let Some(at) = page.shelves.place(size)
@@ -613,11 +663,8 @@ impl Atlas {
         let mut shelves = Shelves::new(page_size);
         let at = shelves.place(size)?;
         let (raw, texture) = pages.create(page_size);
-        self.pages.push(Page {
-            raw,
-            texture,
-            shelves,
-        });
+        self.pages.push(Page { raw, shelves });
+        lock(textures).push(texture);
         Some((self.pages.len() - 1, at))
     }
 }
@@ -671,24 +718,24 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// What a font's glyphs come from, for laying text out.
 enum Source<'a> {
     Fixed(&'a Metrics),
-    Vector(&'a Face, &'a FaceSize),
+    /// A vector font at a size, with its atlas, held while text is laid out rather than locked
+    /// for each glyph.
+    Vector(&'a Face, &'a FaceSize, RefCell<MutexGuard<'a, Atlas>>),
 }
 
 impl Glyphs for Source<'_> {
     fn glyph(&self, c: char) -> Option<Glyph> {
         match self {
             Self::Fixed(metrics) => metrics.glyph(c),
-            Self::Vector(face, sized) => sized.glyph(face, c),
+            Self::Vector(face, sized, atlas) => sized.glyph(face, &mut atlas.borrow_mut(), c),
         }
     }
 
-    fn kern(&self, before: char, c: char) -> f32 {
+    fn kern(&self, before: &Glyph, glyph: &Glyph) -> f32 {
         match self {
             Self::Fixed(_) => 0.0,
-            Self::Vector(face, sized) => {
-                let font = &face.font;
-                let scaled = font.as_scaled(sized.scale);
-                scaled.kern(font.glyph_id(before), font.glyph_id(c))
+            Self::Vector(face, sized, _) => {
+                face.font.as_scaled(sized.scale).kern(before.id, glyph.id)
             }
         }
     }
@@ -696,17 +743,21 @@ impl Glyphs for Source<'_> {
     fn line_height(&self) -> f32 {
         match self {
             Self::Fixed(metrics) => metrics.line_height,
-            Self::Vector(_, sized) => sized.line_height,
+            Self::Vector(_, sized, _) => sized.line_height,
         }
     }
 }
 
 impl Glyphs for Metrics {
     fn glyph(&self, c: char) -> Option<Glyph> {
-        self.glyphs.get(&c).or(self.fallback.as_ref()).copied()
+        let glyph = match self.ascii.get(c as usize) {
+            Some(ascii) => *ascii,
+            None => self.glyphs.get(&c).copied(),
+        };
+        glyph.or(self.fallback)
     }
 
-    fn kern(&self, _: char, _: char) -> f32 {
+    fn kern(&self, _: &Glyph, _: &Glyph) -> f32 {
         0.0
     }
 
@@ -720,8 +771,9 @@ trait Glyphs {
     /// The glyph for `c`, or the one drawn for characters the font lacks.
     fn glyph(&self, c: char) -> Option<Glyph>;
 
-    /// How far the pen moves between `before` and `c`, beside its advance, in unscaled pixels.
-    fn kern(&self, before: char, c: char) -> f32;
+    /// How far the pen moves between `before` and `glyph`, beside its advance, in unscaled
+    /// pixels.
+    fn kern(&self, before: &Glyph, glyph: &Glyph) -> f32;
 
     fn line_height(&self) -> f32;
 
@@ -751,6 +803,22 @@ trait Glyphs {
                 if i > 0 {
                     spaces += space;
                 }
+                if max_width == f32::INFINITY {
+                    // Nothing wraps, so a word goes where the pen is, unless it has no ink:
+                    // placed as it comes, its glyphs looked up once, and taken back if it's
+                    // only space.
+                    let pen = cursor.pen;
+                    cursor.pen += spaces;
+                    let (inked, advance) =
+                        self.place_word(scale, word, max_width, false, &mut cursor, &mut place);
+                    if inked {
+                        spaces = 0.0;
+                    } else {
+                        cursor.pen = pen;
+                        spaces += advance;
+                    }
+                    continue;
+                }
                 let (ink, advance) = self.measure(scale, word, cursor.pen + spaces);
                 let Some(mut ink) = ink else {
                     // A word of other spaces, such as no-break ones, is space too.
@@ -767,40 +835,58 @@ trait Glyphs {
                 // Only a word that doesn't fit even where a line starts breaks between
                 // characters: one too long for any line, or one after leading spaces.
                 let breakable = ink > max_width;
-                let mut before = None;
-                for c in word.chars().filter(|c| !c.is_control()) {
-                    let Some(glyph) = self.glyph(c) else {
-                        continue;
-                    };
-                    if let Some(before) = before {
-                        cursor.pen += self.kern(before, c) * scale;
-                    }
-                    before = Some(c);
-                    let bounds = scale_rect(glyph.bounds, scale);
-                    // Something is on the line, leading spaces at least, so it can wrap.
-                    if breakable
-                        && cursor.pen > 0.0
-                        && cursor.pen.round() + bounds.right() > max_width
-                    {
-                        cursor.new_line();
-                    }
-                    if glyph.has_ink() {
-                        let pen = cursor.pen.round();
-                        let rect =
-                            Rect::new(pen + bounds.x, cursor.top() + bounds.y, bounds.w, bounds.h);
-                        let placed = PlacedGlyph {
-                            rect,
-                            uv: glyph.uv,
-                            page: glyph.page,
-                        };
-                        place(placed, cursor.line);
-                        cursor.ink = Some(cursor.ink.unwrap_or(0.0).max(pen + bounds.right()));
-                    }
-                    cursor.pen += glyph.advance * scale;
-                }
+                self.place_word(scale, word, max_width, breakable, &mut cursor, &mut place);
             }
         }
         cursor.finish()
+    }
+
+    /// Places the glyphs of `word` from the pen, breaking it between characters to fit
+    /// `max_width` if it's `breakable`. Whether it had any ink, and how far it moved the pen, as
+    /// [`Glyphs::measure`] measures it.
+    fn place_word(
+        &self,
+        scale: f32,
+        word: &str,
+        max_width: f32,
+        breakable: bool,
+        cursor: &mut Cursor,
+        place: &mut impl FnMut(PlacedGlyph, usize),
+    ) -> (bool, f32) {
+        let mut inked = false;
+        let mut advance = 0.0f32;
+        let mut before = None;
+        for c in word.chars().filter(|c| !c.is_control()) {
+            let Some(glyph) = self.glyph(c) else {
+                continue;
+            };
+            if let Some(before) = &before {
+                let kern = self.kern(before, &glyph) * scale;
+                cursor.pen += kern;
+                advance += kern;
+            }
+            let bounds = scale_rect(glyph.bounds, scale);
+            // Something is on the line, leading spaces at least, so it can wrap.
+            if breakable && cursor.pen > 0.0 && cursor.pen.round() + bounds.right() > max_width {
+                cursor.new_line();
+            }
+            if glyph.has_ink() {
+                let pen = cursor.pen.round();
+                let rect = Rect::new(pen + bounds.x, cursor.top() + bounds.y, bounds.w, bounds.h);
+                let placed = PlacedGlyph {
+                    rect,
+                    uv: glyph.uv,
+                    page: glyph.page,
+                };
+                place(placed, cursor.line);
+                cursor.ink = Some(cursor.ink.unwrap_or(0.0).max(pen + bounds.right()));
+                inked = true;
+            }
+            cursor.pen += glyph.advance * scale;
+            advance += glyph.advance * scale;
+            before = Some(glyph);
+        }
+        (inked, advance)
     }
 
     /// Lays out `text` as [`Glyphs::lay_out`] does, then moves each line by whole pixels to line
@@ -841,18 +927,18 @@ trait Glyphs {
         let mut before = None;
         for c in word.chars().filter(|c| !c.is_control()) {
             if let Some(glyph) = self.glyph(c) {
-                if let Some(before) = before {
-                    let kern = self.kern(before, c) * scale;
+                if let Some(before) = &before {
+                    let kern = self.kern(before, &glyph) * scale;
                     pen += kern;
                     advance += kern;
                 }
-                before = Some(c);
                 if glyph.has_ink() {
                     let right = pen.round() + scale_rect(glyph.bounds, scale).right();
                     ink = Some(ink.map_or(right, |ink| ink.max(right)));
                 }
                 pen += glyph.advance * scale;
                 advance += glyph.advance * scale;
+                before = Some(glyph);
             }
         }
         (ink, advance)
@@ -1002,17 +1088,14 @@ mod tests {
             uv: ([0.0; 2], [1.0; 2]),
             advance: w + 1.0,
             page: 0,
+            id: GlyphId(0),
         };
         let mut glyphs: HashMap<char, Glyph> = ('a'..='f').map(|c| (c, glyph(3.0, 4.0))).collect();
         glyphs.insert('i', glyph(1.0, 4.0));
         glyphs.insert('g', glyph(3.0, 6.0));
         glyphs.insert(' ', Glyph::blank(2.0));
         glyphs.insert('\u{a0}', Glyph::blank(3.0));
-        Metrics {
-            glyphs,
-            fallback: Some(glyph(3.0, 4.0)),
-            line_height: 6.0,
-        }
+        Metrics::new(glyphs, Some(glyph(3.0, 4.0)), 6.0)
     }
 
     fn lay_out(text: &str, max_width: Option<f32>) -> (Vec<Rect>, [f32; 2], usize) {
@@ -1174,12 +1257,18 @@ mod tests {
             let mut glyph = self.0.glyph(c)?;
             if c == 'a' || c == 'b' {
                 glyph.advance = 3.4;
+                glyph.id = GlyphId(c as u16);
             }
             Some(glyph)
         }
 
-        fn kern(&self, before: char, c: char) -> f32 {
-            if (before, c) == ('a', 'b') { -1.5 } else { 0.0 }
+        fn kern(&self, before: &Glyph, glyph: &Glyph) -> f32 {
+            let ids = [before.id, glyph.id].map(|id| id.0);
+            if ids == ['a' as u16, 'b' as u16] {
+                -1.5
+            } else {
+                0.0
+            }
         }
 
         fn line_height(&self) -> f32 {

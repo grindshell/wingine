@@ -236,7 +236,9 @@ own right.
   Godot's. It edits `SceneFile`s, never live scenes: a `Document` holds the file, its undo
   history of whole-file snapshots (a change lasts until a frame with no button held and no field
   focused, so a drag is one), the selection as a `NodePath`, and a preview `Scene` built through
-  `AssetCache`, which rereads a file only when it changes. `edit.rs`, `clips.rs`, `layout.rs` and
+  `AssetCache`, which rereads a file only when it changes. Painting tiles, and moving, turning or
+  stretching a node, change the preview as well as the file rather than building it again, and a
+  preview built again keeps its particles going. `edit.rs`, `clips.rs`, `layout.rs` and
   `instance.rs` are pure operations on files.
 - The viewport renders the preview into a `GuiCanvas` and picks, paints tiles, resizes, and drags
   in 3D. The Animation panel keys what the clip it shows tracks. The Script screen checks scripts
@@ -280,9 +282,9 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
 - `tests/`: a file per area (`runtime`, `scene`, `screenshots`, `simulation`, `testing`, `gui`,
   `export`, `native`) and per example game. Games' tests check their Luau state through
   `Simulation::eval` and `exec`, and run their own Luau tests through `runtime::testing::run`.
-- `benches/drawing.rs`: what drawing costs from Rust, Luau and native libraries; `physics.rs`,
-  what Luau worlds' steps, tiles, queries and walks cost, and Rust steps of a sixtieth and a
-  59.94 Hz frame. CI doesn't run them. Their numbers shift by a third with unrelated changes, and
+- `benches/drawing.rs`: what drawing sprites and text costs from Rust, Luau and native libraries;
+  `physics.rs`, what Luau worlds' steps, tiles, queries and walks cost, and Rust steps of a
+  sixtieth and a 59.94 Hz frame. CI doesn't run them. Their numbers shift by a third with unrelated changes, and
   by a quarter between runs of one build, so run each a few times. A build started before an edit
   is newer than it, so touch the sources before rebuilding to measure.
 - `docs/`: the user docs, restating the module docs for game authors, with `docs/api/` the API

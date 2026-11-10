@@ -348,10 +348,11 @@ impl Document {
         Some((name, clip, self.timeline.time.clamp(0.0, clip.duration)))
     }
 
-    /// The node at `path` as the preview shows it: as the file has it, with the properties the
-    /// clip posing the preview has tracks of as they are then.
+    /// The node at `path` as the preview shows it, without its children, which panels showing it
+    /// each frame needn't copy: as the file has it, with the properties the clip posing the
+    /// preview has tracks of as they are then.
     pub fn shown_node(&self, path: &[usize]) -> Option<NodeDef> {
-        let mut node = edit::node(&self.file, path)?.clone();
+        let mut node = without_children(edit::node(&self.file, path)?);
         if let Some((_, clip, time)) = self.posing() {
             let names = edit::name_path(&self.file, path)?;
             for track in clip.tracks.iter().filter(|track| track.node == names) {
@@ -376,18 +377,19 @@ impl Document {
             .collect()
     }
 
-    /// Changes the node at `path` to `node`, the node [`Document::shown_node`] gave, changed:
-    /// properties the clip posing the preview has tracks of are keyed at the playhead, and the
-    /// rest change in the node.
+    /// Changes the node at `path` to `node`, the node [`Document::shown_node`] gave, changed, but
+    /// for its children, which stay as they are: properties the clip posing the preview has tracks
+    /// of are keyed at the playhead, and the rest change in the node. A change that only moves,
+    /// turns or stretches the node is made to the preview too, rather than building it again, so
+    /// dragging it costs little.
     pub fn set_node(&mut self, path: &[usize], mut node: NodeDef) {
-        let (Some(shown), Some(original)) =
-            (self.shown_node(path), edit::node(&self.file, path).cloned())
-        else {
+        let Some(shown) = self.shown_node(path) else {
             return;
         };
         if node == shown {
             return;
         }
+        let original = without_children(edit::node(&self.file, path).expect("the node is there"));
         let mut keys = Vec::new();
         let mut keying = None;
         if let Some((name, clip, time)) = self.posing() {
@@ -407,18 +409,62 @@ impl Document {
             }
             keying = Some((name.to_owned(), names, time));
         }
-        let file = self.edit();
+        self.begin_change();
+        // Only tracks the clip has are keyed, which posing the preview sets each frame, so it
+        // needn't be built again for them.
         if let Some((name, names, time)) = keying
-            && let Some(clip) = file.clips.get_mut(&name)
+            && let Some(clip) = self.file.clips.get_mut(&name)
         {
             for (property, value) in keys {
                 clips::set_key(clip, &names, property, time, value)
                     .expect("the value is the property's own");
             }
         }
-        if node != original {
-            *edit::node_mut(file, path).expect("the node is there") = node;
+        if node == original {
+            return;
         }
+        if !(only_moves(&original, &node) && self.move_live(path, &original, &node)) {
+            self.stale = true;
+        }
+        let target = edit::node_mut(&mut self.file, path).expect("the node is there");
+        node.children = mem::take(&mut target.children);
+        *target = node;
+    }
+
+    /// Moves, turns and stretches the preview's node made from the node at `path` as `after` is
+    /// but `before` isn't, where they differ, leaving what the clip posing it sets as it is.
+    /// Whether it could, for a preview built from the file as it is.
+    fn move_live(&mut self, path: &[usize], before: &NodeDef, after: &NodeDef) -> bool {
+        if self.stale || self.error.is_some() {
+            return false;
+        }
+        let Some(id) = self.live_node(path) else {
+            return false;
+        };
+        let Some(live) = self.preview.as_mut().and_then(|scene| scene.get_mut(id)) else {
+            return false;
+        };
+        let changed = |was: f32, now: f32, live: f32| if was == now { live } else { now };
+        let [x, y] = live.position();
+        live.set_position([changed(before.x, after.x, x), changed(before.y, after.y, y)]);
+        live.set_rotation(changed(before.rotation, after.rotation, live.rotation()));
+        let [scale_x, scale_y] = live.scale();
+        live.set_scale([
+            changed(before.scale_x, after.scale_x, scale_x),
+            changed(before.scale_y, after.scale_y, scale_y),
+        ]);
+        let (Some(was), Some(now)) = (before.placement3, after.placement3) else {
+            return true;
+        };
+        let Some(mut placement) = live.placement3() else {
+            return false;
+        };
+        placement.z = changed(was.z, now.z, placement.z);
+        placement.yaw = changed(was.yaw, now.yaw, placement.yaw);
+        placement.pitch = changed(was.pitch, now.pitch, placement.pitch);
+        placement.roll = changed(was.roll, now.roll, placement.roll);
+        placement.scale_z = changed(was.scale_z, now.scale_z, placement.scale_z);
+        live.set_placement3(placement).is_ok()
     }
 
     /// Keys `properties` of the node at `path` as the preview shows them, at the playhead of the
@@ -510,20 +556,7 @@ impl Document {
         match built {
             Ok(mut scene) => {
                 scene.set_size(canvas_size);
-                // Particles show as they are once they've been going a while, so effects show
-                // even while nothing animates them.
-                let root = scene.root();
-                let longest = scene
-                    .descendants(root)
-                    .into_iter()
-                    .filter_map(|id| match scene.node(id).kind() {
-                        Kind::Particles(node) => Some(node.particles.longest_life()),
-                        _ => None,
-                    })
-                    .fold(0.0, f32::max);
-                if longest > 0.0 {
-                    scene.advance_particles(root, longest.min(PREVIEW_WARMUP));
-                }
+                carry_particles(&mut scene, self.preview.take());
                 self.preview = Some(scene);
                 self.error = None;
                 None
@@ -569,6 +602,117 @@ impl Document {
         scene
             .contains_node(id)
             .then(|| edit::path_of(&self.file, &scene.path(id)))
+    }
+}
+
+/// `node` without its children.
+fn without_children(node: &NodeDef) -> NodeDef {
+    let NodeDef {
+        name,
+        kind,
+        x,
+        y,
+        anchor,
+        rotation,
+        scale_x,
+        scale_y,
+        placement3,
+        visible,
+        tags,
+        props,
+        children: _,
+    } = node;
+    NodeDef {
+        name: name.clone(),
+        kind: kind.clone(),
+        x: *x,
+        y: *y,
+        anchor: *anchor,
+        rotation: *rotation,
+        scale_x: *scale_x,
+        scale_y: *scale_y,
+        placement3: *placement3,
+        visible: *visible,
+        tags: tags.clone(),
+        props: props.clone(),
+        children: Vec::new(),
+    }
+}
+
+/// Whether `after` differs from `before` only in where it is, how it's turned and how much it's
+/// stretched, children aside.
+fn only_moves(before: &NodeDef, after: &NodeDef) -> bool {
+    let NodeDef {
+        name,
+        kind,
+        x: _,
+        y: _,
+        anchor,
+        rotation: _,
+        scale_x: _,
+        scale_y: _,
+        placement3,
+        visible,
+        tags,
+        props,
+        children: _,
+    } = after;
+    *name == before.name
+        && *kind == before.kind
+        && *anchor == before.anchor
+        && placement3.is_some() == before.placement3.is_some()
+        && *visible == before.visible
+        && *tags == before.tags
+        && *props == before.props
+}
+
+/// Gives the particles nodes of `scene`, just built, the particles of the nodes at the same paths
+/// in `old`, the scene it was built again from, that send out the same particles, so they go on
+/// as they were. The rest are moved on until they show as they are once they've been going a
+/// while, so effects show even while nothing animates them.
+fn carry_particles(scene: &mut Scene, mut old: Option<Scene>) {
+    let mut fresh = Vec::new();
+    for id in scene.descendants(scene.root()) {
+        let Kind::Particles(node) = scene.node(id).kind() else {
+            continue;
+        };
+        let settings = node.particles.settings();
+        let path = scene.path(id);
+        let carried = old.as_mut().and_then(|old| {
+            let at = old.find(old.root(), &path)?;
+            match old.get(at)?.kind() {
+                Kind::Particles(was) if was.particles.settings() == settings => {
+                    Some(was.particles.clone())
+                }
+                _ => None,
+            }
+        });
+        let Some(mut particles) = carried else {
+            fresh.push((id, node.particles.longest_life()));
+            continue;
+        };
+        let Kind::Particles(node) = scene.node_mut(id).kind_mut() else {
+            unreachable!("the node sends out particles");
+        };
+        particles.set_sprite(node.particles.sprite().cloned());
+        node.particles = particles;
+    }
+    let longest = fresh.iter().map(|&(_, life)| life).fold(0.0, f32::max);
+    if longest <= 0.0 {
+        return;
+    }
+    let ids: Vec<NodeId> = fresh.iter().map(|&(id, _)| id).collect();
+    for &id in &ids {
+        // Those inside another move on with it.
+        let mut above = scene.node(id).parent();
+        let mut inside = false;
+        while let Some(parent) = above {
+            inside |= ids.contains(&parent);
+            above = scene.node(parent).parent();
+        }
+        if !inside {
+            scene.advance_particles(id, longest.min(PREVIEW_WARMUP));
+        }
     }
 }
 

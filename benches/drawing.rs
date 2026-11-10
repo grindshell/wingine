@@ -1,15 +1,15 @@
-//! What drawing a sprite costs: from Rust, from Luau, and through a native library. Run with
-//! `cargo bench`.
+//! What drawing a sprite costs: from Rust, from Luau, and through a native library, and what
+//! drawing a character of text costs. Run with `cargo bench`.
 //!
-//! Each case draws [`SPRITES`] sprites a frame in a [`Simulation`], and reports the median time
-//! `draw` took over [`FRAMES`] frames, per sprite, from the frame stats. The last cases render the
-//! frames too, for what rendering that many quads, billboards and meshes costs.
+//! Each case draws [`SPRITES`] sprites, or characters, a frame in a [`Simulation`], and reports
+//! the median time `draw` took over [`FRAMES`] frames, per sprite, from the frame stats. The last
+//! cases render the frames too, for what rendering that many quads, billboards and meshes costs.
 
 use std::{fs, path::PathBuf};
 
 use wingine::{
     Context, FrameStats, Game, WindowConfig,
-    graphics::{Camera3d, Canvas, Color, Mesh, MeshData, Sprite, View3d},
+    graphics::{Camera3d, Canvas, Color, Font, FontSettings, Mesh, MeshData, Sprite, View3d},
     headless::Simulation,
     math::{Affine, Affine3, Rect},
     particles::{ParticleSettings, Particles},
@@ -62,6 +62,18 @@ fn main() {
         (
             "Rust: Canvas::draw_particles, colored and sized by age",
             Shape::Particles,
+        ),
+        (
+            "Rust: Canvas::draw_text, the built-in font, a character",
+            Shape::Text,
+        ),
+        (
+            "Rust: Canvas::draw_text, a TrueType font, a character",
+            Shape::VectorText,
+        ),
+        (
+            "Rust: Font::layout wrapped, a TrueType font, a character",
+            Shape::WrappedText,
         ),
     ] {
         let mut simulation =
@@ -259,7 +271,24 @@ enum Shape {
     Cube,
     /// The sprite as particles of an emitter, each colored and sized by its age, unturned.
     Particles,
+    /// [`TEXT`] in lines of [`SPRITES`] characters in all, in the built-in font.
+    Text,
+    /// As [`Shape::Text`], in [`VECTOR_FONT`].
+    VectorText,
+    /// [`TEXT`] laid out wrapped to [`WRAP`] pixels wide in [`VECTOR_FONT`], as often as makes
+    /// [`SPRITES`] characters, and drawn.
+    WrappedText,
 }
+
+/// A line of text, as a game's interface would show.
+const TEXT: &str = "The quick brown fox jumps over the lazy dog, again.";
+/// The TrueType font text is drawn in, at 16 pixels to the em.
+const VECTOR_FONT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/examples/lettering/fonts/Hack-Regular.ttf"
+);
+/// How wide wrapped text's lines are, in pixels.
+const WRAP: f32 = 120.0;
 
 /// Draws [`SPRITES`] shapes.
 struct RustGame {
@@ -267,6 +296,8 @@ struct RustGame {
     cube: Mesh,
     /// [`SPRITES`] still particles over the canvas, of every age, for [`Shape::Particles`].
     particles: Particles,
+    /// What text is drawn in.
+    font: Font,
     shape: Shape,
 }
 
@@ -286,10 +317,17 @@ impl RustGame {
         let mut particles = Particles::new(settings, Some(sprite.clone()), 1);
         particles.set_origin(Affine::IDENTITY, Rect::new(0.0, 0.0, 320.0, 180.0));
         particles.advance(1.5);
+        let font = match shape {
+            Shape::VectorText | Shape::WrappedText => {
+                ctx.load_vector_font(VECTOR_FONT, FontSettings::new(16.0))?
+            }
+            _ => ctx.default_font().clone(),
+        };
         Ok(Self {
             sprite,
             cube,
             particles,
+            font,
             shape,
         })
     }
@@ -321,6 +359,19 @@ impl Game for RustGame {
             canvas.draw_particles(&self.particles);
             return;
         }
+        if let Shape::Text | Shape::VectorText | Shape::WrappedText = self.shape {
+            let lines = SPRITES as usize / TEXT.len();
+            for i in 0..lines {
+                let at = [0.0, (i % 18) as f32 * 10.0];
+                if let Shape::WrappedText = self.shape {
+                    let layout = self.font.layout(TEXT, Some(WRAP));
+                    canvas.draw_text_layout(&layout, .., at, Color::WHITE);
+                } else {
+                    canvas.draw_text(&self.font, TEXT, at, Color::WHITE);
+                }
+            }
+            return;
+        }
         for i in 0..SPRITES {
             let [x, y] = position(i);
             let dest = Rect::new(x, y, SIZE as f32, SIZE as f32);
@@ -330,7 +381,12 @@ impl Game for RustGame {
                     canvas.draw_sprite_rotated(&self.sprite, dest, ANGLE, Color::WHITE)
                 }
                 Shape::Rect => canvas.fill_rect(dest, tint),
-                Shape::Billboard | Shape::Cube | Shape::Particles => unreachable!("drawn above"),
+                Shape::Billboard
+                | Shape::Cube
+                | Shape::Particles
+                | Shape::Text
+                | Shape::VectorText
+                | Shape::WrappedText => unreachable!("drawn above"),
             }
         }
     }

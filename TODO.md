@@ -10,22 +10,6 @@ reviewer but not checked again.
 Measure before and after with `cargo bench` (`--bench drawing` or `--bench physics`) or the shmup's
 benchmark, as AGENTS.md asks, on the forge.
 
-- [ ] **The editor rebuilds the preview every frame of a drag.** Each `set_node` marks it stale
-  (`document.rs`), so `Scene::new` runs each frame, warming particles for seconds each time (about
-  660 steps an emitter in the bonfire); the dragged subtree is cloned three times a frame
-  (`viewport.rs`, `document.rs`) and the Inspector clones the selection every frame even idle.
-  Patch transforms into the live preview, as tiles already are, and carry particle state over.
-- [ ] **The script editor lays its text out every frame.** The layouter rebuilds and sorts every
-  token cut (`script_editor.rs`), and `underlines` scans from the start of the text for each
-  diagnostic, twice. Memoize the job by the text's hash and the diagnostics.
-- [ ] **The editor walks the project every frame.** About ten tree walks a frame (`files_ending`,
-  `model_files` in `editor.rs`), `Palette::load` while a tilemap is selected, `read_dir` while the
-  Open dialog shows, and `Output::push` shifting a 5000-line `Vec` (`docks/output.rs`). Cache the
-  lists on rescan, the palette by tileset, and use a `VecDeque`.
-- [ ] **Text layout does each glyph twice.** `lay_out` measures each word with `measure` before
-  placing it (`src/graphics/font.rs`), even without a wrap width, and vector fonts take a mutex
-  and a SipHash lookup per glyph each time. Skip the pass without a wrap width, cache the
-  `GlyphId`, and lock once per layout.
 - [ ] **3D draws are instanced only when consecutive.** `chunk_by(MeshDraw::joins)`
   (`canvas.rs`, `renderer.rs`) so 100 two-part tables are 200 draws. Stable-sort each view's draws
   by mesh, texture and sidedness first; there's no blending in 3D.

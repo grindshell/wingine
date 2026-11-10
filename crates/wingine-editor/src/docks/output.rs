@@ -1,6 +1,9 @@
 //! The Output panel: what the editor logs, and what a game played from it prints.
 
-use std::sync::{Mutex, PoisonError};
+use std::{
+    collections::VecDeque,
+    sync::{Mutex, PoisonError},
+};
 
 use wingine::gui::egui;
 
@@ -26,15 +29,15 @@ pub struct Line {
 /// The lines shown, oldest first.
 #[derive(Default)]
 pub struct Output {
-    lines: Vec<Line>,
+    lines: VecDeque<Line>,
 }
 
 impl Output {
     pub fn push(&mut self, level: Level, text: impl Into<String>) {
         if self.lines.len() == MAX_LINES {
-            self.lines.remove(0);
+            self.lines.pop_front();
         }
-        self.lines.push(Line {
+        self.lines.push_back(Line {
             level,
             text: text.into(),
         });
@@ -60,7 +63,7 @@ impl Output {
         }
     }
 
-    pub fn lines(&self) -> &[Line] {
+    pub fn lines(&self) -> &VecDeque<Line> {
         &self.lines
     }
 
@@ -81,7 +84,7 @@ impl Output {
                 ui.text_style_height(&egui::TextStyle::Monospace),
                 self.lines.len(),
                 |ui, rows| {
-                    for line in &self.lines[rows] {
+                    for line in self.lines.range(rows) {
                         let color = match line.level {
                             Level::Info => visuals.text_color(),
                             Level::Warning => visuals.warn_fg_color,

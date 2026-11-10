@@ -100,8 +100,14 @@ pub struct Editor {
     /// Environment variables for the game played.
     play_env: Vec<(OsString, OsString)>,
     cache: AssetCache,
+    /// The tiles of the tileset of the tilemap selected, by the tileset's path, kept until another
+    /// is selected or the project's files change.
+    palette: Option<(String, Rc<Result<Palette, String>>)>,
     /// The folder being chosen in the Open dialog, while it's open.
     opening: Option<String>,
+    /// The folders in the folder the Open dialog shows, and in the examples folder the welcome
+    /// screen offers, as [`subfolders`] finds them, read again when the folder changes.
+    listed_folders: [Option<(PathBuf, Folders)>; 2],
     closing: Option<Closing>,
     themed: bool,
     /// Asks for frames when there's something new from another thread: the game played, the
@@ -136,7 +142,9 @@ impl Editor {
             runner: std::env::current_exe().unwrap_or_else(|_| "wingine-editor".into()),
             play_env: Vec::new(),
             cache: AssetCache::default(),
+            palette: None,
             opening: None,
+            listed_folders: [None, None],
             closing: None,
             themed: false,
             waker: ctx.waker(),
@@ -167,6 +175,7 @@ impl Editor {
         self.documents.clear();
         self.current = 0;
         self.cache = AssetCache::default();
+        self.palette = None;
         self.scripts.set_project(Some(project.folder.clone()));
         self.watcher = Some(project::watch(project.folder.clone(), self.waker.clone()));
         let message = format!("Opened {}", project.name);
@@ -423,15 +432,12 @@ impl Editor {
 
     /// Does what the Scene dock asks.
     fn apply(&mut self, action: scene_tree::Action) {
-        let tileset = self
-            .project
-            .as_ref()
-            .and_then(|project| project.files_ending(".tileset.luau").into_iter().next())
+        let listed = self.project.as_ref().map(Project::listed);
+        let tileset = listed
+            .and_then(|listed| listed.tilesets.first().cloned())
             .unwrap_or_default();
-        let model = self
-            .project
-            .as_ref()
-            .and_then(|project| project.model_files().into_iter().next())
+        let model = listed
+            .and_then(|listed| listed.models.first().cloned())
             .unwrap_or_default();
         let folder = self.project_folder();
         let Some(document) = self.documents.get_mut(self.current) else {
@@ -688,6 +694,8 @@ impl Editor {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
         self.opening = Some(start.display().to_string());
+        // What's in the folders may have changed since the dialog last showed them.
+        self.listed_folders[OPENING] = None;
     }
 
     /// The Open dialog: a folder's path, and the folders in it to go into.
@@ -708,10 +716,14 @@ impl Editor {
                 }
                 ui.add(egui::TextEdit::singleline(path).desired_width(f32::INFINITY));
             });
+            let listed = &mut self.listed_folders[OPENING];
             egui::ScrollArea::vertical()
                 .max_height(300.0)
                 .show(ui, |ui| {
-                    for (name, folder, is_game) in subfolders(Path::new(path.as_str())) {
+                    for (name, folder, is_game) in
+                        listed_subfolders(listed, Path::new(path.as_str()))
+                    {
+                        let is_game = *is_game;
                         let icon = if is_game { "🎮" } else { "📁" };
                         let response = ui.selectable_label(false, format!("{icon} {name}"));
                         if response.clicked() {
@@ -867,19 +879,24 @@ impl Editor {
                 if ui.button("Open Folder…").clicked() {
                     self.start_opening();
                 }
-                let examples = subfolders(Path::new("examples"));
-                let games: Vec<_> = examples
-                    .into_iter()
+                let examples =
+                    listed_subfolders(&mut self.listed_folders[EXAMPLES], Path::new("examples"));
+                let mut games = examples
+                    .iter()
                     .filter(|(_, _, is_game)| *is_game)
-                    .collect();
-                if !games.is_empty() {
+                    .peekable();
+                let mut chosen = None;
+                if games.peek().is_some() {
                     ui.add_space(12.0);
                     ui.label("Or one of the examples:");
                     for (name, folder, _) in games {
                         if ui.button(format!("🎮 {name}")).clicked() {
-                            self.open_folder(folder);
+                            chosen = Some(folder.clone());
                         }
                     }
+                }
+                if let Some(folder) = chosen {
+                    self.open_folder(folder);
                 }
             });
         });
@@ -1012,8 +1029,25 @@ fn tiles_target<'a>(
     }
 }
 
-/// The folders in `folder`, by name, with their paths and whether each holds a game.
-fn subfolders(folder: &Path) -> Vec<(String, PathBuf, bool)> {
+/// Which of [`Editor::listed_folders`] the Open dialog's are.
+const OPENING: usize = 0;
+/// Which of [`Editor::listed_folders`] the examples are.
+const EXAMPLES: usize = 1;
+
+/// Folders by name, with their paths and whether each holds a game.
+type Folders = Vec<(String, PathBuf, bool)>;
+
+/// The folders in `folder`, as [`subfolders`] finds them, kept in `listed` with the folder they're
+/// in until another folder's are asked for.
+fn listed_subfolders<'a>(listed: &'a mut Option<(PathBuf, Folders)>, folder: &Path) -> &'a Folders {
+    if listed.as_ref().is_none_or(|(of, _)| of != folder) {
+        *listed = Some((folder.to_owned(), subfolders(folder)));
+    }
+    &listed.as_ref().expect("the folders were just listed").1
+}
+
+/// The folders in `folder`, by name.
+fn subfolders(folder: &Path) -> Folders {
     let Ok(read) = fs::read_dir(folder) else {
         return Vec::new();
     };
@@ -1060,6 +1094,7 @@ impl Game for Editor {
             && let Some(project) = &mut self.project
         {
             project.rescan();
+            self.palette = None;
             // The scenes themselves may have changed, images and files they use, and scripts.
             for document in &mut self.documents {
                 let reloaded = document.reload_if_changed(&project.folder);
@@ -1137,7 +1172,7 @@ impl Game for Editor {
                     .default_size(ui.available_height() * 0.45)
                     .show(ui, |ui| {
                         let project = self.project.as_ref().expect("a game is open");
-                        file_action = self.files.ui(ui, &project.name, &project.files);
+                        file_action = self.files.ui(ui, &project.name, project.files());
                     });
                 egui::CentralPanel::default().show(ui, |ui| {
                     let Some(document) = self.documents.get(self.current) else {
@@ -1145,14 +1180,12 @@ impl Game for Editor {
                         ui.weak("Double-click a scene in the FileSystem dock to open it.");
                         return;
                     };
-                    let project = self.project.as_ref().expect("a game is open");
-                    let tilesets = !project.files_ending(".tileset.luau").is_empty();
-                    let scenes = project.files_ending(".scene.luau");
+                    let listed = self.project.as_ref().expect("a game is open").listed();
                     let addable = Addable {
                         sheets: !document.file().sheets.is_empty(),
-                        tilesets,
-                        models: !project.model_files().is_empty(),
-                        scenes: &scenes,
+                        tilesets: !listed.tilesets.is_empty(),
+                        models: !listed.models.is_empty(),
+                        scenes: &listed.scenes,
                     };
                     tree_actions = self.tree.ui(ui, document, &addable);
                 });
@@ -1185,6 +1218,7 @@ impl Game for Editor {
                 if let Some(project) = &mut self.project {
                     project.rescan();
                 }
+                self.palette = None;
             }
             None => {}
         }
@@ -1196,11 +1230,7 @@ impl Game for Editor {
                 ui.strong("Inspector");
                 ui.separator();
                 let project = self.project.as_ref().expect("a game is open");
-                let images = project.files_ending(".png");
-                let tilesets = project.files_ending(".tileset.luau");
-                let scenes = project.files_ending(".scene.luau");
-                let models = project.model_files();
-                let fonts = project.files_ending(".font.luau");
+                let listed = project.listed();
                 let Some(document) = self.documents.get_mut(self.current) else {
                     ui.weak("Open a scene to see its nodes' fields.");
                     return;
@@ -1209,11 +1239,11 @@ impl Game for Editor {
                     ctx,
                     cache: &mut self.cache,
                     folder: &project.folder,
-                    images: &images,
-                    tilesets: &tilesets,
-                    scenes: &scenes,
-                    models: &models,
-                    fonts: &fonts,
+                    images: &listed.images,
+                    tilesets: &listed.tilesets,
+                    scenes: &listed.scenes,
+                    models: &listed.models,
+                    fonts: &listed.fonts,
                 };
                 self.inspector.ui(ui, document, &mut services);
             });
@@ -1243,7 +1273,15 @@ impl Game for Editor {
             let (_, map) = edit::tilemap_at(document.file(), path)?;
             Some(map.tileset.clone())
         });
-        let palette = tileset.map(|tileset| Palette::load(ctx, &mut self.cache, &folder, &tileset));
+        match tileset {
+            Some(tileset) if self.palette.as_ref().is_none_or(|(of, _)| *of != tileset) => {
+                let palette = Palette::load(ctx, &mut self.cache, &folder, &tileset);
+                self.palette = Some((tileset, Rc::new(palette)));
+            }
+            None => self.palette = None,
+            Some(_) => {}
+        }
+        let palette = self.palette.as_ref().map(|(_, palette)| Rc::clone(palette));
 
         egui::Panel::bottom("bottom tabs").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -1269,7 +1307,7 @@ impl Game for Editor {
                     BottomTab::Output => self.output.ui(ui),
                     BottomTab::Tiles => {
                         let document = self.documents.get(self.current);
-                        let target = tiles_target(document, selected.as_ref(), palette.as_ref());
+                        let target = tiles_target(document, selected.as_ref(), palette.as_deref());
                         select_layer = self.tiles.ui(ui, target);
                     }
                     BottomTab::Animation => {
@@ -1300,7 +1338,7 @@ impl Game for Editor {
                 ui.separator();
                 match self.documents.get_mut(self.current) {
                     Some(document) => {
-                        let palette = palette.as_ref().and_then(|palette| palette.as_ref().ok());
+                        let palette = palette.as_deref().and_then(|palette| palette.as_ref().ok());
                         viewport_action = self.viewport.ui(
                             ui,
                             ctx,

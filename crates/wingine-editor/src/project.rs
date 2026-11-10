@@ -32,7 +32,20 @@ pub struct Project {
     /// Its settings, from `conf.luau`, or the error reading them.
     pub config: Result<Config, String>,
     /// What's in the folder.
-    pub files: Vec<Entry>,
+    files: Vec<Entry>,
+    /// The files panels offer, found as the folder was last read.
+    listed: Listed,
+}
+
+/// The paths of a project's files of the kinds panels offer, each in order.
+#[derive(Default)]
+pub struct Listed {
+    pub images: Vec<String>,
+    pub tilesets: Vec<String>,
+    pub scenes: Vec<String>,
+    /// `.glb` and `.gltf` files.
+    pub models: Vec<String>,
+    pub fonts: Vec<String>,
 }
 
 /// A file or folder in a project, by its path from the project's folder, with `/` between names
@@ -60,6 +73,7 @@ impl Project {
         let mut project = Self {
             config: Err(String::new()),
             files: Vec::new(),
+            listed: Listed::default(),
             folder,
             name,
         };
@@ -70,7 +84,27 @@ impl Project {
     /// Reads the folder's files and settings again.
     pub fn rescan(&mut self) {
         self.files = scan(&self.folder, "", 0);
+        let mut models = self.files_ending(".glb");
+        models.extend(self.files_ending(".gltf"));
+        models.sort();
+        self.listed = Listed {
+            images: self.files_ending(".png"),
+            tilesets: self.files_ending(".tileset.luau"),
+            scenes: self.files_ending(".scene.luau"),
+            models,
+            fonts: self.files_ending(".font.luau"),
+        };
         self.config = runtime::config(&self.folder).map_err(|err| err.to_string());
+    }
+
+    /// What's in the folder, as of when it was last read.
+    pub fn files(&self) -> &[Entry] {
+        &self.files
+    }
+
+    /// The files panels offer, as of when the folder was last read.
+    pub fn listed(&self) -> &Listed {
+        &self.listed
     }
 
     /// Whether the folder holds a game: a `main.luau`.
@@ -105,14 +139,6 @@ impl Project {
                 found.push(entry.path.clone());
             }
         });
-        found.sort();
-        found
-    }
-
-    /// The paths of the project's model files, `.glb` and `.gltf`, in order.
-    pub fn model_files(&self) -> Vec<String> {
-        let mut found = self.files_ending(".glb");
-        found.extend(self.files_ending(".gltf"));
         found.sort();
         found
     }

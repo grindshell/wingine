@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use wingine::{
     Context,
-    graphics::Color,
+    graphics::{Color, Texture},
     gui::egui::{self, load::SizedTexture},
     scene::Assets,
 };
@@ -175,6 +175,9 @@ pub struct Palette {
     /// The tileset file's path.
     pub path: String,
     pub tiles: Vec<PaletteTile>,
+    /// Its sheets' images, kept so egui shows them by the IDs its tiles have for as long as it's
+    /// kept, though their files change.
+    _textures: Vec<Texture>,
 }
 
 pub struct PaletteTile {
@@ -233,6 +236,7 @@ impl Palette {
         Ok(Self {
             path: path.to_owned(),
             tiles,
+            _textures: sheets.into_values().map(|(texture, _)| texture).collect(),
         })
     }
 

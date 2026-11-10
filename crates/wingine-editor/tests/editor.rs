@@ -966,6 +966,70 @@ fn particles_are_added_inspected_and_shown_moving_while_selected() {
 }
 
 #[test]
+fn dragging_a_node_moves_it_in_the_preview_without_building_it_again() {
+    let mut simulation = garden(examples().join("garden"));
+    simulation.click_gui("duck");
+    simulation.tap(Key::W);
+    let document = simulation.game().document().unwrap();
+    let id = document.selected_live().unwrap();
+    let before = document.preview.as_ref().unwrap().node(id).position();
+
+    drag(&mut simulation, [700.0, 400.0], [740.0, 410.0]);
+    let scene = simulation
+        .game()
+        .document()
+        .unwrap()
+        .preview
+        .as_ref()
+        .unwrap();
+    assert!(scene.contains_node(id), "the preview is the one it was");
+    let moved = node(&simulation, "pond/duck");
+    assert_ne!([moved.x, moved.y], before);
+    assert_eq!(scene.node(id).position(), [moved.x, moved.y]);
+
+    // Undoing it builds the scene again, as it was.
+    control(&mut simulation, Key::Z);
+    let document = simulation.game().document().unwrap();
+    let scene = document.preview.as_ref().unwrap();
+    let again = document.selected_live().unwrap();
+    assert!(!scene.contains_node(id));
+    assert_eq!(scene.node(again).position(), before);
+}
+
+#[test]
+fn a_preview_built_again_keeps_its_particles_going() {
+    let mut simulation = editor(Some(examples().join("bonfire")));
+    simulation
+        .game_mut()
+        .open_scene("bonfire.scene.luau")
+        .unwrap();
+    simulation.run_frames(2);
+    let sparks = |simulation: &Simulation<Editor>| {
+        let scene = simulation
+            .game()
+            .document()
+            .unwrap()
+            .preview
+            .as_ref()
+            .unwrap();
+        let id = scene.find(scene.root(), "camp/sparks").unwrap();
+        let wingine::scene::Kind::Particles(node) = scene.node(id).kind() else {
+            panic!("sparks are particles");
+        };
+        let positions: Vec<[f32; 2]> = node.particles.positions().collect();
+        (id, positions)
+    };
+    let (id, before) = sparks(&simulation);
+    assert!(!before.is_empty(), "shown as they are once going");
+
+    simulation.game_mut().document_mut().unwrap().rebuild();
+    simulation.step();
+    let (again, after) = sparks(&simulation);
+    assert_ne!(id, again, "built again");
+    assert_eq!(after, before);
+}
+
+#[test]
 fn instance_panels_keep_appearance_and_fitting_overrides() {
     let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join("editor/panel-overrides");
     fs::create_dir_all(&folder).unwrap();

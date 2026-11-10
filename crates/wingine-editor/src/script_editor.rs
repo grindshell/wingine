@@ -9,7 +9,6 @@
 //! scripts are edited all the same.
 
 use std::{
-    hash::{DefaultHasher, Hash, Hasher},
     io,
     ops::Range,
     path::{Path, PathBuf},
@@ -113,8 +112,8 @@ pub struct ScriptEditor {
     /// A character of the script shown to move the cursor to and show.
     jump: Option<usize>,
     problems_open: bool,
-    /// The tokens of a script's text, by a hash of the text.
-    tokens: Option<(u64, Arc<Vec<Token>>)>,
+    /// What's worked out from the text of the script shown to show it.
+    worked_out: WorkedOut,
     /// The path in the New Script dialog, while it's open.
     new_script: Option<String>,
     /// How the script shown was laid out last frame, and where.
@@ -140,7 +139,7 @@ impl ScriptEditor {
             cursor: 0,
             jump: None,
             problems_open: true,
-            tokens: None,
+            worked_out: WorkedOut::default(),
             new_script: None,
             shown: None,
             waker,
@@ -671,7 +670,7 @@ impl ScriptEditor {
             signature,
             hover,
             jump,
-            tokens: token_cache,
+            worked_out,
             ..
         } = self;
         let id = ui.make_persistent_id(("script", &script.path));
@@ -774,9 +773,7 @@ impl ScriptEditor {
         });
         let diagnostics = &script.diagnostics;
         let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap: f32| {
-            let text = text.as_str();
-            let tokens = cached_tokens(token_cache, text);
-            let job = layout_job(text, &tokens, &underlines(text, diagnostics), &font);
+            let job = worked_out.job(text.as_str(), diagnostics, &font);
             ui.fonts_mut(|fonts| fonts.layout_job(job))
         };
         let gutter = gutter_width(
@@ -858,13 +855,13 @@ impl ScriptEditor {
             completion,
             signature,
             hover,
-            tokens: token_cache,
+            worked_out,
             ..
         } = self;
         let Some(script) = self.scripts.get_mut(self.current) else {
             return;
         };
-        let tokens = cached_tokens(token_cache, &script.text);
+        let tokens = worked_out.tokens(&script.text);
         let galley_pos = output.galley_pos;
         let cursor_rect = output
             .galley
@@ -1066,18 +1063,40 @@ fn new_script_problem(folder: &Path, path: &str) -> Option<String> {
     }
 }
 
-fn cached_tokens(cache: &mut Option<(u64, Arc<Vec<Token>>)>, text: &str) -> Arc<Vec<Token>> {
-    let mut hasher = DefaultHasher::new();
-    text.hash(&mut hasher);
-    let hash = hasher.finish();
-    if let Some((cached, tokens)) = cache
-        && *cached == hash
-    {
-        return Arc::clone(tokens);
+/// What's worked out from a script's text to show it, kept while the text stays as it is, since
+/// the text field lays it out each frame.
+#[derive(Default)]
+struct WorkedOut {
+    /// The text the rest is of.
+    text: String,
+    tokens: Arc<Vec<Token>>,
+    /// How it's shown, with the problems it's shown with and in the font.
+    job: Option<(Vec<Diagnostic>, FontId, LayoutJob)>,
+}
+
+impl WorkedOut {
+    /// The tokens of `text`.
+    fn tokens(&mut self, text: &str) -> Arc<Vec<Token>> {
+        if self.text != text {
+            text.clone_into(&mut self.text);
+            self.tokens = Arc::new(luau::tokens(text));
+            self.job = None;
+        }
+        Arc::clone(&self.tokens)
     }
-    let tokens = Arc::new(luau::tokens(text));
-    *cache = Some((hash, Arc::clone(&tokens)));
-    tokens
+
+    /// How `text` is shown in `font`, colored, with `diagnostics` underlined.
+    fn job(&mut self, text: &str, diagnostics: &[Diagnostic], font: &FontId) -> LayoutJob {
+        let tokens = self.tokens(text);
+        match &self.job {
+            Some((shown, was, job)) if shown == diagnostics && was == font => job.clone(),
+            _ => {
+                let job = layout_job(text, &tokens, &underlines(text, diagnostics), font);
+                self.job = Some((diagnostics.to_vec(), font.clone(), job.clone()));
+                job
+            }
+        }
+    }
 }
 
 /// The bytes of `text` each of `diagnostics` underlines, at least a character, in its color.
