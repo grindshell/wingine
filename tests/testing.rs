@@ -644,6 +644,118 @@ fn screenshots_match_their_references() {
     assert_passed(&run(&folder));
 }
 
+#[test]
+fn frames_that_dont_match_stay_in_the_output_folder() {
+    // The game is in `game`, and its references beside its tests, beside the game, and beside the
+    // game named from the root, in the folder an empty game would be written to.
+    let root = game("climbing", &[]);
+    let far = root.join("references/far.png");
+    let far = far.to_string_lossy().replace('\\', "/");
+    let shade = |color: &str| format!("function draw() graphics.clear('{color}') end");
+    let test = format!(
+        "test('beside', function()
+            sim.step()
+            assert(sim.matches_screenshot('../shots/court.png'))
+        end)
+        test('outside', function()
+            sim.step()
+            assert(sim.matches_screenshot('../../references/court.png'))
+        end)
+        test('absolute', function()
+            sim.step()
+            assert(sim.matches_screenshot('{far}'))
+        end)
+        test('folder', function()
+            sim.step()
+            local ok, err = pcall(sim.matches_screenshot, '..')
+            assert(not ok and string.find(err, \"`..` is the game's folder, not a PNG\"), err)
+        end)"
+    );
+    let root = game(
+        "climbing",
+        &[
+            ("game/conf.luau", SMALL_WINDOW),
+            ("game/main.luau", &shade("#204060")),
+            ("game/tests/court.test.luau", &test),
+        ],
+    );
+    let folder = root.join("game");
+    let output = folder.join(OUTPUT_FOLDER);
+
+    // Without references, each fails into the output folder, named from the game's folder.
+    let report = run(&folder);
+    assert!(
+        outcome(&report, "tests/court.test.luau: folder").passed(),
+        "{report}"
+    );
+    for (name, shown, saved) in [
+        ("beside", "shots/court.png", "shots/court.actual.png"),
+        (
+            "outside",
+            "../references/court.png",
+            "up/references/court.actual.png",
+        ),
+        (
+            "absolute",
+            "../references/far.png",
+            "up/references/far.actual.png",
+        ),
+    ] {
+        let missing = failure(&report, &format!("tests/court.test.luau: {name}"));
+        assert!(
+            missing.contains(&format!("there's no {shown} to compare the frame with")),
+            "{missing}"
+        );
+        assert!(
+            missing.contains(&format!("the frame is at .test-output/{saved}")),
+            "{missing}"
+        );
+        assert!(output.join(saved).is_file(), "{saved}");
+    }
+    assert!(!folder.join("references").exists(), "nothing climbs out");
+    assert!(!root.join("references").exists(), "nothing goes beside");
+
+    // Updating saves them where they're named, and then they match.
+    let update = Options {
+        update_screenshots: true,
+        ..Default::default()
+    };
+    let report = run_with(&folder, &update);
+    assert_passed(&report);
+    assert_eq!(
+        outcome(&report, "tests/court.test.luau: outside").written,
+        ["../references/court.png"]
+    );
+    assert!(root.join("references/court.png").is_file());
+    assert!(root.join("references/far.png").is_file());
+    assert_passed(&run(&folder));
+
+    // A frame that differs from a reference outside the game fails into the output folder too.
+    fs::write(folder.join("main.luau"), shade("#206040")).unwrap();
+    let report = run(&folder);
+    let differs = failure(&report, "tests/court.test.luau: outside");
+    assert!(
+        differs.contains("400 pixels of the frame differ from ../references/court.png"),
+        "{differs}"
+    );
+    assert!(
+        differs.contains(
+            "the frame is at .test-output/up/references/court.actual.png, and where it differs, \
+             in magenta, at .test-output/up/references/court.diff.png"
+        ),
+        "{differs}"
+    );
+    let diff = Image::load_png(output.join("up/references/court.diff.png")).unwrap();
+    assert_eq!(diff.pixel(0, 0), [255, 0, 255, 255]);
+    let mut beside_references: Vec<_> = fs::read_dir(root.join("references"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    beside_references.sort();
+    assert_eq!(beside_references, ["court.png", "far.png"]);
+    assert!(!folder.join("references").exists(), "nothing climbs out");
+}
+
 #[cfg(feature = "egui")]
 #[test]
 fn tests_click_the_games_interface() {

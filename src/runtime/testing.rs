@@ -81,7 +81,9 @@
 //!   on different GPUs match), and the screenshot matches when at most `options.pixels` don't (0
 //!   by default). Paths are relative to the test file. A screenshot that doesn't match, or has
 //!   nothing to match, is saved in the game's `.test-output` folder, with a picture of where it
-//!   differs, which the run clears as it starts. With [`Options::update_screenshots`]
+//!   differs, which the run clears as it starts: at its reference's path from the game's folder,
+//!   each `..` that climbs out of the game's folder a folder named `up`, so a reference wherever
+//!   it is fails into that folder. With [`Options::update_screenshots`]
 //!   (`wingine test --update`), it's saved at `path` instead, and matches. `sim.pixel(x, y)`
 //!   returns the red, green, blue and alpha of the latest frame's pixel at `x`, `y`, each from 0
 //!   to 255, counting the window's pixels from 0 at the top-left, as a screenshot has them.
@@ -95,7 +97,7 @@ use std::{
     cell::RefCell,
     fmt::{self, Write as _},
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     rc::Rc,
 };
 
@@ -114,6 +116,8 @@ const SUFFIX: &str = ".test.luau";
 const MAX_DEPTH: usize = 8;
 /// The folder in the game's that screenshots that don't match go to.
 pub const OUTPUT_FOLDER: &str = ".test-output";
+/// What a `..` that climbs out of the game's folder is in the output folder's names.
+const UP: &str = "up";
 /// Seconds of game time a test may run, unless it says otherwise.
 const TIME_LIMIT: f32 = 60.0;
 /// How much a channel of a screenshot's pixel may differ from its reference's, by default.
@@ -1105,9 +1109,14 @@ impl Runner<'_> {
                 }
             }
         }
-        let frame = simulation.screenshot().map_err(raise)?;
         let reference_path = self.test_folder.join(path);
-        let shown = self.in_folder(&reference_path);
+        let from_game = from_folder(self.folder, &reference_path);
+        if from_game.as_os_str().is_empty() {
+            let message = format!("`{path}` is the game's folder, not a PNG");
+            return Err(Refusal::Raise(message));
+        }
+        let shown = from_game.to_string_lossy().replace('\\', "/");
+        let frame = simulation.screenshot().map_err(raise)?;
         let (problem, reference) = if reference_path.is_file() {
             let reference = Image::load_png(&reference_path).map_err(raise)?;
             let comparison = frame.compare(&reference, tolerance);
@@ -1138,7 +1147,10 @@ impl Runner<'_> {
             self.written.push(shown);
             return Ok(vec![mlua::Value::Boolean(true)]);
         }
-        let output = self.folder.join(OUTPUT_FOLDER).join(&shown);
+        let output = self
+            .folder
+            .join(OUTPUT_FOLDER)
+            .join(output_name(&from_game));
         let actual = output.with_extension("actual.png");
         save(&frame, &actual)?;
         let mut message = format!("{problem}: the frame is at {}", self.in_folder(&actual));
@@ -1191,6 +1203,76 @@ fn resume(
         Ok(())
     });
     resumed.expect("lending runs what it's given")
+}
+
+/// The file at `path` by its path from `folder`, worked out from their names alone, as a test
+/// names it: without `.`, each `..` taking out the name before it, and leading where it climbs out
+/// of `folder`. A path on another drive, which none from `folder` leads to, is absolute.
+fn from_folder(folder: &Path, path: &Path) -> PathBuf {
+    if let Ok(inside) = path.strip_prefix(folder) {
+        return normalise(inside);
+    }
+    let absolute =
+        |path: &Path| normalise(&std::path::absolute(path).unwrap_or_else(|_| path.to_owned()));
+    let (folder, path) = (absolute(folder), absolute(path));
+    let shared = folder
+        .components()
+        .zip(path.components())
+        .take_while(|(a, b)| a == b)
+        .count();
+    if shared == 0 {
+        return path;
+    }
+    let mut from = PathBuf::new();
+    for _ in folder.components().skip(shared) {
+        from.push("..");
+    }
+    from.extend(path.components().skip(shared));
+    from
+}
+
+/// `path` without `.`, each `..` taking out the name before it where there's one.
+fn normalise(path: &Path) -> PathBuf {
+    let mut normal = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match normal.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    normal.pop();
+                }
+                // Above the root is the root.
+                Some(Component::Prefix(_) | Component::RootDir) => {}
+                Some(Component::ParentDir | Component::CurDir) | None => normal.push(".."),
+            },
+            component => normal.push(component),
+        }
+    }
+    normal
+}
+
+/// Where in the output folder the frames of the reference at `from_game`, its path from the
+/// game's folder, go: there, each `..` a folder named [`UP`], so they stay in the output folder
+/// wherever the reference is. One on another drive goes in a folder named for the drive, in one
+/// [`UP`].
+fn output_name(from_game: &Path) -> PathBuf {
+    let mut name = PathBuf::new();
+    for component in from_game.components() {
+        match component {
+            Component::Normal(part) => name.push(part),
+            Component::ParentDir => name.push(UP),
+            Component::Prefix(prefix) => {
+                let drive = prefix.as_os_str().to_string_lossy();
+                let drive: String = drive.chars().filter(char::is_ascii_alphanumeric).collect();
+                name.push(UP);
+                if !drive.is_empty() {
+                    name.push(drive);
+                }
+            }
+            Component::RootDir | Component::CurDir => {}
+        }
+    }
+    name
 }
 
 /// Saves `image` as a PNG at `path`, making its folder.
@@ -1298,6 +1380,55 @@ mod tests {
             .collect();
         requests.sort();
         assert_eq!(declared_sim(), requests);
+    }
+
+    #[test]
+    fn references_are_named_from_the_games_folder() {
+        let named = |folder: &str, path: &Path| {
+            let from = from_folder(Path::new(folder), path);
+            let name = output_name(&from);
+            let slashed = |path: &Path| path.to_string_lossy().replace('\\', "/");
+            (slashed(&from), slashed(&name))
+        };
+        let both = |from: &str, name: &str| (from.to_owned(), name.to_owned());
+        let game = |folder: &str, path: &str| named(folder, &Path::new(folder).join(path));
+        assert_eq!(
+            game("game", "shots/a.png"),
+            both("shots/a.png", "shots/a.png")
+        );
+        assert_eq!(
+            game("game", "tests/../shots/./a.png"),
+            both("shots/a.png", "shots/a.png")
+        );
+        assert_eq!(
+            game("game", "tests/../../captures/a.png"),
+            both("../captures/a.png", "up/captures/a.png")
+        );
+        assert_eq!(
+            game("../far/game", "tests/../../../a.png"),
+            both("../../a.png", "up/up/a.png")
+        );
+        assert_eq!(game(".", "tests/../../a.png"), both("../a.png", "up/a.png"));
+        assert_eq!(game("game", "tests/.."), both("", ""));
+
+        // Absolute paths, in the game and out of it, are named from it all the same.
+        let absolute = |path: &str| std::path::absolute(path).unwrap();
+        assert_eq!(
+            named("game", &absolute("game/shots/a.png")),
+            both("shots/a.png", "shots/a.png")
+        );
+        assert_eq!(
+            named("game", &absolute("captures/a.png")),
+            both("../captures/a.png", "up/captures/a.png")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn references_on_another_drive_are_named_for_it() {
+        let from = from_folder(Path::new(r"C:\games\game"), Path::new(r"Q:\captures\a.png"));
+        assert_eq!(from, Path::new(r"Q:\captures\a.png"));
+        assert_eq!(output_name(&from), Path::new("up/Q/captures/a.png"));
     }
 
     #[test]

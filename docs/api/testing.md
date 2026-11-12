@@ -294,8 +294,11 @@ end)
 
 A frame that doesn't match, or has no reference to match, is saved in the game's `.test-output`
 folder, with a picture of where it differs in magenta, and the message says where. Each run
-clears that folder as it starts. Run with `--update`, a frame that doesn't match is saved at
-`path` instead, as the reference, and matches.
+clears that folder as it starts. It's saved at its reference's path from the game's folder, so
+`screenshots/ready.png` fails into `.test-output/screenshots/ready.actual.png`, and each `..` that
+climbs out of the game's folder is a folder named `up` there: references kept beside the game, at
+`../references/ready.png` from its folder, fail into `.test-output/up/references/`. Run with
+`--update`, a frame that doesn't match is saved at `path` instead, as the reference, and matches.
 
 #### `sim.pixel`
 

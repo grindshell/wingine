@@ -333,8 +333,8 @@ cargo run -- test --update path/to/game
 ```
 
 Look at each one it saves before keeping it. A frame that doesn't match goes in the game's
-`.test-output` folder, with a picture of where it differs in magenta; leave that folder out of
-version control. Pixels may differ by 2 in each channel by default, so frames match on any GPU.
+`.test-output` folder, wherever its reference is, with a picture of where it differs in magenta;
+leave that folder out of version control. Pixels may differ by 2 in each channel by default, so frames match on any GPU.
 
 From Rust, `wingine::runtime::testing::run` runs a game's tests and returns how they went, so
 `cargo test` can run them as Pong's are, in [`tests/pong.rs`](../tests/pong.rs).
