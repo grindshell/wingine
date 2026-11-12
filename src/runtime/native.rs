@@ -1481,6 +1481,8 @@ mod host {
         let Some(mut view) = canvas.open_view() else {
             return no_view("draw_meshes");
         };
+        // Whatever the script drew last in the view, a library's meshes cast shadows.
+        view.set_casts_shadow(true);
         for draw in draws {
             view.draw_mesh(mesh, affine3(draw.transform), sprite, color(draw.tint));
         }

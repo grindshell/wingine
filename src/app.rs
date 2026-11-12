@@ -340,7 +340,7 @@ pub(crate) fn run_frame(
     canvas.begin(canvas_size[0], canvas_size[1]);
     canvas.frame_stats = ctx.frame_stats;
     game.draw(canvas);
-    let [lights, lights_left_out] = canvas.light_counts();
+    let [lights, lights_left_out, shadow_maps, shadows_left_out] = canvas.light_counts();
     FrameStats {
         update,
         draw: start.elapsed().as_secs_f32(),
@@ -349,6 +349,8 @@ pub(crate) fn run_frame(
         draw_calls: canvas.draw_call_count(),
         lights,
         lights_left_out,
+        shadow_maps,
+        shadows_left_out,
         ..Default::default()
     }
 }

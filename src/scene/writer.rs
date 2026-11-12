@@ -479,10 +479,16 @@ impl Writer {
                     self.field("cell", &format!("{{ {column}, {row} }}"));
                 }
                 self.color("tint", mesh.tint);
+                if !mesh.casts_shadow {
+                    self.field("casts_shadow", "false");
+                }
             }
             KindDef::Model(model) => {
                 self.field("model", &quoted(&model.model));
                 self.color("tint", model.tint);
+                if !model.casts_shadow {
+                    self.field("casts_shadow", "false");
+                }
             }
             KindDef::Billboard(billboard) => {
                 self.field("sheet", &quoted(&billboard.sheet));
@@ -511,6 +517,9 @@ impl Writer {
                 }
                 if light.edge != default.edge {
                     self.number_field("edge", light.edge)?;
+                }
+                if light.shadows {
+                    self.field("shadows", "true");
                 }
             }
             KindDef::Stack(stack) => self.stack(stack)?,

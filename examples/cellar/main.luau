@@ -4,8 +4,9 @@
 -- the way, models made in Blender tagged `solid` and `prop`, candles tagged `candle`, and the hero.
 -- The candles and the hero are sprites standing among them, billboards that turn to face the
 -- camera, which follows the hero from above and behind. Each candle holds a `flame`, a light
--- that's out until the candle is lit, and then lights the cellar around it. Walk with the arrow keys or WASD, and point
--- at a prop with the mouse to name it.
+-- that's out until the candle is lit, and then lights the cellar around it, the walls and the
+-- props shading what's behind them. Walk with the arrow keys or WASD, and point at a prop with
+-- the mouse to name it.
 --
 -- A tile is a world unit, with columns along `x` and rows along `z`, so up the map is away from
 -- the camera, and each node of the view stands on the tile its position is in.

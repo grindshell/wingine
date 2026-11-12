@@ -752,6 +752,13 @@ impl Inspector {
                     over.label(ui, "tint", &["tint"]);
                     color(ui, &mut mesh.tint);
                     ui.end_row();
+                    over.label(ui, "casts shadow", &["casts_shadow"]);
+                    let casts = ui.checkbox(&mut mesh.casts_shadow, "");
+                    casts.widget_info(|| {
+                        let cast = mesh.casts_shadow;
+                        egui::WidgetInfo::selected(egui::Role::CheckBox, true, cast, "casts shadow")
+                    });
+                    ui.end_row();
                 });
                 if self.picking_cell
                     && let Some(sprite) = &mut mesh.sprite
@@ -767,6 +774,13 @@ impl Inspector {
                     ui.end_row();
                     over.label(ui, "tint", &["tint"]);
                     color(ui, &mut model.tint);
+                    ui.end_row();
+                    over.label(ui, "casts shadow", &["casts_shadow"]);
+                    let casts = ui.checkbox(&mut model.casts_shadow, "");
+                    casts.widget_info(|| {
+                        let cast = model.casts_shadow;
+                        egui::WidgetInfo::selected(egui::Role::CheckBox, true, cast, "casts shadow")
+                    });
                     ui.end_row();
                 });
             }),
@@ -800,6 +814,14 @@ impl Inspector {
                             ui.label("edge");
                             ranged_number(ui, "edge", &mut light.edge, 0.0..=1.0);
                         }
+                    });
+                    ui.end_row();
+                    // Whether the view's meshes and models in its way shade what's behind them.
+                    over.label(ui, "shadows", &["shadows"]);
+                    let shadows = ui.checkbox(&mut light.shadows, "");
+                    shadows.widget_info(|| {
+                        let cast = light.shadows;
+                        egui::WidgetInfo::selected(egui::Role::CheckBox, true, cast, "shadows")
                     });
                     ui.end_row();
                 });

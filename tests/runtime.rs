@@ -3370,6 +3370,174 @@ fn views_take_lights_from_luau() {
     }
 }
 
+/// The wall of `LAMPLIT`, lit by a lamp with shadows a unit before its middle, and between them,
+/// to the left, a screen: twice as far from the lamp, the wall is in the screen's shadow from its
+/// left edge to 0.6 left of its middle, and the screen itself shows from 0.7 left to 0.3.
+const SHADED: &str = r##"return {
+    format = 4,
+    children = {
+        {
+            name = "view", kind = "view3d", width = 0, height = 0, stretch = { 1, 1 },
+            camera = { position = { 0, 0, 5 }, target = { 0, 0, 0 }, height = 2 },
+            lighting = { color = "#000000", ambient = "#000000" },
+            children = {
+                {
+                    name = "wall", kind = "mesh", shape = "cuboid", z = -1, size = { 2, 2, 0.1 },
+                    casts_shadow = false,
+                },
+                { name = "screen", kind = "mesh", shape = "cuboid", x = -0.5, size = { 0.4, 0.4, 0.02 } },
+                { name = "lamp", kind = "light", z = 1, range = 6, shadows = true },
+            },
+        },
+    },
+}"##;
+
+#[test]
+fn scene_shadows_work_from_luau() {
+    let folder = game(
+        "scene_shadows",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            ("shaded.scene.luau", SHADED),
+            (
+                "main.luau",
+                "level = scene.load('shaded.scene.luau')
+                view = level:find('view')
+                lamp, screen, wall = view:find('lamp'), view:find('screen'), view:find('wall')
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.draw_scene(level)
+                    stats = graphics.frame_stats()
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    assert_eq!(simulation.game().error().map(ToString::to_string), None);
+    // The wall left of the screen, in its shadow, and right of its middle, in the light; then
+    // the shadow maps the frame took.
+    let shown = |simulation: &mut Simulation<LuauGame>| {
+        simulation.step();
+        let image = simulation.screenshot().unwrap();
+        simulation.step();
+        let maps = simulation.eval::<u32>("stats.shadow_maps");
+        (image.pixel(1, 10), image.pixel(15, 10), maps)
+    };
+    let (shaded, lit, maps) = shown(&mut simulation);
+    assert_eq!(shaded, BLACK);
+    assert!(lit[0] > 100, "{lit:?}");
+    assert_eq!(maps, 6, "a point light's");
+    assert_eq!(simulation.eval::<u32>("stats.shadows_left_out"), 0);
+    assert!(simulation.eval::<bool>("lamp:light().shadows"));
+    assert_eq!(
+        simulation.eval::<(bool, bool)>("screen:casts_shadow(), wall:casts_shadow()"),
+        (true, false)
+    );
+
+    // A mesh told not to shades nothing.
+    simulation.exec("screen:set_casts_shadow(false)");
+    let (shaded, _, maps) = shown(&mut simulation);
+    assert!(shaded[0] > 100, "{shaded:?}");
+    assert_eq!(maps, 6);
+    assert!(!simulation.eval::<bool>("screen:casts_shadow()"));
+    simulation.exec("screen:set_casts_shadow(true)");
+
+    // Nor does anything from a light without shadows, which takes no maps.
+    simulation.exec("lamp:set_light({ shadows = false })");
+    let (shaded, _, maps) = shown(&mut simulation);
+    assert!(shaded[0] > 100, "{shaded:?}");
+    assert_eq!(maps, 0);
+    assert!(!simulation.eval::<bool>("lamp:light().shadows"));
+
+    // A spot light's shadows are in one map.
+    simulation.exec("lamp:set_light({ shadows = true, cone = 0.9 })");
+    simulation.exec("lamp:set_orientation(math.pi)");
+    let (shaded, lit, maps) = shown(&mut simulation);
+    assert_eq!(shaded, BLACK);
+    assert!(lit[0] > 100, "{lit:?}");
+    assert_eq!(maps, 1);
+
+    for code in ["lamp:casts_shadow()", "lamp:set_casts_shadow(true)"] {
+        let err: String = simulation.eval(&format!(
+            "tostring(select(2, pcall(function() {code} end)))"
+        ));
+        assert!(err.contains("which has no shadow"), "{code}: {err}");
+    }
+}
+
+#[test]
+fn views_take_shadows_from_luau() {
+    let folder = game(
+        "view_shadows",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "wall = graphics.new_cuboid(2, 2, 0.1)
+                screen = graphics.new_cuboid(0.4, 0.4, 0.02)
+                lamp = { position = vector.create(0, 0, 1), range = 6, shadows = true }
+                options = nil
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.begin_3d({
+                        camera = { position = vector.create(0, 0, 5), target = vector.zero, height = 2 },
+                        lighting = { color = '#000000', ambient = '#000000', lights = { lamp } },
+                    })
+                    graphics.draw_mesh(wall, vector.create(0, 0, -1))
+                    graphics.draw_mesh(screen, vector.create(-0.5, 0, 0), options)
+                    stats = graphics.frame_stats()
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    assert_eq!(simulation.game().error().map(ToString::to_string), None);
+    let shaded = |simulation: &mut Simulation<LuauGame>| {
+        simulation.step();
+        simulation.screenshot().unwrap().pixel(1, 10)
+    };
+    assert_eq!(shaded(&mut simulation), BLACK);
+    simulation.step();
+    assert_eq!(
+        simulation.eval::<(u32, u32)>("stats.shadow_maps, stats.shadows_left_out"),
+        (6, 0)
+    );
+    // Drawn as casting none, the screen leaves the wall lit, and so does a light without shadows.
+    simulation.exec("options = { casts_shadow = false }");
+    assert!(shaded(&mut simulation)[0] > 100);
+    simulation.exec("options = { casts_shadow = true } lamp.shadows = false");
+    assert!(shaded(&mut simulation)[0] > 100);
+    simulation.exec("lamp.shadows = true");
+    assert_eq!(shaded(&mut simulation), BLACK);
+
+    // Five point lights with shadows want thirty maps of the view's twenty-four.
+    simulation.exec(
+        "local draw_one = draw
+        function draw()
+            graphics.clear('#000000')
+            local lights = {}
+            for x = -2, 2 do
+                table.insert(lights, { position = vector.create(x / 4, 0, 1), range = 6, shadows = true })
+            end
+            graphics.begin_3d({
+                camera = { position = vector.create(0, 0, 5), target = vector.zero, height = 2 },
+                lighting = { lights = lights },
+            })
+            graphics.draw_mesh(wall, vector.create(0, 0, -1))
+            stats = graphics.frame_stats()
+        end",
+    );
+    simulation.step();
+    simulation.step();
+    assert_eq!(
+        simulation
+            .eval::<(u32, u32, u32)>("stats.lights, stats.shadow_maps, stats.shadows_left_out"),
+        (5, 24, 1)
+    );
+}
+
 /// A 3D view filling the canvas, seen from the front through an orthographic camera 2 units high,
 /// unlit, so a unit is 10 pixels with the world's origin in the middle: a red box to the left in
 /// front of a blue wall, and a red billboard to the right, inside a plain node.

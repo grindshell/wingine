@@ -476,10 +476,12 @@ pub fn new_node(kind: &str, showing: Showing) -> NodeDef {
             shape: Shape::Cuboid([1.0; 3]),
             sprite: None,
             tint: Color::WHITE,
+            casts_shadow: true,
         }),
         "model" => KindDef::Model(ModelDef {
             model: model.to_owned(),
             tint: Color::WHITE,
+            casts_shadow: true,
         }),
         "billboard" => KindDef::Billboard(BillboardDef {
             sheet: sheet.to_owned(),

@@ -136,8 +136,8 @@
 //!   color made a number once can fade a little each frame.
 //! - `graphics.frame_stats()` returns how long the frame before took, and how much it drew, as a
 //!   table: `frame`, `update`, `draw` and `render` are seconds, and `quads`, `triangles`,
-//!   `draw_calls`, `lights` and `lights_left_out` counts. Before the first frame has finished,
-//!   all are 0. See `FrameStats` for what each measures.
+//!   `draw_calls`, `lights`, `lights_left_out`, `shadow_maps` and `shadows_left_out` counts.
+//!   Before the first frame has finished, all are 0. See `FrameStats` for what each measures.
 //! - `graphics.load_sprite_sheet(path, tile_width, tile_height)` loads a PNG divided into a grid
 //!   of sprites `tile_width` by `tile_height` texels, starting at its top-left corner. Each image
 //!   is read once; loading it again, even divided differently, reuses it.
@@ -158,15 +158,20 @@
 //!   angle in radians, the `direction` it shines (a vector), and the `edge` of the cone it fades
 //!   across, a part of it from 0 to 1 (0). A view is lit by 32 lights at once: of those reaching
 //!   what its camera sees, the nearest to the camera. All a view's light together lights a
-//!   surface no brighter than white.
+//!   surface no brighter than white. With `shadows` (`false`), the view's meshes and models in
+//!   a light's way shade what's behind them, with hard edges; billboards shade nothing. A view
+//!   has 24 shadow maps, which the lights nearest its camera take first: a spot light whose
+//!   `cone` is no more than a sixth of a turn takes one, and any other light six. A light there
+//!   are none left for lights without shadows.
 //! - `graphics.draw_mesh(mesh, position, options)` draws a mesh in the view begun last, its origin
 //!   at `position`, a vector, scaled by `options.scale` (a number, or a vector for each axis),
 //!   turned by `roll` about `z`, `pitch` about `x` and `yaw` about `y`, in that order, showing
-//!   `sprite` multiplied by `tint`. Drawing one with no view open is an error.
+//!   `sprite` multiplied by `tint`. It casts shadows from lights with `shadows` unless
+//!   `options.casts_shadow` is `false`. Drawing one with no view open is an error.
 //! - `graphics.draw_model(model, position, options)` draws each part of a model as `draw_mesh`
 //!   would, placed in the model, and the model placed by `position` and `options` as a mesh is,
-//!   all multiplied by `options.tint`. Its parts show their own sprites, so `options.sprite` is
-//!   an error.
+//!   all multiplied by `options.tint`, and casting shadows or not by `options.casts_shadow`. Its
+//!   parts show their own sprites, so `options.sprite` is an error.
 //! - `graphics.draw_billboard(sprite, position, tint, width, height)` draws a sprite standing
 //!   upright in the view begun last, the middle of its bottom edge at `position`, turned to face
 //!   the camera across the ground: `height` tall (1 by default) and `width` wide (by default, as

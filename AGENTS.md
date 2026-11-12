@@ -8,7 +8,8 @@ systems, and don't build more 3D features unless asked.
 ## Scope
 
 Wingine has what its examples need: tilemaps and batched sprites in blend modes, meshes and glTF
-models in 3D views picked by boxes and lit by a sun and by lights at places, sprite animation, particles, a camera, keyboard, mouse and gamepad input bound to
+models in 3D views picked by boxes and lit by a sun and by lights at places that cast shadows,
+sprite animation, particles, a camera, keyboard, mouse and gamepad input bound to
 actions, grid movement, physics with Rapier (bodies and characters, in 2D and in 3D views),
 text in the built-in font, bitmap fonts and TrueType fonts, audio, saves, Luau scripting with
 tasks, native libraries written in Rust, scenes (levels, screens and rigged characters), menus
@@ -112,11 +113,21 @@ own right.
   view, whose uniform carries up to `Light::MAX` of them, chosen by `lights_of` (those reaching
   what the camera sees, the nearest first, for the frame's stats and the renderer alike), and
   `mesh.wgsl` loops over them for every pixel. Light falls off in a straight line to a light's
-  range, adds, and stops at white; there are no shadows. `Light::level_at` is the same rule on
-  the CPU. The shader knows a billboard, which takes a light's whole level, by the normal matrix
-  only billboards have. In scenes a light is a `light` node (`LightDef`), a spot shining along
-  its node's `+z`. `Lighting` and `View3d` stay `Copy`, and native libraries can't add lights:
-  the ABI's lighting is unchanged.
+  range, adds, and stops at white. `Light::level_at` is the same rule on the CPU, which knows
+  nothing of shadows. The shader knows a billboard, which takes a light's whole level, by the
+  normal matrix only billboards have. In scenes a light is a `light` node (`LightDef`), a spot
+  shining along its node's `+z`. `Lighting` and `View3d` stay `Copy`, and native libraries can't
+  add lights: the ABI's lighting is unchanged.
+- Shadows: a light with `Light::shadows` takes one shadow map, or six (`Light::shadow_maps`), of
+  the `Light::SHADOW_MAPS` a view has, handed out by `shadows_of`, the nearest the camera first;
+  a light left without lights the view without shadows, and the sun casts none. The maps are the
+  layers of one depth texture, made when a light first has shadows and the same ones for every
+  view, so the renderer draws a view's just before the view (`draw_shadows`, through
+  `shadow.wgsl`, culling nothing). `mesh.wgsl` reads a map once for a pixel, so shadows' edges
+  are hard, after moving the surface off itself by a few of the map's texels, which keeps it from
+  shading itself. Whether a mesh casts is each draw's (`MeshDraw::casts_shadow`, part of its
+  kind, as `Canvas3d::set_casts_shadow` had it when it was drawn); billboards never do. In
+  scenes it's a mesh or model node's `casts_shadow`, and a light node's `shadows`.
 - `src/graphics/font.rs`: `Font` and `TextLayout`. Built-in and bitmap fonts have their glyphs in
   one texture (`Metrics`; bitmap glyphs cut from a font file's PNG, as wide as their ink).
   TrueType and OpenType fonts (`Face`, `FaceSize`) rasterize a glyph with `ab_glyph` the first time

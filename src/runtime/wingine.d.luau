@@ -155,6 +155,12 @@ type FrameStats = {
     --- Lights that reached what a 3D view saw but didn't light it, there being more than the 32
     --- that light a view at once.
     lights_left_out: number,
+    --- Shadow maps those lights took. Each draws its view's meshes that cast shadows again, from
+    --- a light, in draw calls `draw_calls` doesn't count.
+    shadow_maps: number,
+    --- Lights with `shadows` that lit a 3D view without them, there being more than the 24
+    --- shadow maps a view has.
+    shadows_left_out: number,
 }
 
 --- A camera looking into a 3D world, for a `View3d`. 3D coordinates are right-handed with `y` up:
@@ -212,6 +218,12 @@ type LightSettings = {
     --- The part of the cone, from its rim inward, across which a spot light fades, from 0, a
     --- hard rim, to 1. By default, 0.
     edge: number?,
+    --- Whether the view's meshes and models in its way shade what's behind them, with a hard
+    --- edge. Billboards shade nothing. A view has 24 shadow maps, which the lights nearest its
+    --- camera take first: a spot light whose cone is no more than a sixth of a turn takes one,
+    --- and any other light six. A light there are none left for lights without shadows. By
+    --- default, `false`.
+    shadows: boolean?,
 }
 
 --- A light at a place in a 3D view, for `graphics.begin_3d`.
@@ -246,6 +258,8 @@ type MeshOptions = {
     sprite: Sprite?,
     --- A color the mesh's colors are multiplied by. By default, white.
     tint: Color?,
+    --- Whether it shades what's behind it from lights with `shadows`. By default, `true`.
+    casts_shadow: boolean?,
 }
 
 --- A corner of a mesh's triangles, for `graphics.new_mesh`.
@@ -784,6 +798,10 @@ declare extern type SceneNode with
     function set_cell(self, column: number, row: number): ()
     --- Changes the color the colors of a sprite, mesh, model or billboard are multiplied by.
     function set_tint(self, tint: Color): ()
+    --- Returns whether a mesh or model shades what's behind it from lights with `shadows`.
+    function casts_shadow(self): boolean
+    --- Changes whether a mesh or model shades what's behind it from lights with `shadows`.
+    function set_casts_shadow(self, casts: boolean): ()
     --- Changes the color of a rect or text node.
     function set_color(self, color: Color): ()
     --- Returns how a sprite, rect, text, tile layer or particles node mixes with what's under it.

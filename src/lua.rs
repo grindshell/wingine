@@ -94,9 +94,10 @@
 //!   `height` (world units, for none) being the projection, one or the other. [`Lighting`] is a
 //!   table `{ direction, color, ambient }`, any of them left out keeping its default. A
 //!   [`Light`] is a table of a `position`, a vector, and optionally `color` (white), `range`
-//!   (5), `energy` (1), and for a spot light, `cone` (half its angle, in radians), `direction`
-//!   (a vector) and `edge` (0); a light node's settings are those but its position and
-//!   direction, which are its node's: `node:light()` (its color a number) and
+//!   (5), `energy` (1), `shadows` (whether the view's meshes and models in its way shade what's
+//!   behind them, `false`), and for a spot light, `cone` (half its angle, in radians),
+//!   `direction` (a vector) and `edge` (0); a light node's settings are those but its position
+//!   and direction, which are its node's: `node:light()` (its color a number) and
 //!   `node:set_light(settings)` (those given, keeping the rest). A [`Mesh`]
 //!   is userdata with `mesh:triangle_count()` and `mesh:bounds()`, the least and greatest
 //!   corners of the box its vertices take up, as vectors, or nothing if it has none. A [`Model`]
@@ -153,7 +154,9 @@
 //!   time it's drawn, and one drawn without a camera is in canvas pixels, so `contains` tests the
 //!   mouse against a node. What they show: `node:set_sprite(sprite)`, `node:set_cell(column, row)`
 //!   (a cell of the sheet the scene file gave a sprite, billboard, mesh or particles),
-//!   `node:set_tint(tint)` (sprites, meshes, models and billboards), `node:set_color(color)`
+//!   `node:set_tint(tint)` (sprites, meshes, models and billboards), `node:casts_shadow()` and
+//!   `node:set_casts_shadow(casts)` (meshes and models: whether one shades what's behind it from
+//!   lights with `shadows`, as it does unless its file says not), `node:set_color(color)`
 //!   (rects, text and filled panels), `node:text()` and `node:set_text(text)` (text), and
 //!   `node:blend()` and `node:set_blend(blend)` (sprites, rects, text, tile layers and particles).
 //!   Particles: `node:advance_particles(dt)`, `node:particle_count()` and
@@ -1061,8 +1064,8 @@ impl FromLua for Lighting {
     }
 }
 
-/// Changes the settings of `light` that `table` gives, any of `color`, `range`, `energy`, `cone`
-/// and `edge`, failing if it couldn't then light anything.
+/// Changes the settings of `light` that `table` gives, any of `color`, `range`, `energy`,
+/// `cone`, `edge` and `shadows`, failing if it couldn't then light anything.
 fn light_settings(table: &mlua::Table, light: &mut LightDef) -> mlua::Result<()> {
     if let Some(color) = table.get::<Option<Color>>("color")? {
         light.color = color;
@@ -1079,6 +1082,9 @@ fn light_settings(table: &mlua::Table, light: &mut LightDef) -> mlua::Result<()>
     if let Some(edge) = table.get::<Option<f32>>("edge")? {
         light.edge = edge;
     }
+    if let Some(shadows) = table.get::<Option<bool>>("shadows")? {
+        light.shadows = shadows;
+    }
     match light.problem() {
         Some(problem) => Err(mlua::Error::runtime(format!("a light: {problem}"))),
         None => Ok(()),
@@ -1090,8 +1096,7 @@ impl FromLua for Light {
     /// node has, and for a spot light, a `direction`.
     fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
         let mlua::Value::Table(table) = &value else {
-            let message =
-                "expected a table { position, color, range, energy, direction, cone, edge }";
+            let message = "expected a table { position, color, range, energy, direction, cone, edge, shadows }";
             return Err(conversion_error(&value, "Light", message.into()));
         };
         let Some(position) = table.get::<Option<mlua::Vector>>("position")? else {
@@ -1114,15 +1119,16 @@ impl FromLua for Light {
 }
 
 impl IntoLua for LightDef {
-    /// A table `{ color, range, energy, cone, edge }`, its color a number `0xRRGGBBAA`, and
-    /// `cone` left out of a point light's.
+    /// A table `{ color, range, energy, cone, edge, shadows }`, its color a number
+    /// `0xRRGGBBAA`, and `cone` left out of a point light's.
     fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
-        let table = lua.create_table_with_capacity(0, 5)?;
+        let table = lua.create_table_with_capacity(0, 6)?;
         table.set("color", packed_color(self.color))?;
         table.set("range", self.range)?;
         table.set("energy", self.energy)?;
         table.set("cone", self.cone)?;
         table.set("edge", self.edge)?;
+        table.set("shadows", self.shadows)?;
         Ok(mlua::Value::Table(table))
     }
 }
@@ -1903,6 +1909,23 @@ impl mlua::UserData for SceneNode {
                     | Kind::Mesh(MeshNode { tint: t, .. })
                     | Kind::Model(ModelNode { tint: t, .. })
                     | Kind::Billboard(BillboardNode { tint: t, .. }) => *t = tint,
+                    _ => return None,
+                }
+                Some(())
+            })
+        });
+        methods.add_method("casts_shadow", |_, node, ()| {
+            node.read_kind("shadow", |kind| match kind {
+                Kind::Mesh(MeshNode { casts_shadow, .. })
+                | Kind::Model(ModelNode { casts_shadow, .. }) => Some(*casts_shadow),
+                _ => None,
+            })
+        });
+        methods.add_method("set_casts_shadow", |_, node, casts: bool| {
+            node.write_kind("shadow", |kind| {
+                match kind {
+                    Kind::Mesh(MeshNode { casts_shadow, .. })
+                    | Kind::Model(ModelNode { casts_shadow, .. }) => *casts_shadow = casts,
                     _ => return None,
                 }
                 Some(())

@@ -7,6 +7,10 @@ struct Light {
     // The way it shines, of length 1, then the cosine of its cone's angle: under -1 for a point
     // light, which has no cone.
     direction: vec4<f32>,
+    // The first of the view's shadow maps that are its own, or under 0 for a light without
+    // shadows; how many are, one or six; and how large a texel of them is, in world units, a
+    // world unit from the light along the way a map looks.
+    shadow: vec4<f32>,
 }
 
 struct View {
@@ -20,10 +24,17 @@ struct View {
     // How many of `lights` light the view, then nothing.
     light_count: vec4<u32>,
     lights: array<Light, 32>,
+    // What maps the world onto each shadow map, as a camera at its light would see it.
+    shadow_maps: array<mat4x4<f32>, 24>,
 }
 
 @group(0) @binding(0)
 var<uniform> view: View;
+// How far from its light the nearest thing casting a shadow is, in each shadow map.
+@group(0) @binding(1)
+var shadow_texture: texture_depth_2d_array;
+@group(0) @binding(2)
+var shadow_sampler: sampler_comparison;
 
 @group(1) @binding(0)
 var mesh_texture: texture_2d<f32>;
@@ -97,6 +108,47 @@ fn vs_main(vertex: VertexIn, instance: InstanceIn) -> VertexOut {
     return out;
 }
 
+// How many of a shadow map's texels a surface is moved off itself by, along its normal and
+// toward the light, before it's looked up in the map: enough that a surface the light reaches
+// doesn't shade itself for the map's coarseness, however steeply the light meets it.
+const SHADOW_OFF_SURFACE: f32 = 1.5;
+const SHADOW_TOWARD_LIGHT: f32 = 0.5;
+
+// Whether the light reaches `world`, 1, or something casting a shadow is nearer the light, 0.
+// `normal` is the surface's, or nothing for a billboard's, and `toward` the way to the light.
+fn lit(index: u32, world: vec3<f32>, normal: vec3<f32>, toward: vec3<f32>) -> f32 {
+    let shadow = view.lights[index].shadow;
+    if shadow.x < 0.0 {
+        return 1.0;
+    }
+    var map = u32(shadow.x);
+    if shadow.y > 1.5 {
+        // Six maps, one each way along each axis: the one that looks most nearly this way.
+        let away = -toward;
+        let size = abs(away);
+        if size.x >= size.y && size.x >= size.z {
+            map += select(1u, 0u, away.x > 0.0);
+        } else if size.y >= size.z {
+            map += select(3u, 2u, away.y > 0.0);
+        } else {
+            map += select(5u, 4u, away.z > 0.0);
+        }
+    }
+    let onto_map = view.shadow_maps[map];
+    // How far it is from the light along the way the map looks, which is what a texel's size
+    // grows with.
+    let texel = (onto_map * vec4<f32>(world, 1.0)).w * shadow.z;
+    let moved = world + normal * (texel * SHADOW_OFF_SURFACE)
+        + toward * (texel * SHADOW_TOWARD_LIGHT);
+    let clip = onto_map * vec4<f32>(moved, 1.0);
+    if clip.w <= 0.0 {
+        return 1.0;
+    }
+    let place = clip.xyz / clip.w;
+    let uv = place.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
+    return textureSampleCompareLevel(shadow_texture, shadow_sampler, uv, i32(map), place.z);
+}
+
 @fragment
 fn fs_main(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
     let color = textureSample(mesh_texture, mesh_sampler, in.uv) * in.color;
@@ -123,9 +175,11 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @locatio
         }
         let toward = to_light / max(distance, 1e-6);
         var level = reach;
+        var surface = vec3<f32>(0.0);
         if in.world.w < 0.5 {
             // A surface with no normal faces nothing, as the sun finds it.
             level *= max(dot(normal, toward), 0.0) * step(0.5, normal_length);
+            surface = normal;
         }
         let direction = view.lights[i].direction;
         let color_inner = view.lights[i].color;
@@ -139,6 +193,9 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @locatio
             } else {
                 level *= step(direction.w, along);
             }
+        }
+        if level > 0.0 {
+            level *= lit(i, in.world.xyz, surface, toward);
         }
         light += color_inner.rgb * level;
     }

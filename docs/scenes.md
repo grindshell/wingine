@@ -539,6 +539,7 @@ in a menu.
             color = "#ffd9a0",
             range = 6,
             cone = 0.6,
+            shadows = true,
         },
     },
 },
@@ -563,10 +564,11 @@ The world is right-handed with `y` up, as glTF's is. The kinds of node in it:
 - **`mesh`**: a built-in shape, `shape`, centered on its origin: `"cuboid"`, `size = { width,
   height, depth }`; `"plane"`, flat and facing up, `size = { width, depth }`; or `"sphere"`, of a
   `radius`. Sizes are 1, and a sphere's radius a half, if left out. Optionally a sprite, `sheet`
-  and `cell`, shown on each face, and a `tint`.
+  and `cell`, shown on each face; a `tint`; and `casts_shadow`, whether it shades what's behind it
+  from lights with `shadows` (`true`).
 - **`model`**: the parts of a model file, `model`, a `.glb` or `.gltf` file's path from the
-  game's folder, as [`graphics.load_model`](api/graphics.md#graphicsload_model) loads it, and a
-  `tint`.
+  game's folder, as [`graphics.load_model`](api/graphics.md#graphicsload_model) loads it, a
+  `tint`, and `casts_shadow`, as a mesh's.
 - **`billboard`**: a sprite, `sheet` and `cell`, standing upright with the middle of its bottom
   edge at the node's origin, turned to face the camera across the ground, `width` by `height`
   world units (1 by default; a negative width mirrors it), and a `tint`. It moves with its node,
@@ -576,8 +578,9 @@ The world is right-handed with `y` up, as glTF's is. The kinds of node in it:
   times its color (1), 0 or more. With a `cone`, half the cone's angle in radians, above 0 and up
   to pi, it's a spot light, shining along its node's `+z`, the way a model's front faces, and
   fading across the `edge` of the cone, a part of it from its rim inward, from 0 to 1 (0, a hard
-  rim). Without a `cone` it's a point light, shining every way, and has no `edge`. It moves and
-  turns with its node, but doesn't stretch.
+  rim). Without a `cone` it's a point light, shining every way, and has no `edge`. With `shadows`
+  (`false`), the view's meshes and models in its way shade what's behind them. It moves and turns
+  with its node, but doesn't stretch.
 - **`node`** and **`instance`**: a place, and a scene file placed here, as in the 2D scene. A
   prop can be a scene of its own, of meshes or models, placed into levels by instances and changed
   by overrides.
@@ -597,12 +600,22 @@ say.
 A view's lights add to its sun and ambient light, as the lights of
 [`graphics.begin_3d`](api/graphics.md#graphicsbegin_3d) do, which says how a light lights a
 surface. A light lights everything in its view within its range, wherever it is in the view's
-tree, and casts no shadows: it shines through walls. The example's lamp is a spot light over the
-crate, turned a quarter turn by its `pitch` to shine straight down. A light that isn't `visible`,
-or is inside a node that isn't, is out, and a [clip](#clips) that moves or turns a node moves or
-turns its light, so a lamp can swing. A view is lit by 32 lights at once: of those that reach what
-its camera sees, the nearest to the camera. Scripts read and change a light with
-[`node:light`](api/scene.md#nodelight) and [`node:set_light`](api/scene.md#nodeset_light).
+tree. The example's lamp is a spot light over the crate, turned a quarter turn by its `pitch` to
+shine straight down. A light that isn't `visible`, or is inside a node that isn't, is out, and a
+[clip](#clips) that moves or turns a node moves or turns its light, so a lamp can swing. A view is
+lit by 32 lights at once: of those that reach what its camera sees, the nearest to the camera.
+Scripts read and change a light with [`node:light`](api/scene.md#nodelight) and
+[`node:set_light`](api/scene.md#nodeset_light).
+
+A light without `shadows` shines through walls. With them, as the example's lamp has, the view's
+meshes and models shade what's behind them from it, with hard edges: the crate shades the floor
+around it. Billboards are shaded but shade nothing, and a mesh or model whose `casts_shadow` is
+`false` doesn't either, which a lamp's own model wants, if its light is inside it. Shadows cost
+drawing the view's meshes again from each light, into shadow maps, of which a view has 24: a spot
+light whose `cone` is no more than a sixth of a turn (about 1.05) takes one, and any other light
+six. The lights nearest the camera take them first, and a light there are none left for lights the
+view without shadows. The sun casts none. See
+[`graphics.begin_3d`](api/graphics.md#graphicsbegin_3d) for the rest.
 
 Meshes and models hide what's behind them, whatever order they're drawn in; the view draws over
 what was drawn before it, and nodes after it draw over it. Scripts move nodes in views with

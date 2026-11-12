@@ -609,6 +609,8 @@ pub struct MeshDef {
     pub shape: Shape,
     pub sprite: Option<CellDef>,
     pub tint: Color,
+    /// Whether it shades what's behind it from lights with shadows.
+    pub casts_shadow: bool,
 }
 
 /// A built-in shape, centered on its node's origin: see [`MeshData`].
@@ -653,6 +655,8 @@ pub struct ModelDef {
     /// The model file's path, relative to the game's folder.
     pub model: String,
     pub tint: Color,
+    /// Whether it shades what's behind it from lights with shadows.
+    pub casts_shadow: bool,
 }
 
 /// A sprite standing upright in a 3D view with the middle of its bottom edge at the node's origin,
@@ -682,6 +686,8 @@ pub struct LightDef {
     pub cone: Option<f32>,
     /// The part of the cone, from its rim inward, across which a spot light fades.
     pub edge: f32,
+    /// Whether the view's meshes and models in its way shade what's behind them.
+    pub shadows: bool,
 }
 
 impl Default for LightDef {
@@ -693,6 +699,7 @@ impl Default for LightDef {
             energy: 1.0,
             cone: None,
             edge: 0.0,
+            shadows: false,
         }
     }
 }
@@ -708,6 +715,7 @@ impl LightDef {
             direction,
             cone: self.cone,
             edge: self.edge,
+            shadows: self.shadows,
         }
     }
 
@@ -1871,6 +1879,7 @@ fn read_kind(
                 shape,
                 sprite,
                 tint: optional_color(fields, "tint")?,
+                casts_shadow: optional_boolean(fields, "casts_shadow", true)?,
             })
         }
         "model" => {
@@ -1880,6 +1889,7 @@ fn read_kind(
             KindDef::Model(ModelDef {
                 model: string(model, "model")?,
                 tint: optional_color(fields, "tint")?,
+                casts_shadow: optional_boolean(fields, "casts_shadow", true)?,
             })
         }
         "billboard" => {
@@ -1915,6 +1925,7 @@ fn read_kind(
                 energy,
                 cone,
                 edge,
+                shadows: optional_boolean(fields, "shadows", false)?,
             };
             if let Some(problem) = light.problem() {
                 return Err(problem);
@@ -2576,6 +2587,14 @@ fn string(value: Value, field: &str) -> Result<String, String> {
     }
 }
 
+/// The field `field`, a boolean, or `default` without it.
+fn optional_boolean(fields: &mut Fields, field: &str, default: bool) -> Result<bool, String> {
+    match fields.take(field) {
+        Some(value) => boolean(value, field),
+        None => Ok(default),
+    }
+}
+
 fn boolean(value: Value, field: &str) -> Result<bool, String> {
     match value {
         Value::Bool(value) => Ok(value),
@@ -2749,10 +2768,12 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
                 set("cell", cell_value(sprite.cell));
             }
             set("tint", hex(mesh.tint));
+            set("casts_shadow", Value::Bool(mesh.casts_shadow));
         }
         KindDef::Model(model) => {
             set("model", string(&model.model));
             set("tint", hex(model.tint));
+            set("casts_shadow", Value::Bool(model.casts_shadow));
         }
         KindDef::Billboard(billboard) => {
             set("sheet", string(&billboard.sheet));
@@ -2769,6 +2790,7 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
                 set("cone", number(cone));
             }
             set("edge", number(light.edge));
+            set("shadows", Value::Bool(light.shadows));
         }
         KindDef::Stack(stack) => stack_fields(stack, &mut set),
         KindDef::Panel(panel) => {
@@ -3590,14 +3612,17 @@ mod tests {
                 energy: 1.5,
                 cone: Some(0.6),
                 edge: 0.25,
+                shadows: false,
             }
         );
+        assert!(light("shadows = true").shadows);
         for (fields, message) in [
             ("range = 0", "`range` must be above 0"),
             ("energy = -1", "`energy` can't be less than 0"),
             ("cone = 4", "`cone` is an angle above 0, up to pi"),
             ("cone = 0.5, edge = 2", "`edge` is from 0 to 1"),
             ("edge = 0.5", "a light has an `edge` only with a `cone`"),
+            ("shadows = 1", "`shadows`"),
             ("tint = '#ffffff'", "a light node has no field `tint`"),
         ] {
             let err = error(&source(fields));
@@ -3611,6 +3636,10 @@ mod tests {
             !written.contains("energy") && !written.contains("edge"),
             "{written}"
         );
+        assert!(!written.contains("shadows"), "{written}");
+        let shadowed = parse(&source("shadows = true")).unwrap().to_luau().unwrap();
+        assert!(shadowed.contains("shadows = true"), "{shadowed}");
+        assert_eq!(parse(&shadowed).unwrap().to_luau().unwrap(), shadowed);
         assert_eq!(parse(&written).unwrap().to_luau().unwrap(), written);
         assert_eq!(
             parse(&written).unwrap().children[0].children[0].kind,
@@ -3629,7 +3658,7 @@ mod tests {
                 camera = { position = { 0, 5, 4 }, target = { 0, 0, 0 }, fov = 0.6, far = 50 },
                 lighting = { color = "#ffeedd" },
                 children = {
-                    { name = "floor", kind = "mesh", shape = "plane", size = { 8, 6 }, tint = "#404040" },
+                    { name = "floor", kind = "mesh", shape = "plane", size = { 8, 6 }, tint = "#404040", casts_shadow = false },
                     {
                         name = "stack", kind = "node", x = 1, z = -2, yaw = 0.5,
                         children = {
@@ -3674,6 +3703,7 @@ mod tests {
                 shape: Shape::Plane([8.0, 6.0]),
                 sprite: None,
                 tint: Color::rgb8(0x40, 0x40, 0x40),
+                casts_shadow: false,
             })
         );
         assert_eq!(floor.placement3, Some(Placement3::default()));
@@ -3699,6 +3729,7 @@ mod tests {
                     cell: [2, 3],
                 }),
                 tint: Color::WHITE,
+                casts_shadow: true,
             })
         );
         assert_eq!(crate_.y, 0.5);
@@ -3710,6 +3741,7 @@ mod tests {
             KindDef::Model(ModelDef {
                 model: "models/barrel.glb".into(),
                 tint: Color::WHITE,
+                casts_shadow: true,
             })
         );
         assert_eq!(barrel.placement3.unwrap().scale_z, 2.0);

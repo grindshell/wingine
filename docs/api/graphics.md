@@ -435,6 +435,8 @@ seconds, measured on the CPU:
 | `draw_calls` | How many draw calls those took: one for each run of quads with the same texture, and one for each kind of mesh, or billboard, each 3D view drew: the same mesh showing the same texture. |
 | `lights` | How many [lights at places](#graphicsbegin_3d) lit the frame's 3D views. |
 | `lights_left_out` | How many lights reached what a 3D view saw but didn't light it, there being more than the 32 that light a view at once. |
+| `shadow_maps` | How many [shadow maps](#graphicsbegin_3d) those lights took. Each draws its view's meshes that cast shadows again, from a light, in draw calls `draw_calls` doesn't count. |
+| `shadows_left_out` | How many lights with `shadows` lit a 3D view without them, there being more than the 24 shadow maps a view has. |
 
 Before the first frame has finished, everything is 0. To see what a frame really costs, turn
 [`vsync`](../project-structure.md#vsync) off, and run a release build. See
@@ -1071,6 +1073,7 @@ Each of the `lights` is a table:
 | `cone` | Half the angle of a spot light's cone, in radians, above 0 and up to pi. Without one, it's a point light, shining every way. |
 | `direction` | The way a spot light shines, a vector of any length. A light with a `cone` must have one. |
 | `edge` | The part of the cone, from its rim inward, across which a spot light fades, from 0, a hard rim, to 1. By default, 0. Only a light with a `cone` has one. |
+| `shadows` | Whether the view's meshes and models in its way shade what's behind them. By default, `false`. |
 
 A light's level at a surface is `energy * (1 - distance / range)`: it falls off in a straight
 line, to nothing at its range. A spot light's level is nothing outside its cone, and across the
@@ -1099,13 +1102,43 @@ graphics.begin_3d({
 })
 ```
 
-Lights cast no shadows: one shines through a wall onto what's behind it. A surface whose normal
-is zero faces nothing, so it gets nothing from them, as from the sun.
+A surface whose normal is zero faces nothing, so it gets nothing from lights, as from the sun.
 
 A view is lit by 32 lights at once. Lights that reach nothing its camera sees don't count toward
 them; of the rest, the 32 nearest the camera light the view. Any more are left out: the engine
 logs a warning the first time, and [`graphics.frame_stats`](#graphicsframe_stats) counts them as
 `lights_left_out`.
+
+A light without `shadows` shines through a wall onto what's behind it. With them, the view's
+meshes and models shade what's behind them from the light, billboards too. The shadows have hard
+edges: a place is in one or it isn't. Some things cast none: billboards, which face the camera,
+not the light; the pixels of a mesh's sprite less than half opaque, which aren't drawn either; a
+mesh or model drawn with [`casts_shadow`](#graphicsdraw_mesh) `false`; and anything nearer the
+light than 0.002 of its range. A light inside a mesh, such as a lamp's bulb, is shaded by it all
+round, so draw that one with `casts_shadow = false`. The sun casts no shadows.
+
+```lua
+-- A lamp whose light stops at the crate, but not at its own bulb, which it's inside.
+graphics.begin_3d({
+    camera = camera,
+    lighting = {
+        color = "#000000",
+        ambient = "#101018",
+        lights = { { position = lamp, color = "#ffd9a0", range = 8, shadows = true } },
+    },
+})
+graphics.draw_mesh(ground, vector.zero)
+graphics.draw_mesh(crate, vector.create(1, 0.5, 0))
+graphics.draw_mesh(bulb, lamp, { casts_shadow = false })
+```
+
+A light with shadows draws the view's meshes that cast them again, from where it is, into shadow
+maps, each 512 pixels square: one map for a spot light whose `cone` is no more than a sixth of a
+turn (60 degrees, about 1.05 radians), and six for any other light, a point light or a wider spot
+light. A view has 24 shadow maps, which the lights nearest its camera take first. A light there
+are none left for lights the view without shadows: the engine logs a warning the first time, and
+[`graphics.frame_stats`](#graphicsframe_stats) counts such lights as `shadows_left_out`, and the
+maps taken as `shadow_maps`.
 
 ### `graphics.draw_mesh`
 
@@ -1125,6 +1158,7 @@ colors it:
 | `scale` | How much to scale it: a number, along every axis, or a vector, along each. A negative scale mirrors it. |
 | `sprite` | The sprite it shows. A mesh's corners show points of the sprite from 0 to 1 across it, so each side of a [cube](#graphicsnew_cube) shows the whole sprite. By default, none: the mesh is white. |
 | `tint` | A color its colors are multiplied by. By default, white. |
+| `casts_shadow` | Whether it shades what's behind it from [lights with `shadows`](#graphicsbegin_3d). By default, `true`. |
 
 The mesh is scaled, rolled, pitched and turned, in that order, about its origin, then moved to
 `position`. Pixels of the sprite less than half opaque aren't drawn, so what's behind shows through
@@ -1149,8 +1183,8 @@ graphics.draw_model(model: Model, position: vector, options: MeshOptions?)
 Draws each part of a [model](#models) in the 3D view begun last, as
 [`draw_mesh`](#graphicsdraw_mesh) would, each placed where the model file puts it, and the whole
 model placed by `position` and `options` as a mesh is. Its parts show their own sprites, so
-`options.sprite` is an error, and `options.tint` multiplies all their colors. Each part is a draw
-call of its own.
+`options.sprite` is an error, `options.tint` multiplies all their colors, and
+`options.casts_shadow` is whether all of them cast shadows. Each part is a draw call of its own.
 
 ```lua
 local barrel = graphics.load_model("models/barrel.glb")
@@ -1173,9 +1207,10 @@ it, as [`sprite:flipped_x`](#spriteflipped_x) does.
 
 A billboard is lit as the ground is, whichever way it faces, so it matches what it stands on. A
 [light at a place](#graphicsbegin_3d) gives it its whole level wherever the light is from it,
-since a billboard has no side to turn away. It hides what's behind it as meshes do, its pixels less
-than half opaque left out, and its colors are multiplied by `tint`, white by default. Drawing one
-when no view is open is an error.
+since a billboard has no side to turn away. Meshes shade it from lights with `shadows`, but it
+casts no shadow itself. It hides what's behind it as meshes do, its pixels less than half opaque
+left out, and its colors are multiplied by `tint`, white by default. Drawing one when no view is
+open is an error.
 
 ```lua
 -- The player, a tile tall, facing the way they last walked.

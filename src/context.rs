@@ -74,6 +74,13 @@ pub struct FrameStats {
     /// The lights that reached what a 3D view saw but didn't light it, there being more than
     /// [`Light::MAX`](crate::graphics::Light::MAX) that did.
     pub lights_left_out: u32,
+    /// The shadow maps those lights took. Each is the meshes of its view that cast shadows
+    /// drawn again, from a light, in draw calls `draw_calls` doesn't count.
+    pub shadow_maps: u32,
+    /// The lights with [shadows](crate::graphics::Light::shadows) that lit a 3D view without
+    /// them, there being no more than
+    /// [`Light::SHADOW_MAPS`](crate::graphics::Light::SHADOW_MAPS) maps in a view.
+    pub shadows_left_out: u32,
 }
 
 impl Context {

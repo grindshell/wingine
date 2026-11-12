@@ -6,7 +6,7 @@ use super::{
     Blend, Camera, Canvas3d, Color, Font, Light, Mesh, Sprite, TextLayout, Texture, View3d,
     camera::Transform,
     font::PlacedGlyph,
-    view3d::{Instance, MeshDraw, MeshOrder, Segment3d, lights_of},
+    view3d::{Instance, MeshDraw, MeshOrder, Segment3d, lights_of, shadows_of},
 };
 use crate::{
     FrameStats,
@@ -154,10 +154,12 @@ impl Canvas {
     }
 
     /// How many lights light the 3D views drawn so far this frame, and how many more would but
-    /// for being more than [`Light::MAX`] in a view.
-    pub(crate) fn light_counts(&self) -> [u32; 2] {
+    /// for being more than [`Light::MAX`] in a view; then how many shadow maps those lights
+    /// take, and how many of them go without shadows for want of one.
+    pub(crate) fn light_counts(&self) -> [u32; 4] {
         let mut chosen = Vec::new();
-        let mut counts = [0; 2];
+        let mut shadowed = Vec::new();
+        let mut counts = [0; 4];
         for segment in &self.segments {
             let Range { start, end } = segment.lights.clone();
             if start == end || segment.draws.is_empty() {
@@ -166,6 +168,9 @@ impl Canvas {
             let lights = &self.lights[start as usize..end as usize];
             counts[1] += lights_of(&segment.view, lights, &mut chosen);
             counts[0] += chosen.len() as u32;
+            let [maps, without] = shadows_of(&segment.view, lights, &chosen, &mut shadowed);
+            counts[2] += maps;
+            counts[3] += without;
         }
         counts
     }
@@ -203,6 +208,7 @@ impl Canvas {
             before_batch: (self.batches.len() - 1) as u32,
             draws: first..first,
             lights: first_light..first_light,
+            casting: true,
             billboard_axes: view.camera.billboard_axes(),
         });
         Canvas3d { canvas: self }

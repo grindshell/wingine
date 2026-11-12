@@ -1929,6 +1929,296 @@ fn lights_on_billboards() {
     assert!(mesh > 0.2 && mesh < 0.6, "{mesh}");
 }
 
+/// A view with no sun and no ambient light, so what a light doesn't reach is black.
+fn dark_view(camera: Camera3d, [width, height]: [f32; 2]) -> View3d {
+    View3d {
+        lighting: Lighting {
+            direction: [0.0, -1.0, 0.0],
+            color: Color::BLACK,
+            ambient: Color::BLACK,
+        },
+        ..View3d::new(camera, Rect::new(0.0, 0.0, width, height))
+    }
+}
+
+/// A floor, a cube and a ball lit by one light with shadows: the cube and the ball shade the
+/// floor behind them, with hard edges, and nothing the light reaches is shaded by itself,
+/// however steeply the light meets it.
+#[test]
+fn shadows_from_lights() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let ground = ctx.create_mesh(&MeshData::plane([8.0, 8.0])).unwrap();
+    let cube = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let sphere = ctx.create_mesh(&MeshData::sphere(0.6, 16, 8)).unwrap();
+    let camera = Camera3d::perspective([0.03, 3.51, 5.02], [0.0, 0.3, 0.0], 0.8);
+    let view = dark_view(camera, [128.0, 96.0]);
+    let lamp = Light {
+        energy: 1.5,
+        ..Light::point([0.3, 1.5, 0.2], Color::rgb8(0xff, 0xd0, 0x90), 7.0)
+    };
+    let shading = Light {
+        shadows: true,
+        ..lamp
+    };
+    let mut render = |light: Light, things: bool| {
+        headless
+            .render(128, 96, |canvas| {
+                canvas.clear(Color::rgb8(0x08, 0x08, 0x10));
+                let mut view = canvas.begin_3d(view);
+                view.add_light(light);
+                let grey = Color::rgb8(0xa0, 0xa0, 0xa0);
+                view.draw_mesh(&ground, Affine3::IDENTITY, None, grey);
+                if things {
+                    let turned = Affine3::from_translation([-1.2, 0.5, -0.4])
+                        * Affine3::from_rotation_y(0.5);
+                    view.draw_mesh(&cube, turned, None, Color::rgb8(0xd0, 0x60, 0x40));
+                    let right = Affine3::from_translation([1.2, 0.6, 0.0]);
+                    view.draw_mesh(&sphere, right, None, Color::WHITE);
+                }
+            })
+            .unwrap()
+    };
+    // A floor alone shades nothing, though it casts shadows, out to where the light all but
+    // runs along it.
+    let floor = render(lamp, false);
+    assert_alike(&floor, &render(shading, false), 0, "a floor with shadows");
+
+    let plain = render(lamp, true);
+    let frame = render(shading, true);
+    let pixel = |image: &Image, point: [f32; 3]| {
+        let [x, y] = view.project(point).expect("it's in view");
+        image.pixel(x as u32, y as u32)
+    };
+    let black = [0, 0, 0, 255];
+    // Past the cube from the light, and past the ball, the floor is in their shadows.
+    for behind in [[-2.9, 0.0, -1.1], [2.6, 0.0, -0.3]] {
+        assert_ne!(pixel(&plain, behind), black, "{behind:?} without shadows");
+        assert_eq!(pixel(&frame, behind), black, "{behind:?}");
+    }
+    // What the light reaches is lit as it is without shadows: the floor before them, the cube's
+    // top and the side of it the light is on, and the ball's.
+    for reached in [
+        [0.5, 0.0, 2.0],
+        [-0.3, 0.0, -2.5],
+        [-1.2, 1.0, -0.4],
+        [-0.72, 0.6, -0.1],
+        [0.75, 0.9, 0.1],
+    ] {
+        let lit = pixel(&plain, reached);
+        assert_ne!(lit, black, "{reached:?} without shadows");
+        assert_eq!(pixel(&frame, reached), lit, "{reached:?}");
+    }
+    // Shadows only take light away.
+    let pairs = frame.pixels().iter().zip(plain.pixels());
+    assert!(pairs.clone().all(|(shaded, lit)| shaded <= lit));
+    assert!(pairs.filter(|(shaded, lit)| shaded < lit).count() > 600);
+
+    assert_screenshot(&headless.adapter_name(), "shadows_from_lights", frame);
+}
+
+/// A floor seen from above, and over it two lights with a slab under each: a spot light, whose
+/// shadows are in one map, and a point light, whose are in six. Each slab's shadow is twice its
+/// size, the light being twice as far from the floor as from the slab, and its edge is hard.
+#[test]
+fn shadows_from_spots_and_points() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let ground = ctx.create_mesh(&MeshData::plane([12.0, 6.0])).unwrap();
+    let slab = ctx.create_mesh(&MeshData::cuboid([0.6, 0.1, 0.6])).unwrap();
+    let camera = Camera3d::orthographic([0.0, 10.0, 0.0], [0.0; 3], 6.0);
+    let view = dark_view(camera, [128.0, 64.0]);
+    let spot = Light {
+        shadows: true,
+        ..Light::spot([-3.0, 3.0, 0.0], [0.0, -1.0, 0.0], 0.5, Color::WHITE, 6.0)
+    };
+    let point = Light {
+        shadows: true,
+        ..Light::point([3.0, 3.0, 0.0], Color::rgb8(0xff, 0xd0, 0x90), 6.0)
+    };
+    assert_eq!([spot.shadow_maps(), point.shadow_maps()], [1, 6]);
+    let mut render = |slabs: bool| {
+        headless
+            .render(128, 64, |canvas| {
+                canvas.clear(Color::rgb8(0x20, 0x30, 0x60));
+                let mut view = canvas.begin_3d(view);
+                view.draw_mesh(&ground, Affine3::IDENTITY, None, Color::WHITE);
+                for light in [spot, point] {
+                    view.add_light(light);
+                    let [x, _, z] = light.position;
+                    if slabs {
+                        let under = Affine3::from_translation([x, 1.5, z]);
+                        view.draw_mesh(&slab, under, None, Color::rgb8(0x60, 0xa0, 0xff));
+                    }
+                }
+            })
+            .unwrap()
+    };
+    let open = render(false);
+    let frame = render(true);
+    let pixel = |image: &Image, point: [f32; 3]| {
+        let [x, y] = view.project(point).expect("it's in view");
+        image.pixel(x as u32, y as u32)
+    };
+    let black = [0, 0, 0, 255];
+    for light in [spot, point] {
+        let [x, _, z] = light.position;
+        // The slab reaches 0.3 from under the light, and its shadow 0.6: between them the floor
+        // is dark, across and along, and past them it's lit as it is without the slab.
+        for [dx, dz] in [[0.45, 0.0], [-0.45, 0.0], [0.0, 0.45], [0.0, -0.45]] {
+            let shaded = [x + dx, 0.0, z + dz];
+            assert_ne!(pixel(&open, shaded), black, "{shaded:?} without the slab");
+            assert_eq!(pixel(&frame, shaded), black, "{shaded:?}");
+            let past = [x + dx * 1.7, 0.0, z + dz * 1.7];
+            assert_ne!(pixel(&open, past), black, "{past:?} without the slab");
+            assert_eq!(pixel(&frame, past), pixel(&open, past), "{past:?}");
+        }
+    }
+
+    assert_screenshot(
+        &headless.adapter_name(),
+        "shadows_from_spots_and_points",
+        frame,
+    );
+}
+
+/// What shades a wall from a light before it: a mesh, but not one drawn after the view is told
+/// meshes cast no shadows, nor a billboard, nor the pixels of a mesh's sprite that don't show.
+#[test]
+fn shadows_are_cast_by_meshes_that_show() {
+    let mut headless = headless();
+    let sheet = SpriteSheet::new(headless.context().load_texture(TILESET).unwrap(), 16, 16);
+    let sprite = sheet.sprite(27, 0);
+    let ctx = headless.context();
+    let wall = ctx
+        .create_mesh(&MeshData::cuboid([10.0, 4.0, 0.2]))
+        .unwrap();
+    let card = ctx
+        .create_mesh(&MeshData::cuboid([1.0, 1.0, 0.02]))
+        .unwrap();
+    let camera = Camera3d::orthographic([0.0, 0.5, 5.0], [0.0, 0.5, 0.0], 3.0);
+    let view = dark_view(camera, [128.0, 48.0]);
+    // On the camera's line, twice as far from the wall as what's drawn before it, a little to
+    // the right: so each thing's shadow is twice its size, and falls to its right.
+    let lamp = Light {
+        shadows: true,
+        ..Light::point([0.0, 0.5, 3.0], Color::WHITE, 12.0)
+    };
+    #[derive(Clone, Copy, PartialEq)]
+    enum Thing {
+        Nothing,
+        Card,
+        CardWithoutShadow,
+        Billboard,
+        Sprite,
+    }
+    let mut render = |thing: Thing| {
+        headless
+            .render(128, 48, |canvas| {
+                canvas.clear(Color::BLACK);
+                let mut view = canvas.begin_3d(view);
+                view.add_light(lamp);
+                let back = Affine3::from_translation([0.0, 0.5, -0.1]);
+                view.draw_mesh(&wall, back, None, Color::WHITE);
+                let before = Affine3::from_translation([1.5, 0.5, 1.5]);
+                match thing {
+                    Thing::Nothing => {}
+                    Thing::Card => view.draw_mesh(&card, before, None, Color::WHITE),
+                    Thing::CardWithoutShadow => {
+                        view.set_casts_shadow(false);
+                        view.draw_mesh(&card, before, None, Color::WHITE);
+                    }
+                    Thing::Billboard => {
+                        view.draw_billboard(&sprite, [1.5, 0.0, 1.5], [1.0, 1.0], Color::WHITE);
+                    }
+                    Thing::Sprite => view.draw_mesh(&card, before, Some(&sprite), Color::WHITE),
+                }
+            })
+            .unwrap()
+    };
+    // How many of the wall's pixels are dark where the card's shadow falls: from 2 to 4 across,
+    // and from 0 to 1 up, level with the light.
+    let [left, top] = view.project([2.1, 0.9, 0.0]).unwrap().map(|v| v as u32);
+    let [right, bottom] = view.project([3.9, 0.1, 0.0]).unwrap().map(|v| v as u32);
+    let mut dark = |thing: Thing| {
+        let image = render(thing);
+        let pixels = (left..right).flat_map(|x| (top..bottom).map(move |y| (x, y)));
+        pixels
+            .filter(|&(x, y)| image.pixel(x, y) == [0, 0, 0, 255])
+            .count()
+    };
+    let all = ((right - left) * (bottom - top)) as usize;
+    assert!(all > 300, "{all}");
+    assert_eq!(dark(Thing::Nothing), 0);
+    assert_eq!(dark(Thing::Card), all);
+    assert_eq!(dark(Thing::CardWithoutShadow), 0);
+    assert_eq!(dark(Thing::Billboard), 0);
+    // The sprite is a figure with clear pixels around it, and so is its shadow.
+    let figure = dark(Thing::Sprite);
+    assert!(
+        figure > all / 5 && figure < all * 4 / 5,
+        "{figure} of {all}"
+    );
+
+    let frame = render(Thing::Sprite);
+    assert_screenshot(&headless.adapter_name(), "shadows_cut_out", frame);
+}
+
+/// Five point lights with shadows over a floor, a slab under each, want thirty shadow maps of a
+/// view's twenty-four: the four nearest the camera have theirs, and the farthest lights the
+/// floor under its slab as though the slab weren't there.
+#[test]
+fn shadows_run_out_farthest_from_the_camera_first() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let ground = ctx.create_mesh(&MeshData::plane([12.0, 6.0])).unwrap();
+    let slab = ctx
+        .create_mesh(&MeshData::cuboid([0.4, 0.05, 0.4]))
+        .unwrap();
+    // A little left of the middle, so the light farthest right is the farthest from it.
+    let camera = Camera3d::orthographic([-0.5, 10.0, 0.0], [-0.5, 0.0, 0.0], 6.0);
+    let view = dark_view(camera, [128.0, 64.0]);
+    let lights = [-4.0, -2.0, 0.0, 2.0, 4.0].map(|x| Light {
+        shadows: true,
+        ..Light::point([x, 2.0, 0.0], Color::WHITE, 2.5)
+    });
+    let mut render = |slabs: bool| {
+        headless
+            .render(128, 64, |canvas| {
+                canvas.clear(Color::BLACK);
+                let mut view = canvas.begin_3d(view);
+                view.draw_mesh(&ground, Affine3::IDENTITY, None, Color::WHITE);
+                // The farthest first, so it isn't the order they're added in that decides.
+                for light in lights.iter().rev() {
+                    view.add_light(*light);
+                    if slabs {
+                        let under = Affine3::from_translation([light.position[0], 1.0, 0.0]);
+                        view.draw_mesh(&slab, under, None, Color::WHITE);
+                    }
+                }
+            })
+            .unwrap()
+    };
+    let open = render(false);
+    let frame = render(true);
+    let pixel = |image: &Image, point: [f32; 3]| {
+        let [x, y] = view.project(point).expect("it's in view");
+        image.pixel(x as u32, y as u32)
+    };
+    for light in lights {
+        // Between the slab's edge, 0.2 from under the light, and its shadow's, 0.4 from it.
+        let x = light.position[0];
+        let beside = [x, 0.0, 0.3];
+        let lit = pixel(&open, beside);
+        assert_ne!(lit, [0, 0, 0, 255], "{beside:?} without the slab");
+        if x == 4.0 {
+            assert_eq!(pixel(&frame, beside), lit, "the farthest has no shadows");
+        } else {
+            assert_eq!(pixel(&frame, beside), [0, 0, 0, 255], "{beside:?}");
+        }
+    }
+}
+
 /// A 3D view covers the pixels a 2D fill of its rect does, whichever pixels' middles its edges
 /// fall on, on the target or hanging off it: a plane bigger than the view, seen face on, fills
 /// it.

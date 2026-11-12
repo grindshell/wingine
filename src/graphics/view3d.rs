@@ -5,8 +5,10 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 
-use super::{Camera3d, Canvas, Color, Mesh, Model, Projection, Ray, Sprite, Texture};
-use crate::math::{Affine3, Rect, dot3, normalize3, scale3, sub3};
+use super::{
+    Camera3d, Canvas, Color, Mesh, Model, Projection, Ray, Sprite, Texture, camera3d::Mat4,
+};
+use crate::math::{Affine3, Rect, add3, dot3, normalize3, scale3, sub3};
 
 /// What a 3D view shows, where on the canvas, and how it's lit: see [`Canvas::begin_3d`].
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -102,12 +104,24 @@ pub struct Light {
     /// The part of the cone, from its rim inward, across which a spot light fades, by the cosine
     /// of the angle: 0 is a hard rim, and 1 fades from the middle.
     pub edge: f32,
+    /// Whether what's in its way shades what's behind: the view's meshes and models, but for
+    /// those drawn after [`Canvas3d::set_casts_shadow`] says not, and never its billboards.
+    /// Shadows have hard edges. A view has [`Light::SHADOW_MAPS`] shadow maps: a light takes
+    /// [`Light::shadow_maps`] of them, and one there are none left for lights without shadows.
+    pub shadows: bool,
 }
 
 impl Light {
     /// How many lights light a view at once: of those that reach what its camera sees, the
     /// nearest to the camera.
     pub const MAX: usize = 32;
+    /// How many shadow maps a view's lights share, the nearest to its camera first.
+    pub const SHADOW_MAPS: usize = 24;
+    /// How many texels across and down a shadow map is.
+    pub const SHADOW_RESOLUTION: u32 = 512;
+    /// The widest cone, as half its angle in radians, that one shadow map takes in. A spot light
+    /// with a wider one takes six, as a point light does.
+    pub const SHADOW_CONE: f32 = std::f32::consts::FRAC_PI_3;
 
     /// A light shining every way from `position`, reaching `range` world units.
     pub const fn point(position: [f32; 3], color: Color, range: f32) -> Self {
@@ -119,7 +133,63 @@ impl Light {
             direction: [0.0, 0.0, 1.0],
             cone: None,
             edge: 0.0,
+            shadows: false,
         }
+    }
+
+    /// How many of a view's shadow maps it takes, if it casts shadows: one for a spot light
+    /// whose cone is no wider than [`Light::SHADOW_CONE`], and six for any other, one for each
+    /// way along each axis.
+    pub fn shadow_maps(&self) -> usize {
+        match self.cone {
+            Some(cone) if cone <= Self::SHADOW_CONE => 1,
+            _ => 6,
+        }
+    }
+
+    /// Half the angle each of its shadow maps takes in, across and down: a little more than a
+    /// narrow spot light's cone, or of six maps, a quarter turn's half.
+    fn shadow_map_angle(&self) -> f32 {
+        match self.cone {
+            Some(cone) if cone <= Self::SHADOW_CONE => cone + 0.02,
+            _ => std::f32::consts::FRAC_PI_4,
+        }
+    }
+
+    /// How large a texel of its shadow maps is, in world units, for each world unit from the
+    /// light along the way a map looks.
+    pub(crate) fn shadow_texel(&self) -> f32 {
+        2.0 * self.shadow_map_angle().tan() / Self::SHADOW_RESOLUTION as f32
+    }
+
+    /// What maps the world onto each of its shadow maps, as a camera at the light would see it:
+    /// along the way a narrow spot light shines, or along `+x`, `-x`, `+y`, `-y`, `+z` and `-z`,
+    /// which is the order `mesh.wgsl` picks one of six in.
+    pub(crate) fn shadow_views(&self) -> impl Iterator<Item = Mat4> + '_ {
+        const AXES: [[f32; 3]; 6] = [
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ];
+        let count = self.shadow_maps();
+        let fov_y = 2.0 * self.shadow_map_angle();
+        (0..count).map(move |map| {
+            let direction = if count == 1 {
+                normalize3(self.direction).unwrap_or(AXES[4])
+            } else {
+                AXES[map]
+            };
+            let camera = Camera3d {
+                // Nothing nearer the light than this shades anything.
+                near: self.range * SHADOW_NEAR,
+                far: self.range,
+                ..Camera3d::perspective(self.position, add3(self.position, direction), fov_y)
+            };
+            camera.view_projection(1.0)
+        })
     }
 
     /// A light at `position` shining along `direction`, on what's within `cone` radians of it,
@@ -249,6 +319,44 @@ pub(crate) fn lights_of(view: &View3d, lights: &[Light], chosen: &mut Vec<u32>) 
     extra as u32
 }
 
+/// How near a light, as a part of its range, something must be to cast no shadow.
+const SHADOW_NEAR: f32 = 0.002;
+
+/// Which of `chosen`, the lights of `lights` that light `view`, have shadows, into `shadowed`
+/// as their place in `chosen` and the first of the view's shadow maps each takes. The nearest to
+/// the camera take theirs first, and one there aren't enough left for goes without. Returns how
+/// many maps they take, and how many lights went without.
+pub(crate) fn shadows_of(
+    view: &View3d,
+    lights: &[Light],
+    chosen: &[u32],
+    shadowed: &mut Vec<(u32, u32)>,
+) -> [u32; 2] {
+    shadowed.clear();
+    let casting = |&(_, light): &(usize, &u32)| lights[*light as usize].shadows;
+    let places = chosen.iter().enumerate().filter(casting);
+    shadowed.extend(places.map(|(place, _)| (place as u32, 0)));
+    let distance = |&(place, _): &(u32, u32)| {
+        let light = &lights[chosen[place as usize] as usize];
+        let away = sub3(light.position, view.camera.position);
+        dot3(away, away)
+    };
+    shadowed.sort_by(|a, b| distance(a).total_cmp(&distance(b)));
+    let mut maps = 0;
+    let mut without = 0;
+    shadowed.retain_mut(|(place, first)| {
+        let takes = lights[chosen[*place as usize] as usize].shadow_maps() as u32;
+        if maps + takes > Light::SHADOW_MAPS as u32 {
+            without += 1;
+            return false;
+        }
+        *first = maps;
+        maps += takes;
+        true
+    });
+    [maps, without]
+}
+
 /// Draws meshes into a 3D view on a canvas, from [`Canvas::begin_3d`]. The view is finished when
 /// this is dropped, and what's drawn on the canvas after goes over it.
 ///
@@ -295,6 +403,14 @@ impl Canvas3d<'_> {
             let normal = transform.normal_matrix();
             self.push(Some(mesh), transform, normal, sprite, tint, double_sided);
         }
+    }
+
+    /// Whether the meshes and models drawn in the view from now on cast shadows from its
+    /// lights that have them ([`Light::shadows`]). They do as a view begins. Billboards never
+    /// do: they face the camera, not the light.
+    pub fn set_casts_shadow(&mut self, casts: bool) {
+        let segment = self.canvas.segments.last_mut().expect("begin_3d adds one");
+        segment.casting = casts;
     }
 
     /// Draws `sprite` standing upright with the middle of its bottom edge at `position`, `size`
@@ -370,6 +486,9 @@ impl Canvas3d<'_> {
         }
         let ([u0, v0], [u1, v1]) = sprite.map_or(([0.0, 0.0], [1.0, 1.0]), Sprite::uv_bounds);
         let canvas = &mut *self.canvas;
+        let segment = canvas.segments.last_mut().expect("begin_3d adds a segment");
+        segment.draws.end += 1;
+        let casts_shadow = segment.casting && mesh.is_some();
         canvas.instances.push(Instance {
             model: [
                 transform.x_axis,
@@ -386,9 +505,8 @@ impl Canvas3d<'_> {
             texture: sprite.map(|sprite| sprite.texture().clone()),
             mirrored: determinant < 0.0,
             double_sided,
+            casts_shadow,
         });
-        let segment = canvas.segments.last_mut().expect("begin_3d adds a segment");
-        segment.draws.end += 1;
     }
 
     /// The view being drawn, with its rect in canvas pixels.
@@ -407,6 +525,8 @@ pub(crate) struct Segment3d {
     pub draws: Range<u32>,
     /// Its lights, in the canvas's `lights`.
     pub lights: Range<u32>,
+    /// Whether the meshes drawn in it now cast shadows.
+    pub casting: bool,
     /// The ways its billboards' right and front point ([`Camera3d::billboard_axes`]), the same
     /// for all of them.
     pub billboard_axes: ([f32; 3], [f32; 3]),
@@ -422,6 +542,8 @@ pub(crate) struct MeshDraw {
     pub mirrored: bool,
     /// Whether its triangles show from behind too.
     pub double_sided: bool,
+    /// Whether it shades what's behind it from lights with shadows.
+    pub casts_shadow: bool,
 }
 
 impl MeshDraw {
@@ -433,18 +555,20 @@ impl MeshDraw {
             texture: self.texture.as_ref().map_or(0, Texture::id),
             mirrored: self.mirrored,
             double_sided: self.double_sided,
+            casts_shadow: self.casts_shadow,
         }
     }
 }
 
-/// The kind of a [`MeshDraw`]: its mesh's and texture's IDs, 0 for none, and which way round
-/// it's drawn.
+/// The kind of a [`MeshDraw`]: its mesh's and texture's IDs, 0 for none, which way round it's
+/// drawn, and whether it casts shadows.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct DrawKind {
     mesh: usize,
     texture: usize,
     mirrored: bool,
     double_sided: bool,
+    casts_shadow: bool,
 }
 
 /// The order a 3D view's meshes draw in: draws of a kind together, so each kind is one draw call,
@@ -694,6 +818,105 @@ mod tests {
     }
 
     #[test]
+    fn shadow_maps_go_to_the_lights_nearest_the_camera() {
+        let camera = Camera3d::perspective([0.0; 3], [0.0, 0.0, -1.0], 0.8);
+        let view = View3d::new(camera, Rect::new(0.0, 0.0, 160.0, 90.0));
+        let point = |z: f32| Light {
+            shadows: true,
+            ..Light::point([0.0, 0.0, z], Color::WHITE, 2.0)
+        };
+        let spot = |z: f32, cone: f32| Light {
+            shadows: true,
+            ..Light::spot([0.0, 0.0, z], [0.0, -1.0, 0.0], cone, Color::WHITE, 2.0)
+        };
+        // A narrow spot light's shadows are in one map, and any other light's in six.
+        assert_eq!(point(-1.0).shadow_maps(), 6);
+        assert_eq!(spot(-1.0, 0.5).shadow_maps(), 1);
+        assert_eq!(spot(-1.0, Light::SHADOW_CONE).shadow_maps(), 1);
+        assert_eq!(spot(-1.0, 1.2).shadow_maps(), 6);
+        assert_eq!(point(-1.0).shadow_views().count(), 6);
+        assert_eq!(spot(-1.0, 0.5).shadow_views().count(), 1);
+
+        let mut chosen = Vec::new();
+        let mut shadowed = Vec::new();
+        let mut shadows = |lights: &[Light]| {
+            lights_of(&view, lights, &mut chosen);
+            let counts = shadows_of(&view, lights, &chosen, &mut shadowed);
+            (counts, shadowed.clone())
+        };
+        // Lights without shadows take none.
+        let plain = Light::point([0.0, 0.0, -1.0], Color::WHITE, 2.0);
+        assert_eq!(shadows(&[plain]), ([0, 0], vec![]));
+        // The nearest first, whatever order they're in: each is its place among the view's
+        // lights, and the first map it takes.
+        let lights = [point(-3.0), plain, spot(-1.0, 0.5), point(-2.0)];
+        assert_eq!(shadows(&lights), ([13, 0], vec![(2, 0), (3, 1), (0, 7)]));
+        // Three point lights and a spot light take nineteen maps, so a fourth point light,
+        // farther off, goes without: and a spot light farther still takes one of what's left.
+        let row = [
+            point(-4.0),
+            point(-3.0),
+            point(-2.0),
+            point(-1.0),
+            spot(-3.5, 0.5),
+            spot(-5.0, 0.5),
+        ];
+        let taken = vec![(3, 0), (2, 6), (1, 12), (4, 18), (5, 19)];
+        assert_eq!(shadows(&row), ([20, 1], taken));
+    }
+
+    #[test]
+    fn a_shadow_map_takes_in_its_lights_cone() {
+        let transform = |matrix: &Mat4, [x, y, z]: [f32; 3]| {
+            let clip = [0, 1, 2, 3]
+                .map(|i| matrix[0][i] * x + matrix[1][i] * y + matrix[2][i] * z + matrix[3][i]);
+            [
+                clip[0] / clip[3],
+                clip[1] / clip[3],
+                clip[2] / clip[3],
+                clip[3],
+            ]
+        };
+        // Shining down from 4 up, on what's within half a radian of straight under it.
+        let spot = Light {
+            shadows: true,
+            ..Light::spot([0.0, 4.0, 0.0], [0.0, -1.0, 0.0], 0.5, Color::WHITE, 8.0)
+        };
+        let onto_map = spot.shadow_views().next().unwrap();
+        // Straight under it is the map's middle, as far along it as it is from the light.
+        let [x, y, depth, along] = transform(&onto_map, [0.0, 1.0, 0.0]);
+        assert_near([x, y, along], [0.0, 0.0, 3.0]);
+        assert!(depth > 0.0 && depth < 1.0, "{depth}");
+        // Its cone's rim is just inside the map's edge, and its range the map's far side.
+        let rim = 3.0 * 0.5_f32.tan();
+        let [x, ..] = transform(&onto_map, [rim, 1.0, 0.0]);
+        assert!(x.abs() > 0.9 && x.abs() < 1.0, "{x}");
+        assert_near([transform(&onto_map, [0.0, -4.0, 0.0])[2]], [1.0]);
+        // A texel is its part of the map's width, at a world unit from the light.
+        let width = 2.0 * (0.5_f32 + 0.02).tan();
+        assert_near([spot.shadow_texel() * 512.0], [width]);
+
+        // A point light's six look along each axis, each taking in a quarter turn.
+        let lamp = Light::point([1.0, 2.0, 3.0], Color::WHITE, 8.0);
+        let ways = [
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ];
+        for (onto_map, way) in lamp.shadow_views().zip(ways) {
+            let ahead = add3(lamp.position, scale3(way, 2.0));
+            let [x, y, _, along] = transform(&onto_map, ahead);
+            assert_near([x, y, along], [0.0, 0.0, 2.0]);
+            let behind = add3(lamp.position, scale3(way, -2.0));
+            assert!(transform(&onto_map, behind)[3] < 0.0, "{way:?}");
+        }
+        assert_near([lamp.shadow_texel() * 512.0], [2.0]);
+    }
+
+    #[test]
     fn draws_of_a_kind_draw_together_in_the_order_each_kind_was_first_drawn() {
         // Billboards of three kinds, by which way round they're drawn.
         let draw = |mirrored, double_sided| MeshDraw {
@@ -701,6 +924,7 @@ mod tests {
             texture: None,
             mirrored,
             double_sided,
+            casts_shadow: false,
         };
         let [a, b, c] = [(false, false), (true, false), (false, true)];
         let draws = [a, b, a, a, c, b].map(|(mirrored, sided)| draw(mirrored, sided));

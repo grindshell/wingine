@@ -18,8 +18,9 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
   window, which can cover the screen.
 - **Timing**: an update a frame, or at a fixed rate so games play the same at any frame rate.
   Frame stats and a headless benchmark show where the time goes.
-- **3D views** among the 2D: lit meshes, glTF models and billboarded sprites, for 2.5D games,
-  rendered at the canvas's resolution, and picked with the mouse.
+- **3D views** among the 2D: meshes, glTF models and billboarded sprites, lit by a sun and by
+  lights at places that can cast shadows, for 2.5D games, rendered at the canvas's resolution, and
+  picked with the mouse.
 - **Tilemaps** with layers, and a **camera** that follows the player.
 - **Particles**: emitters of sprites or squares that fly, turn, change color and size as they
   age, and leave trails, in scenes or made by scripts, the same to the bit on every platform.
@@ -183,7 +184,8 @@ standing, walking, blinking and reacting, which the game layers and crossfades.
 
 [`examples/cellar`](examples/cellar) is a dark cellar in 2.5D, where the hero lights candles by
 standing on them. Its level is a [3D view](docs/scenes.md#3d-views) of meshes and models made in
-Blender, with billboarded sprites for the hero and candles, each candle a light once it's lit.
+Blender, with billboarded sprites for the hero and candles, each candle a light once it's lit,
+with shadows.
 
 ![The hero after lighting every candle in the cellar, with the mouse naming a barrel](docs/screenshots/cellar.png)
 

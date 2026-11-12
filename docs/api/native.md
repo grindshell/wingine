@@ -568,7 +568,9 @@ takes. The view's `rect` is where it shows, in the coordinates drawing uses when
 pixels in a hook after `draw`. `View3d::new(camera, rect)` is lit by `Lighting::DEFAULT`, the
 engine's default sun and ambient light; `Lighting::UNLIT` shows every surface as it is. A
 `Lighting` has no `lights`: a library can't add lights at places to a view yet. What it draws in a
-view a script began is lit by that view's lights, as the rest of the view is.
+view a script began is lit by that view's lights, as the rest of the view is, and shaded from
+those with `shadows`. Its meshes always cast shadows from them: a
+[`MeshDraw`](#meshdraw) has no `casts_shadow`.
 
 A camera's `projection` is `Projection::PERSPECTIVE`, which uses `fov_y`, the angle the view takes
 in from its bottom edge to its top in radians, or `Projection::ORTHOGRAPHIC`, which uses `height`,

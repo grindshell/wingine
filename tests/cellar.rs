@@ -173,6 +173,8 @@ fn standing_on_every_candle_lights_them_all() {
     assert_eq!(simulation.eval::<u32>("cellar.lit"), 1);
     // Its flame lights the cellar around it, flickering.
     assert_eq!(simulation.context().frame_stats().lights, 1);
+    // It's a point light with shadows, which are in six maps.
+    assert_eq!(simulation.context().frame_stats().shadow_maps, 6);
     let energy: f32 = simulation.eval(
         "(function()
             for _, candle in cellar.candles do
@@ -197,6 +199,9 @@ fn standing_on_every_candle_lights_them_all() {
     assert_eq!(simulation.eval::<u32>("cellar.lit"), 4);
     assert!(simulation.eval::<bool>("cellar.done"));
     assert_eq!(simulation.context().frame_stats().lights, 4);
+    // Four flames take every shadow map a view has.
+    let stats = simulation.context().frame_stats();
+    assert_eq!([stats.shadow_maps, stats.shadows_left_out], [24, 0]);
 
     // The message over the hero's head is drawn: a quad for each glyph of it, and the HUD's.
     simulation.run_frames(1);

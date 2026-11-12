@@ -401,6 +401,8 @@ pub(super) fn module(
             table.set("draw_calls", stats.draw_calls)?;
             table.set("lights", stats.lights)?;
             table.set("lights_left_out", stats.lights_left_out)?;
+            table.set("shadow_maps", stats.shadow_maps)?;
+            table.set("shadows_left_out", stats.shadows_left_out)?;
             Ok(table)
         })?
     })?;
@@ -477,6 +479,7 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
                 let sprite = options.sprite.as_deref();
                 lent.canvas(|canvas| {
                     let mut view = canvas.open_view()?;
+                    view.set_casts_shadow(options.casts_shadow);
                     view.draw_mesh(&mesh, transform, sprite, options.tint);
                     Some(())
                 })?
@@ -496,6 +499,7 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
                 let transform = options.transform(vector3(position));
                 lent.canvas(|canvas| {
                     let mut view = canvas.open_view()?;
+                    view.set_casts_shadow(options.casts_shadow);
                     view.draw_model(&model, transform, options.tint);
                     Some(())
                 })?
@@ -653,6 +657,7 @@ struct MeshOptions {
     scale: [f32; 3],
     sprite: Option<UserDataRef<Sprite>>,
     tint: Color,
+    casts_shadow: bool,
 }
 
 impl MeshOptions {
@@ -665,6 +670,7 @@ impl MeshOptions {
                 scale: [1.0; 3],
                 sprite: None,
                 tint: Color::WHITE,
+                casts_shadow: true,
             });
         };
         let angle = |name: &str| -> mlua::Result<f32> {
@@ -689,6 +695,7 @@ impl MeshOptions {
             tint: options
                 .get::<Option<Color>>("tint")?
                 .unwrap_or(Color::WHITE),
+            casts_shadow: options.get::<Option<bool>>("casts_shadow")?.unwrap_or(true),
         })
     }
 

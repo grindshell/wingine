@@ -28,7 +28,8 @@ the files.
   [`set_position_3d`](#nodeset_position_3d), [`orientation`](#nodeorientation),
   [`set_orientation`](#nodeset_orientation), [`scale_3d`](#nodescale_3d),
   [`set_scale_3d`](#nodeset_scale_3d), [`world_position_3d`](#nodeworld_position_3d),
-  [`bounds_3d`](#nodebounds_3d), [`light`](#nodelight), [`set_light`](#nodeset_light)
+  [`bounds_3d`](#nodebounds_3d), [`light`](#nodelight), [`set_light`](#nodeset_light),
+  [`casts_shadow`](#nodecasts_shadow), [`set_casts_shadow`](#nodeset_casts_shadow)
 - [3D views](#3d-views): [`camera`](#nodecamera), [`set_camera`](#nodeset_camera),
   [`lighting`](#nodelighting), [`set_lighting`](#nodeset_lighting), [`pick`](#nodepick),
   [`project`](#nodeproject), [`ray`](#noderay)
@@ -591,8 +592,8 @@ node:light(): LightSettings
 ```
 
 Returns the settings of a [light node](../scenes.md#3d-views), as a table: its `color`, a number
-`0xRRGGBBAA`, its `range`, `energy` and `edge`, and for a spot light, its `cone`, which a point
-light's table doesn't have. An error for a node that isn't a light.
+`0xRRGGBBAA`, its `range`, `energy`, `edge` and `shadows`, and for a spot light, its `cone`,
+which a point light's table doesn't have. An error for a node that isn't a light.
 
 ### `node:set_light`
 
@@ -601,9 +602,9 @@ node:set_light(settings: LightSettings)
 ```
 
 Changes those of a light node's settings that `settings` gives, any of `color`, `range`, `energy`,
-`cone` and `edge`, keeping the rest. A `cone` makes a point light a spot light; a cone can be
-widened, up to pi, but not taken away. Where a light is and the way a spot light shines are its
-node's, which [`set_position_3d`](#nodeset_position_3d) and
+`cone`, `edge` and `shadows`, keeping the rest. A `cone` makes a point light a spot light; a cone
+can be widened, up to pi, but not taken away. Where a light is and the way a spot light shines are
+its node's, which [`set_position_3d`](#nodeset_position_3d) and
 [`set_orientation`](#nodeset_orientation) change.
 
 ```lua
@@ -613,6 +614,28 @@ torch:set_light({ energy = 0.9 + 0.1 * math.sin(time * 13) })
 
 Settings a light can't have, such as a `range` of 0 or an `edge` without a `cone`, are an error,
 and the light keeps those it had. A node that isn't a light is an error too.
+
+`shadows` is whether the view's meshes and models in the light's way shade what's behind them,
+as [`graphics.begin_3d`](graphics.md#graphicsbegin_3d) describes, with what shadows cost.
+
+### `node:casts_shadow`
+
+```lua
+node:casts_shadow(): boolean
+```
+
+Returns whether a mesh or model node shades what's behind it from lights with `shadows`: `true`
+unless its file's `casts_shadow` says not, or [`set_casts_shadow`](#nodeset_casts_shadow) has. An
+error for a node of another kind.
+
+### `node:set_casts_shadow`
+
+```lua
+node:set_casts_shadow(casts: boolean)
+```
+
+Changes whether a mesh or model node shades what's behind it from lights with `shadows`. An error
+for a node of another kind.
 
 ## 3D views
 

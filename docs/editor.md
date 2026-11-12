@@ -203,10 +203,12 @@ The Inspector shows a node in a view by `x`, `y` and `z`, `yaw`, `pitch` and `ro
 and its scale along each axis, with no rotation or anchor; a view's camera (where it is and looks,
 which way is up, perspective with a field of view or orthographic with a height, and how near and
 far it sees) and lighting; a mesh's shape, its size, and a sprite of the scene's sheets to show;
-a model's file; a billboard's sprite, size and tint; and a light's color, range and energy, with
-a checkbox that gives it a cone, making it a spot light, and then half the cone's angle, in
-degrees, and its edge. While the Animation panel shows a clip, **♦** keys a node's `z`, `yaw`, `pitch`,
-`roll` and scale as it does `x` and `y`.
+a model's file; for both, a tint, and **casts shadow**, whether it shades what's behind it from
+lights with shadows; a billboard's sprite, size and tint; and a light's color, range and energy,
+with a checkbox that gives it a cone, making it a spot light, and then half the cone's angle, in
+degrees, and its edge, and **shadows**, whether the view's meshes and models in its way shade
+what's behind them. While the Animation panel shows a clip, **♦** keys a node's `z`, `yaw`,
+`pitch`, `roll` and scale as it does `x` and `y`.
 
 ## Animating rigs
 

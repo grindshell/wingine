@@ -13,7 +13,7 @@ use super::{
     camera3d::{self, Mat4},
     canvas::{Batch, Canvas, Vertex},
     mesh::GpuVertex,
-    view3d::{Instance, MeshOrder, Segment3d, lights_of},
+    view3d::{Instance, MeshOrder, Segment3d, lights_of, shadows_of},
 };
 use crate::math::{Rect, normalize3};
 
@@ -46,6 +46,8 @@ struct ViewUniform {
     /// How many of `lights` light it, then nothing.
     light_count: [u32; 4],
     lights: [LightUniform; Light::MAX],
+    /// What maps the world onto each of its shadow maps.
+    shadow_maps: [Mat4; Light::SHADOW_MAPS],
 }
 
 /// A light of a 3D view, as `mesh.wgsl` reads it.
@@ -59,10 +61,14 @@ struct LightUniform {
     /// The way it shines, of length 1, then the cosine of its cone's angle: under -1 for a
     /// point light.
     direction: [f32; 4],
+    /// The first of the view's shadow maps that are its own, or -1 for none, how many are, and
+    /// how large their texels are a world unit from the light, then nothing.
+    shadow: [f32; 4],
 }
 
 impl LightUniform {
-    fn new(light: &Light) -> Self {
+    /// `light`, shaded by the view's shadow maps from `first_map` on, if any are its own.
+    fn new(light: &Light, first_map: Option<u32>) -> Self {
         let [x, y, z] = light.position;
         let [r, g, b, _] = light.color.to_linear();
         let [outer, inner] = light.cone_cosines();
@@ -71,12 +77,23 @@ impl LightUniform {
             position: [x, y, z, light.range],
             color: [r * light.energy, g * light.energy, b * light.energy, inner],
             direction: [dx, dy, dz, outer],
+            shadow: match first_map {
+                Some(first) => [
+                    first as f32,
+                    light.shadow_maps() as f32,
+                    light.shadow_texel(),
+                    0.0,
+                ],
+                None => [-1.0, 0.0, 0.0, 0.0],
+            },
         }
     }
 }
 
 /// Whether a view has had more lights than light it at once, which is said once.
 static TOO_MANY_LIGHTS: AtomicBool = AtomicBool::new(false);
+/// Whether a view's lights have wanted more shadow maps than it has, which is said once.
+static TOO_MANY_SHADOWS: AtomicBool = AtomicBool::new(false);
 
 /// Turns a recorded [`Canvas`] into GPU draw calls, and creates the textures it draws with.
 pub(crate) struct Renderer {
@@ -133,6 +150,74 @@ struct MeshRenderer {
     view_runs: Vec<Range<usize>>,
     /// Which of a view's lights light it, as each view's uniform is made.
     lights: Vec<u32>,
+    /// Which of those have shadows, and the first shadow map of each.
+    shadowed: Vec<(u32, u32)>,
+    /// Draws meshes into a shadow map: every side of them, and no colors.
+    shadow_pipeline: wgpu::RenderPipeline,
+    shadow_layout: wgpu::BindGroupLayout,
+    /// What maps the world onto each shadow map drawn this frame, the views' in turn,
+    /// `shadow_stride` bytes apart.
+    shadow_buffer: wgpu::Buffer,
+    shadow_bind_group: wgpu::BindGroup,
+    shadow_stride: u64,
+    /// The same, as they're uploaded.
+    shadow_views: Vec<u8>,
+    /// Each view's shadow maps, among all those drawn this frame.
+    view_shadows: Vec<Range<u32>>,
+    /// The shadow maps every view draws into in turn, and then reads.
+    shadow_maps: ShadowMaps,
+    /// Compares a depth with a shadow map's nearest texel.
+    shadow_sampler: wgpu::Sampler,
+}
+
+/// A view's shadow maps: the layers of one depth texture. Until a light has shadows, it's a
+/// single texel, which nothing reads.
+struct ShadowMaps {
+    /// Every layer, as views read them.
+    all: wgpu::TextureView,
+    /// Each layer, to draw into.
+    layers: Vec<wgpu::TextureView>,
+}
+
+impl ShadowMaps {
+    /// `layers` maps, each `size` texels across and down.
+    fn new(device: &wgpu::Device, size: u32, layers: u32) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadow maps"),
+            size: wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: layers,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let all = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let layer = |layer| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_array_layer: layer,
+                array_layer_count: Some(1),
+                ..Default::default()
+            })
+        };
+        Self {
+            all,
+            layers: (0..layers).map(layer).collect(),
+        }
+    }
+
+    /// Whether they're maps to draw into yet.
+    fn are_made(&self) -> bool {
+        self.layers.len() == Light::SHADOW_MAPS
+    }
 }
 
 /// Meshes drawn in one draw call, as instances of one mesh.
@@ -488,6 +573,8 @@ impl Renderer {
             );
             load = wgpu::LoadOp::Load;
             first_batch = before;
+            self.meshes
+                .draw_shadows(&mut encoder, index, canvas, &self.white);
             self.meshes.draw(
                 &mut encoder,
                 target,
@@ -559,22 +646,69 @@ impl MeshRenderer {
         let shader = device.create_shader_module(wgpu::include_wgsl!("mesh.wgsl"));
         let views_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("3d views"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: NonZeroU64::new(size_of::<ViewUniform>() as u64),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: NonZeroU64::new(size_of::<ViewUniform>() as u64),
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+            ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("mesh"),
             bind_group_layouts: &[Some(&views_layout), Some(texture_layout)],
             immediate_size: 0,
         });
+        let vertex_attributes = wgpu::vertex_attr_array![
+            0 => Float32x3,
+            1 => Float32x3,
+            2 => Float32x2,
+            3 => Unorm8x4,
+        ];
+        let instance_attributes = wgpu::vertex_attr_array![
+            4 => Float32x3,
+            5 => Float32x3,
+            6 => Float32x3,
+            7 => Float32x3,
+            8 => Float32x3,
+            9 => Float32x3,
+            10 => Float32x3,
+            11 => Float32x4,
+            12 => Unorm8x4,
+        ];
+        let buffers = [
+            Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<GpuVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &vertex_attributes,
+            }),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<Instance>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &instance_attributes,
+            }),
+        ];
         let pipeline = |front_face, cull_mode| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("mesh"),
@@ -583,33 +717,7 @@ impl MeshRenderer {
                     module: &shader,
                     entry_point: Some("vs_main"),
                     compilation_options: Default::default(),
-                    buffers: &[
-                        Some(wgpu::VertexBufferLayout {
-                            array_stride: size_of::<GpuVertex>() as u64,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![
-                                0 => Float32x3,
-                                1 => Float32x3,
-                                2 => Float32x2,
-                                3 => Unorm8x4,
-                            ],
-                        }),
-                        Some(wgpu::VertexBufferLayout {
-                            array_stride: size_of::<Instance>() as u64,
-                            step_mode: wgpu::VertexStepMode::Instance,
-                            attributes: &wgpu::vertex_attr_array![
-                                4 => Float32x3,
-                                5 => Float32x3,
-                                6 => Float32x3,
-                                7 => Float32x3,
-                                8 => Float32x3,
-                                9 => Float32x3,
-                                10 => Float32x3,
-                                11 => Float32x4,
-                                12 => Unorm8x4,
-                            ],
-                        }),
-                    ],
+                    buffers: &buffers,
                 },
                 primitive: wgpu::PrimitiveState {
                     front_face,
@@ -644,7 +752,72 @@ impl MeshRenderer {
             [wgpu::FrontFace::Ccw, wgpu::FrontFace::Cw].map(|front| pipeline(front, cull_mode))
         });
 
+        let shadow_shader = device.create_shader_module(wgpu::include_wgsl!("shadow.wgsl"));
+        let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("shadow map"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: NonZeroU64::new(size_of::<Mat4>() as u64),
+                },
+                count: None,
+            }],
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("shadow map"),
+            bind_group_layouts: &[Some(&shadow_layout), Some(texture_layout)],
+            immediate_size: 0,
+        });
+        // Whichever side of a mesh faces the light shades what's behind it, so nothing is culled.
+        // What keeps a surface from shading itself is in `mesh.wgsl`, where the map is read.
+        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow map"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shadow_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &buffers,
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shadow_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let shadow_maps = ShadowMaps::new(device, 1, 1);
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow maps"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+
         let alignment = u64::from(device.limits().min_uniform_buffer_offset_alignment);
+        let shadow_stride = (size_of::<Mat4>() as u64).next_multiple_of(alignment);
+        let shadow_buffer = create_buffer(
+            device,
+            "shadow maps",
+            wgpu::BufferUsages::UNIFORM,
+            shadow_stride * Light::SHADOW_MAPS as u64,
+        );
+        let shadow_bind_group = shadow_bind_group(device, &shadow_layout, &shadow_buffer);
         let view_stride = (size_of::<ViewUniform>() as u64).next_multiple_of(alignment);
         let views_buffer = create_buffer(
             device,
@@ -652,7 +825,13 @@ impl MeshRenderer {
             wgpu::BufferUsages::UNIFORM,
             view_stride * INITIAL_VIEWS,
         );
-        let views_bind_group = views_bind_group(device, &views_layout, &views_buffer);
+        let views_bind_group = views_bind_group(
+            device,
+            &views_layout,
+            &views_buffer,
+            &shadow_maps,
+            &shadow_sampler,
+        );
         let instance_buffer = create_buffer(
             device,
             "mesh instances",
@@ -674,6 +853,16 @@ impl MeshRenderer {
             runs: Vec::new(),
             view_runs: Vec::new(),
             lights: Vec::new(),
+            shadowed: Vec::new(),
+            shadow_pipeline,
+            shadow_layout,
+            shadow_buffer,
+            shadow_bind_group,
+            shadow_stride,
+            shadow_views: Vec::new(),
+            view_shadows: Vec::new(),
+            shadow_maps,
+            shadow_sampler,
         }
     }
 
@@ -690,24 +879,58 @@ impl MeshRenderer {
         let views = &mut self.views;
         views.clear();
         views.resize(stride * viewports.len(), 0);
+        let shadow_stride = self.shadow_stride as usize;
+        self.shadow_views.clear();
+        self.view_shadows.clear();
         for (index, (segment, viewport)) in canvas.segments.iter().zip(viewports).enumerate() {
+            let first_map = (self.shadow_views.len() / shadow_stride) as u32;
             let Some(viewport) = viewport else {
+                self.view_shadows.push(first_map..first_map);
                 continue;
             };
             let Range { start, end } = segment.lights.clone();
             let lights = &canvas.lights[start as usize..end as usize];
-            let uniform = view_uniform(segment, viewport, lights, &mut self.lights);
+            let (chosen, shadowed) = (&mut self.lights, &mut self.shadowed);
+            let (uniform, maps) = view_uniform(segment, viewport, lights, chosen, shadowed);
             let start = index * stride;
             views[start..start + size_of::<ViewUniform>()]
                 .copy_from_slice(bytemuck::bytes_of(&uniform));
+            for onto_map in &uniform.shadow_maps[..maps as usize] {
+                let start = self.shadow_views.len();
+                self.shadow_views.resize(start + shadow_stride, 0);
+                self.shadow_views[start..start + size_of::<Mat4>()]
+                    .copy_from_slice(bytemuck::bytes_of(onto_map));
+            }
+            self.view_shadows.push(first_map..first_map + maps);
+        }
+        // The maps are made when a light first has shadows, so a game without any doesn't hold
+        // them.
+        let mut rebind = false;
+        if !self.shadow_views.is_empty() && !self.shadow_maps.are_made() {
+            let [size, maps] = [Light::SHADOW_RESOLUTION, Light::SHADOW_MAPS as u32];
+            self.shadow_maps = ShadowMaps::new(device, size, maps);
+            rebind = true;
         }
         let size = self.views_buffer.size();
         ensure_capacity(device, &mut self.views_buffer, "3d views", self.views.len());
-        if self.views_buffer.size() != size {
-            self.views_bind_group =
-                views_bind_group(device, &self.views_layout, &self.views_buffer);
+        if rebind || self.views_buffer.size() != size {
+            self.views_bind_group = views_bind_group(
+                device,
+                &self.views_layout,
+                &self.views_buffer,
+                &self.shadow_maps,
+                &self.shadow_sampler,
+            );
         }
         queue.write_buffer(&self.views_buffer, 0, &self.views);
+        let size = self.shadow_buffer.size();
+        let wanted = self.shadow_views.len();
+        ensure_capacity(device, &mut self.shadow_buffer, "shadow maps", wanted);
+        if self.shadow_buffer.size() != size {
+            self.shadow_bind_group =
+                shadow_bind_group(device, &self.shadow_layout, &self.shadow_buffer);
+        }
+        queue.write_buffer(&self.shadow_buffer, 0, &self.shadow_views);
 
         // Each view's draws of a kind together, so they're one draw call. Until a view's draws
         // aren't in order already, the canvas's instances are uploaded as they are.
@@ -789,6 +1012,52 @@ impl MeshRenderer {
         view
     }
 
+    /// Draws the shadow maps of the `index`th of `canvas`'s 3D views, as uploaded: for each, in
+    /// a pass of its own, the view's meshes that cast shadows, as its light sees them. The maps
+    /// are the same ones for every view, so a view's are drawn just before it is.
+    fn draw_shadows(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        index: usize,
+        canvas: &Canvas,
+        white: &Texture,
+    ) {
+        let maps = self.view_shadows[index].clone();
+        let runs = &self.runs[self.view_runs[index].clone()];
+        for (layer, map) in maps.enumerate() {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow map"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_maps.layers[layer],
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.shadow_pipeline);
+            let offset = (u64::from(map) * self.shadow_stride) as u32;
+            pass.set_bind_group(0, &self.shadow_bind_group, &[offset]);
+            pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+            for run in runs {
+                let draw = &canvas.mesh_draws[run.draw as usize];
+                let Some(mesh) = draw.mesh.as_ref().filter(|_| draw.casts_shadow) else {
+                    continue;
+                };
+                let texture = draw.texture.as_ref().unwrap_or(white);
+                pass.set_bind_group(1, texture.bind_group(), &[]);
+                pass.set_vertex_buffer(0, mesh.vertex_buffer().slice(..));
+                pass.set_index_buffer(mesh.index_buffer().slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..mesh.index_count(), 0, run.instances.clone());
+            }
+        }
+    }
+
     /// Draws the meshes of the `index`th of `canvas`'s 3D views, as uploaded, onto `target` at
     /// `viewport`, in a pass of its own that keeps what's on the target and clears `depth`.
     #[expect(clippy::too_many_arguments)]
@@ -854,29 +1123,62 @@ fn views_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     buffer: &wgpu::Buffer,
+    shadow_maps: &ShadowMaps,
+    shadow_sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("3d views"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer,
+                    offset: 0,
+                    size: NonZeroU64::new(size_of::<ViewUniform>() as u64),
+                }),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&shadow_maps.all),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(shadow_sampler),
+            },
+        ],
+    })
+}
+
+fn shadow_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    buffer: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("shadow maps"),
         layout,
         entries: &[wgpu::BindGroupEntry {
             binding: 0,
             resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                 buffer,
                 offset: 0,
-                size: NonZeroU64::new(size_of::<ViewUniform>() as u64),
+                size: NonZeroU64::new(size_of::<Mat4>() as u64),
             }),
         }],
     })
 }
 
 /// What `segment`'s meshes are drawn with, placed at `viewport` and lit by those of `lights`,
-/// the view's, that light it, which `chosen` is room to choose.
+/// the view's, that light it, which `chosen` is room to choose, and `shadowed` room to choose
+/// those with shadows; and how many shadow maps they take, the first so many of the view's.
 fn view_uniform(
     segment: &Segment3d,
     viewport: &Viewport,
     lights: &[Light],
     chosen: &mut Vec<u32>,
-) -> ViewUniform {
+    shadowed: &mut Vec<(u32, u32)>,
+) -> (ViewUniform, u32) {
     let view = &segment.view;
     let aspect = view.rect.w / view.rect.h;
     let view_proj = camera3d::mul(&viewport.crop, &view.camera.view_projection(aspect));
@@ -897,11 +1199,27 @@ fn view_uniform(
         ambient: lighting.ambient.to_linear(),
         light_count: [chosen.len() as u32, 0, 0, 0],
         lights: Zeroable::zeroed(),
+        shadow_maps: Zeroable::zeroed(),
     };
     for (uniform, &light) in uniform.lights.iter_mut().zip(chosen.iter()) {
-        *uniform = LightUniform::new(&lights[light as usize]);
+        *uniform = LightUniform::new(&lights[light as usize], None);
     }
-    uniform
+    let [maps, without] = shadows_of(view, lights, chosen, shadowed);
+    if without > 0 && !TOO_MANY_SHADOWS.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "a 3D view has {} shadow maps, which the lights nearest its camera take first: \
+             {without} more lights with shadows light it without them",
+            Light::SHADOW_MAPS
+        );
+    }
+    for &(place, first) in shadowed.iter() {
+        let light = &lights[chosen[place as usize] as usize];
+        uniform.lights[place as usize] = LightUniform::new(light, Some(first));
+        for (onto_map, map) in light.shadow_views().zip(first as usize..) {
+            uniform.shadow_maps[map] = onto_map;
+        }
+    }
+    (uniform, maps)
 }
 
 /// Where on a target a 3D view's rect falls.

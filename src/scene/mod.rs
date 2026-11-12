@@ -178,9 +178,10 @@
 //! - `mesh`, in a view: a built-in shape centered on its origin, `shape`, `"cuboid"` with
 //!   `size = { width, height, depth }`, `"plane"`, facing up, with `size = { width, depth }`, or
 //!   `"sphere"` with a `radius`, sizes 1 and the radius a half by default; optionally a sprite,
-//!   `sheet` and `cell`, and a `tint`.
-//! - `model`, in a view: the model file `model`, its path relative to the game's folder, and a
-//!   `tint`.
+//!   `sheet` and `cell`, a `tint`, and `casts_shadow`, whether it shades what's behind it from
+//!   lights with `shadows` (`true`).
+//! - `model`, in a view: the model file `model`, its path relative to the game's folder, a
+//!   `tint`, and `casts_shadow`, as a mesh's.
 //! - `billboard`, in a view: a sprite, `sheet` and `cell`, standing upright with the middle of its
 //!   bottom edge at the node's origin, facing the camera across the ground, `width` by `height`
 //!   world units (1 by default; a negative width mirrors it), and a `tint`. It moves with its node,
@@ -191,7 +192,12 @@
 //!   up to pi, it's a spot light shining along its node's `+z`, the way a model's front faces,
 //!   fading across the `edge` of the cone, a part of it from 0 to 1 (0, a hard rim). It moves and
 //!   turns with its node, but doesn't stretch. A view is lit by 32 lights at once, the nearest
-//!   its camera of those reaching what it sees.
+//!   its camera of those reaching what it sees. With `shadows` (`false`), the view's meshes and
+//!   models in its way shade what's behind them, with hard edges, but for those whose
+//!   `casts_shadow` is `false`; billboards shade nothing. A view has 24 shadow maps, which the
+//!   lights nearest its camera take first: a spot light whose `cone` is no more than a sixth of
+//!   a turn takes one, and any other light six. A light there are none left for lights without
+//!   shadows.
 //!
 //! Nodes in a view are placed in 3D, in its world, right-handed with `y` up: by `x`, `y` and `z`,
 //! turned by `yaw`, `pitch` and `roll`, radians about `y`, `x` and `z`, and stretched by `scale_x`,
@@ -721,6 +727,8 @@ pub struct MeshNode {
     /// The sheet its sprite is from, whose cells it shows with [`MeshNode::set_cell`] and clips.
     pub sheet: Option<SpriteSheet>,
     pub tint: Color,
+    /// Whether it shades what's behind it from lights with shadows.
+    pub casts_shadow: bool,
 }
 
 /// What a model node shows.
@@ -728,6 +736,8 @@ pub struct MeshNode {
 pub struct ModelNode {
     pub model: Model,
     pub tint: Color,
+    /// Whether it shades what's behind it from lights with shadows.
+    pub casts_shadow: bool,
 }
 
 /// What a billboard node shows: a sprite standing upright, the middle of its bottom edge at the
@@ -2694,9 +2704,13 @@ impl Scene {
         let transform = parent * node.local_3d().unwrap_or(Affine3::IDENTITY);
         match &node.kind {
             Kind::Mesh(mesh) => {
+                world.set_casts_shadow(mesh.casts_shadow);
                 world.draw_mesh(&mesh.mesh, transform, mesh.sprite.as_ref(), mesh.tint);
             }
-            Kind::Model(model) => world.draw_model(&model.model, transform, model.tint),
+            Kind::Model(model) => {
+                world.set_casts_shadow(model.casts_shadow);
+                world.draw_model(&model.model, transform, model.tint);
+            }
             Kind::Billboard(billboard) => world.draw_billboard(
                 &billboard.sprite,
                 transform.translation,
@@ -3325,11 +3339,13 @@ impl Build<'_> {
                     sprite,
                     sheet,
                     tint: mesh.tint,
+                    casts_shadow: mesh.casts_shadow,
                 })
             }
             KindDef::Model(model) => Kind::Model(ModelNode {
                 model: self.model(&model.model)?,
                 tint: model.tint,
+                casts_shadow: model.casts_shadow,
             }),
             KindDef::Billboard(billboard) => {
                 let (sprite, sheet) = self.sprite(&billboard.sheet, billboard.cell, node)?;
