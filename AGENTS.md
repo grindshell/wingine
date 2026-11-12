@@ -8,7 +8,7 @@ systems, and don't build more 3D features unless asked.
 ## Scope
 
 Wingine has what its examples need: tilemaps and batched sprites in blend modes, meshes and glTF
-models in 3D views picked by boxes, sprite animation, particles, a camera, keyboard, mouse and gamepad input bound to
+models in 3D views picked by boxes and lit by a sun and by lights at places, sprite animation, particles, a camera, keyboard, mouse and gamepad input bound to
 actions, grid movement, physics with Rapier (bodies and characters, in 2D and in 3D views),
 text in the built-in font, bitmap fonts and TrueType fonts, audio, saves, Luau scripting with
 tasks, native libraries written in Rust, scenes (levels, screens and rigged characters), menus
@@ -108,6 +108,15 @@ own right.
   glTF without a GPU into `ModelData`. Picking is by boxes (`Bounds3`, `Ray::hit_box`), not
   triangles. Luau's points are native `vector`s; `draw_mesh` and `draw_billboard` add to the view
   begun last only while nothing else has been drawn since (`Canvas::open_view`).
+- Lights (`Light`, in `view3d.rs`): `Canvas3d::add_light` records point and spot lights for a
+  view, whose uniform carries up to `Light::MAX` of them, chosen by `lights_of` (those reaching
+  what the camera sees, the nearest first, for the frame's stats and the renderer alike), and
+  `mesh.wgsl` loops over them for every pixel. Light falls off in a straight line to a light's
+  range, adds, and stops at white; there are no shadows. `Light::level_at` is the same rule on
+  the CPU. The shader knows a billboard, which takes a light's whole level, by the normal matrix
+  only billboards have. In scenes a light is a `light` node (`LightDef`), a spot shining along
+  its node's `+z`. `Lighting` and `View3d` stay `Copy`, and native libraries can't add lights:
+  the ABI's lighting is unchanged.
 - `src/graphics/font.rs`: `Font` and `TextLayout`. Built-in and bitmap fonts have their glyphs in
   one texture (`Metrics`; bitmap glyphs cut from a font file's PNG, as wide as their ink).
   TrueType and OpenType fonts (`Face`, `FaceSize`) rasterize a glyph with `ab_glyph` the first time

@@ -1,14 +1,19 @@
-use std::{mem::size_of, num::NonZeroU64, ops::Range};
+use std::{
+    mem::size_of,
+    num::NonZeroU64,
+    ops::Range,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use super::{
-    Blend, Color, Mesh, MeshData, Texture,
+    Blend, Color, Light, Mesh, MeshData, Texture,
     camera3d::{self, Mat4},
     canvas::{Batch, Canvas, Vertex},
     mesh::GpuVertex,
-    view3d::{Instance, MeshOrder, Segment3d},
+    view3d::{Instance, MeshOrder, Segment3d, lights_of},
 };
 use crate::math::{Rect, normalize3};
 
@@ -38,7 +43,40 @@ struct ViewUniform {
     light_color: [f32; 4],
     /// Linear.
     ambient: [f32; 4],
+    /// How many of `lights` light it, then nothing.
+    light_count: [u32; 4],
+    lights: [LightUniform; Light::MAX],
 }
+
+/// A light of a 3D view, as `mesh.wgsl` reads it.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct LightUniform {
+    /// Where it is, then how far it reaches.
+    position: [f32; 4],
+    /// Linear, times its energy, then the cosine of the angle its cone begins to fade at.
+    color: [f32; 4],
+    /// The way it shines, of length 1, then the cosine of its cone's angle: under -1 for a
+    /// point light.
+    direction: [f32; 4],
+}
+
+impl LightUniform {
+    fn new(light: &Light) -> Self {
+        let [x, y, z] = light.position;
+        let [r, g, b, _] = light.color.to_linear();
+        let [outer, inner] = light.cone_cosines();
+        let [dx, dy, dz] = normalize3(light.direction).unwrap_or([0.0, 0.0, 1.0]);
+        Self {
+            position: [x, y, z, light.range],
+            color: [r * light.energy, g * light.energy, b * light.energy, inner],
+            direction: [dx, dy, dz, outer],
+        }
+    }
+}
+
+/// Whether a view has had more lights than light it at once, which is said once.
+static TOO_MANY_LIGHTS: AtomicBool = AtomicBool::new(false);
 
 /// Turns a recorded [`Canvas`] into GPU draw calls, and creates the textures it draws with.
 pub(crate) struct Renderer {
@@ -93,6 +131,8 @@ struct MeshRenderer {
     runs: Vec<MeshRun>,
     /// Each view's draw calls, in `runs`.
     view_runs: Vec<Range<usize>>,
+    /// Which of a view's lights light it, as each view's uniform is made.
+    lights: Vec<u32>,
 }
 
 /// Meshes drawn in one draw call, as instances of one mesh.
@@ -633,6 +673,7 @@ impl MeshRenderer {
             instances: Vec::new(),
             runs: Vec::new(),
             view_runs: Vec::new(),
+            lights: Vec::new(),
         }
     }
 
@@ -653,7 +694,9 @@ impl MeshRenderer {
             let Some(viewport) = viewport else {
                 continue;
             };
-            let uniform = view_uniform(segment, viewport);
+            let Range { start, end } = segment.lights.clone();
+            let lights = &canvas.lights[start as usize..end as usize];
+            let uniform = view_uniform(segment, viewport, lights, &mut self.lights);
             let start = index * stride;
             views[start..start + size_of::<ViewUniform>()]
                 .copy_from_slice(bytemuck::bytes_of(&uniform));
@@ -826,19 +869,39 @@ fn views_bind_group(
     })
 }
 
-/// What `segment`'s meshes are drawn with, placed at `viewport`.
-fn view_uniform(segment: &Segment3d, viewport: &Viewport) -> ViewUniform {
+/// What `segment`'s meshes are drawn with, placed at `viewport` and lit by those of `lights`,
+/// the view's, that light it, which `chosen` is room to choose.
+fn view_uniform(
+    segment: &Segment3d,
+    viewport: &Viewport,
+    lights: &[Light],
+    chosen: &mut Vec<u32>,
+) -> ViewUniform {
     let view = &segment.view;
     let aspect = view.rect.w / view.rect.h;
     let view_proj = camera3d::mul(&viewport.crop, &view.camera.view_projection(aspect));
     let lighting = &view.lighting;
     let [x, y, z] = normalize3(lighting.direction).unwrap_or([0.0; 3]);
-    ViewUniform {
+    let left_out = lights_of(view, lights, chosen);
+    if left_out > 0 && !TOO_MANY_LIGHTS.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "a 3D view is lit by {} lights at once, the nearest to its camera: {left_out} more \
+             that reach what it sees are left out",
+            Light::MAX
+        );
+    }
+    let mut uniform = ViewUniform {
         view_proj,
         light_direction: [x, y, z, 0.0],
         light_color: lighting.color.to_linear(),
         ambient: lighting.ambient.to_linear(),
+        light_count: [chosen.len() as u32, 0, 0, 0],
+        lights: Zeroable::zeroed(),
+    };
+    for (uniform, &light) in uniform.lights.iter_mut().zip(chosen.iter()) {
+        *uniform = LightUniform::new(&lights[light as usize]);
     }
+    uniform
 }
 
 /// Where on a target a 3D view's rect falls.

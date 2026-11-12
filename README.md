@@ -183,7 +183,7 @@ standing, walking, blinking and reacting, which the game layers and crossfades.
 
 [`examples/cellar`](examples/cellar) is a dark cellar in 2.5D, where the hero lights candles by
 standing on them. Its level is a [3D view](docs/scenes.md#3d-views) of meshes and models made in
-Blender, with billboarded sprites for the hero and candles.
+Blender, with billboarded sprites for the hero and candles, each candle a light once it's lit.
 
 ![The hero after lighting every candle in the cellar, with the mouse naming a barrel](docs/screenshots/cellar.png)
 

@@ -8,8 +8,8 @@ use super::{Lent, Textures};
 use crate::{
     Context,
     graphics::{
-        Animation, Blend, Camera, Camera3d, Canvas, Color, Font, FontSettings, Lighting, Mesh,
-        MeshData, MeshVertex, Model, Ray, Sprite, SpriteSheet, TextLayout, View3d,
+        Animation, Blend, Camera, Camera3d, Canvas, Color, Font, FontSettings, Light, Lighting,
+        Mesh, MeshData, MeshVertex, Model, Ray, Sprite, SpriteSheet, TextLayout, View3d,
     },
     lua::{SceneNode, check_layer, packed_color, vector3},
     math::{Affine3, Bounds3, Rect},
@@ -399,6 +399,8 @@ pub(super) fn module(
             table.set("quads", stats.quads)?;
             table.set("triangles", stats.triangles)?;
             table.set("draw_calls", stats.draw_calls)?;
+            table.set("lights", stats.lights)?;
+            table.set("lights_left_out", stats.lights_left_out)?;
             Ok(table)
         })?
     })?;
@@ -446,13 +448,23 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
         let lent = lent.clone();
         lua.create_function(move |_, view: Table| {
             let (camera, rect, lighting) = view_parts(&view)?;
+            let lights: Vec<Light> = match view.get::<Option<Table>>("lighting")? {
+                Some(lighting) => lighting
+                    .get::<Option<Vec<Light>>>("lights")
+                    .context("the view's lights")?
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            };
             lent.canvas(|canvas| {
                 let rect = rect.unwrap_or_else(|| canvas.visible_area());
-                canvas.begin_3d(View3d {
+                let mut view = canvas.begin_3d(View3d {
                     camera,
                     rect,
                     lighting,
                 });
+                for light in lights {
+                    view.add_light(light);
+                }
             })
         })?
     })?;

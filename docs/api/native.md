@@ -566,7 +566,9 @@ pub struct Lighting {
 A view, its camera and its lighting, as the table [`graphics.begin_3d`](graphics.md#graphicsbegin_3d)
 takes. The view's `rect` is where it shows, in the coordinates drawing uses when it begins: canvas
 pixels in a hook after `draw`. `View3d::new(camera, rect)` is lit by `Lighting::DEFAULT`, the
-engine's default sun and ambient light; `Lighting::UNLIT` shows every surface as it is.
+engine's default sun and ambient light; `Lighting::UNLIT` shows every surface as it is. A
+`Lighting` has no `lights`: a library can't add lights at places to a view yet. What it draws in a
+view a script began is lit by that view's lights, as the rest of the view is.
 
 A camera's `projection` is `Projection::PERSPECTIVE`, which uses `fov_y`, the angle the view takes
 in from its bottom edge to its top in radians, or `Projection::ORTHOGRAPHIC`, which uses `height`,

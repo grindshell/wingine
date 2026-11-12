@@ -6,7 +6,7 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 
 use super::{Camera3d, Canvas, Color, Mesh, Model, Projection, Ray, Sprite, Texture};
-use crate::math::{Affine3, Rect, dot3, scale3, sub3};
+use crate::math::{Affine3, Rect, dot3, normalize3, scale3, sub3};
 
 /// What a 3D view shows, where on the canvas, and how it's lit: see [`Canvas::begin_3d`].
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -77,6 +77,176 @@ impl Default for Lighting {
             ambient: Color::rgb(0.5, 0.5, 0.5),
         }
     }
+}
+
+/// A light at a place in a 3D view, lighting what's within its range: see
+/// [`Canvas3d::add_light`]. Its light falls off in a straight line, to nothing at its range. With
+/// a `cone` it's a spot light, lighting only what's within that angle of the way it shines.
+///
+/// A view's lights add to its sun and ambient light, and together they light a surface no
+/// brighter than white.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Light {
+    pub position: [f32; 3],
+    /// Its light on a surface facing it squarely, at its place.
+    pub color: Color,
+    /// How far it reaches, in world units.
+    pub range: f32,
+    /// How many times its color it gives: over 1 keeps it bright farther out.
+    pub energy: f32,
+    /// The way a spot light shines. Its length doesn't matter.
+    pub direction: [f32; 3],
+    /// Half the angle of a spot light's cone, in radians, up to pi. `None` is a point light,
+    /// shining every way.
+    pub cone: Option<f32>,
+    /// The part of the cone, from its rim inward, across which a spot light fades, by the cosine
+    /// of the angle: 0 is a hard rim, and 1 fades from the middle.
+    pub edge: f32,
+}
+
+impl Light {
+    /// How many lights light a view at once: of those that reach what its camera sees, the
+    /// nearest to the camera.
+    pub const MAX: usize = 32;
+
+    /// A light shining every way from `position`, reaching `range` world units.
+    pub const fn point(position: [f32; 3], color: Color, range: f32) -> Self {
+        Self {
+            position,
+            color,
+            range,
+            energy: 1.0,
+            direction: [0.0, 0.0, 1.0],
+            cone: None,
+            edge: 0.0,
+        }
+    }
+
+    /// A light at `position` shining along `direction`, on what's within `cone` radians of it,
+    /// with a hard rim.
+    pub const fn spot(
+        position: [f32; 3],
+        direction: [f32; 3],
+        cone: f32,
+        color: Color,
+        range: f32,
+    ) -> Self {
+        Self {
+            direction,
+            cone: Some(cone),
+            ..Self::point(position, color, range)
+        }
+    }
+
+    /// What's wrong with it, if it can't light anything as it is.
+    pub(crate) fn problem(&self) -> Option<String> {
+        let finite = |v: [f32; 3]| v.iter().all(|v| v.is_finite());
+        if !finite(self.position) {
+            return Some("a light's position must be finite".into());
+        }
+        if !(self.range > 0.0 && self.range.is_finite()) {
+            return Some(format!(
+                "a light's range must be more than 0, not {}",
+                self.range
+            ));
+        }
+        if !(self.energy >= 0.0 && self.energy.is_finite()) {
+            return Some(format!(
+                "a light's energy can't be less than 0, not {}",
+                self.energy
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.edge) {
+            return Some(format!("a light's edge is from 0 to 1, not {}", self.edge));
+        }
+        if let Some(cone) = self.cone {
+            if !(cone > 0.0 && cone <= std::f32::consts::PI) {
+                return Some(format!(
+                    "a light's cone is an angle over 0, up to pi, not {cone}"
+                ));
+            }
+            if !finite(self.direction) || normalize3(self.direction).is_none() {
+                return Some("a spot light's direction must be finite, and not zero".into());
+            }
+        }
+        None
+    }
+
+    /// The cosines of the angles its cone ends at and begins to fade at, or for a point light,
+    /// ones every direction is inside.
+    pub(crate) fn cone_cosines(&self) -> [f32; 2] {
+        match self.cone {
+            Some(cone) => [cone.cos(), (cone * (1.0 - self.edge)).cos()],
+            None => [-2.0, -2.0],
+        }
+    }
+
+    /// How much of its color reaches `point`, with nothing in the way: its energy at its place,
+    /// falling in a straight line to 0 at its range, and for a spot light, 0 outside its cone.
+    /// It's what a surface there facing the light squarely is lit by, as the view draws it.
+    pub fn level_at(&self, point: [f32; 3]) -> f32 {
+        let to_point = sub3(point, self.position);
+        let distance = dot3(to_point, to_point).sqrt();
+        let reach = (1.0 - distance / self.range).max(0.0);
+        let [outer, inner] = self.cone_cosines();
+        let cone = match normalize3(self.direction) {
+            Some(direction) if self.cone.is_some() && distance > 0.0 => {
+                let along = dot3(to_point, direction) / distance;
+                if inner > outer {
+                    ((along - outer) / (inner - outer)).clamp(0.0, 1.0)
+                } else if along >= outer {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            _ => 1.0,
+        };
+        self.energy * reach * cone
+    }
+}
+
+/// Which of `lights` light `view`, into `chosen` as indices into them: those whose reach is in
+/// what its camera sees, and when there are more than [`Light::MAX`], the nearest to the camera,
+/// in the order they were added. Returns how many it left out for being too many.
+pub(crate) fn lights_of(view: &View3d, lights: &[Light], chosen: &mut Vec<u32>) -> u32 {
+    chosen.clear();
+    if lights.is_empty() {
+        return 0;
+    }
+    let aspect = view.rect.w / view.rect.h;
+    let matrix = view.camera.view_projection(aspect);
+    let row = |i: usize| [matrix[0][i], matrix[1][i], matrix[2][i], matrix[3][i]];
+    let [x, y, z, w] = [row(0), row(1), row(2), row(3)];
+    let add = |a: [f32; 4], b: [f32; 4]| [0, 1, 2, 3].map(|i| a[i] + b[i]);
+    let sub = |a: [f32; 4], b: [f32; 4]| [0, 1, 2, 3].map(|i| a[i] - b[i]);
+    // The sides of what the camera sees, each facing inward: left and right, bottom and top,
+    // near and far.
+    let planes = [add(w, x), sub(w, x), add(w, y), sub(w, y), z, sub(w, z)];
+    let reaches = |light: &Light| {
+        planes.iter().all(|&[a, b, c, d]| {
+            let length = (a * a + b * b + c * c).sqrt();
+            let [px, py, pz] = light.position;
+            // A plane the matrix doesn't give, as of a view with no size, cuts nothing off.
+            if length > 0.0 {
+                (a * px + b * py + c * pz + d) / length >= -light.range
+            } else {
+                true
+            }
+        })
+    };
+    chosen.extend((0..lights.len() as u32).filter(|&i| reaches(&lights[i as usize])));
+    let extra = chosen.len().saturating_sub(Light::MAX);
+    if extra > 0 {
+        let distance = |&i: &u32| {
+            let away = sub3(lights[i as usize].position, view.camera.position);
+            dot3(away, away)
+        };
+        chosen.sort_by(|a, b| distance(a).total_cmp(&distance(b)));
+        chosen.truncate(Light::MAX);
+        chosen.sort_unstable();
+    }
+    extra as u32
 }
 
 /// Draws meshes into a 3D view on a canvas, from [`Canvas::begin_3d`]. The view is finished when
@@ -166,6 +336,23 @@ impl Canvas3d<'_> {
         self.push(None, transform, normal, Some(sprite), tint, false);
     }
 
+    /// Lights the view with `light`, as well as by its [`Lighting`]: everything drawn in it,
+    /// before and after. A view is lit by [`Light::MAX`] lights at once, the nearest to its
+    /// camera of those that reach what it sees. A light that can't light anything, such as one
+    /// with no range, is left out.
+    ///
+    /// A billboard takes a light's whole level wherever the light is, having no side to turn
+    /// away from it.
+    pub fn add_light(&mut self, light: Light) {
+        if light.problem().is_some() {
+            return;
+        }
+        let canvas = &mut *self.canvas;
+        canvas.lights.push(light);
+        let segment = canvas.segments.last_mut().expect("begin_3d adds a segment");
+        segment.lights.end += 1;
+    }
+
     /// Records `mesh`, or the billboard quad for `None`, placed by `transform`, with `normal`
     /// moving its normals, showing from behind too if `double_sided`.
     fn push(
@@ -218,6 +405,8 @@ pub(crate) struct Segment3d {
     pub before_batch: u32,
     /// Its meshes, in the canvas's `mesh_draws`.
     pub draws: Range<u32>,
+    /// Its lights, in the canvas's `lights`.
+    pub lights: Range<u32>,
     /// The ways its billboards' right and front point ([`Camera3d::billboard_axes`]), the same
     /// for all of them.
     pub billboard_axes: ([f32; 3], [f32; 3]),
@@ -401,6 +590,107 @@ mod tests {
         assert_near(middle.direction, [0.0, 0.0, -1.0]);
         // Past the rect's right edge, as though the view went on.
         assert_near(view.ray([70.0, 30.0]).origin, [4.0, 0.0, 4.9]);
+    }
+
+    #[test]
+    fn lights_fall_off_to_their_range_and_spots_light_their_cones() {
+        let lamp = Light {
+            energy: 2.0,
+            ..Light::point([1.0, 2.0, 3.0], Color::WHITE, 4.0)
+        };
+        assert_eq!(lamp.level_at([1.0, 2.0, 3.0]), 2.0);
+        assert_eq!(lamp.level_at([1.0, 0.0, 3.0]), 1.0, "halfway to its range");
+        assert_eq!(lamp.level_at([5.0, 2.0, 3.0]), 0.0, "at its range");
+        assert_eq!(lamp.level_at([1.0, 2.0, 9.0]), 0.0, "past it");
+
+        // Shining down, on what's within a quarter turn's half of straight under it.
+        let quarter = std::f32::consts::FRAC_PI_4;
+        let spot = Light::spot(
+            [0.0, 4.0, 0.0],
+            [0.0, -3.0, 0.0],
+            quarter,
+            Color::WHITE,
+            8.0,
+        );
+        assert_eq!(spot.level_at([0.0, 2.0, 0.0]), 0.75);
+        assert!(spot.level_at([1.9, 2.0, 0.0]) > 0.0, "inside its rim");
+        assert_eq!(spot.level_at([2.1, 2.0, 0.0]), 0.0, "outside it");
+        assert_eq!(spot.level_at([0.0, 6.0, 0.0]), 0.0, "behind it");
+        // With an edge, it fades from where the edge begins to the rim.
+        let soft = Light { edge: 1.0, ..spot };
+        let [near, far] = [0.5, 1.5].map(|x| soft.level_at([x, 2.0, 0.0]));
+        assert!(far > 0.0 && far < near && near < 0.75, "{near} {far}");
+
+        for (wrong, message) in [
+            (Light { range: 0.0, ..lamp }, "range"),
+            (
+                Light {
+                    energy: -1.0,
+                    ..lamp
+                },
+                "energy",
+            ),
+            (Light { edge: 1.5, ..spot }, "edge"),
+            (
+                Light {
+                    cone: Some(4.0),
+                    ..spot
+                },
+                "cone",
+            ),
+            (
+                Light {
+                    direction: [0.0; 3],
+                    ..spot
+                },
+                "direction",
+            ),
+            (
+                Light {
+                    position: [f32::NAN, 0.0, 0.0],
+                    ..lamp
+                },
+                "position",
+            ),
+        ] {
+            let problem = wrong.problem().expect("it can't light anything");
+            assert!(problem.contains(message), "{problem}");
+        }
+        assert_eq!(lamp.problem(), None);
+        assert_eq!(soft.problem(), None);
+    }
+
+    #[test]
+    fn a_view_is_lit_by_the_nearest_lights_that_reach_what_it_sees() {
+        // Looking along `-z` from the origin.
+        let camera = Camera3d::perspective([0.0; 3], [0.0, 0.0, -1.0], 0.8);
+        let view = View3d::new(camera, Rect::new(0.0, 0.0, 160.0, 90.0));
+        let at = |position: [f32; 3]| Light::point(position, Color::WHITE, 2.0);
+        let mut chosen = Vec::new();
+
+        assert_eq!(lights_of(&view, &[], &mut chosen), 0);
+        assert!(chosen.is_empty());
+
+        // Ahead; behind, out of reach; behind, but reaching past the camera; far off to a side;
+        // and off to a side, but reaching into view.
+        let lights = [
+            at([0.0, 0.0, -5.0]),
+            at([0.0, 0.0, 5.0]),
+            at([0.0, 0.0, 1.5]),
+            at([50.0, 0.0, -5.0]),
+            at([4.0, 0.0, -5.0]),
+        ];
+        assert_eq!(lights_of(&view, &lights, &mut chosen), 0);
+        assert_eq!(chosen, [0, 2, 4]);
+
+        // More than light a view at once: the nearest, in the order they were added.
+        let row: Vec<Light> = (0..40).map(|i| at([0.0, 0.0, -1.0 - i as f32])).collect();
+        let mut mixed = row.clone();
+        mixed.reverse();
+        assert_eq!(lights_of(&view, &mixed, &mut chosen), 8);
+        assert_eq!(chosen, (8..40).collect::<Vec<u32>>());
+        assert_eq!(lights_of(&view, &row, &mut chosen), 8);
+        assert_eq!(chosen, (0..32).collect::<Vec<u32>>());
     }
 
     #[test]

@@ -150,6 +150,11 @@ type FrameStats = {
     --- Draw calls: one for each run of quads with the same texture, and one for each kind of mesh,
     --- or billboard, each 3D view drew: the same mesh showing the same texture.
     draw_calls: number,
+    --- Lights that lit 3D views.
+    lights: number,
+    --- Lights that reached what a 3D view saw but didn't light it, there being more than the 32
+    --- that light a view at once.
+    lights_left_out: number,
 }
 
 --- A camera looking into a 3D world, for a `View3d`. 3D coordinates are right-handed with `y` up:
@@ -183,6 +188,38 @@ type Lighting = {
     color: Color?,
     --- The light on every surface. By default, `"#808080"`.
     ambient: Color?,
+    --- Lights at places in the view, for `graphics.begin_3d`. A scene's view is lit by its light
+    --- nodes instead. A view is lit by 32 at once: of those that reach what its camera sees, the
+    --- nearest to the camera.
+    lights: { Light }?,
+}
+
+--- What a light gives: a light node's settings, for `node:light` and `node:set_light`. Its light
+--- falls off in a straight line, to nothing at its range, and adds to the view's other light, all
+--- of it together no brighter than white.
+type LightSettings = {
+    --- Its light on a surface facing it squarely, at its place. By default, white. From
+    --- `node:light`, a number.
+    color: Color?,
+    --- How far it reaches, in world units, above 0. By default, 5.
+    range: number?,
+    --- How many times its color it gives, 0 or more: over 1 keeps it bright farther out. By
+    --- default, 1.
+    energy: number?,
+    --- Half the angle of a spot light's cone, in radians, above 0 and up to pi. Without one,
+    --- it's a point light, shining every way.
+    cone: number?,
+    --- The part of the cone, from its rim inward, across which a spot light fades, from 0, a
+    --- hard rim, to 1. By default, 0.
+    edge: number?,
+}
+
+--- A light at a place in a 3D view, for `graphics.begin_3d`.
+type Light = LightSettings & {
+    --- Where it is.
+    position: vector,
+    --- The way a spot light shines: a light with a `cone` has one.
+    direction: vector?,
 }
 
 --- A 3D view, for `graphics.begin_3d`, `graphics.project` and `graphics.ray`.
@@ -643,8 +680,8 @@ declare extern type SceneNode with
     --- Returns the node's name, unique among its siblings. The root's is `""`.
     function name(self): string
     --- Returns `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`,
-    --- `"particles"`, `"tilemap"`, `"tile_layer"`, `"view3d"`, `"mesh"`, `"model"` or
-    --- `"billboard"`.
+    --- `"particles"`, `"tilemap"`, `"tile_layer"`, `"view3d"`, `"mesh"`, `"model"`,
+    --- `"billboard"` or `"light"`.
     function kind(self): string
     --- Returns the names from the root to the node, separated by `/`.
     function path(self): string
@@ -702,8 +739,14 @@ declare extern type SceneNode with
     function set_camera(self, camera: Camera3d): ()
     --- Returns a 3D view's lighting, its colors as numbers.
     function lighting(self): Lighting
-    --- Changes a 3D view's lighting.
+    --- Changes a 3D view's lighting: its sun and ambient light. Its lights at places are its
+    --- light nodes, so `lights` here is an error.
     function set_lighting(self, lighting: Lighting): ()
+    --- Returns a light node's settings, its color as a number, and `cone` only for a spot light.
+    function light(self): LightSettings
+    --- Changes those of a light node's settings that `settings` gives. A light is where its node
+    --- is, and a spot light shines along its node's `+z`, so those are the node's to change.
+    function set_light(self, settings: LightSettings): ()
     --- Returns the nodes of a 3D view under a point in the scene's coordinates, nearest first.
     function pick(self, x: number, y: number): { SceneNode }
     --- Returns where a point in a 3D view's world shows in the scene, or nothing if it's behind

@@ -6,7 +6,7 @@ hand out, and the `Ui` a game's `gui` lays its interface out with:
 | Page | What it covers |
 |---|---|
 | [Built-ins](globals.md) | The game's `update`, `gui`, `draw`, `close_requested` and `reloading`, tasks (`spawn`, `wait`, `wait_until`), `print`, `require` and `approach` |
-| [`graphics`](graphics.md) | Drawing, the camera, blend modes, sprite sheets, sprites, animations, particles, fonts and text, frame stats, and 3D views of meshes, models and billboards, with picking by boxes |
+| [`graphics`](graphics.md) | Drawing, the camera, blend modes, sprite sheets, sprites, animations, particles, fonts and text, frame stats, and 3D views of meshes, models and billboards, lit by a sun and by lights at places, with picking by boxes |
 | [`input`](input.md) | The keyboard, mouse and gamepads, and actions bound to keys and buttons |
 | [`audio`](audio.md) | Sound effects, music and volume |
 | [`tilemap`](tilemap.md) | Tilesets and maps of tiles in layers |
@@ -173,9 +173,19 @@ A kind of tile, for [`tileset:add`](tilemap.md#tilesetadd): a table
 
 A 3D view, a table `{ camera = ..., rect = ..., lighting = ... }`, its camera a table
 `{ position = ..., target = ..., ... }` and its lighting a table `{ direction = ..., color = ...,
-ambient = ... }`, for [`graphics.begin_3d`](graphics.md#graphicsbegin_3d),
+ambient = ..., lights = ... }`, for [`graphics.begin_3d`](graphics.md#graphicsbegin_3d),
 [`graphics.project`](graphics.md#graphicsproject) and [`graphics.ray`](graphics.md#graphicsray).
 See [`graphics.begin_3d`](graphics.md#graphicsbegin_3d).
+
+### `Light` and `LightSettings`
+
+A light at a place in a 3D view, one of a `Lighting`'s `lights`: a table of a `position`, and
+any of `color`, `range`, `energy`, and for a spot light, `cone`, `direction` and `edge`. See
+[`graphics.begin_3d`](graphics.md#graphicsbegin_3d).
+
+`LightSettings` is a scene's light node's: a table with any of `color`, `range`, `energy`, `cone`
+and `edge`, a light's fields but its `position` and `direction`, which are its node's. See
+[`node:light`](scene.md#nodelight) and [`node:set_light`](scene.md#nodeset_light).
 
 ### `MeshOptions`
 

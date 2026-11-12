@@ -183,8 +183,8 @@ with **➕**, as any node; it's laid out as an area, so the Anchors menu and its
 size it.
 
 - **➕** inside a view adds what views hold: a **mesh**, a **model** of one of the game's model
-  files, a **billboard** of one of the scene's sheets, or a plain **node**. Instances can go in
-  views too, from **⛓** or dropped in, placed in 3D.
+  files, a **billboard** of one of the scene's sheets, a **light**, or a plain **node**. Instances
+  can go in views too, from **⛓** or dropped in, placed in 3D.
 - **Dragging a model file** from the FileSystem dock into a view adds a model node showing it,
   where the ray under the pointer meets the ground. A scene file dropped in a view is placed there
   the same way. A scene holding what a view can't, such as sprites, isn't placed in one, nor a
@@ -192,6 +192,9 @@ size it.
 - **Clicking** in a view selects what's under the pointer, by the boxes around what nodes show,
   the nearest first; clicking again in the same place reaches the next, as elsewhere. The
   selection's box is outlined.
+- **A light** shows nothing to click, having no box: select it in the Scene dock. While it's
+  selected, the viewport shows how far it reaches: three rings about a point light, and a spot
+  light's cone, out to its rim.
 - **The Move tool**, or the Select tool's drag, moves the selected node across the ground at its
   height, or holding Shift, up and down. The Rotate and Scale tools leave nodes in views alone;
   turn and stretch them in the Inspector.
@@ -200,8 +203,10 @@ The Inspector shows a node in a view by `x`, `y` and `z`, `yaw`, `pitch` and `ro
 and its scale along each axis, with no rotation or anchor; a view's camera (where it is and looks,
 which way is up, perspective with a field of view or orthographic with a height, and how near and
 far it sees) and lighting; a mesh's shape, its size, and a sprite of the scene's sheets to show;
-a model's file; and a billboard's sprite, size and tint. While the Animation panel shows a clip,
-**♦** keys a node's `z`, `yaw`, `pitch`, `roll` and scale as it does `x` and `y`.
+a model's file; a billboard's sprite, size and tint; and a light's color, range and energy, with
+a checkbox that gives it a cone, making it a spot light, and then half the cone's angle, in
+degrees, and its edge. While the Animation panel shows a clip, **♦** keys a node's `z`, `yaw`, `pitch`,
+`roll` and scale as it does `x` and `y`.
 
 ## Animating rigs
 

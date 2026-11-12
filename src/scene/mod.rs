@@ -185,6 +185,13 @@
 //!   bottom edge at the node's origin, facing the camera across the ground, `width` by `height`
 //!   world units (1 by default; a negative width mirrors it), and a `tint`. It moves with its node,
 //!   but doesn't turn or stretch.
+//! - `light`, in a view: a light at the node's origin ([`Light`](crate::graphics::Light)), of a
+//!   `color` (white), reaching `range` world units (5), its light falling off in a straight line
+//!   to nothing there, and `energy` times its color (1). With a `cone`, half an angle in radians
+//!   up to pi, it's a spot light shining along its node's `+z`, the way a model's front faces,
+//!   fading across the `edge` of the cone, a part of it from 0 to 1 (0, a hard rim). It moves and
+//!   turns with its node, but doesn't stretch. A view is lit by 32 lights at once, the nearest
+//!   its camera of those reaching what it sees.
 //!
 //! Nodes in a view are placed in 3D, in its world, right-handed with `y` up: by `x`, `y` and `z`,
 //! turned by `yaw`, `pitch` and `roll`, radians about `y`, `x` and `z`, and stretched by `scale_x`,
@@ -193,8 +200,8 @@
 //! Plain nodes and instances can be in views too, so a prop can be a scene file of its own, whose
 //! nodes an instance places in a view: a file reads nodes as placed in 3D if they're of the kinds
 //! only views hold, inside a view or a node placed in 3D, or have fields only those nodes have.
-//! Once instances have placed their scenes, a mesh, model or billboard anywhere but in a view is an
-//! error, as is a node of another kind in one, naming the node.
+//! Once instances have placed their scenes, a mesh, model, billboard or light anywhere but in a
+//! view is an error, as is a node of another kind in one, naming the node.
 //!
 //! What a sprite, rect, text or area shows has its top-left corner at the node's origin, unless
 //! it has a `pivot`: the point of it, from its top-left corner, `{ x, y }`, that's at the origin
@@ -419,7 +426,7 @@ use std::{
 pub use clip::{Clip, Interpolation, KeyValue, Keys, Property, Track};
 pub use file::{
     AreaDef, BillboardDef, BitmapFontDef, CellDef, FORMAT, FontCharacters, FontFile, InstanceDef,
-    KindDef, MeshDef, ModelDef, NodeDef, PanelDef, PanelFill, PanelLookDef, ParticlesDef,
+    KindDef, LightDef, MeshDef, ModelDef, NodeDef, PanelDef, PanelFill, PanelLookDef, ParticlesDef,
     Placement3, Props, RectDef, SceneFile, Shape, SheetDef, SpriteDef, Stack, StackDirection,
     TextDef, TileDef, TileLayerDef, TilemapDef, TilesetFile, Value, VectorFontDef, View3dDef,
 };
@@ -639,6 +646,8 @@ pub enum Kind {
     Mesh(MeshNode),
     Model(ModelNode),
     Billboard(BillboardNode),
+    /// A light at its place in a 3D view, a spot light shining along its `+z`.
+    Light(LightDef),
     /// A rectangle that doesn't draw, laying out its children one after another.
     Stack(Stack),
     /// A stack that draws behind its children.
@@ -829,6 +838,7 @@ impl Kind {
             Self::Mesh(_) => "mesh",
             Self::Model(_) => "model",
             Self::Billboard(_) => "billboard",
+            Self::Light(_) => "light",
             Self::Stack(_) => "stack",
             Self::Panel(_) => "panel",
             Self::Particles(_) => "particles",
@@ -1251,6 +1261,7 @@ impl Node {
             | Kind::Mesh(_)
             | Kind::Model(_)
             | Kind::Billboard(_)
+            | Kind::Light(_)
             | Kind::Stack(_)
             | Kind::Panel(_) => None,
             Kind::Sprite(sprite) => Some(sprite.size),
@@ -1290,6 +1301,7 @@ impl Node {
             | Kind::Mesh(_)
             | Kind::Model(_)
             | Kind::Billboard(_)
+            | Kind::Light(_)
             | Kind::Stack(_)
             | Kind::Panel(_) => ([0.0, 0.0], [0.0, 0.0]),
         };
@@ -2655,7 +2667,8 @@ impl Scene {
                 | Kind::Tilemap(_)
                 | Kind::Mesh(_)
                 | Kind::Model(_)
-                | Kind::Billboard(_) => {}
+                | Kind::Billboard(_)
+                | Kind::Light(_) => {}
             }
         }
         if node.kind.stack().is_some() {
@@ -2690,6 +2703,10 @@ impl Scene {
                 billboard.size,
                 billboard.tint,
             ),
+            // A spot light shines the way its node's front faces.
+            Kind::Light(light) => {
+                world.add_light(light.light(transform.translation, transform.z_axis));
+            }
             _ => {}
         }
         for &child in &node.children {
@@ -2746,8 +2763,8 @@ fn check_3d(def: &NodeDef, in_3d: bool) -> Result<(), String> {
     if in_3d {
         if !file::can_be_3d(kind) {
             return Err(format!(
-                "{} can't be in a 3D view, which holds only mesh, model, billboard and plain \
-                 nodes, and instances of scenes of them",
+                "{} can't be in a 3D view, which holds only mesh, model, billboard, light and \
+                 plain nodes, and instances of scenes of them",
                 a_node_of(kind)
             ));
         }
@@ -3323,6 +3340,7 @@ impl Build<'_> {
                     tint: billboard.tint,
                 })
             }
+            KindDef::Light(light) => Kind::Light(*light),
             KindDef::Stack(stack) => Kind::Stack(*stack),
             KindDef::Panel(panel) => {
                 let look = match &panel.look {

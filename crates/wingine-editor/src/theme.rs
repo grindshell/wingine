@@ -110,6 +110,7 @@ pub fn kind_icon(kind: &str) -> &'static str {
         "mesh" => "⬛",
         "model" => "🗿",
         "billboard" => "👤",
+        "light" => "☀",
         "scene" => "🎬",
         _ => "?",
     }

@@ -1,8 +1,8 @@
 # Scenes
 
 A scene is a tree of sprites, rectangles, text, areas, stacks and panels, and 3D views of meshes,
-models and billboards, laid out in a file of its own rather than in code: a level, a screen, a
-character. The game loads it with
+models, billboards and lights, laid out in a file of its own rather than in code: a level, a
+screen, a character. The game loads it with
 [`scene.load`](api/scene.md#sceneload), finds the nodes it cares about by name or tag, moves and
 changes them, and draws the whole tree with one call:
 
@@ -98,7 +98,7 @@ Every node has a `name` and a `kind`, and may have any of the rest:
 | Field | What it is | Default |
 |---|---|---|
 | `name` | Required. Unique among the node's siblings, and without `/`. | |
-| `kind` | Required. `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`, `"particles"`, `"tilemap"`, `"tile_layer"`, `"instance"`, `"view3d"`, `"mesh"`, `"model"` or `"billboard"`. | |
+| `kind` | Required. `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`, `"particles"`, `"tilemap"`, `"tile_layer"`, `"instance"`, `"view3d"`, `"mesh"`, `"model"`, `"billboard"` or `"light"`. | |
 | `x`, `y` | Where the node's origin is within its parent. | `0` |
 | `anchor` | The point of the parent's rectangle that `x` and `y` are measured from, `{ x, y }`, as fractions of its width and height. See [Laying out screens](#laying-out-screens). | the parent's origin |
 | `rotation` | Radians, clockwise, about its origin. | `0` |
@@ -137,8 +137,8 @@ Each kind has fields of its own:
   [Particles](#particles).
 - **`tilemap`** and **`tile_layer`**: a grid of tiles, and its layers. See [Tilemaps](#tilemaps).
 - **`instance`**: another scene file, placed here. See [Instances](#instances).
-- **`view3d`**, and **`mesh`**, **`model`** and **`billboard`** in it: a 3D world shown in a
-  rectangle of the scene, and what's in it. See [3D views](#3d-views).
+- **`view3d`**, and **`mesh`**, **`model`**, **`billboard`** and **`light`** in it: a 3D world
+  shown in a rectangle of the scene, what's in it, and what lights it. See [3D views](#3d-views).
 
 A sprite, rect, text or area has its top-left corner at the node's origin, unless it has a
 `pivot`: the point of it, from its top-left corner, `{ x, y }`, that's at the origin instead, and
@@ -483,8 +483,9 @@ appearance are discarded; explicitly mixing fill and sprite fields in one overri
 
 A `view3d` node is a rectangle of the scene showing a 3D world through a camera, as
 [`graphics.begin_3d`](api/graphics.md#graphicsbegin_3d) shows one, and its children are that
-world's nodes: meshes, models made in tools such as Blender, and sprites standing among them,
-billboards. A level of a 2.5D game is one; so is a 3D picture in a menu.
+world's nodes: meshes, models made in tools such as Blender, sprites standing among them,
+billboards, and lights at places, such as lamps. A level of a 2.5D game is one; so is a 3D picture
+in a menu.
 
 ```lua
 {
@@ -528,6 +529,17 @@ billboards. A level of a 2.5D game is one; so is a 3D picture in a menu.
             cell = { 27, 0 },
             height = 0.9,
         },
+        {
+            name = "lamp",
+            kind = "light",
+            x = 2.5,
+            y = 3,
+            z = 1.5,
+            pitch = 1.5707964,
+            color = "#ffd9a0",
+            range = 6,
+            cone = 0.6,
+        },
     },
 },
 ```
@@ -543,7 +555,8 @@ fills the canvas; it moves with its node, but doesn't turn or stretch. Its other
   (`0.1` and `1000`).
 - `lighting`: `direction`, the way the sun's light goes, `{ x, y, z }`; `color`, the sun's light;
   and `ambient`, the light on every surface. Each is the default's if left out, and so is the
-  whole of it: a sun high above and in front.
+  whole of it: a sun high above and in front. Lights at places aren't listed here: they're the
+  view's `light` nodes.
 
 The world is right-handed with `y` up, as glTF's is. The kinds of node in it:
 
@@ -558,6 +571,13 @@ The world is right-handed with `y` up, as glTF's is. The kinds of node in it:
   edge at the node's origin, turned to face the camera across the ground, `width` by `height`
   world units (1 by default; a negative width mirrors it), and a `tint`. It moves with its node,
   but doesn't turn or stretch.
+- **`light`**: a light at the node's origin, of a `color` (white), reaching `range` world units
+  (5), above 0, its light falling off in a straight line to nothing there, and giving `energy`
+  times its color (1), 0 or more. With a `cone`, half the cone's angle in radians, above 0 and up
+  to pi, it's a spot light, shining along its node's `+z`, the way a model's front faces, and
+  fading across the `edge` of the cone, a part of it from its rim inward, from 0 to 1 (0, a hard
+  rim). Without a `cone` it's a point light, shining every way, and has no `edge`. It moves and
+  turns with its node, but doesn't stretch.
 - **`node`** and **`instance`**: a place, and a scene file placed here, as in the 2D scene. A
   prop can be a scene of its own, of meshes or models, placed into levels by instances and changed
   by overrides.
@@ -568,11 +588,21 @@ Nodes in a view are placed in 3D, by `x`, `y` and `z`; `yaw`, `pitch` and `roll`
 about its origin, as [`graphics.draw_mesh`](api/graphics.md#graphicsdraw_mesh) places a mesh, and
 its children with it. They have no `rotation` or `anchor`, which are the 2D scene's.
 
-Only views hold meshes, models and billboards, and views hold only them, plain nodes and
+Only views hold meshes, models, billboards and lights, and views hold only them, plain nodes and
 instances: a sprite in a view, or a mesh outside one, is an error naming the node. That's checked
 once instances have placed their scenes, so a prop's own file can hold a model at its top, and be
 placed in a view. Plain nodes there are placed in 3D too, at the defaults if their file doesn't
 say.
+
+A view's lights add to its sun and ambient light, as the lights of
+[`graphics.begin_3d`](api/graphics.md#graphicsbegin_3d) do, which says how a light lights a
+surface. A light lights everything in its view within its range, wherever it is in the view's
+tree, and casts no shadows: it shines through walls. The example's lamp is a spot light over the
+crate, turned a quarter turn by its `pitch` to shine straight down. A light that isn't `visible`,
+or is inside a node that isn't, is out, and a [clip](#clips) that moves or turns a node moves or
+turns its light, so a lamp can swing. A view is lit by 32 lights at once: of those that reach what
+its camera sees, the nearest to the camera. Scripts read and change a light with
+[`node:light`](api/scene.md#nodelight) and [`node:set_light`](api/scene.md#nodeset_light).
 
 Meshes and models hide what's behind them, whatever order they're drawn in; the view draws over
 what was drawn before it, and nodes after it draw over it. Scripts move nodes in views with

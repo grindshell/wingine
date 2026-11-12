@@ -16,7 +16,7 @@ use super::{
 };
 use crate::{
     Error, Result,
-    graphics::{Align, Blend, Camera3d, Color, Lighting, MeshData, Projection},
+    graphics::{Align, Blend, Camera3d, Color, Light, Lighting, MeshData, Projection},
     lua::{
         DEFAULT_FOV, is_identifier,
         mlua::{self, chunk::ChunkMode},
@@ -264,6 +264,8 @@ pub enum KindDef {
     Model(ModelDef),
     /// A sprite standing upright in a 3D view, turned to face the camera.
     Billboard(BillboardDef),
+    /// A light at a place in a 3D view.
+    Light(LightDef),
     /// A rectangle that doesn't draw, laying the nodes inside it out one after another.
     Stack(Stack),
     /// A stack that draws behind what it holds.
@@ -288,6 +290,7 @@ impl KindDef {
             Self::Mesh(_) => "mesh",
             Self::Model(_) => "model",
             Self::Billboard(_) => "billboard",
+            Self::Light(_) => "light",
             Self::Stack(_) => "stack",
             Self::Panel(_) => "panel",
             Self::Particles(_) => "particles",
@@ -318,7 +321,7 @@ impl KindDef {
         }
     }
 
-    /// Whether it's a kind only 3D views hold: a mesh, model or billboard.
+    /// Whether it's a kind only 3D views hold: a mesh, model, billboard or light.
     pub fn is_3d(&self) -> bool {
         is_3d_kind(self.name())
     }
@@ -343,7 +346,7 @@ impl KindDef {
 
 /// Whether the kind named `kind` is one only 3D views hold.
 pub(crate) fn is_3d_kind(kind: &str) -> bool {
-    matches!(kind, "mesh" | "model" | "billboard")
+    matches!(kind, "mesh" | "model" | "billboard" | "light")
 }
 
 /// Whether nodes of the kind named `kind` may be placed in 3D: those only views hold, and plain
@@ -662,6 +665,77 @@ pub struct BillboardDef {
     /// Its width and height in world units. A negative width mirrors it.
     pub size: [f32; 2],
     pub tint: Color,
+}
+
+/// A light at its node's place in a 3D view, lighting what's within its range: see [`Light`].
+/// With a `cone` it's a spot light, shining along its node's `+z`, the way a model's front
+/// faces. It moves and turns with its node, but doesn't stretch.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LightDef {
+    /// Its light on a surface facing it squarely, at its place.
+    pub color: Color,
+    /// How far it reaches, in world units.
+    pub range: f32,
+    /// How many times its color it gives.
+    pub energy: f32,
+    /// Half the angle of a spot light's cone, in radians, up to pi. `None` is a point light.
+    pub cone: Option<f32>,
+    /// The part of the cone, from its rim inward, across which a spot light fades.
+    pub edge: f32,
+}
+
+impl Default for LightDef {
+    /// A white point light reaching 5 world units.
+    fn default() -> Self {
+        Self {
+            color: Color::WHITE,
+            range: 5.0,
+            energy: 1.0,
+            cone: None,
+            edge: 0.0,
+        }
+    }
+}
+
+impl LightDef {
+    /// The light it is at `position`, shining along `direction` if it's a spot light.
+    pub fn light(&self, position: [f32; 3], direction: [f32; 3]) -> Light {
+        Light {
+            position,
+            color: self.color,
+            range: self.range,
+            energy: self.energy,
+            direction,
+            cone: self.cone,
+            edge: self.edge,
+        }
+    }
+
+    /// What's wrong with it, if it can't light anything as it is, naming its fields as scene
+    /// files do.
+    pub fn problem(&self) -> Option<String> {
+        if !(self.range > 0.0 && self.range.is_finite()) {
+            return Some(format!("`range` must be above 0, not {}", self.range));
+        }
+        if !(self.energy >= 0.0 && self.energy.is_finite()) {
+            return Some(format!(
+                "`energy` can't be less than 0, not {}",
+                self.energy
+            ));
+        }
+        if let Some(cone) = self.cone
+            && !(cone > 0.0 && cone <= std::f32::consts::PI)
+        {
+            return Some(format!("`cone` is an angle above 0, up to pi, not {cone}"));
+        }
+        if !(0.0..=1.0).contains(&self.edge) {
+            return Some(format!("`edge` is from 0 to 1, not {}", self.edge));
+        }
+        if self.cone.is_none() && self.edge != 0.0 {
+            return Some("a light has an `edge` only with a `cone`, whose edge it is".into());
+        }
+        None
+    }
 }
 
 /// What a tileset file holds: the kinds of tile tilemaps are made of, by name, all the same size.
@@ -1822,6 +1896,31 @@ fn read_kind(
                 tint: optional_color(fields, "tint")?,
             })
         }
+        "light" => {
+            let default = LightDef::default();
+            let mut number = |field: &str, default: f32| match fields.take(field) {
+                Some(value) => finite(value, field),
+                None => Ok(default),
+            };
+            let range = number("range", default.range)?;
+            let energy = number("energy", default.energy)?;
+            let edge = number("edge", default.edge)?;
+            let cone = match fields.take("cone") {
+                Some(cone) => Some(finite(cone, "cone")?),
+                None => None,
+            };
+            let light = LightDef {
+                color: optional_color(fields, "color")?,
+                range,
+                energy,
+                cone,
+                edge,
+            };
+            if let Some(problem) = light.problem() {
+                return Err(problem);
+            }
+            KindDef::Light(light)
+        }
         "stack" => KindDef::Stack(read_stack(fields, "a stack")?),
         "panel" => {
             let stack = read_stack(fields, "a panel")?;
@@ -1897,8 +1996,8 @@ fn read_kind(
         other => {
             return Err(format!(
                 "there's no kind of node `{other}`: a node is a node, sprite, rect, text, area, \
-                 stack, panel, particles, tilemap, tile_layer, instance, view3d, mesh, model or \
-                 billboard"
+                 stack, panel, particles, tilemap, tile_layer, instance, view3d, mesh, model, \
+                 billboard or light"
             ));
         }
     };
@@ -2661,6 +2760,15 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
             set("width", number(billboard.size[0]));
             set("height", number(billboard.size[1]));
             set("tint", hex(billboard.tint));
+        }
+        KindDef::Light(light) => {
+            set("color", hex(light.color));
+            set("range", number(light.range));
+            set("energy", number(light.energy));
+            if let Some(cone) = light.cone {
+                set("cone", number(cone));
+            }
+            set("edge", number(light.edge));
         }
         KindDef::Stack(stack) => stack_fields(stack, &mut set),
         KindDef::Panel(panel) => {
@@ -3452,6 +3560,62 @@ mod tests {
         assert!(err.contains("`slice` can't be less than 0"), "{err}");
         let err = node("kind = 'stack', color = '#ffffff'");
         assert!(err.contains("a stack node has no field `color`"), "{err}");
+    }
+
+    #[test]
+    fn reads_and_writes_lights() {
+        let source = |light: &str| {
+            format!(
+                "return {{ format = 4, children = {{ {{ name = 'view', kind = 'view3d', width = \
+                 160, height = 90, camera = {{ position = {{ 0, 5, 4 }}, target = {{ 0, 0, 0 }} \
+                 }}, children = {{ {{ name = 'lamp', kind = 'light', {light} }} }} }} }} }}"
+            )
+        };
+        let light = |fields: &str| {
+            let scene = parse(&source(fields)).unwrap();
+            let lamp = &scene.children[0].children[0];
+            assert!(lamp.placement3.is_some(), "a light is placed in 3D");
+            match &lamp.kind {
+                KindDef::Light(light) => *light,
+                other => panic!("{other:?}"),
+            }
+        };
+        // A white point light reaching 5, unless it says otherwise.
+        assert_eq!(light("y = 3"), LightDef::default());
+        assert_eq!(
+            light("color = '#ffd9a0', range = 8, energy = 1.5, cone = 0.6, edge = 0.25, yaw = 1"),
+            LightDef {
+                color: Color::rgb8(0xff, 0xd9, 0xa0),
+                range: 8.0,
+                energy: 1.5,
+                cone: Some(0.6),
+                edge: 0.25,
+            }
+        );
+        for (fields, message) in [
+            ("range = 0", "`range` must be above 0"),
+            ("energy = -1", "`energy` can't be less than 0"),
+            ("cone = 4", "`cone` is an angle above 0, up to pi"),
+            ("cone = 0.5, edge = 2", "`edge` is from 0 to 1"),
+            ("edge = 0.5", "a light has an `edge` only with a `cone`"),
+            ("tint = '#ffffff'", "a light node has no field `tint`"),
+        ] {
+            let err = error(&source(fields));
+            assert!(err.contains(message) && err.contains("lamp"), "{err}");
+        }
+        // Written, it's read back the same, without what it leaves at the defaults.
+        let scene = parse(&source("color = '#ffd9a0', range = 8, cone = 0.6, y = 3")).unwrap();
+        let written = scene.to_luau().unwrap();
+        assert!(written.contains("kind = \"light\""), "{written}");
+        assert!(
+            !written.contains("energy") && !written.contains("edge"),
+            "{written}"
+        );
+        assert_eq!(parse(&written).unwrap().to_luau().unwrap(), written);
+        assert_eq!(
+            parse(&written).unwrap().children[0].children[0].kind,
+            scene.children[0].children[0].kind
+        );
     }
 
     /// A level with a 3D view: a crate on a floor, a prop placed in it, and a billboard.

@@ -433,6 +433,8 @@ seconds, measured on the CPU:
 | `quads` | How many quads the frame drew: sprites, rectangles and glyphs of text. |
 | `triangles` | How many triangles of meshes and billboards the frame drew in [3D views](#3d-views). |
 | `draw_calls` | How many draw calls those took: one for each run of quads with the same texture, and one for each kind of mesh, or billboard, each 3D view drew: the same mesh showing the same texture. |
+| `lights` | How many [lights at places](#graphicsbegin_3d) lit the frame's 3D views. |
+| `lights_left_out` | How many lights reached what a 3D view saw but didn't light it, there being more than the 32 that light a view at once. |
 
 Before the first frame has finished, everything is 0. To see what a frame really costs, turn
 [`vsync`](../project-structure.md#vsync) off, and run a release build. See
@@ -1052,10 +1054,58 @@ The lighting's table:
 | `direction` | The way the sun's light goes, a vector of any length. By default, `vector.create(-0.3, -1, -0.5)`: down from above, a little to the right and in front. |
 | `color` | The sun's light, a [`Color`](README.md#color), on surfaces facing it, and less on those turned partly away. By default, `"#cccccc"`. |
 | `ambient` | The light on every surface, even those facing away from the sun. By default, `"#808080"`. |
+| `lights` | Lights at places in the view, such as lamps and torches: a list of tables, below. By default, none. |
 
-White light shows a surface as it is, and the sun and ambient light together light it no brighter
+White light shows a surface as it is, and all of a view's light together lights it no brighter
 than that. For no shading at all, light everything with ambient light alone:
 `{ color = "#000000", ambient = "#ffffff" }`.
+
+Each of the `lights` is a table:
+
+| Field | What it is |
+|---|---|
+| `position` | Where the light is, a vector. Every light has one. |
+| `color` | Its light, a [`Color`](README.md#color), on a surface at its place facing it squarely. By default, white. |
+| `range` | How far it reaches, in world units, above 0. By default, 5. |
+| `energy` | How many times its color it gives, 0 or more: over 1 keeps it bright farther out. By default, 1. |
+| `cone` | Half the angle of a spot light's cone, in radians, above 0 and up to pi. Without one, it's a point light, shining every way. |
+| `direction` | The way a spot light shines, a vector of any length. A light with a `cone` must have one. |
+| `edge` | The part of the cone, from its rim inward, across which a spot light fades, from 0, a hard rim, to 1. By default, 0. Only a light with a `cone` has one. |
+
+A light's level at a surface is `energy * (1 - distance / range)`: it falls off in a straight
+line, to nothing at its range. A spot light's level is nothing outside its cone, and across the
+cone's `edge` it fades to nothing at the rim, by the cosine of the angle from the way it shines.
+The surface gets the light's `color` times that level, and less of it the more it's turned away
+from the light, as of the sun's. So a view lights a surface by its ambient light, the sun's by how
+squarely the surface faces it, and each light's the same way, added together.
+
+```lua
+-- A dark room: a lamp on the wall, and a spot light over the middle of the floor.
+graphics.begin_3d({
+    camera = camera,
+    lighting = {
+        color = "#000000",
+        ambient = "#101018",
+        lights = {
+            { position = vector.create(4, 3.5, -2), color = "#ffd9a0", range = 8 },
+            {
+                position = vector.create(0, 3, 0),
+                direction = vector.create(0, -1, 0),
+                cone = 0.5,
+                range = 6,
+            },
+        },
+    },
+})
+```
+
+Lights cast no shadows: one shines through a wall onto what's behind it. A surface whose normal
+is zero faces nothing, so it gets nothing from them, as from the sun.
+
+A view is lit by 32 lights at once. Lights that reach nothing its camera sees don't count toward
+them; of the rest, the 32 nearest the camera light the view. Any more are left out: the engine
+logs a warning the first time, and [`graphics.frame_stats`](#graphicsframe_stats) counts them as
+`lights_left_out`.
 
 ### `graphics.draw_mesh`
 
@@ -1121,9 +1171,11 @@ upright however far down the camera looks. It's `height` world units tall, 1 by 
 `width` wide, by default as wide as its shape makes it at that height. A negative `width` mirrors
 it, as [`sprite:flipped_x`](#spriteflipped_x) does.
 
-A billboard is lit as the ground is, whichever way it faces, so it matches what it stands on. It
-hides what's behind it as meshes do, its pixels less than half opaque left out, and its colors are
-multiplied by `tint`, white by default. Drawing one when no view is open is an error.
+A billboard is lit as the ground is, whichever way it faces, so it matches what it stands on. A
+[light at a place](#graphicsbegin_3d) gives it its whole level wherever the light is from it,
+since a billboard has no side to turn away. It hides what's behind it as meshes do, its pixels less
+than half opaque left out, and its colors are multiplied by `tint`, white by default. Drawing one
+when no view is open is an error.
 
 ```lua
 -- The player, a tile tall, facing the way they last walked.

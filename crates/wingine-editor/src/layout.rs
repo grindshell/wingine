@@ -164,7 +164,8 @@ pub fn apply(node: &mut NodeDef, preset: &Preset, size: [f32; 2], margin: f32) {
         | KindDef::Instance(_)
         | KindDef::Mesh(_)
         | KindDef::Model(_)
-        | KindDef::Billboard(_) => {
+        | KindDef::Billboard(_)
+        | KindDef::Light(_) => {
             return;
         }
     };

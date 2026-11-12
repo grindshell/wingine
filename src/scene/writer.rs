@@ -11,8 +11,8 @@ use std::{collections::BTreeMap, fmt::Write};
 use super::{
     clip::{Clip, Interpolation, Keys, Track},
     file::{
-        self, FORMAT, KindDef, NodeDef, PanelLookDef, Placement3, SceneFile, Shape, SheetDef,
-        Stack, StackDirection, TileDef, TilesetFile, Value,
+        self, FORMAT, KindDef, LightDef, NodeDef, PanelLookDef, Placement3, SceneFile, Shape,
+        SheetDef, Stack, StackDirection, TileDef, TilesetFile, Value,
     },
 };
 use crate::{
@@ -496,6 +496,22 @@ impl Writer {
                     self.number_field("height", height)?;
                 }
                 self.color("tint", billboard.tint);
+            }
+            KindDef::Light(light) => {
+                let default = LightDef::default();
+                self.color("color", light.color);
+                if light.range != default.range {
+                    self.number_field("range", light.range)?;
+                }
+                if light.energy != default.energy {
+                    self.number_field("energy", light.energy)?;
+                }
+                if let Some(cone) = light.cone {
+                    self.number_field("cone", cone)?;
+                }
+                if light.edge != default.edge {
+                    self.number_field("edge", light.edge)?;
+                }
             }
             KindDef::Stack(stack) => self.stack(stack)?,
             KindDef::Panel(panel) => match &panel.look {

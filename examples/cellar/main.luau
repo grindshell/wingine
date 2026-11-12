@@ -3,7 +3,8 @@
 -- edits: a 3D view holding a floor, walls of cuboids tagged `solid`, barrels, crates and a table in
 -- the way, models made in Blender tagged `solid` and `prop`, candles tagged `candle`, and the hero.
 -- The candles and the hero are sprites standing among them, billboards that turn to face the
--- camera, which follows the hero from above and behind. Walk with the arrow keys or WASD, and point
+-- camera, which follows the hero from above and behind. Each candle holds a `flame`, a light
+-- that's out until the candle is lit, and then lights the cellar around it. Walk with the arrow keys or WASD, and point
 -- at a prop with the mouse to name it.
 --
 -- A tile is a world unit, with columns along `x` and rows along `z`, so up the map is away from
@@ -37,7 +38,7 @@ for _, direction in DIRECTIONS do
 end
 
 type Prop = { node: SceneNode, kind: string, column: number, row: number }
-type Candle = { node: SceneNode, column: number, row: number, lit: boolean }
+type Candle = { node: SceneNode, flame: SceneNode, column: number, row: number, lit: boolean }
 
 -- The column and row of the tile a node of the view stands on.
 local function tile_of(node: SceneNode): (number, number)
@@ -55,7 +56,10 @@ end
 local candles: { Candle } = {}
 for _, node in view:tagged("candle") do
     local column, row = tile_of(node)
-    table.insert(candles, { node = node, column = column, row = row, lit = false })
+    -- Its light, which the scene has lit, so the editor shows what it lights.
+    local flame = node:find("flame") :: SceneNode
+    flame:set_visible(false)
+    table.insert(candles, { node = node, flame = flame, column = column, row = row, lit = false })
 end
 
 local props: { Prop } = {}
@@ -141,6 +145,7 @@ function update(dt: number)
     for _, candle in cellar.candles do
         if not candle.lit and candle.column == column and candle.row == row then
             candle.lit = true
+            candle.flame:set_visible(true)
             cellar.lit += 1
             cellar.done = cellar.lit == #cellar.candles
         end
@@ -164,6 +169,7 @@ function draw()
             -- Flickering, each candle in its own time.
             local glow = 0.9 + 0.1 * math.sin(cellar.time * 9 + i * 2)
             candle.node:set_tint(graphics.color({ r = glow, g = glow * 0.85, b = glow * 0.45 }))
+            candle.flame:set_light({ energy = glow })
         end
     end
     hero:set_position_3d(cellar.hero_position())

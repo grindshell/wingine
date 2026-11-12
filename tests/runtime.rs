@@ -3176,6 +3176,200 @@ fn cameras_place_points_on_the_canvas_and_rays_into_the_world() {
     assert!(both.contains("not both"), "{both}");
 }
 
+/// A white wall seen from the front, a unit 10 pixels with the world's origin in the middle, in a
+/// view with no sun and no ambient light: lit only by a lamp in front of its left half, inside a
+/// plain node.
+const LAMPLIT: &str = r##"return {
+    format = 4,
+    children = {
+        {
+            name = "view", kind = "view3d", width = 0, height = 0, stretch = { 1, 1 },
+            camera = { position = { 0, 0, 5 }, target = { 0, 0, 0 }, height = 2 },
+            lighting = { color = "#000000", ambient = "#000000" },
+            children = {
+                { name = "wall", kind = "mesh", shape = "cuboid", z = -1, size = { 2, 2, 0.1 } },
+                {
+                    name = "post", kind = "node", x = -0.5,
+                    children = { { name = "lamp", kind = "light", range = 2 } },
+                },
+            },
+        },
+    },
+}"##;
+
+#[test]
+fn scene_lights_work_from_luau() {
+    let folder = game(
+        "scene_lights",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            ("lamplit.scene.luau", LAMPLIT),
+            (
+                "main.luau",
+                "level = scene.load('lamplit.scene.luau')
+                view = level:find('view')
+                lamp = view:find('post/lamp')
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.draw_scene(level)
+                    stats = graphics.frame_stats()
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    assert_eq!(simulation.game().error().map(ToString::to_string), None);
+    // In front of the lamp, 0.95 away of its 2, the wall is lit a little over half, and to the
+    // right, farther off and turned from it, less.
+    let lit = |simulation: &mut Simulation<LuauGame>| {
+        simulation.step();
+        let image = simulation.screenshot().unwrap();
+        (image.pixel(5, 10), image.pixel(15, 10))
+    };
+    let (near, far) = lit(&mut simulation);
+    assert!(
+        (185..=200).contains(&near[0]) && near[0] == near[2],
+        "{near:?}"
+    );
+    assert!(far[0] > 100 && far[0] < near[0] - 40, "{far:?}");
+    simulation.step();
+    assert_eq!(
+        simulation.eval::<(u32, u32)>("stats.lights, stats.lights_left_out"),
+        (1, 0)
+    );
+
+    assert_eq!(simulation.eval::<String>("lamp:kind()"), "light");
+    assert_eq!(
+        simulation.eval::<(String, f32, f32, bool, f32)>(
+            "(function() local light = lamp:light() return string.format('%08x', light.color), \
+             light.range, light.energy, light.cone == nil, light.edge end)()"
+        ),
+        ("ffffffff".into(), 2.0, 1.0, true, 0.0)
+    );
+    assert!(simulation.eval::<bool>("lamp:bounds_3d() == nil"));
+    assert_eq!(
+        simulation.eval::<f32>("lamp:world_position_3d().x"),
+        -0.5,
+        "it's where its node is"
+    );
+
+    // Recolored, the wall shows its color, and the settings left out stay as they were.
+    simulation.exec("lamp:set_light({ color = '#ff0000' })");
+    let (near, _) = lit(&mut simulation);
+    assert!(near[0] > 185 && near[1] == 0 && near[2] == 0, "{near:?}");
+    assert_eq!(simulation.eval::<f32>("lamp:light().range"), 2.0);
+
+    // With a cone it shines along its node's `+z`, away from the wall, until it's turned round:
+    // then on what's within its cone, with a hard rim.
+    simulation.exec("lamp:set_light({ color = '#ffffff', cone = 0.3 })");
+    assert_eq!(lit(&mut simulation), (BLACK, BLACK));
+    simulation.exec("lamp:set_orientation(math.pi)");
+    let (near, far) = lit(&mut simulation);
+    assert!(near[0] > 185, "{near:?}");
+    assert_eq!(far, BLACK);
+    assert_eq!(simulation.eval::<f32>("lamp:light().cone"), 0.3);
+
+    // Hidden, or inside a hidden node, it's out.
+    simulation.exec("view:find('post'):set_visible(false)");
+    assert_eq!(lit(&mut simulation), (BLACK, BLACK));
+    simulation.step();
+    assert_eq!(simulation.eval::<u32>("stats.lights"), 0);
+
+    for (code, message) in [
+        ("lamp:set_light({ range = 0 })", "`range` must be above 0"),
+        (
+            "lamp:set_light({ energy = -1 })",
+            "`energy` can't be less than 0",
+        ),
+        (
+            "lamp:set_light({ cone = 4 })",
+            "`cone` is an angle above 0, up to pi",
+        ),
+        ("lamp:set_light({ edge = 2 })", "`edge` is from 0 to 1"),
+        ("view:find('wall'):light()", "light"),
+        ("view:find('wall'):set_light({})", "light"),
+        ("view:set_lighting({ lights = {} })", "its light nodes"),
+    ] {
+        let err: String = simulation.eval(&format!(
+            "tostring(select(2, pcall(function() {code} end)))"
+        ));
+        assert!(err.contains(message), "{code}: {err}");
+    }
+    // A setting that failed changed nothing.
+    assert_eq!(simulation.eval::<f32>("lamp:light().range"), 2.0);
+}
+
+#[test]
+fn views_take_lights_from_luau() {
+    let folder = game(
+        "view_lights",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "wall = graphics.new_cuboid(2, 2, 0.1)
+                lights = { { position = vector.create(-0.5, 0, 0), range = 2 } }
+                function draw()
+                    graphics.clear('#000000')
+                    ok, problem = pcall(graphics.begin_3d, {
+                        camera = { position = vector.create(0, 0, 5), target = vector.zero, height = 2 },
+                        lighting = { color = '#000000', ambient = '#000000', lights = lights },
+                    })
+                    if ok then
+                        graphics.draw_mesh(wall, vector.create(0, 0, -1))
+                    end
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    assert_eq!(simulation.game().error().map(ToString::to_string), None);
+    let lit = |simulation: &mut Simulation<LuauGame>| {
+        simulation.step();
+        let image = simulation.screenshot().unwrap();
+        (image.pixel(5, 10), image.pixel(15, 10))
+    };
+    let (near, far) = lit(&mut simulation);
+    assert!((185..=200).contains(&near[0]), "{near:?}");
+    assert!(far[0] > 100 && far[0] < near[0] - 40, "{far:?}");
+
+    // A spot light shining at the wall's left half, and a blue one adding to it there.
+    simulation.exec(
+        "lights = {
+            { position = vector.create(-0.5, 0, 0), direction = vector.create(0, 0, -1),
+              cone = 0.3, range = 2, color = '#ff0000' },
+            { position = vector.create(-0.5, 0, 0), range = 2, color = '#0000ff', energy = 0.5 },
+        }",
+    );
+    let (near, far) = lit(&mut simulation);
+    assert!(near[0] > 185 && near[1] == 0 && near[2] > 100, "{near:?}");
+    assert!(far[0] == 0 && far[2] > 0, "{far:?}");
+
+    for (light, message) in [
+        ("{ range = 2 }", "a light has a `position`"),
+        (
+            "{ position = vector.zero, cone = 0.5 }",
+            "has a `direction`",
+        ),
+        (
+            "{ position = vector.zero, range = -1 }",
+            "`range` must be above 0",
+        ),
+        (
+            "{ position = vector.zero, cone = 0.5, direction = vector.zero }",
+            "direction",
+        ),
+        ("5", "Light"),
+    ] {
+        simulation.exec(&format!("lights = {{ {light} }}"));
+        simulation.step();
+        let err: String = simulation.eval("tostring(problem)");
+        assert!(err.contains(message), "{light}: {err}");
+    }
+}
+
 /// A 3D view filling the canvas, seen from the front through an orthographic camera 2 units high,
 /// unlit, so a unit is 10 pixels with the world's origin in the middle: a red box to the left in
 /// front of a blue wall, and a red billboard to the right, inside a plain node.

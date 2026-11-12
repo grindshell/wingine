@@ -3,10 +3,10 @@ use std::ops::{Bound, Range, RangeBounds};
 use bytemuck::{Pod, Zeroable};
 
 use super::{
-    Blend, Camera, Canvas3d, Color, Font, Mesh, Sprite, TextLayout, Texture, View3d,
+    Blend, Camera, Canvas3d, Color, Font, Light, Mesh, Sprite, TextLayout, Texture, View3d,
     camera::Transform,
     font::PlacedGlyph,
-    view3d::{Instance, MeshDraw, MeshOrder, Segment3d},
+    view3d::{Instance, MeshDraw, MeshOrder, Segment3d, lights_of},
 };
 use crate::{
     FrameStats,
@@ -48,6 +48,8 @@ pub struct Canvas {
     /// The meshes drawn in them, in order, and how each is placed.
     pub(crate) mesh_draws: Vec<MeshDraw>,
     pub(crate) instances: Vec<Instance>,
+    /// The lights added to them, in order.
+    pub(crate) lights: Vec<Light>,
     width: f32,
     height: f32,
     transform: Transform,
@@ -66,6 +68,7 @@ impl Canvas {
             segments: Vec::new(),
             mesh_draws: Vec::new(),
             instances: Vec::new(),
+            lights: Vec::new(),
             width: 0.0,
             height: 0.0,
             transform: Transform::IDENTITY,
@@ -150,6 +153,23 @@ impl Canvas {
             .sum()
     }
 
+    /// How many lights light the 3D views drawn so far this frame, and how many more would but
+    /// for being more than [`Light::MAX`] in a view.
+    pub(crate) fn light_counts(&self) -> [u32; 2] {
+        let mut chosen = Vec::new();
+        let mut counts = [0; 2];
+        for segment in &self.segments {
+            let Range { start, end } = segment.lights.clone();
+            if start == end || segment.draws.is_empty() {
+                continue;
+            }
+            let lights = &self.lights[start as usize..end as usize];
+            counts[1] += lights_of(&segment.view, lights, &mut chosen);
+            counts[0] += chosen.len() as u32;
+        }
+        counts
+    }
+
     /// Fills the whole canvas with `color`, discarding anything drawn so far this frame.
     pub fn clear(&mut self, color: Color) {
         self.clear_color = color;
@@ -158,6 +178,7 @@ impl Canvas {
         self.segments.clear();
         self.mesh_draws.clear();
         self.instances.clear();
+        self.lights.clear();
     }
 
     /// Begins a 3D view, which shows what [`Canvas3d::draw_mesh`] draws in it through
@@ -176,10 +197,12 @@ impl Canvas {
             quads: quad..quad,
         });
         let first = self.mesh_draws.len() as u32;
+        let first_light = self.lights.len() as u32;
         self.segments.push(Segment3d {
             view: View3d { rect, ..view },
             before_batch: (self.batches.len() - 1) as u32,
             draws: first..first,
+            lights: first_light..first_light,
             billboard_axes: view.camera.billboard_axes(),
         });
         Canvas3d { canvas: self }

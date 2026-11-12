@@ -77,6 +77,9 @@ fn the_cellar_starts_dark_with_the_hero_at_the_start() {
         .sum();
     assert_eq!(stats.draw_calls, 1 + 1 + (1 + 1 + 2) + 1 + 2);
     assert_eq!(stats.triangles, 2 + WALLS * 12 + prop_triangles + 5 * 2);
+    // Each candle holds a flame, a light that's out until it's lit.
+    assert_eq!(stats.lights, 0);
+    assert!(!simulation.eval::<bool>("cellar.candles[1].flame:is_visible()"));
 }
 
 #[test]
@@ -168,6 +171,19 @@ fn standing_on_every_candle_lights_them_all() {
     let [up, down, left, right] = [Key::Up, Key::Down, Key::Left, Key::Right];
     walk(&mut simulation, &[right, right, up]);
     assert_eq!(simulation.eval::<u32>("cellar.lit"), 1);
+    // Its flame lights the cellar around it, flickering.
+    assert_eq!(simulation.context().frame_stats().lights, 1);
+    let energy: f32 = simulation.eval(
+        "(function()
+            for _, candle in cellar.candles do
+                if candle.lit then
+                    return candle.flame:light().energy
+                end
+            end
+            return 0
+        end)()",
+    );
+    assert!((0.8..=1.0).contains(&energy), "{energy}");
     walk(&mut simulation, &[down, right, right, up, up, up, up]);
     assert_eq!(simulation.eval::<u32>("cellar.lit"), 2);
     // Standing on a lit candle again lights nothing more.
@@ -180,6 +196,7 @@ fn standing_on_every_candle_lights_them_all() {
     assert_eq!(tile(&mut simulation), (1, 1));
     assert_eq!(simulation.eval::<u32>("cellar.lit"), 4);
     assert!(simulation.eval::<bool>("cellar.done"));
+    assert_eq!(simulation.context().frame_stats().lights, 4);
 
     // The message over the hero's head is drawn: a quad for each glyph of it, and the HUD's.
     simulation.run_frames(1);

@@ -15,8 +15,8 @@ use image::{RgbaImage, imageops};
 use wingine::{
     Context,
     graphics::{
-        Align, Blend, Camera, Camera3d, Canvas, Color, Font, Lighting, Mesh, MeshData, MeshVertex,
-        Model, Resolution, Scaling, SpriteSheet, Texture, View3d,
+        Align, Blend, Camera, Camera3d, Canvas, Color, Font, Light, Lighting, Mesh, MeshData,
+        MeshVertex, Model, Resolution, Scaling, SpriteSheet, Texture, View3d,
     },
     headless::{Comparison, Headless, Image},
     math::{Affine, Affine3, Rect},
@@ -1720,6 +1720,213 @@ fn meshes_normals() {
     assert_alike(&flipped, &mirrored, 0, "mirrored and stretched");
 
     assert_screenshot(&headless.adapter_name(), "meshes_normals", frame);
+}
+
+/// A floor, a cube and a ball in a view with no sun and little ambient light, lit by a warm light
+/// over the cube and a brighter, cooler one beside the ball: each lights what faces it, less the
+/// farther off it is, to nothing at its range, and where both reach, their light adds. A light
+/// added after the meshes lights them as one added before does.
+#[test]
+fn lights_at_places() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let ground = ctx.create_mesh(&MeshData::plane([8.0, 8.0])).unwrap();
+    let cube = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let sphere = ctx.create_mesh(&MeshData::sphere(0.6, 16, 8)).unwrap();
+    let camera = Camera3d::perspective([0.03, 3.51, 5.02], [0.0, 0.3, 0.0], 0.8);
+    let view = View3d {
+        lighting: Lighting {
+            direction: [0.0, -1.0, 0.0],
+            color: Color::BLACK,
+            ambient: Color::rgb8(0x18, 0x18, 0x20),
+        },
+        ..View3d::new(camera, Rect::new(0.0, 0.0, 128.0, 96.0))
+    };
+    let warm = Light::point([-1.5, 1.6, 0.5], Color::rgb8(0xff, 0xd0, 0x90), 4.0);
+    let cool = Light {
+        energy: 1.5,
+        ..Light::point([1.6, 1.2, 0.8], Color::rgb8(0x60, 0xa0, 0xff), 3.0)
+    };
+    let mut render = |lights: &[Light]| {
+        headless
+            .render(128, 96, |canvas| {
+                canvas.clear(Color::rgb8(0x08, 0x08, 0x10));
+                let mut view = canvas.begin_3d(view);
+                if let Some(first) = lights.first() {
+                    view.add_light(*first);
+                }
+                let grey = Color::rgb8(0xa0, 0xa0, 0xa0);
+                view.draw_mesh(&ground, Affine3::IDENTITY, None, grey);
+                let turned =
+                    Affine3::from_translation([-1.2, 0.5, -0.4]) * Affine3::from_rotation_y(0.5);
+                view.draw_mesh(&cube, turned, None, Color::rgb8(0xd0, 0x60, 0x40));
+                let right = Affine3::from_translation([1.2, 0.6, 0.0]);
+                view.draw_mesh(&sphere, right, None, Color::WHITE);
+                for light in lights.iter().skip(1) {
+                    view.add_light(*light);
+                }
+            })
+            .unwrap()
+    };
+    let unlit = render(&[]);
+    let frame = render(&[warm, cool]);
+    let swapped = render(&[cool, warm]);
+    assert_alike(&frame, &swapped, 0, "lights added in the other order");
+
+    let pixel = |image: &Image, point: [f32; 3]| {
+        let [x, y] = view.project(point).expect("it's in view");
+        image.pixel(x as u32, y as u32)
+    };
+    // The floor's far corner is out of both lights' reach, so shows by the ambient light alone.
+    let corner = [3.5, 0.0, -3.5];
+    assert_eq!(warm.level_at(corner) + cool.level_at(corner), 0.0);
+    assert_eq!(pixel(&frame, corner), pixel(&unlit, corner));
+    // Under the warm light the floor is lit warm, and between the two, by both.
+    let under = pixel(&frame, [-1.5, 0.0, 1.4]);
+    assert!(under[0] > 100 && under[0] > under[2] + 20, "{under:?}");
+    let between = [0.4, 0.0, 1.6];
+    let both = pixel(&frame, between);
+    let warm_only = pixel(&render(&[warm]), between);
+    let cool_only = pixel(&render(&[cool]), between);
+    for channel in 0..3 {
+        assert!(
+            both[channel] >= warm_only[channel].max(cool_only[channel]),
+            "{both:?} isn't {warm_only:?} and {cool_only:?} together"
+        );
+    }
+    assert!(both[0] > cool_only[0] && both[2] > warm_only[2], "{both:?}");
+
+    assert_screenshot(&headless.adapter_name(), "lights_at_places", frame);
+}
+
+/// Two spot lights shining straight down on a floor seen from above: one with a hard rim, which
+/// lights a disc and nothing outside it, and one fading across its whole cone. A third, turned
+/// away from the floor, lights nothing.
+#[test]
+fn lights_spots() {
+    let mut headless = headless();
+    let ground = headless
+        .context()
+        .create_mesh(&MeshData::plane([12.0, 6.0]))
+        .unwrap();
+    let camera = Camera3d::orthographic([0.0, 10.0, 0.0], [0.0; 3], 6.0);
+    let view = View3d {
+        lighting: Lighting {
+            direction: [0.0, -1.0, 0.0],
+            color: Color::BLACK,
+            ambient: Color::BLACK,
+        },
+        ..View3d::new(camera, Rect::new(0.0, 0.0, 128.0, 64.0))
+    };
+    let down = [0.0, -1.0, 0.0];
+    let hard = Light::spot([-3.0, 3.0, 0.0], down, 0.5, Color::WHITE, 6.0);
+    let soft = Light {
+        edge: 1.0,
+        ..Light::spot(
+            [3.0, 3.0, 0.0],
+            down,
+            0.5,
+            Color::rgb8(0xff, 0xd0, 0x90),
+            6.0,
+        )
+    };
+    let away = Light::spot([0.0, 3.0, 0.0], [0.0, 1.0, 0.0], 0.5, Color::WHITE, 6.0);
+    let frame = headless
+        .render(128, 64, |canvas| {
+            canvas.clear(Color::rgb8(0x20, 0x30, 0x60));
+            let mut view = canvas.begin_3d(view);
+            view.draw_mesh(&ground, Affine3::IDENTITY, None, Color::WHITE);
+            for light in [hard, soft, away] {
+                view.add_light(light);
+            }
+        })
+        .unwrap();
+    let pixel = |point: [f32; 3]| {
+        let [x, y] = view.project(point).expect("it's in view");
+        frame.pixel(x as u32, y as u32)
+    };
+    // The hard cone's rim on the floor is 3 tan 0.5 from under it, about 1.64.
+    let black = [0, 0, 0, 255];
+    let [middle, inside, outside] = [0.05, 1.4, 1.9].map(|x| pixel([-3.0 + x, 0.0, 0.1]));
+    assert!(middle[0] > 180, "{middle:?}");
+    assert!(inside[0] > 120 && inside[0] < middle[0], "{inside:?}");
+    assert_eq!(outside, black);
+    // The soft one fades all the way from its middle.
+    let [middle, halfway, outside] = [0.05, 1.3, 1.9].map(|x| pixel([3.0 + x, 0.0, 0.1]));
+    assert!(middle[0] > 180, "{middle:?}");
+    assert!(
+        halfway[0] > 40 && halfway[0] < middle[0] - 40,
+        "{halfway:?}"
+    );
+    assert_eq!(outside, black);
+    assert_eq!(pixel([0.05, 0.0, 0.1]), black, "under the one turned away");
+
+    assert_screenshot(&headless.adapter_name(), "lights_spots", frame);
+}
+
+/// A billboard takes a light's whole level wherever the light is from it, having no side to turn
+/// away, where a wall facing the camera, lit from its side, is lit by how squarely it faces the
+/// light.
+#[test]
+fn lights_on_billboards() {
+    let mut headless = headless();
+    let sheet = SpriteSheet::new(headless.context().load_texture(TILESET).unwrap(), 16, 16);
+    let sprite = sheet.sprite(27, 0);
+    let wall = headless
+        .context()
+        .create_mesh(&MeshData::cuboid([1.0, 1.0, 0.1]))
+        .unwrap();
+    let camera = Camera3d::orthographic([0.0, 0.5, 5.0], [0.0, 0.5, 0.0], 2.0);
+    let dark = View3d {
+        lighting: Lighting {
+            direction: [0.0, -1.0, 0.0],
+            color: Color::BLACK,
+            ambient: Color::BLACK,
+        },
+        ..View3d::new(camera, Rect::new(0.0, 0.0, 64.0, 32.0))
+    };
+    let unlit = View3d {
+        lighting: Lighting::UNLIT,
+        ..dark
+    };
+    // Level with the middle of both, a little in front of them, between the two.
+    let lamp = Light::point([0.0, 0.5, 0.2], Color::WHITE, 4.0);
+    let mut render = |view: View3d, lights: &[Light]| {
+        headless
+            .render(64, 32, |canvas| {
+                canvas.clear(Color::BLACK);
+                let mut view = canvas.begin_3d(view);
+                for light in lights {
+                    view.add_light(*light);
+                }
+                view.draw_billboard(&sprite, [-1.0, 0.0, 0.0], [1.0, 1.0], Color::WHITE);
+                let right = Affine3::from_translation([1.0, 0.5, -0.05]);
+                view.draw_mesh(&wall, right, Some(&sprite), Color::WHITE);
+            })
+            .unwrap()
+    };
+    let lit = render(dark, &[lamp]);
+    let shown = render(unlit, &[]);
+    // How bright each is by the lamp, of how bright it is shown as it is: the left half of the
+    // frame is the billboard's, and the right the wall's.
+    let part = |columns: std::ops::Range<u32>| {
+        let sum = |image: &Image| -> f32 {
+            let pixels = columns.clone().flat_map(|x| (0..32).map(move |y| (x, y)));
+            pixels
+                .map(|(x, y)| {
+                    let [r, g, b, _] = image.pixel(x, y);
+                    f32::from(r) + f32::from(g) + f32::from(b)
+                })
+                .sum()
+        };
+        assert!(sum(&shown) > 1000.0, "nothing shows in {columns:?}");
+        sum(&lit) / sum(&shown)
+    };
+    let [billboard, mesh] = [part(0..32), part(32..64)];
+    // Both are about 1 from the lamp, of its 4, so three quarters lit but for facing it: the
+    // wall faces a fifth toward it.
+    assert!(billboard > 0.75 && billboard < 0.97, "{billboard}");
+    assert!(mesh > 0.2 && mesh < 0.6, "{mesh}");
 }
 
 /// A 3D view covers the pixels a 2D fill of its rect does, whichever pixels' middles its edges

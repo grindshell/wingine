@@ -1367,6 +1367,58 @@ impl Viewport {
             return;
         };
         let origin = transform.translation;
+        if let Kind::Light(light) = scene.node(id).kind() {
+            // How far a light reaches: a point light's as rings about it, and a spot light's as
+            // its cone, out to its rim.
+            let faint = egui::Stroke::new(1.0, theme::ACCENT.gamma_multiply(0.6));
+            const STEPS: usize = 32;
+            let ring = |center: [f32; 3], across: [f32; 3], up: [f32; 3], radius: f32| {
+                let point = |step: usize| {
+                    let (sin, cos) = (step as f32 / STEPS as f32 * 2.0 * PI).sin_cos();
+                    [0, 1, 2].map(|i| center[i] + radius * (across[i] * cos + up[i] * sin))
+                };
+                (0..=STEPS).map(point).collect::<Vec<_>>()
+            };
+            let draw = |points: &[[f32; 3]]| {
+                for pair in points.windows(2) {
+                    if let (Some(from), Some(to)) = (shown(pair[0]), shown(pair[1])) {
+                        painter.line_segment([from, to], faint);
+                    }
+                }
+            };
+            let [x, y, z] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+            let cross3 = |a: [f32; 3], b: [f32; 3]| {
+                [
+                    a[1] * b[2] - a[2] * b[1],
+                    a[2] * b[0] - a[0] * b[2],
+                    a[0] * b[1] - a[1] * b[0],
+                ]
+            };
+            let unit = |v: [f32; 3]| {
+                let length = v.iter().map(|c| c * c).sum::<f32>().sqrt();
+                (length > 1e-6).then(|| v.map(|c| c / length))
+            };
+            match (light.cone, unit(transform.z_axis)) {
+                (Some(cone), Some(forward)) => {
+                    // Across and up the cone's mouth, square to the way it shines.
+                    let aside = if forward[1].abs() < 0.9 { y } else { x };
+                    let across = unit(cross3(aside, forward)).unwrap_or(x);
+                    let up = cross3(forward, across);
+                    let (sin, cos) = cone.sin_cos();
+                    let center = [0, 1, 2].map(|i| origin[i] + forward[i] * light.range * cos);
+                    let rim = ring(center, across, up, light.range * sin);
+                    draw(&rim);
+                    for corner in rim.iter().step_by(STEPS / 4).take(4) {
+                        draw(&[origin, *corner]);
+                    }
+                }
+                _ => {
+                    for (across, up) in [(x, z), (x, y), (z, y)] {
+                        draw(&ring(origin, across, up, light.range));
+                    }
+                }
+            }
+        }
         let Some(at) = shown(origin) else {
             return;
         };

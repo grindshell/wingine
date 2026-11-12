@@ -28,7 +28,7 @@ the files.
   [`set_position_3d`](#nodeset_position_3d), [`orientation`](#nodeorientation),
   [`set_orientation`](#nodeset_orientation), [`scale_3d`](#nodescale_3d),
   [`set_scale_3d`](#nodeset_scale_3d), [`world_position_3d`](#nodeworld_position_3d),
-  [`bounds_3d`](#nodebounds_3d)
+  [`bounds_3d`](#nodebounds_3d), [`light`](#nodelight), [`set_light`](#nodeset_light)
 - [3D views](#3d-views): [`camera`](#nodecamera), [`set_camera`](#nodeset_camera),
   [`lighting`](#nodelighting), [`set_lighting`](#nodeset_lighting), [`pick`](#nodepick),
   [`project`](#nodeproject), [`ray`](#noderay)
@@ -99,8 +99,8 @@ node:kind(): string
 ```
 
 Returns `"node"`, `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`, `"particles"`,
-`"tilemap"`, `"tile_layer"`, `"view3d"`, `"mesh"`, `"model"` or `"billboard"`. An instance is a
-`"node"` once loaded.
+`"tilemap"`, `"tile_layer"`, `"view3d"`, `"mesh"`, `"model"`, `"billboard"` or `"light"`. An
+instance is a `"node"` once loaded.
 
 ### `node:path`
 
@@ -582,7 +582,37 @@ node:bounds_3d(): (vector?, vector?)
 
 Returns the least and greatest corners of the box in its view's world around what a mesh or
 model shows, moved, turned and stretched as it's drawn, or around a billboard, standing as it faces
-the camera; or nothing for a plain node.
+the camera; or nothing for a plain node or a light.
+
+### `node:light`
+
+```lua
+node:light(): LightSettings
+```
+
+Returns the settings of a [light node](../scenes.md#3d-views), as a table: its `color`, a number
+`0xRRGGBBAA`, its `range`, `energy` and `edge`, and for a spot light, its `cone`, which a point
+light's table doesn't have. An error for a node that isn't a light.
+
+### `node:set_light`
+
+```lua
+node:set_light(settings: LightSettings)
+```
+
+Changes those of a light node's settings that `settings` gives, any of `color`, `range`, `energy`,
+`cone` and `edge`, keeping the rest. A `cone` makes a point light a spot light; a cone can be
+widened, up to pi, but not taken away. Where a light is and the way a spot light shines are its
+node's, which [`set_position_3d`](#nodeset_position_3d) and
+[`set_orientation`](#nodeset_orientation) change.
+
+```lua
+-- A torch that flickers.
+torch:set_light({ energy = 0.9 + 0.1 * math.sin(time * 13) })
+```
+
+Settings a light can't have, such as a `range` of 0 or an `edge` without a `cone`, are an error,
+and the light keeps those it had. A node that isn't a light is an error too.
 
 ## 3D views
 
@@ -626,6 +656,10 @@ Returns the view's lighting: `direction`, and `color` and `ambient` as numbers `
 node:set_lighting(lighting: Lighting)
 ```
 
+Changes the view's lighting, its sun and ambient light, whose fields are the defaults where
+they're left out, as in [`graphics.begin_3d`](graphics.md#graphicsbegin_3d). A scene's view is lit
+at places by its [light nodes](#nodelight), so `lights` here is an error.
+
 ### `node:pick`
 
 ```lua
@@ -634,8 +668,8 @@ node:pick(x: number, y: number): { SceneNode }
 
 Returns the nodes of the view under the point `x`, `y` in the scene's coordinates, nearest the
 camera first: those that show whose [boxes](#nodebounds_3d) the ray through the point goes into.
-Nothing is under a point outside the view. A scene drawn without a camera is in canvas pixels, as
-the mouse is.
+A light has no box, so it's never among them. Nothing is under a point outside the view. A scene
+drawn without a camera is in canvas pixels, as the mouse is.
 
 ```lua
 local x, y = input.mouse_position()

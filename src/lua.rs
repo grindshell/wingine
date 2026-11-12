@@ -92,7 +92,12 @@
 //!   table `{ position, target, up, fov, height, near, far }`: `position` and `target` are
 //!   vectors, and the rest optional, `fov` (radians, for perspective, 0.8 by default) and
 //!   `height` (world units, for none) being the projection, one or the other. [`Lighting`] is a
-//!   table `{ direction, color, ambient }`, any of them left out keeping its default. A [`Mesh`]
+//!   table `{ direction, color, ambient }`, any of them left out keeping its default. A
+//!   [`Light`] is a table of a `position`, a vector, and optionally `color` (white), `range`
+//!   (5), `energy` (1), and for a spot light, `cone` (half its angle, in radians), `direction`
+//!   (a vector) and `edge` (0); a light node's settings are those but its position and
+//!   direction, which are its node's: `node:light()` (its color a number) and
+//!   `node:set_light(settings)` (those given, keeping the rest). A [`Mesh`]
 //!   is userdata with `mesh:triangle_count()` and `mesh:bounds()`, the least and greatest
 //!   corners of the box its vertices take up, as vectors, or nothing if it has none. A [`Model`]
 //!   is userdata with the same methods, its box holding its parts placed in it.
@@ -117,7 +122,7 @@
 //! - A [`SceneNode`] is userdata for a node of a [`Scene`], which every node of the scene shares;
 //!   two of the same node are `==`. Finding nodes: `node:name()`, `node:kind()` (`"node"`,
 //!   `"sprite"`, `"rect"`, `"text"`, `"area"`, `"stack"`, `"panel"`, `"particles"`, `"tilemap"`,
-//!   `"tile_layer"`, `"view3d"`, `"mesh"`, `"model"` or `"billboard"`), `node:path()`
+//!   `"tile_layer"`, `"view3d"`, `"mesh"`, `"model"`, `"billboard"` or `"light"`), `node:path()`
 //!   (the names from the root, joined by `/`), `node:find(path)` (the node `path` leads to from
 //!   this one, or `nil`), `node:tagged(tag)` (this node and those inside it with the tag, in draw
 //!   order), `node:parent()`, `node:children()`, `node:tags()`, `node:has_tag(tag)` and
@@ -135,7 +140,8 @@
 //!   `node:world_position_3d()` (in the view's world) and `node:bounds_3d()` (the corners of the
 //!   box around what a mesh, model or billboard shows, or nothing). A view has `node:camera()`,
 //!   `node:set_camera(camera)`, `node:lighting()` (its colors numbers),
-//!   `node:set_lighting(lighting)`, `node:pick(x, y)` (its nodes under a point of the scene,
+//!   `node:set_lighting(lighting)` (its sun and ambient light: `lights` there is an error, a
+//!   scene's being its light nodes), `node:pick(x, y)` (its nodes under a point of the scene,
 //!   nearest first), `node:project(point)` (where a point of its world shows in the scene, or
 //!   nothing) and `node:ray(x, y)` (where the ray into its world through a point of the scene
 //!   starts and the way it goes, of length 1, or nothing outside the view). What they cover: `node:size()` (before stretching with its parent, or a
@@ -258,7 +264,7 @@ use crate::{
     Error, Fullscreen, Result,
     audio::{PlaySettings, Sound},
     graphics::{
-        Animation, Blend, Camera3d, Color, Font, Lighting, Mesh, Model, Projection, Scaling,
+        Animation, Blend, Camera3d, Color, Font, Light, Lighting, Mesh, Model, Projection, Scaling,
         Sprite, SpriteSheet, TextLayout,
     },
     grid::{Direction, GridMover},
@@ -266,9 +272,9 @@ use crate::{
     math::{Affine, Bounds3, Rect},
     particles::Particles,
     scene::{
-        AreaNode, BillboardNode, Clip, Kind, MeshNode, ModelNode, Node, NodeId, PanelFill,
-        PanelLook, PanelNode, ParticlesNode, Placement3, Props, RectNode, Scene, SpriteNode,
-        TextNode, TilemapNode, Value, View3dNode, a_node_of, particle_settings,
+        AreaNode, BillboardNode, Clip, Kind, LightDef, MeshNode, ModelNode, Node, NodeId,
+        PanelFill, PanelLook, PanelNode, ParticlesNode, Placement3, Props, RectNode, Scene,
+        SpriteNode, TextNode, TilemapNode, Value, View3dNode, a_node_of, particle_settings,
         particle_settings_value, plain,
     },
     tilemap::{Tile, TileId, Tilemap, Tileset},
@@ -1055,6 +1061,72 @@ impl FromLua for Lighting {
     }
 }
 
+/// Changes the settings of `light` that `table` gives, any of `color`, `range`, `energy`, `cone`
+/// and `edge`, failing if it couldn't then light anything.
+fn light_settings(table: &mlua::Table, light: &mut LightDef) -> mlua::Result<()> {
+    if let Some(color) = table.get::<Option<Color>>("color")? {
+        light.color = color;
+    }
+    if let Some(range) = table.get::<Option<f32>>("range")? {
+        light.range = range;
+    }
+    if let Some(energy) = table.get::<Option<f32>>("energy")? {
+        light.energy = energy;
+    }
+    if let Some(cone) = table.get::<Option<f32>>("cone")? {
+        light.cone = Some(cone);
+    }
+    if let Some(edge) = table.get::<Option<f32>>("edge")? {
+        light.edge = edge;
+    }
+    match light.problem() {
+        Some(problem) => Err(mlua::Error::runtime(format!("a light: {problem}"))),
+        None => Ok(()),
+    }
+}
+
+impl FromLua for Light {
+    /// A light of a view drawn without a scene: a table of a `position`, the settings a light
+    /// node has, and for a spot light, a `direction`.
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        let mlua::Value::Table(table) = &value else {
+            let message =
+                "expected a table { position, color, range, energy, direction, cone, edge }";
+            return Err(conversion_error(&value, "Light", message.into()));
+        };
+        let Some(position) = table.get::<Option<mlua::Vector>>("position")? else {
+            return Err(mlua::Error::runtime("a light has a `position`, a vector"));
+        };
+        let mut settings = LightDef::default();
+        light_settings(table, &mut settings)?;
+        let direction = table.get::<Option<mlua::Vector>>("direction")?;
+        if settings.cone.is_some() && direction.is_none() {
+            let message = "a light with a `cone` has a `direction`, the way it shines";
+            return Err(mlua::Error::runtime(message));
+        }
+        let direction = direction.map_or([0.0, 0.0, 1.0], vector3);
+        let light = settings.light(vector3(position), direction);
+        match light.problem() {
+            Some(problem) => Err(mlua::Error::runtime(problem)),
+            None => Ok(light),
+        }
+    }
+}
+
+impl IntoLua for LightDef {
+    /// A table `{ color, range, energy, cone, edge }`, its color a number `0xRRGGBBAA`, and
+    /// `cone` left out of a point light's.
+    fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
+        let table = lua.create_table_with_capacity(0, 5)?;
+        table.set("color", packed_color(self.color))?;
+        table.set("range", self.range)?;
+        table.set("energy", self.energy)?;
+        table.set("cone", self.cone)?;
+        table.set("edge", self.edge)?;
+        Ok(mlua::Value::Table(table))
+    }
+}
+
 /// A Luau vector's components.
 pub(crate) fn vector3(vector: mlua::Vector) -> [f32; 3] {
     [vector.x(), vector.y(), vector.z()]
@@ -1601,10 +1673,38 @@ impl mlua::UserData for SceneNode {
                 _ => None,
             })
         });
-        methods.add_method("set_lighting", |_, node, lighting: Lighting| {
+        methods.add_method("set_lighting", |lua, node, lighting: mlua::Value| {
+            if let mlua::Value::Table(table) = &lighting
+                && table.contains_key("lights")?
+            {
+                let message = "a scene's view is lit by its light nodes, not by `lights` in \
+                               its lighting";
+                return Err(mlua::Error::runtime(message));
+            }
+            let lighting = Lighting::from_lua(lighting, lua)?;
             node.write_kind("lighting", |kind| match kind {
                 Kind::View3d(view) => {
                     view.lighting = lighting;
+                    Some(())
+                }
+                _ => None,
+            })
+        });
+        methods.add_method("light", |_, node, ()| {
+            node.read_kind("light", |kind| match kind {
+                Kind::Light(light) => Some(*light),
+                _ => None,
+            })
+        });
+        methods.add_method("set_light", |_, node, settings: mlua::Table| {
+            let mut changed = node.read_kind("light", |kind| match kind {
+                Kind::Light(light) => Some(*light),
+                _ => None,
+            })?;
+            light_settings(&settings, &mut changed)?;
+            node.write_kind("light", |kind| match kind {
+                Kind::Light(light) => {
+                    *light = changed;
                     Some(())
                 }
                 _ => None,

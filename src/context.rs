@@ -69,6 +69,11 @@ pub struct FrameStats {
     /// The draw calls they took: one for each run of quads drawn with the same texture, and one
     /// for each kind of mesh each 3D view drew, the same mesh showing the same texture.
     pub draw_calls: u32,
+    /// The [lights](crate::graphics::Light) that lit 3D views.
+    pub lights: u32,
+    /// The lights that reached what a 3D view saw but didn't light it, there being more than
+    /// [`Light::MAX`](crate::graphics::Light::MAX) that did.
+    pub lights_left_out: u32,
 }
 
 impl Context {

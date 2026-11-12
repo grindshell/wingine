@@ -11,9 +11,9 @@ use wingine::{
     graphics::{Align, Blend, Camera3d, Color, Lighting},
     particles::ParticleSettings,
     scene::{
-        AreaDef, BillboardDef, InstanceDef, KindDef, MeshDef, ModelDef, NodeDef, PanelDef,
-        PanelFill, PanelLookDef, ParticlesDef, Placement3, RectDef, SceneFile, Shape, SpriteDef,
-        Stack, TextDef, TileLayerDef, TilemapDef, View3dDef,
+        AreaDef, BillboardDef, InstanceDef, KindDef, LightDef, MeshDef, ModelDef, NodeDef,
+        PanelDef, PanelFill, PanelLookDef, ParticlesDef, Placement3, RectDef, SceneFile, Shape,
+        SpriteDef, Stack, TextDef, TileLayerDef, TilemapDef, View3dDef,
     },
 };
 
@@ -38,7 +38,7 @@ pub const KINDS: [&str; 11] = [
 ];
 
 /// The kinds of node that can be added to a 3D view, placed in 3D.
-pub const KINDS_3D: [&str; 5] = ["node", "mesh", "model", "billboard", "instance"];
+pub const KINDS_3D: [&str; 6] = ["node", "mesh", "model", "billboard", "light", "instance"];
 
 /// Whether the nodes inside `node` are placed in 3D: it's a 3D view, or it's in one.
 pub fn holds_3d_node(node: &NodeDef) -> bool {
@@ -58,7 +58,8 @@ fn place_for(node: &mut NodeDef, in_3d: bool) -> Result<(), String> {
     if in_3d {
         if !(either || node.kind.is_3d()) {
             return Err(format!(
-                "a 3D view holds only meshes, models, billboards, plain nodes and instances, not \
+                "a 3D view holds only meshes, models, billboards, lights, plain nodes and \
+                 instances, not \
                  a {kind}"
             ));
         }
@@ -486,6 +487,7 @@ pub fn new_node(kind: &str, showing: Showing) -> NodeDef {
             size: [1.0, 1.0],
             tint: Color::WHITE,
         }),
+        "light" => KindDef::Light(LightDef::default()),
         _ => KindDef::Node,
     };
     let mut node = NodeDef::new(kind, kind_def);

@@ -135,9 +135,9 @@
 //!   numbers once. With `opacity`, its alpha is multiplied by it (and kept from 0 to 1), so a
 //!   color made a number once can fade a little each frame.
 //! - `graphics.frame_stats()` returns how long the frame before took, and how much it drew, as a
-//!   table: `frame`, `update`, `draw` and `render` are seconds, and `quads` and `draw_calls`
-//!   counts. Before the first frame has finished, all are 0. See `FrameStats` for what each
-//!   measures.
+//!   table: `frame`, `update`, `draw` and `render` are seconds, and `quads`, `triangles`,
+//!   `draw_calls`, `lights` and `lights_left_out` counts. Before the first frame has finished,
+//!   all are 0. See `FrameStats` for what each measures.
 //! - `graphics.load_sprite_sheet(path, tile_width, tile_height)` loads a PNG divided into a grid
 //!   of sprites `tile_width` by `tile_height` texels, starting at its top-left corner. Each image
 //!   is read once; loading it again, even divided differently, reuses it.
@@ -151,7 +151,14 @@
 //!   and optionally `up`, `fov` (with perspective, 0.8 radians by default) or `height` (without),
 //!   `near` and `far`; `rect`, where on the canvas it shows (the whole canvas by default, moved by
 //!   the camera `set_camera` sets); and `lighting`, a table of any of `direction` (a vector),
-//!   `color` and `ambient`, a sun's light and light from all around.
+//!   `color` and `ambient`, a sun's light and light from all around, and `lights`, a list of
+//!   lights at places: each a table of a `position` (a vector), and optionally a `color`
+//!   (white), a `range` in world units (5), across which its light falls off in a straight line
+//!   to nothing, and an `energy` (1), times its color; and for a spot light, a `cone`, half its
+//!   angle in radians, the `direction` it shines (a vector), and the `edge` of the cone it fades
+//!   across, a part of it from 0 to 1 (0). A view is lit by 32 lights at once: of those reaching
+//!   what its camera sees, the nearest to the camera. All a view's light together lights a
+//!   surface no brighter than white.
 //! - `graphics.draw_mesh(mesh, position, options)` draws a mesh in the view begun last, its origin
 //!   at `position`, a vector, scaled by `options.scale` (a number, or a vector for each axis),
 //!   turned by `roll` about `z`, `pitch` about `x` and `yaw` about `y`, in that order, showing

@@ -770,6 +770,40 @@ impl Inspector {
                     ui.end_row();
                 });
             }),
+            KindDef::Light(light) => section(ui, &title, |ui| {
+                grid(ui, "light", |ui| {
+                    over.label(ui, "color", &["color"]);
+                    color(ui, &mut light.color);
+                    ui.end_row();
+                    over.label(ui, "range", &["range"]);
+                    ranged_number(ui, "range", &mut light.range, 0.01..=f32::MAX);
+                    ui.end_row();
+                    over.label(ui, "energy", &["energy"]);
+                    ranged_number(ui, "energy", &mut light.energy, 0.0..=f32::MAX);
+                    ui.end_row();
+                    // A light with a cone is a spot light, and only a cone has an edge.
+                    over.label(ui, "cone", &["cone", "edge"]);
+                    ui.horizontal(|ui| {
+                        let mut spot = light.cone.is_some();
+                        let response = ui.checkbox(&mut spot, "");
+                        response.widget_info(|| {
+                            egui::WidgetInfo::selected(egui::Role::CheckBox, true, spot, "cone")
+                        });
+                        if response.changed() {
+                            light.cone = spot.then_some(0.5);
+                            light.edge = 0.0;
+                        }
+                        if let Some(cone) = &mut light.cone {
+                            // Half the cone's angle, as the file has it, in degrees.
+                            degrees(ui, "cone angle", cone);
+                            *cone = cone.clamp(1f32.to_radians(), std::f32::consts::PI);
+                            ui.label("edge");
+                            ranged_number(ui, "edge", &mut light.edge, 0.0..=1.0);
+                        }
+                    });
+                    ui.end_row();
+                });
+            }),
             KindDef::Billboard(billboard) => section(ui, &title, |ui| {
                 grid(ui, "billboard", |ui| {
                     over.label(ui, "sheet", &["sheet"]);
@@ -1387,6 +1421,22 @@ fn ranged<Num: egui::emath::Numeric>(
 /// screen: egui doesn't carry a label's text over to what it labels.
 fn number(ui: &mut egui::Ui, name: &str, value: &mut f32, speed: f32) -> egui::Response {
     let response = ui.add(egui::DragValue::new(value).speed(speed));
+    response.widget_info(|| {
+        let mut info = egui::WidgetInfo::drag_value(response.enabled(), f64::from(*value));
+        info.label = Some(name.to_owned());
+        info
+    });
+    response
+}
+
+/// A field for a number within `range`, as [`ranged`] is, named `name` as [`number`]'s is.
+fn ranged_number(
+    ui: &mut egui::Ui,
+    name: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+) -> egui::Response {
+    let response = ui.add(ranged(value, range).speed(0.05));
     response.widget_info(|| {
         let mut info = egui::WidgetInfo::drag_value(response.enabled(), f64::from(*value));
         info.label = Some(name.to_owned());

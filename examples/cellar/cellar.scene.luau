@@ -19,8 +19,8 @@ return {
                 target = { 5.5, 0, 5.5 },
             },
             lighting = {
-                color = "#b0a8a0",
-                ambient = "#505060",
+                color = "#807870",
+                ambient = "#383844",
             },
             children = {
                 {
@@ -538,6 +538,15 @@ return {
                             cell = { 3, 15 },
                             tint = "#a09890",
                             tags = { "candle" },
+                            children = {
+                                {
+                                    name = "flame",
+                                    kind = "light",
+                                    y = 0.6,
+                                    color = "#ffb060",
+                                    range = 4,
+                                },
+                            },
                         },
                         {
                             name = "candle_2",
@@ -548,6 +557,15 @@ return {
                             cell = { 3, 15 },
                             tint = "#a09890",
                             tags = { "candle" },
+                            children = {
+                                {
+                                    name = "flame",
+                                    kind = "light",
+                                    y = 0.6,
+                                    color = "#ffb060",
+                                    range = 4,
+                                },
+                            },
                         },
                         {
                             name = "candle_3",
@@ -558,6 +576,15 @@ return {
                             cell = { 3, 15 },
                             tint = "#a09890",
                             tags = { "candle" },
+                            children = {
+                                {
+                                    name = "flame",
+                                    kind = "light",
+                                    y = 0.6,
+                                    color = "#ffb060",
+                                    range = 4,
+                                },
+                            },
                         },
                         {
                             name = "candle_4",
@@ -568,6 +595,15 @@ return {
                             cell = { 3, 15 },
                             tint = "#a09890",
                             tags = { "candle" },
+                            children = {
+                                {
+                                    name = "flame",
+                                    kind = "light",
+                                    y = 0.6,
+                                    color = "#ffb060",
+                                    range = 4,
+                                },
+                            },
                         },
                     },
                 },
