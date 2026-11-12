@@ -49,13 +49,16 @@
 //!   `sim.tap(key)` presses it, runs a frame and lets it go; `sim.hold(key, seconds)` holds it for
 //!   that long; and `sim.type_text(text)` types text without pressing keys. Held keys repeat as a
 //!   system repeats them.
-//! - Actions, through what the game binds them to, a key or else a gamepad's button:
+//! - Actions, through what the game binds them to, a key, or else a mouse button, or else a
+//!   gamepad's button:
 //!   `sim.press_action(action)`, `sim.release_action(action)`, `sim.tap_action(action)` and
 //!   `sim.hold_action(action, seconds)`.
 //! - The mouse, in canvas pixels: `sim.move_mouse(x, y)`, `sim.press_mouse(button)`,
 //!   `sim.release_mouse(button)`, and `sim.click(x, y, button)`, which moves there, presses,
 //!   runs a frame and lets go; and `sim.scroll(x, y)`, which turns the wheel `y` notches away
-//!   from the player, and tilts it `x` right.
+//!   from the player, and tilts it `x` right. `sim.move_mouse_by(x, y)` moves the mouse `x` right
+//!   and `y` toward the player, in the units of `input.mouse_motion`, which the game sees only
+//!   while it has captured the mouse.
 //! - Gamepads: `sim.connect_gamepad(name)` connects one and returns its number;
 //!   `sim.disconnect_gamepad(gamepad)`; `sim.press_button(gamepad, button, strength)` (1 by
 //!   default), `sim.release_button(gamepad, button)`, `sim.tap_button(gamepad, button)` and
@@ -125,6 +128,7 @@ const REQUESTS: &[&str] = &[
     "tap_action",
     "hold_action",
     "move_mouse",
+    "move_mouse_by",
     "press_mouse",
     "release_mouse",
     "click",
@@ -829,6 +833,10 @@ impl Runner<'_> {
             }
             "move_mouse" => {
                 simulation.move_mouse(args.get(0)?, args.get(1)?);
+                nothing
+            }
+            "move_mouse_by" => {
+                simulation.move_mouse_by(args.get(0)?, args.get(1)?);
                 nothing
             }
             "press_mouse" => {

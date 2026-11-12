@@ -100,6 +100,25 @@ pub(super) fn module(lua: &Lua, lent: &Lent) -> mlua::Result<Table> {
             lent.context(|ctx| ctx.input_mut().set_input_method(area))
         })?
     })?;
+    input.set("set_mouse_captured", {
+        let lent = lent.clone();
+        lua.create_function(move |_, captured: bool| {
+            lent.context(|ctx| ctx.input_mut().set_mouse_captured(captured))
+        })?
+    })?;
+    input.set("mouse_captured", {
+        let lent = lent.clone();
+        lua.create_function(move |_, ()| lent.context(|ctx| ctx.input().mouse_captured()))?
+    })?;
+    input.set("mouse_motion", {
+        let lent = lent.clone();
+        lua.create_function(move |_, ()| {
+            lent.context(|ctx| {
+                let [x, y] = ctx.input().mouse_motion();
+                (x, y)
+            })
+        })?
+    })?;
     input.set("mouse_position", {
         let lent = lent.clone();
         lua.create_function(move |_, ()| {

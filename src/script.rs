@@ -17,6 +17,7 @@
 //! hold W 1s              # press, run for 1 second (or a number of frames), release
 //! type Ada > ?           # type the rest of the line, without pressing keys
 //! mouse 120 64           # move the cursor to canvas pixel (120, 64)
+//! mouse-by 40 -10        # move the mouse 40 right and 10 away, for a game that has captured it
 //! mouse-down Left        # hold a mouse button down (Left, Right, Middle, Back, Forward)
 //! mouse-up Left
 //! click 120 64           # move the cursor, press Left, run one frame, release
@@ -44,6 +45,10 @@
 //! or one a run before kept): then it starts with copies of the files in that folder, so the run
 //! never changes them. Either way, the folder goes when the run ends.
 //!
+//! `mouse-by` moves the mouse as [`Simulation::move_mouse_by`] does, in the units of
+//! [`Input::mouse_motion`]: the game sees it only while it has captured the mouse, as a game that
+//! looks around with it does, and otherwise it does nothing.
+//!
 //! `click-gui` clicks a widget of the game's [interface](crate::gui) as
 //! [`Simulation::click_gui`] does, by its label: a button's text, or what a field is labelled by.
 //! The interface must have laid it out in the frame before, and a window shows from the frame
@@ -60,6 +65,7 @@
 //! Benchmark a release build: `cargo run --release`.
 //!
 //! [`Simulation`]: crate::headless::Simulation
+//! [`Input::mouse_motion`]: crate::input::Input::mouse_motion
 //! [`KeyRepeat`]: crate::headless::KeyRepeat
 //! [`WindowConfig`]: crate::WindowConfig
 
@@ -93,6 +99,7 @@ enum Command {
     Hold(Key, u32),
     Type(String),
     Mouse([f32; 2]),
+    MouseBy([f32; 2]),
     MouseDown(MouseButton),
     MouseUp(MouseButton),
     Click(MouseButton, Option<[f32; 2]>),
@@ -169,6 +176,7 @@ pub fn run<G: Game>(
             Command::Hold(key, frames) => simulation.hold_frames(key, frames),
             Command::Type(text) => simulation.type_text(&text),
             Command::Mouse([x, y]) => simulation.move_mouse(x, y),
+            Command::MouseBy([x, y]) => simulation.move_mouse_by(x, y),
             Command::MouseDown(button) => simulation.mouse_down(button),
             Command::MouseUp(button) => simulation.mouse_up(button),
             Command::Click(button, position) => {
@@ -375,6 +383,7 @@ fn parse_command(name: &str, args: &[&str]) -> Result<Command, String> {
         ("tap", [key]) => Command::Tap(by_name(key)?),
         ("hold", [key, duration]) => Command::Hold(by_name(key)?, frames(duration)?),
         ("mouse", [x, y]) => Command::Mouse([number(x)?, number(y)?]),
+        ("mouse-by", [x, y]) => Command::MouseBy([number(x)?, number(y)?]),
         ("mouse-down", [button]) => Command::MouseDown(by_name(button)?),
         ("mouse-up", [button]) => Command::MouseUp(by_name(button)?),
         ("click", []) => Command::Click(MouseButton::Left, None),
@@ -405,9 +414,9 @@ fn parse_command(name: &str, args: &[&str]) -> Result<Command, String> {
             Command::Benchmark(some_frames(duration)?, Some(PathBuf::from(file)))
         }
         (
-            "wait" | "press" | "release" | "tap" | "hold" | "mouse" | "mouse-down" | "mouse-up"
-            | "click" | "scroll" | "pad-down" | "pad-up" | "pad-tap" | "pad-hold" | "stick"
-            | "key-repeat" | "resize" | "screenshot" | "benchmark",
+            "wait" | "press" | "release" | "tap" | "hold" | "mouse" | "mouse-by" | "mouse-down"
+            | "mouse-up" | "click" | "scroll" | "pad-down" | "pad-up" | "pad-tap" | "pad-hold"
+            | "stick" | "key-repeat" | "resize" | "screenshot" | "benchmark",
             _,
         ) => return Err(format!("wrong arguments for `{name}`")),
         _ => return Err(format!("unknown command `{name}`")),
@@ -492,6 +501,7 @@ mod tests {
             type >
             type Ada  Lovelace? # a comment
             mouse 12.5 40
+            mouse-by 40 -10.5
             mouse-down left
             mouse-up Left
             click
@@ -525,6 +535,7 @@ mod tests {
                 Command::Type(">".into()),
                 Command::Type("Ada  Lovelace?".into()),
                 Command::Mouse([12.5, 40.0]),
+                Command::MouseBy([40.0, -10.5]),
                 Command::MouseDown(MouseButton::Left),
                 Command::MouseUp(MouseButton::Left),
                 Command::Click(MouseButton::Left, None),

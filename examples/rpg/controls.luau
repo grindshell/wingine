@@ -1,10 +1,11 @@
 -- The game's controls, which the player chooses on a screen of their own from the title's menu.
 -- Each action shows its keys, the first of which is the one the game names, as in "Space:
--- Examine". Picking an action waits for a key or gamepad button (`input.pressed_controls`) to put
--- first in place of the one it had first; a key another action has goes there in exchange, so no
--- two actions share one, and Escape stops waiting without changing anything. What's chosen lasts,
--- in the save `controls`, which the game reads as it starts. The screen is laid out in
--- `controls.scene.luau`: a panel of rows copied from its hidden `row`.
+-- Examine". Picking an action waits for a key, or a button of the mouse or a gamepad
+-- (`input.pressed_controls`), to put first in place of the one it had first; a key another action
+-- has goes there in exchange, so no two actions share one, and Escape stops waiting without
+-- changing anything. What's chosen lasts, in the save `controls`, which the game reads as it
+-- starts. The screen is laid out in `controls.scene.luau`: a panel of rows copied from its hidden
+-- `row`.
 
 local look = require("./look")
 

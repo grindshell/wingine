@@ -132,9 +132,13 @@ own right.
 - `src/input.rs` and `gamepads.rs`: `Input`, keys, mouse, gamepads and actions. A system's repeat
   of a held key is a repeat, not a press. `text` is what keys typed; input methods are off unless a
   game takes one, since they change which key events arrive. Actions keep their controls in the
-  order bound, so the first names them. Sticks and triggers go through a radial dead zone and
-  hold from 0.5 and release below 0.4. Gamepads are numbered from 1 and polled only while the
-  window is focused.
+  order bound, so the first names them; a mouse button is a control by a name of its own
+  (`MouseLeft`), since `Left` is the arrow key. Sticks and triggers go through a radial dead zone
+  and hold from 0.5 and release below 0.4. Gamepads are numbered from 1 and polled only while the
+  window is focused. A captured mouse (`set_mouse_captured`) is the game's wish until the window
+  grants it after the frame (`State::capture_mouse`), locking the cursor or else confining it,
+  and goes with the window's focus. Its motion is winit's `DeviceEvent::MouseMotion`, counted
+  only while it's captured, when egui hears nothing of the mouse but its buttons' releases.
 - `src/particles.rs`: `Particles`, an emitter with `ParticleSettings` that keeps no time:
   `advance` steps it in parts of at most 1/60 s, spreading particles started as its origin moved
   along the way. Each emitter has a xorshift seeded by its settings or its owner (a scene node's
@@ -325,7 +329,8 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
 - Volumes are linear (1 as recorded). Failing to play a sound effect logs a warning; loading and
   music return errors.
 - Keys are physical, named for US QWERTY. Games bind named actions and query those. The mouse is
-  in canvas pixels; `Camera::canvas_to_world` converts it.
+  in canvas pixels; `Camera::canvas_to_world` converts it. A captured mouse's motion is in the
+  mouse's own units, which differ between mice and systems, so games scale it by a sensitivity.
 - egui draws over the whole frame at the output's resolution, in logical window pixels. Tests find
   widgets by label, so give one whose label egui doesn't know a label of its own
   (`Response::widget_info`). egui sizes a new window or menu in its first frame and shows it in
@@ -411,7 +416,9 @@ Check how a game behaves headlessly instead of opening a window and driving it b
   write its tests in Luau, in `*.test.luau` files that `cargo run -- test path/to/game` runs.
   Prefer this for anything worth keeping, so CI catches regressions.
 
-Windowing itself (focus, minimizing, real resizes, DPI) still needs a real window. Audio in these
+Windowing itself (focus, minimizing, real resizes, DPI, capturing the mouse) still needs a real
+window: a simulation only notes that the mouse is captured, and takes its motion from
+`move_mouse_by`. Audio in these
 runs is silent; `cargo test -- --ignored` runs a check that plays (muted) through the real sound
 device.
 

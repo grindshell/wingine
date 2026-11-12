@@ -196,14 +196,22 @@ impl Game for Actions {
     fn draw(&mut self, _canvas: &mut Canvas) {}
 }
 
-/// A game with `jump` on W and any gamepad's South, `fire` on gamepad 2's right trigger, and
-/// `pause` on any gamepad's Start.
+/// A game with `jump` on W and any gamepad's South, `fire` on gamepad 2's right trigger,
+/// `pause` on any gamepad's Start, and `aim` on any gamepad's left trigger and the right mouse
+/// button.
 fn actions() -> Simulation<Actions> {
     Simulation::new(&config(), |ctx| {
         let input = ctx.input_mut();
         input.bind(
             "jump",
             [Control::Key(Key::W), Control::Button(GamepadButton::South)],
+        );
+        input.bind(
+            "aim",
+            [
+                Control::Button(GamepadButton::LeftTrigger),
+                Control::Mouse(MouseButton::Right),
+            ],
         );
         input.bind_gamepad("fire", 2, [GamepadButton::RightTrigger]);
         input.bind("pause", [GamepadButton::Start]);
@@ -229,6 +237,15 @@ fn actions_are_pressed_by_what_they_are_bound_to() {
     simulation.action_up("jump");
     simulation.step();
     assert!(!simulation.context().input().key_held(Key::W));
+
+    // One without keys presses its first mouse button, before any gamepad's.
+    simulation.action_down("aim");
+    simulation.step();
+    assert!(simulation.context().input().held("aim"));
+    assert!(simulation.context().input().mouse_held(MouseButton::Right));
+    simulation.action_up("aim");
+    simulation.step();
+    assert!(!simulation.context().input().mouse_held(MouseButton::Right));
 
     // One with only buttons presses its first, on its gamepad, or with any, the first connected.
     simulation.connect_gamepad("first");
@@ -570,6 +587,60 @@ fn clicks_are_in_canvas_pixels() {
     simulation.click(MouseButton::Left, 4.0, 5.0);
     assert_eq!(simulation.game().clicks, [[4.0, 5.0]]);
     assert_eq!(simulation.game().canvas_size, [32.0, 16.0]);
+}
+
+/// Captures the mouse when Space is pressed and releases it when Escape is, and records how far
+/// it sees the mouse move each update, where a test can read it after a scripted run has ended
+/// the game.
+struct Looker(Rc<RefCell<Vec<[f32; 2]>>>);
+
+impl Game for Looker {
+    fn update(&mut self, ctx: &mut Context, _dt: f32) {
+        if ctx.input().key_pressed(Key::Space) {
+            ctx.input_mut().set_mouse_captured(true);
+        } else if ctx.input().key_pressed(Key::Escape) {
+            ctx.input_mut().set_mouse_captured(false);
+        }
+        self.0.borrow_mut().push(ctx.input().mouse_motion());
+    }
+
+    fn draw(&mut self, _canvas: &mut Canvas) {}
+}
+
+#[test]
+fn the_mouse_moves_for_a_game_that_has_captured_it() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let mut simulation = Simulation::new(&config(), |_| Ok(Looker(seen.clone()))).unwrap();
+    simulation.move_mouse_by(9.0, 9.0);
+    simulation.tap(Key::Space);
+    assert!(simulation.context().input().mouse_captured());
+    simulation.move_mouse_by(3.0, -2.0);
+    simulation.move_mouse_by(1.0, 0.5);
+    simulation.run_frames(2);
+    simulation.tap(Key::Escape);
+    assert!(!simulation.context().input().mouse_captured());
+    simulation.move_mouse_by(9.0, 9.0);
+    simulation.step();
+    assert_eq!(
+        *seen.borrow(),
+        [[0.0, 0.0], [4.0, -1.5], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
+    );
+}
+
+#[test]
+fn a_script_moves_a_captured_mouse() {
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("simulation-mouse");
+    fs::create_dir_all(&directory).unwrap();
+    let script = directory.join("look.txt");
+    fs::write(
+        &script,
+        "mouse-by 9 9  # not captured yet\ntap Space\nmouse-by 40 -10.5\nwait 1\n",
+    )
+    .unwrap();
+
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    wingine::script::run(&config(), |_| Ok(Looker(seen.clone())), &script).unwrap();
+    assert_eq!(*seen.borrow(), [[0.0, 0.0], [40.0, -10.5]]);
 }
 
 #[test]

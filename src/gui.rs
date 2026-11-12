@@ -631,6 +631,13 @@ impl SimulatedInput {
         });
     }
 
+    /// Takes the pointer away, as when the game captures the mouse.
+    pub fn remove_pointer(&mut self) {
+        if self.pointer.take().is_some() {
+            self.events.push(egui::Event::PointerGone);
+        }
+    }
+
     pub fn text(&mut self, text: &str) {
         self.events.push(egui::Event::Text(text.to_owned()));
     }

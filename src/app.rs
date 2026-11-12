@@ -8,11 +8,11 @@ use std::{
 use web_time::Instant;
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, Ime, KeyEvent, WindowEvent},
+    event::{DeviceEvent, DeviceId, ElementState, Ime, KeyEvent, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{self, ModifiersState, NamedKey, PhysicalKey},
     monitor::{MonitorHandle, VideoModeHandle},
-    window::{Window, WindowId},
+    window::{CursorGrabMode, Window, WindowId},
 };
 
 use crate::{
@@ -557,9 +557,10 @@ where
             return;
         };
         // Whether egui wants the event to itself, such as a click on one of its windows. A key
-        // egui doesn't hear (Tab, unless one of its widgets has focus) is the game's alone.
+        // egui doesn't hear (Tab, unless one of its widgets has focus) is the game's alone, as
+        // the mouse is while it's captured.
         #[cfg(feature = "egui")]
-        let to_gui = if hidden_from_gui(&event, &state.ctx.gui) {
+        let to_gui = if hidden_from_gui(&event, &state.ctx.gui, state.captured) {
             false
         } else {
             state
@@ -617,11 +618,13 @@ where
                     }
                 }
             }
-            // Releases aren't delivered while unfocused, so treat every key and button as released.
+            // Releases aren't delivered while unfocused, so treat every key and button as
+            // released, and the mouse too, which the player needs elsewhere.
             WindowEvent::Focused(focused) => {
                 state.focused = focused;
                 if !focused {
                     state.ctx.input.release_all();
+                    state.capture_mouse();
                 }
             }
             // Frames stop while the window is hidden, so they start again here.
@@ -633,8 +636,25 @@ where
                 } else if state.ctx.fullscreen != state.fullscreen {
                     state.set_fullscreen(state.ctx.fullscreen);
                 }
+                state.capture_mouse();
             }
             _ => {}
+        }
+    }
+
+    /// Hears how far the mouse moved, which a game reads while it has captured the mouse. Other
+    /// device events are the window's own, as window events.
+    fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        if let DeviceEvent::MouseMotion { delta: (x, y) } = event
+            && state.captured
+        {
+            state.ctx.input.move_mouse_by([x as f32, y as f32]);
+            if state.redraw == Redraw::OnDemand {
+                state.window.request_redraw();
+            }
         }
     }
 
@@ -659,15 +679,24 @@ where
     }
 }
 
-/// Whether `event` is a key egui doesn't hear (see [`Gui::hears_key`](crate::gui::Gui::hears_key)),
-/// which then goes to the game alone.
+/// Whether `event` is one egui doesn't hear, which then goes to the game alone: a key it doesn't
+/// hear (see [`Gui::hears_key`](crate::gui::Gui::hears_key)), or while the mouse is `captured`,
+/// the mouse moving, a press of its buttons or a turn of its wheel, since there's no cursor to
+/// point at egui's widgets with. Releases still reach it, to end what it began before.
 #[cfg(feature = "egui")]
-fn hidden_from_gui(event: &WindowEvent, gui: &crate::gui::Gui) -> bool {
+fn hidden_from_gui(event: &WindowEvent, gui: &crate::gui::Gui, captured: bool) -> bool {
     match event {
         WindowEvent::KeyboardInput { event, .. } => match event.physical_key {
             PhysicalKey::Code(code) => Key::from_winit(code).is_some_and(|key| !gui.hears_key(key)),
             PhysicalKey::Unidentified(_) => false,
         },
+        WindowEvent::CursorMoved { .. }
+        | WindowEvent::CursorEntered { .. }
+        | WindowEvent::MouseWheel { .. }
+        | WindowEvent::MouseInput {
+            state: ElementState::Pressed,
+            ..
+        } => captured,
         _ => false,
     }
 }
@@ -705,6 +734,10 @@ struct State<G> {
     stats: FrameStats,
     /// Cursor position in physical window pixels, while it is over the window.
     cursor: Option<[f64; 2]>,
+    /// Whether the window has captured the mouse: hidden its cursor and held it. The game's
+    /// wish, [`Input::mouse_captured`](crate::input::Input::mouse_captured), is compared with it
+    /// after each frame.
+    captured: bool,
     /// The gamepads, unless the system has none to read.
     gamepads: Option<Gamepads>,
     /// Whether the window has the keyboard's focus, and so the gamepads'.
@@ -947,6 +980,7 @@ impl<G: Game> State<G> {
             last_frame: Instant::now(),
             stats: FrameStats::default(),
             cursor: None,
+            captured: false,
             gamepads,
             modifiers: ModifiersState::empty(),
             #[cfg(not(feature = "egui"))]
@@ -1071,6 +1105,63 @@ impl<G: Game> State<G> {
         self.fullscreen = from_winit(winit.clone());
         self.ctx.fullscreen = self.fullscreen;
         self.window.set_fullscreen(winit);
+    }
+
+    /// Captures the mouse or releases it, as the game last asked, if the window hasn't yet. A
+    /// window that can't capture it, or hasn't the focus to, releases it for the game.
+    fn capture_mouse(&mut self) {
+        let capture = self.ctx.input.mouse_captured();
+        if capture == self.captured {
+            return;
+        }
+        if !capture {
+            // Fails only where the mouse couldn't be captured in the first place.
+            let _ = self.window.set_cursor_grab(CursorGrabMode::None);
+            self.window.set_cursor_visible(true);
+            self.captured = false;
+            return;
+        }
+        if !self.focused {
+            log::warn!("couldn't capture the mouse: the window isn't focused");
+            self.ctx.input.set_mouse_captured(false);
+            return;
+        }
+        // From the window's middle, so that where a locked cursor still clicks, it clicks the
+        // window. Systems that don't let a window move the cursor lock it where it is.
+        let size = self.window.inner_size();
+        let middle = winit::dpi::PhysicalPosition::new(size.width / 2, size.height / 2);
+        let _ = self.window.set_cursor_position(middle);
+        // X11 can't lock the cursor, and macOS and the web can't confine it.
+        let grabbed = self
+            .window
+            .set_cursor_grab(CursorGrabMode::Locked)
+            .or_else(|_| self.window.set_cursor_grab(CursorGrabMode::Confined));
+        if let Err(err) = grabbed {
+            log::warn!("couldn't capture the mouse: {err}");
+            self.ctx.input.set_mouse_captured(false);
+            return;
+        }
+        self.window.set_cursor_visible(false);
+        // egui has no cursor to point with until the mouse is released and moves again, so it
+        // sees the buttons held let go, as the click that captured the mouse may hold one, then
+        // the cursor leave.
+        #[cfg(feature = "egui")]
+        {
+            let device_id = DeviceId::dummy();
+            for (_, _, button) in MouseButton::ALL {
+                if self.ctx.input.mouse_held(button) {
+                    let released = WindowEvent::MouseInput {
+                        device_id,
+                        state: ElementState::Released,
+                        button: button.to_winit(),
+                    };
+                    let _ = self.gui_window.on_window_event(&self.window, &released);
+                }
+            }
+            let left = WindowEvent::CursorLeft { device_id };
+            let _ = self.gui_window.on_window_event(&self.window, &left);
+        }
+        self.captured = true;
     }
 
     fn frame(&mut self) {

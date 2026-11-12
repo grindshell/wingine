@@ -252,19 +252,22 @@
 //! `input`, while the game loads and in `update`:
 //!
 //! - `input.bind(action, controls, gamepad)` binds an action, such as `"jump"`, to a list of
-//!   keys and gamepad buttons, such as `{ "Space", "W", "South" }`, replacing any it had. A
-//!   gamepad's buttons include its sticks' directions, such as `"LeftStickLeft"`. With
-//!   `gamepad`, a number from 1, only that gamepad's buttons count; without, any gamepad's do.
+//!   keys, mouse buttons and gamepad buttons, such as `{ "Space", "W", "South" }`, replacing any
+//!   it had. A gamepad's buttons include its sticks' directions, such as `"LeftStickLeft"`, and
+//!   a mouse button is named with `Mouse` before it, as `"MouseLeft"`, since `"Left"` is the
+//!   arrow key. With `gamepad`, a number from 1, only that gamepad's buttons count; without, any
+//!   gamepad's do.
 //! - `input.bindings(action)` returns what an action is bound to, a list of names in the order
 //!   they were bound, empty if it isn't, and the gamepad it was bound to, if one, so a game shows
 //!   the player its first: "Space: Examine".
-//! - `input.pressed_controls()` returns the keys and gamepad buttons pressed this frame, in the
-//!   order they were pressed, named as `input.bind` takes them, as a screen that lets players
-//!   choose their controls asks which they pressed. Gamepad buttons are any gamepad's.
+//! - `input.pressed_controls()` returns the keys, mouse buttons and gamepad buttons pressed this
+//!   frame, in the order they were pressed, named as `input.bind` takes them, as a screen that
+//!   lets players choose their controls asks which they pressed. Gamepad buttons are any
+//!   gamepad's.
 //! - `input.held(action)`, `input.pressed(action)` and `input.released(action)` tell whether any
 //!   of the action's controls is held, or was pressed or released this frame.
-//! - `input.strength(action)` tells how far it's pushed, from 0 to 1: 1 for a key, and for a
-//!   trigger or a stick's direction, how far that is. `input.axis(negative, positive)` is how far
+//! - `input.strength(action)` tells how far it's pushed, from 0 to 1: 1 for a key or a mouse
+//!   button, and for a trigger or a stick's direction, how far that is. `input.axis(negative, positive)` is how far
 //!   `positive` is pushed less how far `negative` is, from -1 to 1.
 //! - `input.key_held(key)`, `input.key_pressed(key)` and `input.key_released(key)` do the same for
 //!   a key.
@@ -283,7 +286,16 @@
 //!   keys reach it, not the game, and `input.composition()` returns what it's composing, for the
 //!   game to show; it's `""` otherwise.
 //! - `input.mouse_position()` returns the cursor's position in canvas pixels, or `nil` when the
-//!   cursor is outside the window.
+//!   cursor is outside the window, or the mouse is captured.
+//! - `input.set_mouse_captured(captured)` captures the mouse, as a game that looks around with it
+//!   does, or releases it. Captured, its cursor is hidden and held in the window, and its buttons
+//!   and wheel are the game's rather than the interface's. The window captures it once the frame
+//!   has drawn, and releases it when it loses focus, after which the game captures it again when
+//!   it wants, as on a click. `input.mouse_captured()` tells whether it's captured.
+//! - `input.mouse_motion()` returns how far the mouse moved this frame while it's captured, as
+//!   `x, y`: `x` is positive moved right, and `y` positive moved toward the player. It's in the
+//!   mouse's own units rather than canvas pixels, for a game to multiply by a sensitivity, and
+//!   `0, 0` while the mouse isn't captured.
 //! - `input.mouse_held(button)`, `input.mouse_pressed(button)` and
 //!   `input.mouse_released(button)` do the same for a mouse button.
 //! - `input.wheel()` returns how far the mouse wheel turned this frame, in notches, as `x, y`:

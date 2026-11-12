@@ -192,6 +192,7 @@ The script has one command per line. `#` starts a comment.
 | `hold W 1s` | Presses a key, runs for a second (or a number of frames, as `hold W 60`), and lets it go. |
 | `type Ada > ?` | Types the rest of the line, [as the game reads it](api/input.md#inputtext), without pressing any keys: anything but `#`, which starts a comment. |
 | `mouse 120 64` | Moves the cursor to canvas pixel (120, 64). |
+| `mouse-by 40 -10` | Moves the mouse itself, 40 right and 10 away from the player, as [`input.mouse_motion`](api/input.md#inputmouse_motion) has it, for a game that has [captured the mouse](api/input.md#capturing-the-mouse). It does nothing while the game hasn't. |
 | `mouse-down Left` | Holds a mouse button down: `Left`, `Right`, `Middle`, `Back` or `Forward`. |
 | `mouse-up Left` | Lets a mouse button go. |
 | `click 120 64` | Moves the cursor, presses the left button, runs one frame, and lets it go. |
@@ -364,10 +365,10 @@ fn serving_starts_a_rally() {
 ```
 
 - `tap`, `hold`, `key_down` and `key_up` press keys, as the script commands of the same names do,
-  and `click`, `move_mouse`, `connect_gamepad` and `button_down` the rest.
+  and `click`, `move_mouse`, `move_mouse_by`, `connect_gamepad` and `button_down` the rest.
 - `tap_action`, `hold_action`, `action_down` and `action_up` press what an action is bound to:
-  its first key, or if it has none, its first gamepad button. So a test presses `"serve"` and
-  keeps working when the game binds it to another key.
+  its first key, or if it has none, its first mouse button, or else its first gamepad button. So
+  a test presses `"serve"` and keeps working when the game binds it to another key.
 - `eval::<T>(expression)` returns the value of a Luau expression, and `exec(code)` runs Luau, such
   as to set up a state. Each is a chunk of its own, run between frames, which the engine lends what
   it lends `update`, so engine functions work in it: it can load a level, bind an action or play a

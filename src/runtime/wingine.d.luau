@@ -28,6 +28,11 @@ type MouseButton = string
 --- such as `"LeftStickLeft"`, in any case. Buttons are named for where they are on the gamepad.
 type GamepadButton = string
 
+--- What an action is bound to: a `Key`, a `GamepadButton`, or a mouse button as `"MouseLeft"`,
+--- `"MouseRight"`, `"MouseMiddle"`, `"MouseBack"` or `"MouseForward"`, in any case, since `"Left"`
+--- and `"Right"` are the arrow keys.
+type Control = string
+
 --- A direction on the grid.
 type Direction = "up" | "down" | "left" | "right"
 
@@ -1058,16 +1063,16 @@ declare graphics: {
 --- The keyboard, mouse and gamepads, and actions bound to keys and buttons. Works while the game
 --- loads and in `update`.
 declare input: {
-    --- Binds `action` to keys and gamepad buttons, replacing what it was bound to before. With
-    --- `gamepad`, only that gamepad's buttons count; without, any gamepad's do.
-    bind: (action: string, controls: { Key | GamepadButton }, gamepad: number?) -> (),
+    --- Binds `action` to keys, mouse buttons and gamepad buttons, replacing what it was bound to
+    --- before. With `gamepad`, only that gamepad's buttons count; without, any gamepad's do.
+    bind: (action: string, controls: { Control }, gamepad: number?) -> (),
     --- Returns what `action` is bound to, in the order it was bound, empty if it isn't, and the
     --- gamepad whose buttons count, if one was given.
-    bindings: (action: string) -> ({ Key | GamepadButton }, number?),
-    --- Returns the keys and gamepad buttons pressed for this update, in the order they were
-    --- pressed, named as `bind` takes them: what a screen choosing controls binds. Gamepad buttons
-    --- are any gamepad's.
-    pressed_controls: () -> { Key | GamepadButton },
+    bindings: (action: string) -> ({ Control }, number?),
+    --- Returns the keys, mouse buttons and gamepad buttons pressed for this update, in the order
+    --- they were pressed, named as `bind` takes them: what a screen choosing controls binds.
+    --- Gamepad buttons are any gamepad's.
+    pressed_controls: () -> { Control },
     --- Returns whether anything bound to `action` is down.
     held: (action: string) -> boolean,
     --- Returns whether anything bound to `action` was pressed for this update.
@@ -1076,8 +1081,9 @@ declare input: {
     released: (action: string) -> boolean,
     --- Returns whether a key bound to `action` repeated for this update, as `key_repeated` says.
     repeated: (action: string) -> boolean,
-    --- Returns how far `action` is pushed, from 0 to 1: 1 while a key bound to it is down, and
-    --- otherwise as far as the furthest of its buttons, such as a trigger or a stick's direction.
+    --- Returns how far `action` is pushed, from 0 to 1: 1 while a key or mouse button bound to it
+    --- is down, and otherwise as far as the furthest of its gamepad buttons, such as a trigger or
+    --- a stick's direction.
     strength: (action: string) -> number,
     --- Returns how far `positive` is pushed less how far `negative` is, from -1 to 1.
     axis: (negative: string, positive: string) -> number,
@@ -1098,8 +1104,21 @@ declare input: {
     --- Takes the system's input method while `area`, around where text goes, is given, or with
     --- `nil`, lets it go. While it composes, keys reach it rather than the game.
     set_input_method: (area: Rect?) -> (),
-    --- Returns the cursor's position in canvas pixels, or `nil, nil` outside the window.
+    --- Returns the cursor's position in canvas pixels, or `nil, nil` outside the window, and
+    --- while the mouse is captured.
     mouse_position: () -> (number?, number?),
+    --- Captures the mouse, or with `false`, releases it. Captured, its cursor is hidden and held
+    --- in the window, `mouse_motion` tells how far it moves, and its buttons and wheel are the
+    --- game's, not the interface's. The window captures it once the frame has drawn, and releases
+    --- it when it loses focus.
+    set_mouse_captured: (captured: boolean) -> (),
+    --- Returns whether the mouse is captured: as the game last set it, unless the window couldn't
+    --- capture it or has lost focus since.
+    mouse_captured: () -> boolean,
+    --- Returns how far the mouse moved for this update while it's captured: `x` positive moved
+    --- right, and `y` positive moved toward the player. It's in the mouse's own units, not canvas
+    --- pixels, and `0, 0` while the mouse isn't captured.
+    mouse_motion: () -> (number, number),
     --- Returns whether `button` is down.
     mouse_held: (button: MouseButton) -> boolean,
     --- Returns whether `button` was pressed for this update.
@@ -1327,14 +1346,17 @@ declare sim: {
     hold: (key: Key, seconds: number) -> (),
     --- Types `text`, without pressing keys.
     type_text: (text: string) -> (),
-    --- Holds down what the game bound `action` to: its first key, or else its first button of a
-    --- connected gamepad.
+    --- Holds down what the game bound `action` to: its first key, or else its first mouse button,
+    --- or else its first button of a connected gamepad.
     press_action: (action: string) -> (),
     release_action: (action: string) -> (),
     tap_action: (action: string) -> (),
     hold_action: (action: string, seconds: number) -> (),
     --- Moves the cursor to `x`, `y` in canvas pixels.
     move_mouse: (x: number, y: number) -> (),
+    --- Moves the mouse `x` right and `y` toward the player, in the units of `input.mouse_motion`,
+    --- which the game sees only while it has captured the mouse.
+    move_mouse_by: (x: number, y: number) -> (),
     --- Holds a mouse button down, the left by default.
     press_mouse: (button: MouseButton?) -> (),
     release_mouse: (button: MouseButton?) -> (),

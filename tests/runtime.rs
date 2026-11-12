@@ -182,7 +182,7 @@ fn games_read_the_wheel_what_was_pressed_and_what_actions_are_bound_to() {
     let (controls, gamepad): (Vec<String>, Option<u32>) = simulation.eval("input.bindings('fly')");
     assert!(controls.is_empty() && gamepad.is_none());
 
-    // Keys and gamepad buttons, in the order they're pressed, but not mouse buttons.
+    // Keys, gamepad buttons and mouse buttons, in the order they're pressed.
     let pad = simulation.connect_gamepad("Pad");
     simulation.key_down(Key::K);
     simulation.button_down(pad, GamepadButton::Start);
@@ -192,7 +192,10 @@ fn games_read_the_wheel_what_was_pressed_and_what_actions_are_bound_to() {
     simulation.button_up(pad, GamepadButton::Start);
     simulation.mouse_up(MouseButton::Left);
     simulation.step();
-    assert_eq!(simulation.eval::<Vec<String>>("pressed"), ["K", "Start"]);
+    assert_eq!(
+        simulation.eval::<Vec<String>>("pressed"),
+        ["K", "Start", "MouseLeft"]
+    );
 
     // The wheel's turns between two updates add up.
     simulation.scroll(0.0, 1.5);
@@ -203,6 +206,95 @@ fn games_read_the_wheel_what_was_pressed_and_what_actions_are_bound_to() {
         simulation.eval::<(f32, f32)>("turned[1][1], turned[1][2]"),
         (-1.0, 1.5)
     );
+}
+
+#[test]
+fn games_capture_the_mouse_and_read_how_far_it_moved() {
+    let folder = game(
+        "mouse_capture",
+        &[(
+            "main.luau",
+            "input.bind('fire', { 'LeftControl', 'mouseleft' })
+            input.bind('aim', { 'MouseRight' })
+            moved = {}
+            seen = { fires = 0, aimed = 0 }
+            function update()
+                if input.key_pressed('Escape') then
+                    input.set_mouse_captured(false)
+                elseif input.mouse_pressed('left') and not input.mouse_captured() then
+                    input.set_mouse_captured(true)
+                elseif input.pressed('fire') then
+                    seen.fires += 1
+                end
+                if input.held('aim') then
+                    seen.aimed += 1
+                end
+                seen.strength = input.strength('aim')
+                seen.captured = input.mouse_captured()
+                seen.x, seen.y = input.mouse_position()
+                local x, y = input.mouse_motion()
+                if x ~= 0 or y ~= 0 then
+                    table.insert(moved, { x, y })
+                end
+            end",
+        )],
+    );
+    let mut simulation = simulation(&folder);
+    assert_eq!(
+        simulation.eval::<Vec<String>>("(input.bindings('fire'))"),
+        ["LeftControl", "MouseLeft"]
+    );
+
+    // Until the game captures the mouse, moving it is nothing to the game.
+    simulation.move_mouse(10.0, 20.0);
+    simulation.move_mouse_by(5.0, 5.0);
+    simulation.step();
+    assert!(!simulation.eval::<bool>("seen.captured"));
+    assert_eq!(
+        simulation.eval::<(f32, f32)>("seen.x, seen.y"),
+        (10.0, 20.0)
+    );
+    assert_eq!(simulation.eval::<usize>("#moved"), 0);
+
+    // The click that captures it fires nothing, and then there's no cursor.
+    simulation.tap_mouse(MouseButton::Left);
+    simulation.step();
+    assert!(simulation.eval::<bool>("seen.captured"));
+    assert_eq!(simulation.eval::<u32>("seen.fires"), 0);
+    assert!(simulation.eval::<bool>("seen.x == nil and seen.y == nil"));
+
+    // Moves between two updates add up, and one update sees them.
+    simulation.move_mouse_by(30.0, -4.0);
+    simulation.move_mouse_by(1.5, 1.0);
+    simulation.run_frames(2);
+    assert_eq!(simulation.eval::<usize>("#moved"), 1);
+    assert_eq!(
+        simulation.eval::<(f32, f32)>("moved[1][1], moved[1][2]"),
+        (31.5, -3.0)
+    );
+
+    // Actions follow the mouse buttons they're bound to, which `tap_action` presses for want
+    // of a key.
+    simulation.tap_mouse(MouseButton::Left);
+    simulation.step();
+    assert_eq!(simulation.eval::<u32>("seen.fires"), 1);
+    simulation.action_down("aim");
+    simulation.run_frames(3);
+    assert_eq!(simulation.eval::<f32>("seen.strength"), 1.0);
+    simulation.action_up("aim");
+    simulation.step();
+    assert_eq!(simulation.eval::<u32>("seen.aimed"), 3);
+
+    // Released, the cursor is where it was, and the mouse's moves are nothing again.
+    simulation.tap(Key::Escape);
+    simulation.move_mouse_by(8.0, 8.0);
+    simulation.step();
+    assert!(!simulation.eval::<bool>("seen.captured"));
+    assert_eq!(
+        simulation.eval::<(f32, f32)>("seen.x, seen.y"),
+        (10.0, 20.0)
+    );
+    assert_eq!(simulation.eval::<usize>("#moved"), 1);
 }
 
 #[test]
@@ -844,7 +936,7 @@ fn gamepads_are_read_by_number_and_through_actions() {
     assert!(
         simulation
             .eval::<String>("bind_error")
-            .contains("unknown key or gamepad button `Shift`")
+            .contains("unknown key, mouse button or gamepad button `Shift`")
     );
     let one = simulation.connect_gamepad("Left Hand");
     let two = simulation.connect_gamepad("Right Hand");

@@ -267,6 +267,10 @@ pub struct Simulation<G> {
     /// Input for the game's interface, gathered until the next frame.
     #[cfg(feature = "egui")]
     gui_input: crate::gui::SimulatedInput,
+    /// Whether the game had captured the mouse when the last frame ended, when the interface
+    /// lost its pointer.
+    #[cfg(feature = "egui")]
+    mouse_captured: bool,
     /// Where the game's saves go, unless its config gave a folder. Declared after `game`, so the
     /// game has finished with it first.
     _saves: Option<TemporaryFolder>,
@@ -338,6 +342,8 @@ impl<G: Game> Simulation<G> {
             actions_held: HashMap::new(),
             #[cfg(feature = "egui")]
             gui_input: Default::default(),
+            #[cfg(feature = "egui")]
+            mouse_captured: false,
             _saves: temporary,
         })
     }
@@ -495,6 +501,26 @@ impl<G: Game> Simulation<G> {
         self.headless.ctx.frame_stats = stats;
         self.drawn = true;
         self.frames += 1;
+        #[cfg(feature = "egui")]
+        self.take_pointer_from_gui();
+    }
+
+    /// Takes the interface's pointer away once the game has captured the mouse, as a window
+    /// does when the frame is done: the interface sees the buttons held let go, then the pointer
+    /// leave, and no more of the mouse until the game releases it and it moves again.
+    #[cfg(feature = "egui")]
+    fn take_pointer_from_gui(&mut self) {
+        let input = &self.headless.ctx.input;
+        let captured = input.mouse_captured();
+        if captured && !self.mouse_captured {
+            for (_, _, button) in MouseButton::ALL {
+                if input.mouse_held(button) {
+                    self.gui_input.button(button, false);
+                }
+            }
+            self.gui_input.remove_pointer();
+        }
+        self.mouse_captured = captured;
     }
 
     pub fn run_frames(&mut self, frames: u32) {
@@ -602,12 +628,14 @@ impl<G: Game> Simulation<G> {
         self.key_up(key);
     }
 
-    /// Moves the cursor to `x`, `y` in canvas pixels.
+    /// Moves the cursor to `x`, `y` in canvas pixels. While the game has
+    /// [captured the mouse](crate::input::Input::set_mouse_captured) there's no cursor, so the
+    /// game sees it there only once the mouse is released.
     pub fn move_mouse(&mut self, x: f32, y: f32) {
         self.wake();
         self.headless.ctx.input.set_mouse_position(Some([x, y]));
         #[cfg(feature = "egui")]
-        {
+        if !self.headless.ctx.input.mouse_captured() {
             let [x, y] = self.headless.ctx.screen.to_output([x, y], self.output, 1.0);
             let pixels_per_point = self.headless.ctx.gui.egui.pixels_per_point();
             self.gui_input
@@ -615,12 +643,24 @@ impl<G: Game> Simulation<G> {
         }
     }
 
+    /// Moves the mouse by `x`, `y`, in the units of
+    /// [`Input::mouse_motion`](crate::input::Input::mouse_motion): positive `x` is to the right,
+    /// and positive `y` toward the player. As in a window, the game sees it only while it has
+    /// [captured the mouse](crate::input::Input::set_mouse_captured), which a simulation only
+    /// notes; otherwise it does nothing, and the cursor stays where [`Simulation::move_mouse`]
+    /// put it.
+    pub fn move_mouse_by(&mut self, x: f32, y: f32) {
+        self.wake();
+        self.headless.ctx.input.move_mouse_by([x, y]);
+    }
+
     /// Presses `button` where the cursor is. The game sees it unless the interface wants it, as
-    /// when the cursor is over one of its windows.
+    /// when the cursor is over one of its windows, which it never does while the game has
+    /// captured the mouse.
     pub fn mouse_down(&mut self, button: MouseButton) {
         self.wake();
         #[cfg(feature = "egui")]
-        {
+        if !self.headless.ctx.input.mouse_captured() {
             self.gui_input.button(button, true);
             let gui = &self.headless.ctx.gui;
             if self
@@ -702,13 +742,15 @@ impl<G: Game> Simulation<G> {
     }
 
     /// Presses what `action` is bound to, as the player would: its first key, as
-    /// [`Simulation::key_down`] does, or if it has none, its first gamepad button, as
-    /// [`Simulation::button_down`] does, on the gamepad it's bound to, or if it's bound to any, the
-    /// first connected. So a test presses what the game binds, wherever the game binds it.
+    /// [`Simulation::key_down`] does, or if it has none, its first mouse button, as
+    /// [`Simulation::mouse_down`] does, or if it has none of those either, its first gamepad
+    /// button, as [`Simulation::button_down`] does, on the gamepad it's bound to, or if it's bound
+    /// to any, the first connected. So a test presses what the game binds, wherever the game
+    /// binds it.
     ///
     /// # Panics
     ///
-    /// If `action` isn't bound to a key, nor to a button of a connected gamepad.
+    /// If `action` isn't bound to a key or a mouse button, nor to a button of a connected gamepad.
     pub fn action_down(&mut self, action: &str) {
         if let Err(message) = self.try_action_down(action) {
             panic!("{message}");
@@ -721,6 +763,7 @@ impl<G: Game> Simulation<G> {
         let pressed = self.action_control(action)?;
         match pressed {
             Pressed::Key(key) => self.key_down(key),
+            Pressed::Mouse(button) => self.mouse_down(button),
             Pressed::Button(gamepad, button) => self.button_down(gamepad, button),
         }
         self.actions_held.insert(action.to_owned(), pressed);
@@ -732,6 +775,7 @@ impl<G: Game> Simulation<G> {
     pub fn action_up(&mut self, action: &str) {
         match self.actions_held.remove(action) {
             Some(Pressed::Key(key)) => self.key_up(key),
+            Some(Pressed::Mouse(button)) => self.mouse_up(button),
             Some(Pressed::Button(gamepad, button)) => self.button_up(gamepad, button),
             None => {}
         }
@@ -763,14 +807,21 @@ impl<G: Game> Simulation<G> {
         let controls = input.bindings(action);
         let key = controls.iter().find_map(|&control| match control {
             Control::Key(key) => Some(key),
-            Control::Button(_) => None,
+            Control::Mouse(_) | Control::Button(_) => None,
         });
         if let Some(key) = key {
             return Ok(Pressed::Key(key));
         }
+        let mouse = controls.iter().find_map(|&control| match control {
+            Control::Mouse(button) => Some(button),
+            Control::Key(_) | Control::Button(_) => None,
+        });
+        if let Some(button) = mouse {
+            return Ok(Pressed::Mouse(button));
+        }
         let button = controls.iter().find_map(|&control| match control {
-            Control::Key(_) => None,
             Control::Button(button) => Some(button),
+            Control::Key(_) | Control::Mouse(_) => None,
         });
         let button = button.ok_or_else(unbound)?;
         let gamepad = input.bound_gamepad(action);
@@ -836,11 +887,11 @@ impl<G: Game> Simulation<G> {
     /// [`Input::wheel`](crate::input::Input::wheel) has them: positive `y` turns it away from the
     /// player, as to scroll up, and positive `x` tilts it right. The game sees it unless the
     /// interface wants it, as when the cursor is over one of its windows, which scrolls what's
-    /// under the cursor.
+    /// under the cursor, and never does while the game has captured the mouse.
     pub fn scroll(&mut self, x: f32, y: f32) {
         self.wake();
         #[cfg(feature = "egui")]
-        {
+        if !self.headless.ctx.input.mouse_captured() {
             // egui has winit's way round: positive `x` is tilting left.
             self.gui_input.scroll_lines(egui::vec2(-x, y));
             let gui = &self.headless.ctx.gui;
@@ -1033,6 +1084,7 @@ impl Simulation<LuauGame> {
 #[derive(Clone, Copy, Debug)]
 enum Pressed {
     Key(Key),
+    Mouse(MouseButton),
     /// A button of a gamepad, by its number.
     Button(u32, GamepadButton),
 }

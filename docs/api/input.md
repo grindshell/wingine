@@ -56,11 +56,18 @@ end
 ### `input.bind`
 
 ```lua
-input.bind(action: string, controls: { Key | GamepadButton }, gamepad: number?)
+input.bind(action: string, controls: { Control }, gamepad: number?)
 ```
 
-Binds `action` to `controls`, [keys](#key-names) and [gamepad buttons](#button-names), replacing
-what it was bound to before. An action is held, pressed or released when any of its controls is.
+Binds `action` to `controls`, [keys](#key-names), [gamepad buttons](#button-names) and
+[mouse buttons](#mouse-buttons-as-controls), replacing what it was bound to before. An action is
+held, pressed or released when any of its controls is.
+
+A mouse button is named with `Mouse` before it, since `"Left"` and `"Right"` are the arrow keys:
+
+```lua
+input.bind("fire", { "LeftControl", "MouseLeft", "RightTrigger" })
+```
 
 Without `gamepad`, the buttons are any gamepad's. With it, only that gamepad's buttons count, as
 when each player has a gamepad of their own, while the keys are the same either way:
@@ -109,9 +116,9 @@ gamepad buttons don't repeat.
 input.strength(action: string): number
 ```
 
-Returns how far `action` is pushed, from 0 to 1: 1 while one of its keys is down, and otherwise as
-far as the furthest of its buttons. A trigger or a stick's direction can be anywhere between; other
-buttons are 0 or 1. An action with nothing bound is 0.
+Returns how far `action` is pushed, from 0 to 1: 1 while one of its keys or mouse buttons is down,
+and otherwise as far as the furthest of its gamepad buttons. A trigger or a stick's direction can
+be anywhere between; other buttons are 0 or 1. An action with nothing bound is 0.
 
 ### `input.axis`
 
@@ -125,7 +132,7 @@ Returns how far `positive` is pushed less how far `negative` is, from -1 to 1. B
 ### `input.bindings`
 
 ```lua
-input.bindings(action: string): ({ Key | GamepadButton }, number?)
+input.bindings(action: string): ({ Control }, number?)
 ```
 
 Returns what `action` is bound to, named as `input.bind` takes them, in the order they were
@@ -189,15 +196,29 @@ so no two actions share one.
 ### `input.pressed_controls`
 
 ```lua
-input.pressed_controls(): { Key | GamepadButton }
+input.pressed_controls(): { Control }
 ```
 
-Returns the keys and gamepad buttons pressed for this update, in the order they were pressed,
-named as [`input.bind`](#inputbind) takes them, so what it returns binds as it is. Gamepad buttons
-are any gamepad's, and include sticks' directions, such as `"LeftStickUp"`, pushed past halfway.
-A key the system [repeats](#inputkey_repeated) isn't pressed again. Mouse buttons aren't
-controls, so they aren't among them, and neither are keys the interface takes, as a focused text
-field does.
+Returns the keys, mouse buttons and gamepad buttons pressed for this update, in the order they
+were pressed, named as [`input.bind`](#inputbind) takes them, so what it returns binds as it is:
+a click of the left button is `"MouseLeft"`. Gamepad buttons are any gamepad's, and include
+sticks' directions, such as `"LeftStickUp"`, pushed past halfway. A key the system
+[repeats](#inputkey_repeated) isn't pressed again. What the interface takes isn't among them: the
+keys a focused text field does, or a click on one of its windows.
+
+### Mouse buttons as controls
+
+| Button | As [`input.mouse_held`](#inputmouse_held) names it | As a control |
+|---|---|---|
+| Left | `"left"` | `"MouseLeft"` |
+| Right | `"right"` | `"MouseRight"` |
+| Middle, the wheel pressed in | `"middle"` | `"MouseMiddle"` |
+| Back, on the side | `"back"` | `"MouseBack"` |
+| Forward, on the side | `"forward"` | `"MouseForward"` |
+
+Names can be written in any case, and none is also a key's name or a gamepad button's. An action
+bound to a mouse button is pressed by a click anywhere on the canvas, wherever the cursor is, but
+not by one the [interface](gui.md) takes.
 
 ## Keys
 
@@ -430,7 +451,7 @@ input.mouse_position(): (number?, number?)
 ```
 
 Returns the cursor's position in canvas pixels, or `nil, nil` when the cursor is outside the
-window. With a fixed [`resolution`](../project-structure.md#resolution), the position accounts for
+window, or the mouse is [captured](#capturing-the-mouse). With a fixed [`resolution`](../project-structure.md#resolution), the position accounts for
 the scaling, and over the black bars it's outside the canvas: below 0, or past the canvas's size.
 
 ```lua
@@ -503,3 +524,84 @@ local _, turned = input.wheel()
 -- Nearer for each notch turned away, and farther for each turned toward.
 zoom = math.clamp(zoom * 0.85 ^ turned, 0.4, 2)
 ```
+
+## Capturing the mouse
+
+A game that looks around with the mouse, as a first-person one does, has no use for a cursor,
+which stops at the screen's edge. It **captures** the mouse instead: the cursor is hidden and
+held in the window, and the game reads how far the mouse moved.
+
+```lua
+-- Radians the view turns for each unit the mouse moves.
+local SENSITIVITY = 0.0025
+
+input.bind("release", { "Escape" })
+
+function update(dt: number)
+    if input.pressed("release") then
+        input.set_mouse_captured(false)
+    elseif input.mouse_pressed("left") and not input.mouse_captured() then
+        input.set_mouse_captured(true)
+    end
+    local x, y = input.mouse_motion()
+    yaw -= x * SENSITIVITY
+    pitch = math.clamp(pitch - y * SENSITIVITY, -1.5, 1.5)
+end
+```
+
+### `input.set_mouse_captured`
+
+```lua
+input.set_mouse_captured(captured: boolean)
+```
+
+Captures the mouse, or with `false`, releases it. While it's captured:
+
+- The cursor is hidden and can't leave the window: locked in place where the system can, and
+  otherwise confined to the window.
+- [`input.mouse_motion`](#inputmouse_motion) returns how far the mouse moved.
+- There's no cursor, so [`input.mouse_position`](#inputmouse_position) returns `nil, nil`.
+- The mouse's buttons and wheel are the game's wherever they're pressed, and none reach the
+  [interface](gui.md).
+
+The window captures the mouse once the frame has drawn. A window that can't, as one without focus
+can't, logs a warning, and the mouse is released again.
+
+When the window loses focus, as when the player switches to another, the mouse is released, and
+stays released when they come back: the game captures it again when it wants, as on a click.
+Wingine binds no key to release it, so a game binds its own, as Escape above, or the player has
+only the system's ways out, such as Alt+Tab.
+
+A game [reloaded](../running-games.md#reloading-as-you-work) in its window starts with the mouse
+released, as it started the first time.
+
+On the web, a page may capture the mouse only just after the player clicks or presses a key, so
+call it in the `update` that sees the press, and the browser's own Escape releases the mouse
+without telling the game.
+
+In [tests](testing.md) and scripted runs, capturing the mouse is only noted.
+
+### `input.mouse_captured`
+
+```lua
+input.mouse_captured(): boolean
+```
+
+Returns whether the mouse is captured: as the game last set it, unless the window couldn't capture
+it or has lost focus since. A game shows "Click to play" while it isn't.
+
+### `input.mouse_motion`
+
+```lua
+input.mouse_motion(): (number, number)
+```
+
+Returns how far the mouse moved for this update while it's captured, as `x, y`: `x` is positive
+moved right, and `y` positive moved toward the player, as canvas pixels grow. Moves between two
+updates add up, and each is seen by one update, as presses are. It's `0, 0` while the mouse isn't
+captured.
+
+The numbers are in the mouse's own units, not canvas pixels, and aren't scaled with the canvas:
+what the mouse reports, before the system speeds up the cursor, on Windows and Linux, and how far
+the cursor would have moved on macOS and the web. Mice differ in how much they report for the
+same move, so multiply by a sensitivity, and let the player set it.

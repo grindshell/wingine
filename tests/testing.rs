@@ -203,6 +203,8 @@ fn waits_and_input_reach_the_game() {
                         seen.at = { input.mouse_position() }
                     end
                     if input.pressed('fire') then seen.fires += 1 end
+                    if input.key_pressed('C') then input.set_mouse_captured(true) end
+                    seen.moved = { input.mouse_motion() }
                     seen.lean = input.button_strength('LeftStickRight')
                     seen.text ..= input.text()
                 end
@@ -243,6 +245,17 @@ fn waits_and_input_reach_the_game() {
                     sim.click(4, 6, 'right')
                     assert_equal(seen.clicks, 1)
                     assert_equal(seen.at, { 4, 6 })
+                    -- The mouse's moves reach a game that has captured it, and no other.
+                    sim.move_mouse_by(7, 7)
+                    sim.step()
+                    assert_equal(seen.moved, { 0, 0 })
+                    sim.tap('C')
+                    sim.move_mouse_by(12, -3)
+                    sim.move_mouse_by(0.5, 0)
+                    sim.step()
+                    assert_equal(seen.moved, { 12.5, -3 })
+                    sim.step()
+                    assert_equal(seen.moved, { 0, 0 })
                 end)
                 test('gamepads', function()
                     local pad = sim.connect_gamepad()

@@ -29,9 +29,9 @@ const PIXELS_PER_NOTCH: f64 = 40.0;
 /// Keyboard, mouse and gamepad state for the current frame, available from
 /// [`Context::input`](crate::Context::input).
 ///
-/// Games usually bind named actions (such as `"confirm"`) to keys and gamepad buttons with
-/// [`Input::bind`] and query those, so controls can be rebound without touching game code. Keys,
-/// mouse buttons and gamepads can also be queried directly.
+/// Games usually bind named actions (such as `"confirm"`) to keys, mouse buttons and gamepad
+/// buttons with [`Input::bind`] and query those, so controls can be rebound without touching game
+/// code. Keys, mouse buttons and gamepads can also be queried directly.
 ///
 /// A key or button is *pressed* or *released* on the frame its state changed, and *held* while it
 /// is down. One tapped between two frames counts as both pressed and released on the next frame,
@@ -48,19 +48,29 @@ const PIXELS_PER_NOTCH: f64 = 40.0;
 ///
 /// A screen that lets players choose their own controls asks [`Input::pressed_controls`] what
 /// they pressed, and binds it, showing what an action is bound to from [`Input::bindings`].
+///
+/// A game that turns a view with the mouse, as a first-person one does, captures it with
+/// [`Input::set_mouse_captured`], which hides the cursor and holds it in the window, and reads
+/// how far the mouse moved from [`Input::mouse_motion`].
 #[derive(Debug, Default)]
 pub struct Input {
     keys: Buttons<Key>,
     mouse_buttons: Buttons<MouseButton>,
     mouse_position: Option<[f32; 2]>,
+    /// Whether the game has captured the mouse, or has asked to: the window captures it once the
+    /// frame is done, and releases it here if it can't.
+    mouse_captured: bool,
+    /// How far the mouse moved since the last update while it was captured, in its own units:
+    /// `x` to the right, `y` toward the player.
+    mouse_motion: [f32; 2],
     /// How far the mouse wheel turned since the last update, in notches: `x` to the right, `y`
     /// away from the player.
     wheel: [f32; 2],
     /// Every gamepad connected since the game started, by number: gamepad 1 is first. Those
     /// disconnected keep their number, for when they come back.
     gamepads: Vec<Gamepad>,
-    /// The keys and gamepad buttons pressed since the last update, in the order they were, each
-    /// once.
+    /// The keys, mouse buttons and gamepad buttons pressed since the last update, in the order
+    /// they were, each once.
     pressed_controls: Vec<Control>,
     actions: HashMap<String, Binding>,
     /// What was typed since the last update.
@@ -74,7 +84,7 @@ pub struct Input {
 /// What an action is bound to.
 #[derive(Debug)]
 struct Binding {
-    /// Its keys and gamepad buttons, in the order they were bound.
+    /// Its keys, mouse buttons and gamepad buttons, in the order they were bound.
     controls: Vec<Control>,
     /// The gamepad whose buttons count, or `None` for any gamepad's.
     gamepad: Option<u32>,
@@ -84,14 +94,21 @@ impl Binding {
     fn keys(&self) -> impl Iterator<Item = Key> + '_ {
         self.controls.iter().filter_map(|&control| match control {
             Control::Key(key) => Some(key),
-            Control::Button(_) => None,
+            Control::Mouse(_) | Control::Button(_) => None,
+        })
+    }
+
+    fn mouse_buttons(&self) -> impl Iterator<Item = MouseButton> + '_ {
+        self.controls.iter().filter_map(|&control| match control {
+            Control::Mouse(button) => Some(button),
+            Control::Key(_) | Control::Button(_) => None,
         })
     }
 
     fn buttons(&self) -> impl Iterator<Item = GamepadButton> + '_ {
         self.controls.iter().filter_map(|&control| match control {
-            Control::Key(_) => None,
             Control::Button(button) => Some(button),
+            Control::Key(_) | Control::Mouse(_) => None,
         })
     }
 }
@@ -101,8 +118,9 @@ impl Input {
         Self::default()
     }
 
-    /// Binds `action` to `controls`, keys and gamepad buttons, replacing what it was bound to
-    /// before. Its buttons are any gamepad's: [`Input::bind_gamepad`] binds one gamepad's.
+    /// Binds `action` to `controls`, keys, mouse buttons and gamepad buttons, replacing what it
+    /// was bound to before. Its gamepad buttons are any gamepad's: [`Input::bind_gamepad`] binds
+    /// one gamepad's.
     pub fn bind(
         &mut self,
         action: impl Into<String>,
@@ -139,8 +157,9 @@ impl Input {
         self.actions.insert(action, binding);
     }
 
-    /// What `action` is bound to: its keys and gamepad buttons, in the order they were bound, so
-    /// the first is the one to show the player. Nothing, for an action that isn't bound.
+    /// What `action` is bound to: its keys, mouse buttons and gamepad buttons, in the order they
+    /// were bound, so the first is the one to show the player. Nothing, for an action that isn't
+    /// bound.
     pub fn bindings(&self, action: &str) -> &[Control] {
         self.actions
             .get(action)
@@ -153,11 +172,14 @@ impl Input {
         self.actions.get(action)?.gamepad
     }
 
-    /// Forgets every action's binding and lets go of any input method, as for a game starting
-    /// again in the same window. What's held stays held.
+    /// Forgets every action's binding and lets go of any input method and of the mouse, if it's
+    /// captured, as for a game starting again in the same window, which captures the mouse
+    /// again if it wants it, and leaves the player their cursor if it fails to start. What's
+    /// held stays held.
     pub(crate) fn clear_bindings(&mut self) {
         self.actions.clear();
         self.set_input_method(None);
+        self.set_mouse_captured(false);
     }
 
     /// Whether `key` is down.
@@ -185,23 +207,33 @@ impl Input {
 
     /// Whether anything bound to `action` is down. Unbound actions are never held.
     pub fn held(&self, action: &str) -> bool {
-        self.any_bound(action, Self::key_held, Gamepad::held)
+        self.any_bound(action, Self::key_held, Self::mouse_held, Gamepad::held)
     }
 
     /// Whether anything bound to `action` went down this frame.
     pub fn pressed(&self, action: &str) -> bool {
-        self.any_bound(action, Self::key_pressed, Gamepad::pressed)
+        self.any_bound(
+            action,
+            Self::key_pressed,
+            Self::mouse_pressed,
+            Gamepad::pressed,
+        )
     }
 
     /// Whether anything bound to `action` went up this frame.
     pub fn released(&self, action: &str) -> bool {
-        self.any_bound(action, Self::key_released, Gamepad::released)
+        self.any_bound(
+            action,
+            Self::key_released,
+            Self::mouse_released,
+            Gamepad::released,
+        )
     }
 
     /// Whether a key bound to `action` repeated this frame, as [`Input::key_repeated`] tells.
-    /// Gamepad buttons don't repeat, since the system repeats only keys.
+    /// Mouse and gamepad buttons don't repeat, since the system repeats only keys.
     pub fn repeated(&self, action: &str) -> bool {
-        self.any_bound(action, Self::key_repeated, |_, _| false)
+        self.any_bound(action, Self::key_repeated, |_, _| false, |_, _| false)
     }
 
     /// What was typed for this update, in order: the characters the player's keyboard layout
@@ -244,14 +276,16 @@ impl Input {
         self.input_method
     }
 
-    /// How far `action` is pushed, from 0 to 1: 1 while one of its keys is held, and otherwise
-    /// the furthest of its buttons is pushed, which for a trigger or a stick's direction can be
-    /// anywhere between. Unbound actions are never pushed.
+    /// How far `action` is pushed, from 0 to 1: 1 while one of its keys or mouse buttons is held,
+    /// and otherwise the furthest of its gamepad buttons is pushed, which for a trigger or a
+    /// stick's direction can be anywhere between. Unbound actions are never pushed.
     pub fn strength(&self, action: &str) -> f32 {
         let Some(binding) = self.actions.get(action) else {
             return 0.0;
         };
-        if binding.keys().any(|key| self.key_held(key)) {
+        if binding.keys().any(|key| self.key_held(key))
+            || binding.mouse_buttons().any(|b| self.mouse_held(b))
+        {
             return 1.0;
         }
         self.matching_gamepads(binding.gamepad)
@@ -269,9 +303,53 @@ impl Input {
     /// The cursor's position in canvas pixels, or `None` while it is outside the window. With a
     /// fixed [`Resolution`](crate::graphics::Resolution), positions over the black bars fall
     /// outside the canvas. Use [`Camera::canvas_to_world`](crate::graphics::Camera::canvas_to_world)
-    /// to find the world position under the cursor.
+    /// to find the world position under the cursor. While the mouse is
+    /// [captured](Input::set_mouse_captured) there's no cursor, so it's `None`.
     pub fn mouse_position(&self) -> Option<[f32; 2]> {
-        self.mouse_position
+        self.mouse_position.filter(|_| !self.mouse_captured)
+    }
+
+    /// Captures the mouse, or with `false`, releases it. While it's captured, the cursor is
+    /// hidden and held in the window, so the mouse moves without reaching an edge, and
+    /// [`Input::mouse_motion`] tells how far it moved, as a game turning a first-person view by
+    /// it wants. There being no cursor, [`Input::mouse_position`] is `None`, and the mouse's
+    /// buttons and wheel are the game's wherever they're pressed, not the interface's.
+    ///
+    /// The window captures the mouse once this frame is done: it locks the cursor where the
+    /// system can, and otherwise confines it to the window. One that can't, as a window without
+    /// focus can't, logs a warning, and the mouse is released again. When the window loses focus
+    /// the mouse is released, and stays released, so a game captures it again when the player
+    /// comes back to it, as on a click. The engine binds no key to release it: games bind their
+    /// own, such as Escape.
+    ///
+    /// On the web, a page may capture the mouse only just after the player clicks or presses a
+    /// key, and the browser's Escape releases it without telling the game.
+    ///
+    /// A [`Simulation`](crate::headless::Simulation) only notes it.
+    pub fn set_mouse_captured(&mut self, captured: bool) {
+        self.mouse_captured = captured;
+        if !captured {
+            self.mouse_motion = [0.0, 0.0];
+        }
+    }
+
+    /// Whether the mouse is captured: as the game last [set it](Input::set_mouse_captured),
+    /// unless the window couldn't capture it or has lost focus since.
+    pub fn mouse_captured(&self) -> bool {
+        self.mouse_captured
+    }
+
+    /// How far the mouse moved for this update while it's [captured](Input::set_mouse_captured),
+    /// as `[x, y]`: `x` is positive moved right, and `y` positive moved toward the player, as
+    /// canvas pixels grow. Moves between two updates add up, and each is seen by one update.
+    /// `[0.0, 0.0]` while the mouse isn't captured.
+    ///
+    /// It's in the mouse's own units, not canvas pixels: what the mouse reports before the system
+    /// speeds up the cursor, where the system tells (Windows and Linux), and otherwise how far the
+    /// cursor would have moved (macOS and the web). Mice differ in how much they report for the
+    /// same move, so a game multiplies it by a sensitivity the player can set.
+    pub fn mouse_motion(&self) -> [f32; 2] {
+        self.mouse_motion
     }
 
     /// Whether `button` is down.
@@ -320,10 +398,11 @@ impl Input {
         self.wheel
     }
 
-    /// The keys and gamepad buttons pressed for this update, in the order they were pressed, as
-    /// a screen that lets players choose their controls asks which they pressed, then binds it.
-    /// Gamepad buttons are any gamepad's, sticks' directions among them. A key the system
-    /// repeats isn't pressed again, and the keys the interface takes aren't the game's.
+    /// The keys, mouse buttons and gamepad buttons pressed for this update, in the order they
+    /// were pressed, as a screen that lets players choose their controls asks which they pressed,
+    /// then binds it. Gamepad buttons are any gamepad's, sticks' directions among them. A key the
+    /// system repeats isn't pressed again, and the keys and clicks the interface takes aren't the
+    /// game's.
     pub fn pressed_controls(&self) -> &[Control] {
         &self.pressed_controls
     }
@@ -332,10 +411,12 @@ impl Input {
         &self,
         action: &str,
         key: impl Fn(&Self, Key) -> bool,
+        mouse: impl Fn(&Self, MouseButton) -> bool,
         button: impl Fn(&Gamepad, GamepadButton) -> bool,
     ) -> bool {
         self.actions.get(action).is_some_and(|binding| {
             binding.keys().any(|k| key(self, k))
+                || binding.mouse_buttons().any(|b| mouse(self, b))
                 || self
                     .matching_gamepads(binding.gamepad)
                     .any(|gamepad| binding.buttons().any(|b| button(gamepad, b)))
@@ -382,7 +463,9 @@ impl Input {
     }
 
     pub(crate) fn mouse_down(&mut self, button: MouseButton) {
-        self.mouse_buttons.down(button);
+        if self.mouse_buttons.down(button) {
+            Self::note_pressed(&mut self.pressed_controls, Control::Mouse(button));
+        }
     }
 
     pub(crate) fn mouse_up(&mut self, button: MouseButton) {
@@ -391,6 +474,15 @@ impl Input {
 
     pub(crate) fn set_mouse_position(&mut self, position: Option<[f32; 2]>) {
         self.mouse_position = position;
+    }
+
+    /// Moves the mouse by `x`, `y`, as [`Input::mouse_motion`] has them, which counts only while
+    /// the mouse is captured.
+    pub(crate) fn move_mouse_by(&mut self, [x, y]: [f32; 2]) {
+        if self.mouse_captured {
+            self.mouse_motion[0] += x;
+            self.mouse_motion[1] += y;
+        }
     }
 
     /// Turns the mouse wheel by `x`, `y` notches, as [`Input::wheel`] has them.
@@ -460,9 +552,10 @@ impl Input {
         gamepad_mut(&mut self.gamepads, number)
     }
 
-    /// Releases every held key and button, for when the window loses focus and stops receiving
-    /// input events.
+    /// Releases every held key and button, and the mouse if it's captured, for when the window
+    /// loses focus and stops receiving input events.
     pub(crate) fn release_all(&mut self) {
+        self.set_mouse_captured(false);
         self.keys.release_all();
         self.mouse_buttons.release_all();
         for gamepad in &mut self.gamepads {
@@ -470,11 +563,12 @@ impl Input {
         }
     }
 
-    /// Clears this frame's presses, releases, text and turns of the wheel. Call after the game has
-    /// updated.
+    /// Clears this frame's presses, releases, text, turns of the wheel and moves of the mouse.
+    /// Call after the game has updated.
     pub(crate) fn end_frame(&mut self) {
         self.text.clear();
         self.wheel = [0.0, 0.0];
+        self.mouse_motion = [0.0, 0.0];
         self.pressed_controls.clear();
         self.keys.end_frame();
         self.mouse_buttons.end_frame();
@@ -684,6 +778,21 @@ pub enum MouseButton {
 }
 
 impl MouseButton {
+    /// Every button, with its name and its name as a [`Control`].
+    pub(crate) const ALL: [(&'static str, &'static str, Self); 5] = [
+        ("Left", "MouseLeft", Self::Left),
+        ("Right", "MouseRight", Self::Right),
+        ("Middle", "MouseMiddle", Self::Middle),
+        ("Back", "MouseBack", Self::Back),
+        ("Forward", "MouseForward", Self::Forward),
+    ];
+
+    /// The button's name as a [`Control`], such as `"MouseLeft"`: with `Mouse` before it, since
+    /// `Left` and `Right` are the arrow keys.
+    pub fn control_name(self) -> &'static str {
+        Self::ALL[self as usize].1
+    }
+
     pub(crate) fn from_winit(button: winit::event::MouseButton) -> Option<Self> {
         use winit::event::MouseButton as Winit;
         match button {
@@ -695,6 +804,19 @@ impl MouseButton {
             Winit::Other(_) => None,
         }
     }
+
+    /// The button as winit has it, for telling egui of it.
+    #[cfg(feature = "egui")]
+    pub(crate) fn to_winit(self) -> winit::event::MouseButton {
+        use winit::event::MouseButton as Winit;
+        match self {
+            Self::Left => Winit::Left,
+            Self::Right => Winit::Right,
+            Self::Middle => Winit::Middle,
+            Self::Back => Winit::Back,
+            Self::Forward => Winit::Forward,
+        }
+    }
 }
 
 /// Parses a button name such as `"left"`, ignoring case.
@@ -702,17 +824,11 @@ impl FromStr for MouseButton {
     type Err = ParseInputError;
 
     fn from_str(name: &str) -> Result<Self, Self::Err> {
-        [
-            ("Left", Self::Left),
-            ("Right", Self::Right),
-            ("Middle", Self::Middle),
-            ("Back", Self::Back),
-            ("Forward", Self::Forward),
-        ]
-        .into_iter()
-        .find(|(candidate, _)| name.eq_ignore_ascii_case(candidate))
-        .map(|(_, button)| button)
-        .ok_or_else(|| ParseInputError(format!("unknown mouse button `{name}`")))
+        Self::ALL
+            .into_iter()
+            .find(|(candidate, _, _)| name.eq_ignore_ascii_case(candidate))
+            .map(|(_, _, button)| button)
+            .ok_or_else(|| ParseInputError(format!("unknown mouse button `{name}`")))
     }
 }
 
@@ -877,18 +993,22 @@ pub(crate) enum Axis {
     Y,
 }
 
-/// What an action can be bound to: a key, or a gamepad's button.
+/// What an action can be bound to: a key, a mouse button, or a gamepad's button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Control {
     Key(Key),
+    Mouse(MouseButton),
     Button(GamepadButton),
 }
 
 impl Control {
-    /// The key's name or the gamepad button's, which [parsing](Control::from_str) reads back.
+    /// The key's name, the gamepad button's, or the mouse button's
+    /// [as a control](MouseButton::control_name), such as `"MouseLeft"`, which
+    /// [parsing](Control::from_str) reads back.
     pub fn name(self) -> &'static str {
         match self {
             Self::Key(key) => key.name(),
+            Self::Mouse(button) => button.control_name(),
             Self::Button(button) => button.name(),
         }
     }
@@ -900,21 +1020,41 @@ impl From<Key> for Control {
     }
 }
 
+impl From<MouseButton> for Control {
+    fn from(button: MouseButton) -> Self {
+        Self::Mouse(button)
+    }
+}
+
 impl From<GamepadButton> for Control {
     fn from(button: GamepadButton) -> Self {
         Self::Button(button)
     }
 }
 
-/// Parses a key's name or a gamepad button's, ignoring case. No name is both.
+/// Parses a key's name, a gamepad button's, or a mouse button's
+/// [as a control](MouseButton::control_name), such as `"MouseLeft"`, ignoring case. No name is
+/// two of them: `"Left"` is the arrow key.
 impl FromStr for Control {
     type Err = ParseInputError;
 
     fn from_str(name: &str) -> Result<Self, Self::Err> {
+        let mouse = || {
+            MouseButton::ALL
+                .into_iter()
+                .find(|(_, candidate, _)| name.eq_ignore_ascii_case(candidate))
+                .map(|(_, _, button)| Self::Mouse(button))
+        };
         name.parse()
             .map(Self::Key)
             .or_else(|_| name.parse().map(Self::Button))
-            .map_err(|_| ParseInputError(format!("unknown key or gamepad button `{name}`")))
+            .ok()
+            .or_else(mouse)
+            .ok_or_else(|| {
+                ParseInputError(format!(
+                    "unknown key, mouse button or gamepad button `{name}`"
+                ))
+            })
     }
 }
 
@@ -1370,19 +1510,35 @@ mod tests {
             "A is a key, not the Xbox button"
         );
         assert_eq!(
+            "mouseleft".parse(),
+            Ok(Control::Mouse(MouseButton::Left)),
+            "a mouse button is a control by its name after `Mouse`"
+        );
+        assert_eq!(
+            "Left".parse::<Control>(),
+            Ok(Control::Key(Key::Left)),
+            "Left is the arrow key, not the mouse button"
+        );
+        assert!("Middle".parse::<Control>().is_err());
+        assert_eq!(
             "Shift".parse::<Control>().unwrap_err().to_string(),
-            "unknown key or gamepad button `Shift`"
+            "unknown key, mouse button or gamepad button `Shift`"
         );
         assert_eq!("Right".parse(), Ok(Stick::Right));
     }
 
     #[test]
-    fn no_name_is_both_a_key_and_a_gamepad_button() {
+    fn no_name_is_two_kinds_of_control() {
         for name in Key::NAMES {
             assert!(name.parse::<GamepadButton>().is_err(), "{name}");
         }
         for (index, (name, button)) in GamepadButton::ALL.into_iter().enumerate() {
             assert!(name.parse::<Key>().is_err(), "{name}");
+            assert_eq!(button as usize, index, "`ALL` is in order");
+        }
+        for (index, (_, name, button)) in MouseButton::ALL.into_iter().enumerate() {
+            assert!(name.parse::<Key>().is_err(), "{name}");
+            assert!(name.parse::<GamepadButton>().is_err(), "{name}");
             assert_eq!(button as usize, index, "`ALL` is in order");
         }
     }
@@ -1398,6 +1554,88 @@ mod tests {
             assert_eq!(button.name(), name);
             assert_eq!(name.parse(), Ok(Control::Button(button)));
         }
+        for (name, control_name, button) in MouseButton::ALL {
+            assert_eq!(name.parse(), Ok(button));
+            assert_eq!(Control::Mouse(button).name(), control_name);
+            assert_eq!(control_name.parse(), Ok(Control::Mouse(button)));
+        }
+    }
+
+    #[test]
+    fn actions_follow_bound_mouse_buttons() {
+        let mut input = Input::new();
+        input.bind(
+            "fire",
+            [Control::Key(Key::LeftControl), MouseButton::Left.into()],
+        );
+        input.mouse_down(MouseButton::Right);
+        assert!(!input.held("fire"), "only the left button is bound");
+        input.mouse_down(MouseButton::Left);
+        assert!(input.pressed("fire") && input.held("fire"));
+        assert_eq!(input.strength("fire"), 1.0);
+        assert!(!input.repeated("fire"));
+
+        input.end_frame();
+        assert!(!input.pressed("fire") && input.held("fire"));
+        input.mouse_up(MouseButton::Left);
+        assert!(input.released("fire") && !input.held("fire"));
+        assert_eq!(input.strength("fire"), 0.0);
+    }
+
+    #[test]
+    fn mouse_motion_adds_up_while_captured_until_an_update_has_seen_it() {
+        let mut input = Input::new();
+        input.move_mouse_by([5.0, 5.0]);
+        assert_eq!(input.mouse_motion(), [0.0, 0.0], "it isn't captured");
+
+        input.set_mouse_captured(true);
+        assert!(input.mouse_captured());
+        input.move_mouse_by([3.0, -1.0]);
+        input.move_mouse_by([0.5, 2.0]);
+        assert_eq!(input.mouse_motion(), [3.5, 1.0]);
+        input.end_frame();
+        assert_eq!(input.mouse_motion(), [0.0, 0.0]);
+        assert!(input.mouse_captured(), "it stays captured");
+
+        input.move_mouse_by([1.0, 1.0]);
+        input.set_mouse_captured(false);
+        assert_eq!(
+            input.mouse_motion(),
+            [0.0, 0.0],
+            "released, it hasn't moved"
+        );
+    }
+
+    #[test]
+    fn a_captured_mouse_has_no_position() {
+        let mut input = Input::new();
+        input.set_mouse_position(Some([4.0, 8.0]));
+        input.set_mouse_captured(true);
+        assert_eq!(input.mouse_position(), None);
+        input.set_mouse_captured(false);
+        assert_eq!(input.mouse_position(), Some([4.0, 8.0]));
+    }
+
+    #[test]
+    fn a_game_starting_again_releases_a_captured_mouse() {
+        let mut input = Input::new();
+        input.bind("fire", [MouseButton::Left]);
+        input.set_mouse_captured(true);
+        input.clear_bindings();
+        assert!(!input.mouse_captured());
+        assert!(input.bindings("fire").is_empty());
+    }
+
+    #[test]
+    fn losing_focus_releases_a_captured_mouse() {
+        let mut input = Input::new();
+        input.set_mouse_captured(true);
+        input.move_mouse_by([2.0, 0.0]);
+        input.release_all();
+        assert!(!input.mouse_captured());
+        assert_eq!(input.mouse_motion(), [0.0, 0.0]);
+        input.move_mouse_by([2.0, 0.0]);
+        assert_eq!(input.mouse_motion(), [0.0, 0.0], "it stays released");
     }
 
     #[test]
@@ -1435,7 +1673,6 @@ mod tests {
         input.key_up(Key::K);
         input.key_down(Key::K);
         input.key_repeat(Key::K);
-        // Not a control.
         input.mouse_down(MouseButton::Left);
         assert_eq!(
             input.pressed_controls(),
@@ -1443,6 +1680,7 @@ mod tests {
                 Control::Key(Key::K),
                 Control::Button(GamepadButton::South),
                 Control::Button(GamepadButton::LeftStickLeft),
+                Control::Mouse(MouseButton::Left),
             ]
         );
 
@@ -1450,6 +1688,7 @@ mod tests {
         input.end_frame();
         input.key_repeat(Key::K);
         input.set_gamepad_button(1, GamepadButton::South, 0.8);
+        input.mouse_down(MouseButton::Left);
         assert!(input.pressed_controls().is_empty());
 
         // A repeat of a key not held presses it, as when the window gains focus.

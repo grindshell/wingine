@@ -95,6 +95,33 @@ fn clicks_away_from_the_interface_reach_the_game() {
 }
 
 #[test]
+fn a_captured_mouse_is_the_games_alone_until_it_is_released() {
+    let mut simulation = simulation(config());
+    let button = simulation.gui_rect("Press me").unwrap();
+    let [x, y] = [button.x + button.w / 2.0, button.y + button.h / 2.0];
+    simulation.move_mouse(x, y);
+    simulation.step();
+
+    // Captured over the button, with no cursor to press it with: clicks and the wheel are the
+    // game's.
+    simulation.context().input_mut().set_mouse_captured(true);
+    simulation.step();
+    simulation.tap_mouse(MouseButton::Left);
+    simulation.scroll(0.0, 1.0);
+    simulation.run_frames(2);
+    let panel = simulation.game();
+    assert_eq!((panel.game_clicks, panel.button_clicks), (1, 0));
+    assert_eq!(panel.turned, [0.0, 1.0]);
+
+    // Released, the cursor presses the button again once it moves.
+    simulation.context().input_mut().set_mouse_captured(false);
+    simulation.step();
+    simulation.click_gui("Press me");
+    let panel = simulation.game();
+    assert_eq!((panel.game_clicks, panel.button_clicks), (1, 1));
+}
+
+#[test]
 fn the_wheel_turns_for_the_game_away_from_the_interface_only() {
     let mut simulation = simulation(config());
     let button = simulation.gui_rect("Press me").unwrap();

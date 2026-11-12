@@ -139,15 +139,16 @@ sim.hold_action(action: string, seconds: number)
 ```
 
 Press, release, tap and hold what the game bound `action` to with
-[`input.bind`](input.md#inputbind): its first key, or if it has none, its first gamepad button,
-on the first connected gamepad (or the one it's bound to). So a test presses what the game binds,
-wherever the game binds it. An action bound to nothing, or only to the buttons of gamepads that
-aren't connected, is an error.
+[`input.bind`](input.md#inputbind): its first key, or if it has none, its first mouse button, or
+if it has none of those either, its first gamepad button, on the first connected gamepad (or the
+one it's bound to). So a test presses what the game binds, wherever the game binds it. An action
+bound to nothing, or only to the buttons of gamepads that aren't connected, is an error.
 
 ### The mouse
 
 ```lua
 sim.move_mouse(x: number, y: number)
+sim.move_mouse_by(x: number, y: number)
 sim.press_mouse(button: MouseButton?)
 sim.release_mouse(button: MouseButton?)
 sim.click(x: number, y: number, button: MouseButton?)
@@ -158,6 +159,25 @@ Moves the cursor to `x`, `y` in canvas pixels, and holds a button down or lets i
 `sim.click` moves the cursor, presses the button, runs a frame, and lets it go. `sim.scroll`
 turns the mouse wheel where the cursor is, `y` notches away from the player and `x` tilted right,
 as [`input.wheel`](input.md#inputwheel) has them, for the next update.
+
+`sim.move_mouse_by` moves the mouse itself rather than the cursor, `x` right and `y` toward the
+player, in the units of [`input.mouse_motion`](input.md#inputmouse_motion), which returns it in the
+next update. As in a window, the game sees it only while it has
+[captured the mouse](input.md#capturing-the-mouse), which a test's game does as it would in a
+window, though there's no cursor to hide; otherwise it does nothing. So a test of a game that
+looks around with the mouse does what captures it, then moves it:
+
+```lua
+test("the mouse turns the view", function()
+    sim.click(160, 90)
+    sim.move_mouse_by(200, 0)
+    sim.step()
+    assert(game.yaw < 0, "turned right")
+end)
+```
+
+While the mouse is captured, `sim.move_mouse` moves a cursor the game doesn't see until it
+releases the mouse.
 
 ### Gamepads
 

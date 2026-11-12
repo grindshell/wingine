@@ -134,6 +134,12 @@ A gamepad button's name, such as `"South"`, `"Start"` or `"DPadUp"`, or a stick'
 as `"LeftStickLeft"`, in any case. Buttons are named for where they are on the gamepad.
 [Button names](input.md#button-names) lists them.
 
+### `Control`
+
+What an action is bound to: a `Key`, a `GamepadButton`, or a mouse button named with `Mouse`
+before it, such as `"MouseLeft"`, in any case.
+[Mouse buttons as controls](input.md#mouse-buttons-as-controls) lists those.
+
 ### `Blend`
 
 How what's drawn mixes with what's under it: one of `"normal"`, `"add"`, `"multiply"` and
