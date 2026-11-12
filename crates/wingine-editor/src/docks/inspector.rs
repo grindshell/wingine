@@ -14,7 +14,7 @@ use std::{
 
 use wingine::{
     Context,
-    graphics::{Align, Blend, Camera3d, Color, Projection},
+    graphics::{Align, Blend, Camera3d, Color, Fog, Projection},
     gui::egui,
     particles::ParticleSettings,
     scene::{
@@ -677,6 +677,34 @@ impl Inspector {
                     over.label(ui, "ambient", &["lighting"]);
                     color(ui, &mut lighting.ambient);
                     ui.end_row();
+                });
+                ui.strong("Fog");
+                grid(ui, "fog", |ui| {
+                    over.label(ui, "fog", &["fog"]);
+                    let mut foggy = view.fog.is_some();
+                    let response = ui.checkbox(&mut foggy, "");
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::Role::CheckBox, true, foggy, "fog")
+                    });
+                    if response.changed() {
+                        // As far as shows a room, to begin with.
+                        view.fog = foggy.then(|| Fog::new(Color::WHITE, 0.0, 50.0));
+                    }
+                    ui.end_row();
+                    if let Some(fog) = &mut view.fog {
+                        over.label(ui, "fog's color", &["fog"]);
+                        color(ui, &mut fog.color);
+                        ui.end_row();
+                        over.label(ui, "fog's near", &["fog"]);
+                        number(ui, "fog's near", &mut fog.near, 0.1);
+                        ui.end_row();
+                        over.label(ui, "fog's far", &["fog"]);
+                        number(ui, "fog's far", &mut fog.far, 0.1);
+                        ui.end_row();
+                        // It begins at the camera or past it, and is whole farther off.
+                        fog.near = fog.near.max(0.0);
+                        fog.far = fog.far.max(fog.near + 0.01);
+                    }
                 });
             }),
             KindDef::Mesh(mesh) => section(ui, &title, |ui| {

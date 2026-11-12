@@ -8,7 +8,8 @@ systems, and don't build more 3D features unless asked.
 ## Scope
 
 Wingine has what its examples need: tilemaps and batched sprites in blend modes, meshes and glTF
-models in 3D views picked by boxes and lit by a sun and by lights at places that cast shadows,
+models in 3D views picked by boxes, lit by a sun and by lights at places that cast shadows, and
+fading into fog,
 sprite animation, particles, a camera, keyboard, mouse and gamepad input bound to
 actions, grid movement, physics with Rapier (bodies and characters, in 2D and in 3D views),
 text in the built-in font, bitmap fonts and TrueType fonts, audio, saves, Luau scripting with
@@ -128,6 +129,14 @@ own right.
   shading itself. Whether a mesh casts is each draw's (`MeshDraw::casts_shadow`, part of its
   kind, as `Canvas3d::set_casts_shadow` had it when it was drawn); billboards never do. In
   scenes it's a mesh or model node's `casts_shadow`, and a light node's `shadows`.
+- Fog (`Fog`, a `View3d`'s `fog`): `mesh.wgsl` mixes what a pixel shows, lit and shaded, with the
+  fog's color by its distance from the camera, in a straight line from `near` to `far`, in linear
+  light; from where the camera is (`View3d::distance`), or ahead of an orthographic one. A view
+  draws no background, so a game clears the canvas to the fog's color itself. `lights_of` leaves
+  out a light all of whose reach is `far` or more away, uncounted, so `shadows_of` gives it no
+  maps. Fog that can't be (`Fog::problem`) is none. In scenes it's a view's `fog`
+  (`View3dDef::fog`), written only if it has one. Native libraries can't give a view fog: the
+  ABI's view is unchanged.
 - `src/graphics/font.rs`: `Font` and `TextLayout`. Built-in and bitmap fonts have their glyphs in
   one texture (`Metrics`; bitmap glyphs cut from a font file's PNG, as wide as their ink).
   TrueType and OpenType fonts (`Face`, `FaceSize`) rasterize a glyph with `ab_glyph` the first time

@@ -19,8 +19,8 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **Timing**: an update a frame, or at a fixed rate so games play the same at any frame rate.
   Frame stats and a headless benchmark show where the time goes.
 - **3D views** among the 2D: meshes, glTF models and billboarded sprites, lit by a sun and by
-  lights at places that can cast shadows, for 2.5D games, rendered at the canvas's resolution, and
-  picked with the mouse.
+  lights at places that can cast shadows, fading into fog with distance, for 2.5D games, rendered
+  at the canvas's resolution, and picked with the mouse.
 - **Tilemaps** with layers, and a **camera** that follows the player.
 - **Particles**: emitters of sprites or squares that fly, turn, change color and size as they
   age, and leave trails, in scenes or made by scripts, the same to the bit on every platform.
@@ -195,7 +195,7 @@ Walk with the arrow keys, and point at a prop to name it.
 
 [`examples/course`](examples/course) is a course to run around in 3D, collecting coins, built
 from Kenney's [Prototype Kit](https://kenney.nl/assets/prototype-kit) and made solid by a
-[physics world](docs/api/physics.md#in-3d).
+[physics world](docs/api/physics.md#in-3d). Its far side fades into the sky, by the view's fog.
 
 ![The figurine jumping toward the block and its coin, its shadow on the ground below](docs/screenshots/course.png)
 

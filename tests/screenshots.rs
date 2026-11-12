@@ -15,7 +15,7 @@ use image::{RgbaImage, imageops};
 use wingine::{
     Context,
     graphics::{
-        Align, Blend, Camera, Camera3d, Canvas, Color, Font, Light, Lighting, Mesh, MeshData,
+        Align, Blend, Camera, Camera3d, Canvas, Color, Fog, Font, Light, Lighting, Mesh, MeshData,
         MeshVertex, Model, Resolution, Scaling, SpriteSheet, Texture, View3d,
     },
     headless::{Comparison, Headless, Image},
@@ -1927,6 +1927,83 @@ fn lights_on_billboards() {
     // wall faces a fifth toward it.
     assert!(billboard > 0.75 && billboard < 0.97, "{billboard}");
     assert!(mesh > 0.2 && mesh < 0.6, "{mesh}");
+}
+
+/// A floor running away from the camera, cubes along it and a billboard, in fog the color the
+/// canvas is cleared to: what's nearer than the fog shows as it does without, what's past it is
+/// the fog's color and nothing else, so the floor's far end can't be told from what's behind it,
+/// and between the two things fade, lit and shaded or not.
+#[test]
+fn fog_over_distance() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let ground = ctx.create_mesh(&MeshData::plane([6.0, 40.0])).unwrap();
+    let cube = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let sheet = SpriteSheet::new(ctx.load_texture(TILESET).unwrap(), 16, 16);
+    let sprite = sheet.sprite(27, 0);
+    let camera = Camera3d::perspective([0.0, 2.0, 2.0], [0.0, 0.5, -10.0], 0.8);
+    let sky = Color::rgb8(0x60, 0x80, 0xa0);
+    let fog = Fog::new(sky, 6.0, 18.0);
+    let clear = View3d::new(camera, Rect::new(0.0, 0.0, 128.0, 96.0));
+    let foggy = View3d {
+        fog: Some(fog),
+        ..clear
+    };
+    let lamp = Light {
+        shadows: true,
+        ..Light::point([0.5, 2.5, -2.0], Color::rgb8(0xff, 0xd0, 0x90), 8.0)
+    };
+    let mut render = |view: View3d| {
+        headless
+            .render(128, 96, |canvas| {
+                canvas.clear(sky);
+                let mut view = canvas.begin_3d(view);
+                view.add_light(lamp);
+                let floor = Affine3::from_translation([0.0, 0.0, -18.0]);
+                view.draw_mesh(&ground, floor, None, Color::rgb8(0xa0, 0xa0, 0xa0));
+                for [x, z] in [[-1.5, -3.0], [1.5, -13.0], [-1.5, -22.0]] {
+                    let place = Affine3::from_translation([x, 0.5, z]);
+                    view.draw_mesh(&cube, place, None, Color::rgb8(0xd0, 0x60, 0x40));
+                }
+                view.draw_billboard(&sprite, [-1.0, 0.0, -8.0], [1.0, 1.5], Color::WHITE);
+            })
+            .unwrap()
+    };
+    let shown = render(clear);
+    let frame = render(foggy);
+    let pixel = |image: &Image, point: [f32; 3]| {
+        let [x, y] = clear.project(point).expect("it's in view");
+        image.pixel(x as u32, y as u32)
+    };
+    let amount = |point: [f32; 3]| fog.amount_at(foggy.distance(point));
+
+    // The floor before the fog begins is as it is without.
+    let near = [0.0, 0.0, -3.0];
+    assert_eq!(amount(near), 0.0);
+    assert_eq!(pixel(&frame, near), pixel(&shown, near));
+    // Past where it's whole, the floor is the color behind it, which without fog it isn't.
+    let far = [0.0, 0.0, -30.0];
+    assert_eq!(amount(far), 1.0);
+    let behind = frame.pixel(64, 2);
+    assert_eq!(pixel(&frame, far), behind);
+    assert_ne!(pixel(&shown, far), behind);
+    // And between, it's between the two.
+    let middle = [2.5, 0.0, -9.0];
+    assert!(amount(middle) > 0.4 && amount(middle) < 0.5);
+    let [with, without] = [pixel(&frame, middle), pixel(&shown, middle)];
+    for channel in 0..3 {
+        let [low, high] = if without[channel] < behind[channel] {
+            [without[channel], behind[channel]]
+        } else {
+            [behind[channel], without[channel]]
+        };
+        assert!(
+            with[channel] > low && with[channel] < high,
+            "{with:?} isn't between {without:?} and {behind:?}"
+        );
+    }
+
+    assert_screenshot(&headless.adapter_name(), "fog_over_distance", frame);
 }
 
 /// A view with no sun and no ambient light, so what a light doesn't reach is black.

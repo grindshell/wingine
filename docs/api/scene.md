@@ -31,7 +31,8 @@ the files.
   [`bounds_3d`](#nodebounds_3d), [`light`](#nodelight), [`set_light`](#nodeset_light),
   [`casts_shadow`](#nodecasts_shadow), [`set_casts_shadow`](#nodeset_casts_shadow)
 - [3D views](#3d-views): [`camera`](#nodecamera), [`set_camera`](#nodeset_camera),
-  [`lighting`](#nodelighting), [`set_lighting`](#nodeset_lighting), [`pick`](#nodepick),
+  [`lighting`](#nodelighting), [`set_lighting`](#nodeset_lighting), [`fog`](#nodefog),
+  [`set_fog`](#nodeset_fog), [`pick`](#nodepick),
   [`project`](#nodeproject), [`ray`](#noderay)
 - [Posing](#posing): [`pose`](#nodepose), [`Clip`](#clip)
 - [Adding and removing nodes](#adding-and-removing-nodes): [`add`](#nodeadd),
@@ -682,6 +683,30 @@ node:set_lighting(lighting: Lighting)
 Changes the view's lighting, its sun and ambient light, whose fields are the defaults where
 they're left out, as in [`graphics.begin_3d`](graphics.md#graphicsbegin_3d). A scene's view is lit
 at places by its [light nodes](#nodelight), so `lights` here is an error.
+
+### `node:fog`
+
+```lua
+node:fog(): Fog?
+```
+
+Returns the view's fog, `color` as a number `0xRRGGBBAA`, `near` and `far`, or nothing if it has
+none.
+
+### `node:set_fog`
+
+```lua
+node:set_fog(fog: Fog?)
+```
+
+Changes the view's fog, whole: `color` is white and `near` 0 where they're left out, and it must
+have a `far`, more than `near`, as in [`graphics.begin_3d`](graphics.md#graphicsbegin_3d). With
+`nil`, the view has none.
+
+```lua
+-- The fog closes in as night falls.
+view:set_fog({ color = sky, near = 8, far = 48 - 24 * night })
+```
 
 ### `node:pick`
 

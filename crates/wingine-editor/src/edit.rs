@@ -471,6 +471,7 @@ pub fn new_node(kind: &str, showing: Showing) -> NodeDef {
             pivot: [0.0, 0.0],
             camera: Camera3d::perspective([0.0, 3.0, 5.0], [0.0, 0.0, 0.0], 0.8),
             lighting: Lighting::default(),
+            fog: None,
         }),
         "mesh" => KindDef::Mesh(MeshDef {
             shape: Shape::Cuboid([1.0; 3]),

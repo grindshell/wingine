@@ -92,7 +92,9 @@
 //!   table `{ position, target, up, fov, height, near, far }`: `position` and `target` are
 //!   vectors, and the rest optional, `fov` (radians, for perspective, 0.8 by default) and
 //!   `height` (world units, for none) being the projection, one or the other. [`Lighting`] is a
-//!   table `{ direction, color, ambient }`, any of them left out keeping its default. A
+//!   table `{ direction, color, ambient }`, any of them left out keeping its default. [`Fog`] is
+//!   a table `{ color, near, far }`: what a view shows fades to `color` (white) from `near` (0)
+//!   world units from its camera to `far`, which it must have, more than `near`. A
 //!   [`Light`] is a table of a `position`, a vector, and optionally `color` (white), `range`
 //!   (5), `energy` (1), `shadows` (whether the view's meshes and models in its way shade what's
 //!   behind them, `false`), and for a spot light, `cone` (half its angle, in radians),
@@ -142,7 +144,8 @@
 //!   box around what a mesh, model or billboard shows, or nothing). A view has `node:camera()`,
 //!   `node:set_camera(camera)`, `node:lighting()` (its colors numbers),
 //!   `node:set_lighting(lighting)` (its sun and ambient light: `lights` there is an error, a
-//!   scene's being its light nodes), `node:pick(x, y)` (its nodes under a point of the scene,
+//!   scene's being its light nodes), `node:fog()` (its color a number, or nothing for a view
+//!   without fog), `node:set_fog(fog)` (or `nil` for none), `node:pick(x, y)` (its nodes under a point of the scene,
 //!   nearest first), `node:project(point)` (where a point of its world shows in the scene, or
 //!   nothing) and `node:ray(x, y)` (where the ray into its world through a point of the scene
 //!   starts and the way it goes, of length 1, or nothing outside the view). What they cover: `node:size()` (before stretching with its parent, or a
@@ -267,8 +270,8 @@ use crate::{
     Error, Fullscreen, Result,
     audio::{PlaySettings, Sound},
     graphics::{
-        Animation, Blend, Camera3d, Color, Font, Light, Lighting, Mesh, Model, Projection, Scaling,
-        Sprite, SpriteSheet, TextLayout,
+        Animation, Blend, Camera3d, Color, Fog, Font, Light, Lighting, Mesh, Model, Projection,
+        Scaling, Sprite, SpriteSheet, TextLayout,
     },
     grid::{Direction, GridMover},
     input::{Control, GamepadButton, Key, MouseButton},
@@ -1064,6 +1067,40 @@ impl FromLua for Lighting {
     }
 }
 
+impl FromLua for Fog {
+    /// A table of a `far`, and a `color` and a `near` unless they're white and 0.
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        let mlua::Value::Table(table) = &value else {
+            let message = "expected a table { color, near, far }".into();
+            return Err(conversion_error(&value, "Fog", message));
+        };
+        let Some(far) = table.get::<Option<f32>>("far")? else {
+            let message = "a fog has a `far`, how far off there's nothing but fog";
+            return Err(mlua::Error::runtime(message));
+        };
+        let fog = Fog {
+            color: table.get::<Option<Color>>("color")?.unwrap_or(Color::WHITE),
+            near: table.get::<Option<f32>>("near")?.unwrap_or(0.0),
+            far,
+        };
+        match fog.problem() {
+            Some(problem) => Err(mlua::Error::runtime(problem)),
+            None => Ok(fog),
+        }
+    }
+}
+
+impl IntoLua for Fog {
+    /// A table `{ color, near, far }`, its color a number `0xRRGGBBAA`.
+    fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
+        let table = lua.create_table_with_capacity(0, 3)?;
+        table.set("color", packed_color(self.color))?;
+        table.set("near", self.near)?;
+        table.set("far", self.far)?;
+        Ok(mlua::Value::Table(table))
+    }
+}
+
 /// Changes the settings of `light` that `table` gives, any of `color`, `range`, `energy`,
 /// `cone`, `edge` and `shadows`, failing if it couldn't then light anything.
 fn light_settings(table: &mlua::Table, light: &mut LightDef) -> mlua::Result<()> {
@@ -1691,6 +1728,21 @@ impl mlua::UserData for SceneNode {
             node.write_kind("lighting", |kind| match kind {
                 Kind::View3d(view) => {
                     view.lighting = lighting;
+                    Some(())
+                }
+                _ => None,
+            })
+        });
+        methods.add_method("fog", |_, node, ()| {
+            node.read_kind("fog", |kind| match kind {
+                Kind::View3d(view) => Some(view.fog),
+                _ => None,
+            })
+        });
+        methods.add_method("set_fog", |_, node, fog: Option<Fog>| {
+            node.write_kind("fog", |kind| match kind {
+                Kind::View3d(view) => {
+                    view.fog = fog;
                     Some(())
                 }
                 _ => None,

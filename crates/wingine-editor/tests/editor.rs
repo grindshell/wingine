@@ -13,7 +13,7 @@ use std::{
 
 use wingine::{
     Redraw, WindowConfig,
-    graphics::Blend,
+    graphics::{Blend, Color, Fog},
     headless::{Headless, Simulation},
     input::{Key, MouseButton},
     scene::{
@@ -851,9 +851,26 @@ fn views_and_their_nodes_are_added_and_inspected() {
         unreachable!()
     };
     assert_eq!(view.camera.position, [0.0, 6.0, 5.0]);
+    assert_eq!(view.fog, None);
+
+    // Its fog, which it has once the box is ticked: then its color and how far off it is.
+    assert!(simulation.gui_rect("fog's far").is_none());
+    // The box is to the right of its label, which is called the same.
+    let tick = *simulation.gui_rects("fog").last().expect("a box for fog");
+    simulation.click(
+        MouseButton::Left,
+        tick.x + tick.w / 2.0,
+        tick.y + tick.h / 2.0,
+    );
+    simulation.run_frames(3);
+    set_field(&mut simulation, "fog's far", "30");
+    let KindDef::View3d(view) = &node(&simulation, "view3d").kind else {
+        unreachable!()
+    };
+    assert_eq!(view.fog, Some(Fog::new(Color::WHITE, 0.0, 30.0)));
 
     // Each was a change of its own.
-    for _ in 0..6 {
+    for _ in 0..8 {
         control(&mut simulation, Key::Z);
     }
     assert!(!simulation.game().document().unwrap().is_dirty());

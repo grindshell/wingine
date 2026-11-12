@@ -175,6 +175,11 @@ impl Camera3d {
     }
 
     /// Which ways the view's right, its up and where it looks point in the world.
+    /// The way it looks, of length 1.
+    pub(crate) fn forward(&self) -> [f32; 3] {
+        self.basis().forward
+    }
+
     fn basis(&self) -> Basis {
         let forward = normalize3(sub3(self.target, self.position)).unwrap_or([0.0, 0.0, -1.0]);
         // Looking along `up`, up the view is toward `-z` looking down, or `+z` looking up.

@@ -1037,6 +1037,7 @@ in one hide each other by how near they are, but a later view draws over an earl
 | `camera` | The camera the view looks through: a table, below. |
 | `rect` | Where on the canvas the view shows, a [`Rect`](README.md#rect). By default, the whole canvas. With a [camera](#graphicsset_camera) set, it's in world positions, as everything drawn is. |
 | `lighting` | How the view is lit: a table, below. By default, the default sun and ambient light. |
+| `fog` | What the view shows fades to with distance: a table, below. By default, nothing. |
 
 The camera's table:
 
@@ -1139,6 +1140,41 @@ light. A view has 24 shadow maps, which the lights nearest its camera take first
 are none left for lights the view without shadows: the engine logs a warning the first time, and
 [`graphics.frame_stats`](#graphicsframe_stats) counts such lights as `shadows_left_out`, and the
 maps taken as `shadow_maps`.
+
+The fog's table:
+
+| Field | What it is |
+|---|---|
+| `color` | What things fade to, a [`Color`](README.md#color). By default, white. |
+| `near` | How far from the camera fog begins, in world units, 0 or more. By default, 0. |
+| `far` | How far from the camera there's nothing but fog, in world units, more than `near`. Every fog has one. |
+
+In fog, what a view shows fades to the fog's color with its distance from the camera, in a
+straight line: none of it nearer than `near`, `(distance - near) / (far - near)` of it between,
+and nothing else at `far` and beyond. Meshes, models and billboards fade alike, after they're
+lit and shaded. The distance is from where the camera is, so turning the camera fogs nothing
+more or less; under an orthographic camera, with a `height`, it's how far ahead of the camera a
+place is.
+
+A view draws no background: what's behind its meshes is what was drawn before it, or what
+[`graphics.clear`](#graphicsclear) filled the canvas with. So clear to the fog's color, and the
+far side of a world fades into what's behind it, and what comes and goes past `far`, such as
+parts of a world loaded around the player, can't be seen to.
+
+```lua
+-- Dusk: the ground fades into the sky from 24 units off, and is gone at 48.
+local SKY = graphics.color("#10141f")
+
+function draw()
+    graphics.clear(SKY)
+    graphics.begin_3d({ camera = camera, fog = { color = SKY, near = 24, far = 48 } })
+    graphics.draw_mesh(ground, vector.zero)
+end
+```
+
+A light none of whose reach is nearer the camera than the fog's `far` lights nothing that
+shows. It isn't one of the view's 32 lights, takes no shadow maps, and isn't counted as left
+out.
 
 ### `graphics.draw_mesh`
 

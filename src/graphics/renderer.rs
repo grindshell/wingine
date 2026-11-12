@@ -9,7 +9,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use super::{
-    Blend, Color, Light, Mesh, MeshData, Texture,
+    Blend, Color, Light, Mesh, MeshData, Projection, Texture,
     camera3d::{self, Mat4},
     canvas::{Batch, Canvas, Vertex},
     mesh::GpuVertex,
@@ -45,6 +45,16 @@ struct ViewUniform {
     ambient: [f32; 4],
     /// How many of `lights` light it, then nothing.
     light_count: [u32; 4],
+    /// Its fog's color, linear, then 1, or 0 for a view without fog.
+    fog_color: [f32; 4],
+    /// How far from the camera its fog begins, then 1 over how much farther it's whole, then
+    /// nothing.
+    fog: [f32; 4],
+    /// Where the camera is, then nothing.
+    eye: [f32; 4],
+    /// The way the camera looks, of length 1, then 1 for an orthographic camera, whose fog is by
+    /// how far ahead of it things are, or 0.
+    eye_forward: [f32; 4],
     lights: [LightUniform; Light::MAX],
     /// What maps the world onto each of its shadow maps.
     shadow_maps: [Mat4; Light::SHADOW_MAPS],
@@ -1192,12 +1202,27 @@ fn view_uniform(
             Light::MAX
         );
     }
+    let (fog_color, fog) = match view.fog() {
+        Some(fog) => {
+            let [r, g, b, _] = fog.color.to_linear();
+            let span = 1.0 / (fog.far - fog.near);
+            ([r, g, b, 1.0], [fog.near, span, 0.0, 0.0])
+        }
+        None => ([0.0; 4], [0.0; 4]),
+    };
+    let [ex, ey, ez] = view.camera.position;
+    let [fx, fy, fz] = view.camera.forward();
+    let orthographic = matches!(view.camera.projection, Projection::Orthographic { .. });
     let mut uniform = ViewUniform {
         view_proj,
         light_direction: [x, y, z, 0.0],
         light_color: lighting.color.to_linear(),
         ambient: lighting.ambient.to_linear(),
         light_count: [chosen.len() as u32, 0, 0, 0],
+        fog_color,
+        fog,
+        eye: [ex, ey, ez, 0.0],
+        eye_forward: [fx, fy, fz, if orthographic { 1.0 } else { 0.0 }],
         lights: Zeroable::zeroed(),
         shadow_maps: Zeroable::zeroed(),
     };

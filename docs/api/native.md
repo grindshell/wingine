@@ -567,7 +567,8 @@ A view, its camera and its lighting, as the table [`graphics.begin_3d`](graphics
 takes. The view's `rect` is where it shows, in the coordinates drawing uses when it begins: canvas
 pixels in a hook after `draw`. `View3d::new(camera, rect)` is lit by `Lighting::DEFAULT`, the
 engine's default sun and ambient light; `Lighting::UNLIT` shows every surface as it is. A
-`Lighting` has no `lights`: a library can't add lights at places to a view yet. What it draws in a
+`Lighting` has no `lights`, and a `View3d` no `fog`: a library can't add lights at places to a
+view yet, or fog. What it draws in a
 view a script began is lit by that view's lights, as the rest of the view is, and shaded from
 those with `shadows`. Its meshes always cast shadows from them: a
 [`MeshDraw`](#meshdraw) has no `casts_shadow`.

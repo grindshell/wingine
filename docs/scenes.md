@@ -558,6 +558,11 @@ fills the canvas; it moves with its node, but doesn't turn or stretch. Its other
   and `ambient`, the light on every surface. Each is the default's if left out, and so is the
   whole of it: a sun high above and in front. Lights at places aren't listed here: they're the
   view's `light` nodes.
+- `fog`, if the view has any: `{ color = "#10141f", near = 24, far = 48 }`. What the view shows
+  fades to `color` (`"#ffffff"`) with its distance from the camera, from none at `near` (`0`)
+  world units to nothing else at `far`, which a fog must have, more than `near`. A view draws
+  no background, so a game clears the canvas to the fog's color for the world's far side to
+  fade into what's behind it. See [`graphics.begin_3d`](api/graphics.md#graphicsbegin_3d).
 
 The world is right-handed with `y` up, as glTF's is. The kinds of node in it:
 

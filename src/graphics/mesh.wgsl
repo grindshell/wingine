@@ -23,6 +23,14 @@ struct View {
     ambient: vec4<f32>,
     // How many of `lights` light the view, then nothing.
     light_count: vec4<u32>,
+    // Its fog's color, linear, then 1, or 0 for a view without fog.
+    fog_color: vec4<f32>,
+    // How far from the camera its fog begins, then 1 over how much farther it's whole.
+    fog: vec4<f32>,
+    // Where the camera is.
+    eye: vec4<f32>,
+    // The way the camera looks, of length 1, then 1 for an orthographic camera, or 0.
+    eye_forward: vec4<f32>,
     lights: array<Light, 32>,
     // What maps the world onto each shadow map, as a camera at its light would see it.
     shadow_maps: array<mat4x4<f32>, 24>,
@@ -199,5 +207,19 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @locatio
         }
         light += color_inner.rgb * level;
     }
-    return vec4<f32>(color.rgb * min(light, vec3<f32>(1.0)), 1.0);
+    var shown = color.rgb * min(light, vec3<f32>(1.0));
+    if view.fog_color.a > 0.5 {
+        // It fades to the fog's color with how far it is from the camera, in a straight line
+        // from where the fog begins to where there's nothing else: from where the camera is,
+        // or for an orthographic camera, which is nowhere, by how far ahead of it.
+        let away = in.world.xyz - view.eye.xyz;
+        let distance = select(
+            length(away),
+            dot(away, view.eye_forward.xyz),
+            view.eye_forward.w > 0.5,
+        );
+        let amount = clamp((distance - view.fog.x) * view.fog.y, 0.0, 1.0);
+        shown = mix(shown, view.fog_color.rgb, amount);
+    }
+    return vec4<f32>(shown, 1.0);
 }

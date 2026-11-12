@@ -16,6 +16,11 @@ return {
                 color = "#fff4e0",
                 ambient = "#7080a0",
             },
+            fog = {
+                color = "#a8c8e8",
+                near = 8,
+                far = 28,
+            },
             children = {
                 {
                     name = "ground",

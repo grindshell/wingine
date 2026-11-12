@@ -174,7 +174,9 @@
 //!   `{ position = { x, y, z }, target = { x, y, z } }`, with `up` (`{ 0, 1, 0 }`), `fov`
 //!   (`0.8`) or for an orthographic camera `height`, `near` (`0.1`) and `far` (`1000`) if they
 //!   aren't the defaults; `lighting`, `{ direction, color, ambient }`, is the default lighting,
-//!   field by field, where it leaves fields out.
+//!   field by field, where it leaves fields out; and `fog`, `{ color, near, far }`, if it has
+//!   any, is what it shows fading to `color` (`"#ffffff"`) from `near` (`0`) world units
+//!   from its camera to `far`, which it must have, more than `near`.
 //! - `mesh`, in a view: a built-in shape centered on its origin, `shape`, `"cuboid"` with
 //!   `size = { width, height, depth }`, `"plane"`, facing up, with `size = { width, depth }`, or
 //!   `"sphere"` with a `radius`, sizes 1 and the radius a half by default; optionally a sprite,
@@ -442,8 +444,8 @@ pub(crate) use writer::write_value;
 use crate::{
     Context, Error, Result,
     graphics::{
-        Align, Blend, Camera3d, Canvas, Canvas3d, Color, Font, Lighting, Mesh, Model, Ray, Sprite,
-        SpriteSheet, TextLayout, Texture, View3d,
+        Align, Blend, Camera3d, Canvas, Canvas3d, Color, Fog, Font, Lighting, Mesh, Model, Ray,
+        Sprite, SpriteSheet, TextLayout, Texture, View3d,
     },
     lua::check_tilemap_size,
     math::{Affine, Affine3, Bounds3, Rect, add3, scale3},
@@ -717,6 +719,8 @@ pub struct View3dNode {
     pub pivot: [f32; 2],
     pub camera: Camera3d,
     pub lighting: Lighting,
+    /// What it shows fades to with distance, if anything.
+    pub fog: Option<Fog>,
 }
 
 /// What a mesh node shows: its shape's mesh, showing a sprite or white, times its tint.
@@ -2175,6 +2179,7 @@ impl Scene {
             camera: view.camera,
             rect: self.bounds(id)?,
             lighting: view.lighting,
+            fog: view.fog,
         })
     }
 
@@ -2656,6 +2661,7 @@ impl Scene {
                             camera: view.camera,
                             rect: shown,
                             lighting: view.lighting,
+                            fog: view.fog,
                         });
                         for &child in &node.children {
                             self.draw_3d(&mut world, child, Affine3::IDENTITY);
@@ -3325,6 +3331,7 @@ impl Build<'_> {
                 pivot: view.pivot,
                 camera: view.camera,
                 lighting: view.lighting,
+                fog: view.fog,
             }),
             KindDef::Mesh(mesh) => {
                 let (sprite, sheet) = match &mesh.sprite {

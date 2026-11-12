@@ -16,7 +16,7 @@ use super::{
 };
 use crate::{
     Error, Result,
-    graphics::{Align, Blend, Camera3d, Color, Light, Lighting, MeshData, Projection},
+    graphics::{Align, Blend, Camera3d, Color, Fog, Light, Lighting, MeshData, Projection},
     lua::{
         DEFAULT_FOV, is_identifier,
         mlua::{self, chunk::ChunkMode},
@@ -594,6 +594,8 @@ pub struct View3dDef {
     pub pivot: [f32; 2],
     pub camera: Camera3d,
     pub lighting: Lighting,
+    /// What it shows fades to with distance, if anything.
+    pub fog: Option<Fog>,
 }
 
 /// A sprite of one of a scene's sheets: the sheet's name and the sprite's column and row in it.
@@ -1835,12 +1837,14 @@ fn read_kind(
                 Some(lighting) => read_lighting(lighting)?,
                 None => Lighting::default(),
             };
+            let fog = fields.take("fog").map(read_fog).transpose()?;
             KindDef::View3d(View3dDef {
                 size,
                 stretch,
                 pivot,
                 camera: read_camera(camera)?,
                 lighting,
+                fog,
             })
         }
         "mesh" => {
@@ -2301,6 +2305,29 @@ fn read_lighting(lighting: Value) -> Result<Lighting, String> {
     })
 }
 
+/// A view's fog, `{ color, near, far }`: white from 0 where those are left out.
+fn read_fog(fog: Value) -> Result<Fog, String> {
+    let mut fields = Fields::new(fog, "`fog`")?;
+    let color = match fields.take("color") {
+        Some(value) => color(value, "fog.color")?,
+        None => Color::WHITE,
+    };
+    let near = match fields.take("near") {
+        Some(near) => finite(near, "fog.near")?,
+        None => 0.0,
+    };
+    let far = fields
+        .take("far")
+        .ok_or("a fog has a `far`, how far off there's nothing but fog")?;
+    let far = finite(far, "fog.far")?;
+    fields.finish("`fog`")?;
+    let fog = Fog { color, near, far };
+    match fog.problem() {
+        Some(problem) => Err(problem),
+        None => Ok(fog),
+    }
+}
+
 /// A sprite's `sheet` and `cell`, which the sprite of a node or a tile must have.
 fn read_sheet_cell(
     fields: &mut Fields,
@@ -2755,6 +2782,9 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
             set("pivot", pair(view.pivot));
             set("camera", camera_value(&view.camera));
             set("lighting", lighting_value(&view.lighting));
+            if let Some(fog) = &view.fog {
+                set("fog", fog_value(fog));
+            }
         }
         KindDef::Mesh(mesh) => {
             set("shape", string(mesh.shape.name()));
@@ -2890,6 +2920,18 @@ fn lighting_value(lighting: &Lighting) -> Value {
             ("direction".to_owned(), triple_value(lighting.direction)),
             ("color".to_owned(), hex_value(lighting.color)),
             ("ambient".to_owned(), hex_value(lighting.ambient)),
+        ]
+        .into(),
+    )
+}
+
+/// Fog as a scene file holds it, with every field.
+fn fog_value(fog: &Fog) -> Value {
+    Value::Map(
+        [
+            ("color".to_owned(), hex_value(fog.color)),
+            ("near".to_owned(), Value::Number(fog.near.into())),
+            ("far".to_owned(), Value::Number(fog.far.into())),
         ]
         .into(),
     )
@@ -3657,6 +3699,7 @@ mod tests {
                 pivot = { 80, 45 },
                 camera = { position = { 0, 5, 4 }, target = { 0, 0, 0 }, fov = 0.6, far = 50 },
                 lighting = { color = "#ffeedd" },
+                fog = { color = "#102030", near = 6, far = 40 },
                 children = {
                     { name = "floor", kind = "mesh", shape = "plane", size = { 8, 6 }, tint = "#404040", casts_shadow = false },
                     {
@@ -3693,6 +3736,24 @@ mod tests {
         assert_eq!([def.camera.near, def.camera.far], [0.1, 50.0]);
         assert_eq!(def.lighting.color, Color::rgb8(0xff, 0xee, 0xdd));
         assert_eq!(def.lighting.ambient, Lighting::default().ambient);
+        let fog = Fog::new(Color::rgb8(0x10, 0x20, 0x30), 6.0, 40.0);
+        assert_eq!(def.fog, Some(fog));
+        // A fog is white, from the camera, where it doesn't say, and a view has none unless it
+        // says so.
+        let bare = "camera = { position = { 0, 1, 2 }, target = { 0, 0, 0 } },";
+        let fog_of = |fields: &str| {
+            let source = format!(
+                "return {{ format = 2, children = {{ {{ name = 'view', kind = 'view3d', \
+                 width = 1, height = 1, {bare} {fields} }} }} }}"
+            );
+            match &parse(&source).unwrap().children[0].kind {
+                KindDef::View3d(def) => def.fog,
+                kind => panic!("{kind:?}"),
+            }
+        };
+        assert_eq!(fog_of(""), None);
+        let plain = Fog::new(Color::WHITE, 0.0, 12.0);
+        assert_eq!(fog_of("fog = { far = 12 },"), Some(plain));
 
         let [floor, stack, barrel, hero, prop] = &view.children[..] else {
             panic!("{:?}", view.children);
@@ -3833,6 +3894,22 @@ mod tests {
             (
                 view("", &format!("{camera} lighting = {{ colour = 1 }},")),
                 "`lighting` has no field `colour`",
+            ),
+            (
+                view("", &format!("{camera} fog = {{ near = 2 }},")),
+                "node `view`: a fog has a `far`, how far off there's nothing but fog",
+            ),
+            (
+                view("", &format!("{camera} fog = {{ near = 2, far = 2 }},")),
+                "a fog's far must be more than its near, 2, not 2",
+            ),
+            (
+                view("", &format!("{camera} fog = {{ near = -1, far = 2 }},")),
+                "a fog's near can't be less than 0, not -1",
+            ),
+            (
+                view("", &format!("{camera} fog = {{ far = 2, density = 1 }},")),
+                "`fog` has no field `density`",
             ),
             (
                 view("", &format!("{camera} rotation = 1,")),

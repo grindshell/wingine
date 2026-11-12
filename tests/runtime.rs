@@ -3370,6 +3370,167 @@ fn views_take_lights_from_luau() {
     }
 }
 
+/// A white wall seen from the front, shown as it is, its front 5.95 units ahead of the camera, in
+/// red fog from 4 units ahead to 8; and a lamp, a unit before it.
+const FOGGY: &str = r##"return {
+    format = 4,
+    children = {
+        {
+            name = "view", kind = "view3d", width = 0, height = 0, stretch = { 1, 1 },
+            camera = { position = { 0, 0, 5 }, target = { 0, 0, 0 }, height = 2 },
+            lighting = { color = "#000000", ambient = "#ffffff" },
+            fog = { color = "#ff0000", near = 4, far = 8 },
+            children = {
+                { name = "wall", kind = "mesh", shape = "cuboid", z = -1, size = { 2, 2, 0.1 } },
+                { name = "lamp", kind = "light", range = 2 },
+            },
+        },
+    },
+}"##;
+
+#[test]
+fn scene_fog_works_from_luau() {
+    let folder = game(
+        "scene_fog",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            ("foggy.scene.luau", FOGGY),
+            (
+                "main.luau",
+                "level = scene.load('foggy.scene.luau')
+                view = level:find('view')
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.draw_scene(level)
+                    stats = graphics.frame_stats()
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    assert_eq!(simulation.game().error().map(ToString::to_string), None);
+    // The wall's middle, and then how many lights lit the view.
+    let shown = |simulation: &mut Simulation<LuauGame>| {
+        simulation.step();
+        let pixel = simulation.screenshot().unwrap().pixel(10, 10);
+        simulation.step();
+        (pixel, simulation.eval::<u32>("stats.lights"))
+    };
+    // Nearly half of the way through the fog, the wall is that much of the fog's red, in
+    // linear light: its green and blue a little over half, which shows as 190.
+    let (pixel, lights) = shown(&mut simulation);
+    assert!(
+        pixel[0] == 255 && (186..=194).contains(&pixel[1]) && pixel[1] == pixel[2],
+        "{pixel:?}"
+    );
+    assert_eq!(lights, 1);
+    assert_eq!(
+        simulation.eval::<(String, f32, f32)>(
+            "(function() local fog = view:fog() return string.format('%08x', fog.color), \
+             fog.near, fog.far end)()"
+        ),
+        ("ff0000ff".into(), 4.0, 8.0)
+    );
+
+    // Fog that's whole before the wall leaves nothing of it, and the lamp, all of whose reach
+    // is past it, isn't one of the view's lights.
+    simulation.exec("view:set_fog({ color = '#0000ff', far = 2.5 })");
+    assert_eq!(shown(&mut simulation), ([0, 0, 255, 255], 0));
+    assert_eq!(simulation.eval::<f32>("view:fog().near"), 0.0);
+
+    // Without fog, the wall shows as it is.
+    simulation.exec("view:set_fog(nil)");
+    assert_eq!(shown(&mut simulation), ([255, 255, 255, 255], 1));
+    assert!(simulation.eval::<bool>("view:fog() == nil"));
+
+    for (code, message) in [
+        ("view:set_fog({ near = 2 })", "a fog has a `far`"),
+        (
+            "view:set_fog({ near = 2, far = 1 })",
+            "a fog's far must be more than its near",
+        ),
+        (
+            "view:set_fog({ near = -1, far = 1 })",
+            "a fog's near can't be less than 0",
+        ),
+        ("view:set_fog(5)", "Fog"),
+        ("view:find('wall'):fog()", "which has no fog"),
+        ("view:find('wall'):set_fog(nil)", "which has no fog"),
+    ] {
+        let err: String = simulation.eval(&format!(
+            "tostring(select(2, pcall(function() {code} end)))"
+        ));
+        assert!(err.contains(message), "{code}: {err}");
+    }
+    // A fog that failed changed nothing.
+    assert!(simulation.eval::<bool>("view:fog() == nil"));
+}
+
+#[test]
+fn views_take_fog_from_luau() {
+    let folder = game(
+        "view_fog",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "wall = graphics.new_cuboid(8, 8, 0.1)
+                fog = { color = '#ff0000', near = 5, far = 7 }
+                -- A lamp far behind the wall, past the fog.
+                lights = { { position = vector.create(0, 0, -20), range = 2 } }
+                function draw()
+                    graphics.clear('#000000')
+                    ok, problem = pcall(graphics.begin_3d, {
+                        camera = { position = vector.create(0, 0, 5), target = vector.zero },
+                        lighting = { color = '#000000', ambient = '#ffffff', lights = lights },
+                        fog = fog,
+                    })
+                    if ok then
+                        graphics.draw_mesh(wall, vector.create(0, 0, -1))
+                    end
+                    stats = graphics.frame_stats()
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    assert_eq!(simulation.game().error().map(ToString::to_string), None);
+    // The wall's middle and its corner, and then how many lights lit the view.
+    let shown = |simulation: &mut Simulation<LuauGame>| {
+        simulation.step();
+        let image = simulation.screenshot().unwrap();
+        simulation.step();
+        let lights = simulation.eval::<u32>("stats.lights");
+        (image.pixel(10, 10), image.pixel(0, 0), lights)
+    };
+    // In perspective, fog is by how far a place is from the camera: the wall's middle is 5.95
+    // away, nearly half of the way through the fog, and its corner 6.8, nearly all of it.
+    let (middle, corner, lights) = shown(&mut simulation);
+    assert!(
+        middle[0] == 255 && (186..=196).contains(&middle[1]),
+        "{middle:?}"
+    );
+    assert!(corner[0] == 255 && corner[1] < middle[1] - 60, "{corner:?}");
+    assert_eq!(lights, 0);
+
+    simulation.exec("fog = nil");
+    let white = [255, 255, 255, 255];
+    assert_eq!(shown(&mut simulation), (white, white, 1));
+
+    for (fog, message) in [
+        ("{ near = 1 }", "a fog has a `far`"),
+        ("{ near = 2, far = 1 }", "more than its near"),
+        ("5", "Fog"),
+    ] {
+        simulation.exec(&format!("fog = {fog}"));
+        simulation.step();
+        let err: String = simulation.eval("tostring(problem)");
+        assert!(err.contains(message), "{fog}: {err}");
+    }
+}
+
 /// The wall of `LAMPLIT`, lit by a lamp with shadows a unit before its middle, and between them,
 /// to the left, a screen: twice as far from the lamp, the wall is in the screen's shadow from its
 /// left edge to 0.6 left of its middle, and the screen itself shows from 0.7 left to 0.3.

@@ -8,8 +8,8 @@ use super::{Lent, Textures};
 use crate::{
     Context,
     graphics::{
-        Animation, Blend, Camera, Camera3d, Canvas, Color, Font, FontSettings, Light, Lighting,
-        Mesh, MeshData, MeshVertex, Model, Ray, Sprite, SpriteSheet, TextLayout, View3d,
+        Animation, Blend, Camera, Camera3d, Canvas, Color, Fog, Font, FontSettings, Light,
+        Lighting, Mesh, MeshData, MeshVertex, Model, Ray, Sprite, SpriteSheet, TextLayout, View3d,
     },
     lua::{SceneNode, check_layer, packed_color, vector3},
     math::{Affine3, Bounds3, Rect},
@@ -449,7 +449,7 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
     graphics.set("begin_3d", {
         let lent = lent.clone();
         lua.create_function(move |_, view: Table| {
-            let (camera, rect, lighting) = view_parts(&view)?;
+            let (camera, rect, lighting, fog) = view_parts(&view)?;
             let lights: Vec<Light> = match view.get::<Option<Table>>("lighting")? {
                 Some(lighting) => lighting
                     .get::<Option<Vec<Light>>>("lights")
@@ -463,6 +463,7 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
                     camera,
                     rect,
                     lighting,
+                    fog,
                 });
                 for light in lights {
                     view.add_light(light);
@@ -609,21 +610,24 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
     Ok(())
 }
 
-/// The camera, rect (if it has one) and lighting of a table describing a 3D view.
-fn view_parts(view: &Table) -> mlua::Result<(Camera3d, Option<Rect>, Lighting)> {
+/// The camera, rect (if it has one), lighting and fog (if it has any) of a table describing a 3D
+/// view.
+fn view_parts(view: &Table) -> mlua::Result<(Camera3d, Option<Rect>, Lighting, Option<Fog>)> {
     let camera = view.get("camera").context("the view's camera")?;
     let rect = view.get("rect").context("the view's rect")?;
     let lighting: Option<Lighting> = view.get("lighting").context("the view's lighting")?;
-    Ok((camera, rect, lighting.unwrap_or_default()))
+    let fog = view.get("fog").context("the view's fog")?;
+    Ok((camera, rect, lighting.unwrap_or_default(), fog))
 }
 
 /// The 3D view a table describes, without a rect showing on the whole canvas.
 fn read_view(lent: &Lent, view: &Table) -> mlua::Result<View3d> {
-    let (camera, rect, lighting) = view_parts(view)?;
+    let (camera, rect, lighting, fog) = view_parts(view)?;
     Ok(View3d {
         camera,
         rect: view_rect(lent, rect)?,
         lighting,
+        fog,
     })
 }
 

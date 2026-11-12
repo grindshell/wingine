@@ -34,4 +34,4 @@ pub use sprite::{Sprite, SpriteSheet};
 pub use texture::Texture;
 #[cfg(feature = "egui")]
 pub(crate) use texture::WeakTexture;
-pub use view3d::{Canvas3d, Light, Lighting, View3d};
+pub use view3d::{Canvas3d, Fog, Light, Lighting, View3d};

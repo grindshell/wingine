@@ -1447,6 +1447,7 @@ mod host {
                         color: color(lighting.color),
                         ambient: color(lighting.ambient),
                     },
+                    fog: None,
                 });
                 abi::Status::OK
             }

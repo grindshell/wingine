@@ -234,6 +234,21 @@ type Light = LightSettings & {
     direction: vector?,
 }
 
+--- Fog in a 3D view: what it shows fades to a color with its distance from the camera, in a
+--- straight line, from none at `near` to nothing but the fog at `far` and beyond. The distance is
+--- from where the camera is, or for an orthographic camera, how far ahead of it. A view draws no
+--- background, so clear the canvas to the fog's color for the far side of a world to fade into
+--- what's behind it. A light none of whose reach is nearer than `far` lights nothing that shows,
+--- so isn't one of the view's.
+type Fog = {
+    --- What things fade to. By default, white. From `node:fog`, a number.
+    color: Color?,
+    --- How far from the camera fog begins, in world units, 0 or more. By default, 0.
+    near: number?,
+    --- How far from the camera there's nothing but fog, in world units, more than `near`.
+    far: number,
+}
+
 --- A 3D view, for `graphics.begin_3d`, `graphics.project` and `graphics.ray`.
 type View3d = {
     camera: Camera3d,
@@ -241,6 +256,8 @@ type View3d = {
     rect: Rect?,
     --- By default, the default sun and ambient light.
     lighting: Lighting?,
+    --- What it shows fades to with distance. By default, nothing.
+    fog: Fog?,
 }
 
 --- How `graphics.draw_mesh` places and colors a mesh: scaled, rolled, pitched and turned, in that
@@ -756,6 +773,10 @@ declare extern type SceneNode with
     --- Changes a 3D view's lighting: its sun and ambient light. Its lights at places are its
     --- light nodes, so `lights` here is an error.
     function set_lighting(self, lighting: Lighting): ()
+    --- Returns a 3D view's fog, its color as a number, or nothing if it has none.
+    function fog(self): Fog?
+    --- Changes a 3D view's fog, whole, or with `nil`, takes it away.
+    function set_fog(self, fog: Fog?): ()
     --- Returns a light node's settings, its color as a number, and `cone` only for a spot light.
     function light(self): LightSettings
     --- Changes those of a light node's settings that `settings` gives. A light is where its node

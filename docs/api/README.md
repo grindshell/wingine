@@ -169,11 +169,12 @@ table of `size`, how many pixels its em is, and optionally `smooth`. See
 A kind of tile, for [`tileset:add`](tilemap.md#tilesetadd): a table
 `{ sprite = ..., tint = ..., solid = ... }`. See [`tileset:add`](tilemap.md#tilesetadd).
 
-### `View3d`, `Camera3d` and `Lighting`
+### `View3d`, `Camera3d`, `Lighting` and `Fog`
 
-A 3D view, a table `{ camera = ..., rect = ..., lighting = ... }`, its camera a table
-`{ position = ..., target = ..., ... }` and its lighting a table `{ direction = ..., color = ...,
-ambient = ..., lights = ... }`, for [`graphics.begin_3d`](graphics.md#graphicsbegin_3d),
+A 3D view, a table `{ camera = ..., rect = ..., lighting = ..., fog = ... }`, its camera a table
+`{ position = ..., target = ..., ... }`, its lighting a table `{ direction = ..., color = ...,
+ambient = ..., lights = ... }` and its fog, if it has any, a table `{ color = ..., near = ...,
+far = ... }`, for [`graphics.begin_3d`](graphics.md#graphicsbegin_3d),
 [`graphics.project`](graphics.md#graphicsproject) and [`graphics.ray`](graphics.md#graphicsray).
 See [`graphics.begin_3d`](graphics.md#graphicsbegin_3d).
 

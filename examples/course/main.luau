@@ -21,6 +21,10 @@
 -- whatever is below, so a jump shows where it lands. The coins aren't bodies: they spin, and the
 -- player picks one up by coming near it, into a ball around it.
 --
+-- The view has fog, the scene's: the course fades into the sky with its distance from the camera,
+-- most at its far side and with the camera far off. The sky is the fog's color, which the canvas
+-- is cleared to.
+--
 -- Run with `cargo run -- examples/course`. The models are Kenney's Prototype Kit
 -- (<https://kenney.nl/assets/prototype-kit>, CC0). The game's state is in the global table
 -- `course`, where tests can see it.
@@ -232,9 +236,12 @@ function update(dt: number)
 end
 
 local font = graphics.default_font()
+-- The sky is the color the view's fog fades the course to, so the two meet.
+local fog = view:fog()
+local sky = if fog then fog.color else graphics.color("#a8c8e8")
 
 function draw()
-    graphics.clear("#a8c8e8")
+    graphics.clear(sky)
     view:set_camera(course.camera())
     graphics.draw_scene(level)
 

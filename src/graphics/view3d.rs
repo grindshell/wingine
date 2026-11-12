@@ -18,15 +18,35 @@ pub struct View3d {
     /// canvas's camera moves and zooms it, as it does everything else.
     pub rect: Rect,
     pub lighting: Lighting,
+    /// What it shows fades to with distance, if anything. Fog that can't be, such as one whose
+    /// `far` isn't past its `near`, is none.
+    pub fog: Option<Fog>,
 }
 
 impl View3d {
-    /// A view through `camera` filling `rect`, lit by [`Lighting::default`].
+    /// A view through `camera` filling `rect`, lit by [`Lighting::default`], without fog.
     pub fn new(camera: Camera3d, rect: Rect) -> Self {
         Self {
             camera,
             rect,
             lighting: Lighting::default(),
+            fog: None,
+        }
+    }
+
+    /// Its fog, if it has one that can be.
+    pub(crate) fn fog(&self) -> Option<Fog> {
+        self.fog.filter(|fog| fog.problem().is_none())
+    }
+
+    /// How far `point` is from the camera, as fog measures it: in a straight line from where
+    /// the camera is, or for an orthographic camera, which has no place to be far from, how far
+    /// ahead of it.
+    pub fn distance(&self, point: [f32; 3]) -> f32 {
+        let away = sub3(point, self.camera.position);
+        match self.camera.projection {
+            Projection::Perspective { .. } => dot3(away, away).sqrt(),
+            Projection::Orthographic { .. } => dot3(away, self.camera.forward()),
         }
     }
 
@@ -78,6 +98,51 @@ impl Default for Lighting {
             color: Color::rgb(0.8, 0.8, 0.8),
             ambient: Color::rgb(0.5, 0.5, 0.5),
         }
+    }
+}
+
+/// Fog in a 3D view: a color that what's drawn in it fades to with its distance from the camera
+/// ([`View3d::distance`]), in a straight line from none at `near` to nothing but fog at `far`
+/// and beyond. It's over the view's meshes, models and billboards alike, lit or not.
+///
+/// A view draws no background, so what's behind the fog is what the canvas was cleared to, or
+/// had drawn on it: clear it to the fog's color for the far side of a world to fade into it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fog {
+    /// What things fade to.
+    pub color: Color,
+    /// How far from the camera fog begins, in world units: 0 or more.
+    pub near: f32,
+    /// How far from the camera there's nothing but fog: more than `near`.
+    pub far: f32,
+}
+
+impl Fog {
+    /// Fog of `color` from `near` to `far` world units from the camera.
+    pub const fn new(color: Color, near: f32, far: f32) -> Self {
+        Self { color, near, far }
+    }
+
+    /// What's wrong with it, if it can't be.
+    pub(crate) fn problem(&self) -> Option<String> {
+        if !(self.near >= 0.0 && self.near.is_finite()) {
+            return Some(format!(
+                "a fog's near can't be less than 0, not {}",
+                self.near
+            ));
+        }
+        if !(self.far > self.near && self.far.is_finite()) {
+            return Some(format!(
+                "a fog's far must be more than its near, {}, not {}",
+                self.near, self.far
+            ));
+        }
+        None
+    }
+
+    /// How much of what's `distance` from the camera is fog, from 0 to 1, as the view draws it.
+    pub fn amount_at(&self, distance: f32) -> f32 {
+        ((distance - self.near) / (self.far - self.near)).clamp(0.0, 1.0)
     }
 }
 
@@ -277,8 +342,9 @@ impl Light {
 }
 
 /// Which of `lights` light `view`, into `chosen` as indices into them: those whose reach is in
-/// what its camera sees, and when there are more than [`Light::MAX`], the nearest to the camera,
-/// in the order they were added. Returns how many it left out for being too many.
+/// what its camera sees, short of where its fog hides everything, and when there are more than
+/// [`Light::MAX`], the nearest to the camera, in the order they were added. Returns how many it
+/// left out for being too many.
 pub(crate) fn lights_of(view: &View3d, lights: &[Light], chosen: &mut Vec<u32>) -> u32 {
     chosen.clear();
     if lights.is_empty() {
@@ -293,7 +359,12 @@ pub(crate) fn lights_of(view: &View3d, lights: &[Light], chosen: &mut Vec<u32>) 
     // The sides of what the camera sees, each facing inward: left and right, bottom and top,
     // near and far.
     let planes = [add(w, x), sub(w, x), add(w, y), sub(w, y), z, sub(w, z)];
+    // What a light must reach nearer than to light anything that shows through the fog.
+    let hidden = view.fog().map(|fog| fog.far);
     let reaches = |light: &Light| {
+        if hidden.is_some_and(|far| view.distance(light.position) - light.range >= far) {
+            return false;
+        }
         planes.iter().all(|&[a, b, c, d]| {
             let length = (a * a + b * b + c * c).sqrt();
             let [px, py, pz] = light.position;
@@ -815,6 +886,66 @@ mod tests {
         assert_eq!(chosen, (8..40).collect::<Vec<u32>>());
         assert_eq!(lights_of(&view, &row, &mut chosen), 8);
         assert_eq!(chosen, (0..32).collect::<Vec<u32>>());
+    }
+
+    #[test]
+    fn fog_thickens_in_a_straight_line_and_leaves_out_the_lights_past_it() {
+        let fog = Fog::new(Color::WHITE, 10.0, 30.0);
+        assert_eq!(fog.problem(), None);
+        let amounts = [5.0, 10.0, 20.0, 30.0, 100.0].map(|distance| fog.amount_at(distance));
+        assert_eq!(amounts, [0.0, 0.0, 0.5, 1.0, 1.0]);
+        for (wrong, message) in [
+            (Fog { near: -1.0, ..fog }, "near"),
+            (Fog { far: 10.0, ..fog }, "far"),
+            (
+                Fog {
+                    far: f32::INFINITY,
+                    ..fog
+                },
+                "far",
+            ),
+        ] {
+            let problem = wrong.problem().expect("it can't be");
+            assert!(problem.contains(message), "{problem}");
+        }
+
+        // It's by how far a place is from a camera in perspective, and how far ahead of an
+        // orthographic one.
+        let rect = Rect::new(0.0, 0.0, 160.0, 90.0);
+        let camera = Camera3d::perspective([0.0; 3], [0.0, 0.0, -1.0], 0.8);
+        let view = View3d::new(camera, rect);
+        assert_eq!(view.distance([3.0, 0.0, -4.0]), 5.0);
+        let flat = View3d::new(
+            Camera3d::orthographic([0.0; 3], [0.0, 0.0, -1.0], 2.0),
+            rect,
+        );
+        assert_eq!(flat.distance([3.0, 0.0, -4.0]), 4.0);
+
+        // A light none of whose reach is short of where the fog is whole lights nothing that
+        // shows, so isn't one of the view's: the third's ends just there.
+        let at = |z: f32| Light::point([0.0, 0.0, z], Color::WHITE, 2.0);
+        let lights = [at(-5.0), at(-31.5), at(-32.0), at(-40.0)];
+        let mut chosen = Vec::new();
+        assert_eq!(lights_of(&view, &lights, &mut chosen), 0);
+        assert_eq!(chosen, [0, 1, 2, 3]);
+        let foggy = View3d {
+            fog: Some(fog),
+            ..view
+        };
+        assert_eq!(lights_of(&foggy, &lights, &mut chosen), 0);
+        assert_eq!(chosen, [0, 1]);
+        // Nor does it count as left out, however many there are.
+        let row: Vec<Light> = (0..60).map(|i| at(-1.0 - i as f32)).collect();
+        assert_eq!(lights_of(&foggy, &row, &mut chosen), 0);
+        assert_eq!(chosen, (0..31).collect::<Vec<u32>>());
+        // Fog that can't be is none.
+        let wrong = View3d {
+            fog: Some(Fog { far: 5.0, ..fog }),
+            ..view
+        };
+        assert_eq!(wrong.fog(), None);
+        assert_eq!(lights_of(&wrong, &lights, &mut chosen), 0);
+        assert_eq!(chosen.len(), 4);
     }
 
     #[test]

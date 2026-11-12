@@ -16,7 +16,7 @@ use super::{
     },
 };
 use crate::{
-    graphics::{Align, Blend, Camera3d, Color, Lighting, Projection},
+    graphics::{Align, Blend, Camera3d, Color, Fog, Lighting, Projection},
     lua::{DEFAULT_FOV, is_identifier},
     particles::ParticleSettings,
 };
@@ -216,6 +216,23 @@ impl Writer {
         if ambient {
             self.any_color("ambient", lighting.ambient);
         }
+        self.close();
+        self.end_field();
+        Ok(())
+    }
+
+    /// A view's `fog`, leaving out what's at its defaults.
+    fn fog(&mut self, fog: &Fog) -> Result<(), String> {
+        let at = |err: String| format!("fog: {err}");
+        self.key("fog");
+        self.open();
+        if fog.color.to_rgba8() != Color::WHITE.to_rgba8() {
+            self.any_color("color", fog.color);
+        }
+        if fog.near != 0.0 {
+            self.number_field("near", fog.near).map_err(at)?;
+        }
+        self.number_field("far", fog.far).map_err(at)?;
         self.close();
         self.end_field();
         Ok(())
@@ -462,6 +479,9 @@ impl Writer {
                 self.pivot(view.pivot)?;
                 self.camera(&view.camera)?;
                 self.lighting(&view.lighting)?;
+                if let Some(fog) = &view.fog {
+                    self.fog(fog)?;
+                }
             }
             KindDef::Mesh(mesh) => {
                 self.field("shape", &quoted(mesh.shape.name()));
@@ -1425,6 +1445,11 @@ mod tests {
                 direction = { 0, -1, 0 },
                 ambient = "#202020",
             },
+            fog = {
+                color = "#102030",
+                near = 6,
+                far = 40,
+            },
             children = {
                 {
                     name = "floor",
@@ -1490,6 +1515,9 @@ mod tests {
                 height = 12,
                 near = 1,
             },
+            fog = {
+                far = 20,
+            },
         },
     },
     clips = {
@@ -1519,6 +1547,8 @@ mod tests {
             panic!("{:?}", scene.children[0].kind);
         };
         assert_eq!(view.lighting.color, Lighting::default().color);
+        let fog = view.fog.expect("the view has fog");
+        assert_eq!([fog.near, fog.far], [6.0, 40.0]);
         // Written and read back from Rust, every field the same.
         let written = scene.to_luau().unwrap();
         assert_eq!(parse(&written), scene);
