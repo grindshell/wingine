@@ -24,7 +24,10 @@
 //! are the game's too, but for these, which only tests have:
 //!
 //! - `test(name, run, options)` declares a test, as the file loads. Names are unique in a file.
-//!   `options.time_limit` is how many seconds of game time it may run, 60 by default.
+//!   `options.time_limit` is how many seconds of game time it may run, 60 by default, and
+//!   `options.ignored`, if true, leaves it out of a run unless [`Options::ignored`] asks for the
+//!   ignored tests (`wingine test --ignored`), as a benchmark or a check that saves screenshots to
+//!   look at is.
 //! - `assert_equal(actual, expected, message)` fails the test unless `actual` and `expected` are
 //!   equal, tables by their fields, saying what each was. `assert_near(actual, expected,
 //!   tolerance, message)` fails it unless two numbers are within `tolerance` (1e-6 by default).
@@ -79,7 +82,11 @@
 //!   by default). Paths are relative to the test file. A screenshot that doesn't match, or has
 //!   nothing to match, is saved in the game's `.test-output` folder, with a picture of where it
 //!   differs, which the run clears as it starts. With [`Options::update_screenshots`]
-//!   (`wingine test --update`), it's saved at `path` instead, and matches.
+//!   (`wingine test --update`), it's saved at `path` instead, and matches. `sim.pixel(x, y)`
+//!   returns the red, green, blue and alpha of the latest frame's pixel at `x`, `y`, each from 0
+//!   to 255, counting the window's pixels from 0 at the top-left, as a screenshot has them.
+//! - Files: `sim.read_file(path)` returns what the file at `path`, relative to the test file, holds,
+//!   as a string, such as data the game was made from to check it against.
 //!
 //! A function that can't do what it's asked, such as pressing an action the game hasn't bound,
 //! raises an error where the test called it.
@@ -145,6 +152,8 @@ const REQUESTS: &[&str] = &[
     "has_quit",
     "screenshot",
     "matches_screenshot",
+    "pixel",
+    "read_file",
 ];
 
 /// The requests about the game's interface, with the `egui` feature.
@@ -269,6 +278,8 @@ pub struct Options {
     /// Saves screenshots that don't match their references, or have none, as their references,
     /// rather than failing.
     pub update_screenshots: bool,
+    /// Runs only the tests declared `ignored`, which are otherwise left out.
+    pub ignored: bool,
 }
 
 /// How a test went.
@@ -304,8 +315,11 @@ impl Outcome {
 pub struct Report {
     /// Each test's outcome, in the order they ran.
     pub outcomes: Vec<Outcome>,
-    /// How many tests the filter left out.
+    /// How many tests the filter left out, with the tests not declared `ignored` when only those
+    /// run.
     pub filtered_out: usize,
+    /// How many tests were left out for being declared `ignored`.
+    pub ignored: usize,
 }
 
 impl Report {
@@ -341,9 +355,10 @@ impl fmt::Display for Report {
         let result = if self.passed() { "ok" } else { "FAILED" };
         write!(
             f,
-            "test result: {result}. {} passed; {} failed; {} filtered out",
+            "test result: {result}. {} passed; {} failed; {} ignored; {} filtered out",
             self.passed_count(),
             self.failed_count(),
+            self.ignored,
             self.filtered_out
         )
     }
@@ -372,8 +387,9 @@ pub fn run(
             on_outcome(&outcome);
             report.outcomes.push(outcome);
         };
-        let filtered_out = run_file(folder, &config, &file, options, &mut record);
-        report.filtered_out += filtered_out;
+        let left_out = run_file(folder, &config, &file, options, &mut record);
+        report.filtered_out += left_out.filtered_out;
+        report.ignored += left_out.ignored;
     }
     Ok(report)
 }
@@ -416,6 +432,15 @@ struct Declaration {
     name: String,
     run: mlua::Function,
     time_limit: f32,
+    /// Whether it runs only when the ignored tests are asked for.
+    ignored: bool,
+}
+
+/// The tests of a file a run left out.
+#[derive(Default)]
+struct LeftOut {
+    filtered_out: usize,
+    ignored: usize,
 }
 
 /// The tests a file declares as it loads.
@@ -447,7 +472,7 @@ fn run_file(
     file: &str,
     options: &Options,
     record: &mut impl FnMut(Outcome),
-) -> usize {
+) -> LeftOut {
     let path = folder.join(file);
     let outcome = |name: Option<&str>, failure: Option<String>, written| Outcome {
         file: file.to_owned(),
@@ -460,21 +485,33 @@ fn run_file(
         Ok(loaded) => Some(loaded),
         Err(failure) => {
             record(outcome(None, Some(failure), Vec::new()));
-            return 0;
+            return LeftOut::default();
         }
     };
-    let names: Vec<String> = fresh.as_ref().map_or_else(Vec::new, |loaded| {
-        loaded.names().into_iter().map(str::to_owned).collect()
-    });
-    let mut filtered_out = 0;
+    let (names, ignored): (Vec<String>, Vec<bool>) = fresh.as_ref().map_or_else(
+        || (Vec::new(), Vec::new()),
+        |loaded| {
+            loaded
+                .tests
+                .iter()
+                .map(|test| (test.name.clone(), test.ignored))
+                .unzip()
+        },
+    );
+    let mut left_out = LeftOut::default();
     for (index, name) in names.iter().enumerate() {
         let title = format!("{file}: {name}");
         if options
             .filter
             .as_ref()
             .is_some_and(|filter| !title.contains(filter.as_str()))
+            || (options.ignored && !ignored[index])
         {
-            filtered_out += 1;
+            left_out.filtered_out += 1;
+            continue;
+        }
+        if ignored[index] && !options.ignored {
+            left_out.ignored += 1;
             continue;
         }
         let loaded = match fresh.take().map_or_else(|| load(folder, config, &path), Ok) {
@@ -501,6 +538,7 @@ fn run_file(
             time_limit: TIME_LIMIT,
             end_frame: 0,
             written: Vec::new(),
+            frame: None,
         };
         let result = runner.run(&mut simulation, &tests[index]);
         // The VM closes with the simulation, while it holds the GPU the textures its globals hold
@@ -511,7 +549,7 @@ fn run_file(
         drop(simulation);
         record(outcome(Some(name), result.err(), written));
     }
-    filtered_out
+    left_out
 }
 
 /// `failure` with paths in the game's `folder` from there, and without the lines of tracebacks
@@ -603,10 +641,16 @@ fn test_function(lua: &Lua, declared: Rc<RefCell<Declared>>) -> mlua::Result<mlu
                 return Err(mlua::Error::runtime(message));
             }
             let mut time_limit = TIME_LIMIT;
+            let mut ignored = false;
             if let Some(options) = options {
                 for pair in options.pairs::<String, mlua::Value>() {
                     let (option, value) = pair?;
                     match (option.as_str(), value) {
+                        ("ignored", mlua::Value::Boolean(value)) => ignored = value,
+                        ("ignored", _) => {
+                            let message = "`ignored` is true or false";
+                            return Err(mlua::Error::runtime(message));
+                        }
                         ("time_limit", mlua::Value::Number(seconds))
                             if seconds > 0.0 && seconds.is_finite() =>
                         {
@@ -620,7 +664,8 @@ fn test_function(lua: &Lua, declared: Rc<RefCell<Declared>>) -> mlua::Result<mlu
                             return Err(mlua::Error::runtime(message));
                         }
                         _ => {
-                            let message = format!("a test has a `time_limit`, not `{option}`");
+                            let message =
+                                format!("a test has a `time_limit` and `ignored`, not `{option}`");
                             return Err(mlua::Error::runtime(message));
                         }
                     }
@@ -630,6 +675,7 @@ fn test_function(lua: &Lua, declared: Rc<RefCell<Declared>>) -> mlua::Result<mlu
                 name,
                 run,
                 time_limit,
+                ignored,
             });
             Ok(())
         },
@@ -659,6 +705,9 @@ struct Runner<'a> {
     end_frame: u64,
     /// The references it saved.
     written: Vec<String>,
+    /// The latest frame, kept for `sim.pixel` while the test asks only for its pixels, since a
+    /// test reads many and each screenshot copies the frame from the GPU.
+    frame: Option<Image>,
 }
 
 impl Runner<'_> {
@@ -766,6 +815,10 @@ impl Runner<'_> {
     /// Carries out the request `name`, with `args`.
     fn request(&mut self, simulation: &mut Simulation<LuauGame>, name: &str, args: &Args) -> Reply {
         let nothing = Ok(Vec::new());
+        if name != "pixel" {
+            // Anything else may change what the latest frame is.
+            self.frame = None;
+        }
         match name {
             "step" => {
                 let frames = args.optional::<u32>(0)?.unwrap_or(1);
@@ -965,6 +1018,33 @@ impl Runner<'_> {
                 let path = args.get::<String>(0)?;
                 let options = args.optional::<Table>(1)?;
                 self.matches_screenshot(simulation, &path, options)
+            }
+            "pixel" => {
+                let (x, y): (f64, f64) = (args.get(0)?, args.get(1)?);
+                let frame = match &mut self.frame {
+                    Some(frame) => frame,
+                    empty => empty.insert(simulation.screenshot().map_err(raise)?),
+                };
+                let (width, height) = (frame.width(), frame.height());
+                let inside =
+                    |at: f64, size: u32| at.fract() == 0.0 && at >= 0.0 && at < f64::from(size);
+                if !inside(x, width) || !inside(y, height) {
+                    let message = format!(
+                        "the frame's pixels are whole numbers from 0, 0 to {}, {}, not {x}, {y}",
+                        width - 1,
+                        height - 1
+                    );
+                    return Err(Refusal::Raise(message));
+                }
+                let [r, g, b, a] = frame.pixel(x as u32, y as u32);
+                args.results((r, g, b, a))
+            }
+            "read_file" => {
+                let path = args.get::<String>(0)?;
+                let bytes = fs::read(self.test_folder.join(&path))
+                    .map_err(|err| Refusal::Raise(format!("can't read {path}: {err}")))?;
+                let text = self.lua.create_string(bytes).map_err(raise)?;
+                Ok(vec![mlua::Value::String(text)])
             }
             _ => unreachable!("every request is carried out"),
         }

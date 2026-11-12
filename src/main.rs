@@ -3,14 +3,15 @@
 //!
 //! ```text
 //! wingine [--watch] path/to/game
-//! wingine test [--update] path/to/game [filter]
+//! wingine test [--update] [--ignored] path/to/game [filter]
 //! wingine export path/to/game path/to/out
 //! wingine
 //! ```
 //!
 //! With `--watch`, the game reloads whenever a file in its folder changes. `test` runs the tests
-//! in its `*.test.luau` files, or those whose files and names contain `filter`, and with
-//! `--update`, saves screenshots that don't match as their references. `export` makes a folder to
+//! in its `*.test.luau` files, or those whose files and names contain `filter`; with `--update`,
+//! it saves screenshots that don't match as their references, and with `--ignored`, it runs only
+//! the tests declared `ignored`, which it otherwise leaves out. `export` makes a folder to
 //! ship, whose executable, a copy of this one, runs the game beside it when it's started with
 //! nothing, as by double-clicking. See the `runtime` module for what the folder holds,
 //! `runtime::testing` for tests, and `runtime::export` for exports.
@@ -20,7 +21,7 @@ use std::{ffi::OsString, path::Path, process::ExitCode};
 use wingine::runtime::{self, testing};
 
 const USAGE: &str = "usage: wingine [--watch] <game folder>
-       wingine test [--update] <game folder> [filter]
+       wingine test [--update] [--ignored] <game folder> [filter]
        wingine export <game folder> <out folder>";
 
 fn main() -> ExitCode {
@@ -88,11 +89,18 @@ fn export(game: &OsString, out: &OsString) -> ExitCode {
 
 /// Runs a game's tests, as `wingine test` does with `args`, printing each as it finishes, then
 /// the failures and a summary, as `cargo test` does.
-fn test(args: &[OsString]) -> ExitCode {
-    let (update_screenshots, args) = match args {
-        [flag, rest @ ..] if flag == "--update" => (true, rest),
-        rest => (false, rest),
-    };
+fn test(mut args: &[OsString]) -> ExitCode {
+    let (mut update_screenshots, mut ignored) = (false, false);
+    while let [flag, rest @ ..] = args {
+        if flag == "--update" {
+            update_screenshots = true;
+        } else if flag == "--ignored" {
+            ignored = true;
+        } else {
+            break;
+        }
+        args = rest;
+    }
     let (folder, filter) = match args {
         [folder] => (folder, None),
         [folder, filter] => (folder, Some(filter.to_string_lossy().into_owned())),
@@ -104,6 +112,7 @@ fn test(args: &[OsString]) -> ExitCode {
     let options = testing::Options {
         filter,
         update_screenshots,
+        ignored,
     };
     println!("running the tests of {}", Path::new(folder).display());
     let report = testing::run(folder, &options, |outcome| {
@@ -115,7 +124,7 @@ fn test(args: &[OsString]) -> ExitCode {
     });
     match report {
         Ok(report) => {
-            if report.outcomes.is_empty() && report.filtered_out == 0 {
+            if report.outcomes.is_empty() && report.filtered_out == 0 && report.ignored == 0 {
                 println!("no tests: they go in files named *.test.luau in the game's folder");
             }
             println!("\n{report}");

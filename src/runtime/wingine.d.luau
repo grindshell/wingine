@@ -1368,6 +1368,9 @@ declare function wait_until(condition: () -> boolean): ()
 type TestOptions = {
     --- Seconds of game time it may run before it fails, 60 by default.
     time_limit: number?,
+    --- Whether it runs only when the ignored tests are asked for (`wingine test --ignored`), as a
+    --- benchmark does: false by default.
+    ignored: boolean?,
 }
 
 --- How a screenshot matches its reference.
@@ -1453,4 +1456,10 @@ declare sim: {
     --- Returns whether the latest frame matches the PNG at `path`, relative to the test file, and
     --- if not, what differs: `assert(sim.matches_screenshot(path))`.
     matches_screenshot: (path: string, options: ScreenshotOptions?) -> (boolean, string?),
+    --- Returns the red, green, blue and alpha, each from 0 to 255, of the latest frame's pixel at
+    --- `x`, `y`: whole numbers of the window's pixels from 0 at the top-left, as a screenshot has
+    --- them.
+    pixel: (x: number, y: number) -> (number, number, number, number),
+    --- Returns what the file at `path`, relative to the test file, holds.
+    read_file: (path: string) -> string,
 }

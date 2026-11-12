@@ -286,12 +286,14 @@ pong.test.luau:6: expected { left = 0, right = 1 }, got { left = 1, right = 0 }
 stack traceback:
 	pong.test.luau:6: in function <pong.test.luau:2>
 
-test result: FAILED. 1 passed; 1 failed; 0 filtered out
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 filtered out
 ```
 
 It ends with a failing exit code if any test failed, so a CI job can run it. A word after the
 game's folder runs only the tests whose files and names contain it:
-`cargo run -- test path/to/game serve`.
+`cargo run -- test path/to/game serve`. A test declared with `{ ignored = true }`, such as a
+benchmark, is left out and counted as ignored, and `--ignored` runs only those:
+`cargo run --release -- test --ignored path/to/game`.
 
 **Each test starts afresh.** Every test runs against a new copy of the game, as it is once its
 `main.luau` has run, before its first frame: its saves start empty and its audio is silent, and

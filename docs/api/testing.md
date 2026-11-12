@@ -25,7 +25,7 @@ wait.
 - [`test`](#test)
 - [`sim`](#sim): [time](#time), [keys](#keys), [actions](#actions), [the mouse](#the-mouse),
   [gamepads](#gamepads), [the interface](#the-interface), [the window](#the-window),
-  [screenshots](#screenshots)
+  [screenshots](#screenshots), [files](#files)
 - [`assert_equal`](#assert_equal), [`assert_near`](#assert_near)
 
 ## `test`
@@ -44,6 +44,7 @@ tests are declared only as their file loads, at its top level.
 | Option | What it does | Default |
 |---|---|---|
 | `time_limit` | Seconds of game time the test may run. Past it, the test fails, saying where it was. | 60 |
+| `ignored` | Whether the test is left out of a run unless the ignored tests are asked for, with `wingine test --ignored`, which runs only those. For a benchmark, or a check that saves screenshots to look at rather than asserting. | `false` |
 
 ```lua
 test("the computer wins a whole match", function()
@@ -266,7 +267,7 @@ relative to the test file.
 sim.screenshot(path: string)
 ```
 
-Saves the latest frame as a PNG at `path`.
+Saves the latest frame as a PNG at `path`, making its folder if it has to.
 
 #### `sim.matches_screenshot`
 
@@ -295,6 +296,39 @@ A frame that doesn't match, or has no reference to match, is saved in the game's
 folder, with a picture of where it differs in magenta, and the message says where. Each run
 clears that folder as it starts. Run with `--update`, a frame that doesn't match is saved at
 `path` instead, as the reference, and matches.
+
+#### `sim.pixel`
+
+```lua
+sim.pixel(x: number, y: number): (number, number, number, number)
+```
+
+Returns the red, green, blue and alpha of the latest frame's pixel at `x`, `y`, each from 0 to
+255. Like a screenshot, the frame is the window's size, so `x` and `y` are whole numbers of the
+window's pixels, from 0 at the top-left: with a fixed resolution scaled up, a canvas pixel is
+several, past any bars. So a test checks what's drawn somewhere without a reference to match:
+
+```lua
+test("the net is drawn down the middle", function()
+    sim.step()
+    local r, g, b = sim.pixel(320, 100)
+    assert_equal({ r, g, b }, { 255, 255, 255 })
+end)
+```
+
+Reading many pixels of one frame is cheap: the frame is copied from the GPU once, for the first.
+
+### Files
+
+#### `sim.read_file`
+
+```lua
+sim.read_file(path: string): string
+```
+
+Returns what the file at `path`, relative to the test file, holds, as a string of its bytes. A
+game reads only its scripts, assets and saves, but a test may check the game against what it was
+made from, such as a data file it was written from by hand.
 
 ## `assert_equal`
 

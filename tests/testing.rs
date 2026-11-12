@@ -115,7 +115,7 @@ fn tests_are_found_run_and_reported() {
     let shown = report.to_string();
     assert!(shown.contains("---- a.test.luau: raises ----"), "{shown}");
     assert!(
-        shown.ends_with("test result: FAILED. 2 passed; 2 failed; 0 filtered out"),
+        shown.ends_with("test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 filtered out"),
         "{shown}"
     );
 }
@@ -471,6 +471,100 @@ fn filters_pick_tests_by_file_and_name() {
         ..Default::default()
     };
     assert_eq!(run_with(&folder, &options).outcomes.len(), 1);
+}
+
+#[test]
+fn ignored_tests_run_only_when_asked_for() {
+    let folder = game(
+        "ignored",
+        &[
+            ("main.luau", ""),
+            (
+                "slow.test.luau",
+                "test('quick', function() end)
+                test('benchmark', function() end, { ignored = true })
+                test('screenshots', function() end, { ignored = true, time_limit = 120 })
+                test('kept', function() end, { ignored = false })",
+            ),
+            (
+                "bad.test.luau",
+                "test('which', function() end, { ignored = 'yes' })",
+            ),
+        ],
+    );
+    let titles =
+        |report: &Report| -> Vec<String> { report.outcomes.iter().map(Outcome::title).collect() };
+    let report = run(&folder);
+    let bad = failure(&report, "bad.test.luau");
+    assert!(bad.contains("`ignored` is true or false"), "{bad}");
+    assert_eq!(
+        titles(&report)[1..],
+        ["slow.test.luau: quick", "slow.test.luau: kept"]
+    );
+    assert_eq!((report.ignored, report.filtered_out), (2, 0));
+    assert!(
+        report
+            .to_string()
+            .ends_with("1 failed; 2 ignored; 0 filtered out"),
+        "{report}"
+    );
+
+    // Asked for, only the ignored run, and the filter picks among them.
+    let ignored = Options {
+        ignored: true,
+        ..Default::default()
+    };
+    let report = run_with(&folder, &ignored);
+    assert_eq!(
+        titles(&report)[1..],
+        ["slow.test.luau: benchmark", "slow.test.luau: screenshots"]
+    );
+    assert_eq!((report.ignored, report.filtered_out), (0, 2));
+    let picked = Options {
+        ignored: true,
+        filter: Some("bench".into()),
+        ..Default::default()
+    };
+    let report = run_with(&folder, &picked);
+    assert_eq!(titles(&report)[1..], ["slow.test.luau: benchmark"]);
+    assert_eq!((report.ignored, report.filtered_out), (0, 3));
+}
+
+#[test]
+fn tests_read_the_frames_pixels_and_files() {
+    let folder = game(
+        "pixels",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "function draw()
+                    graphics.clear('#204060')
+                    graphics.fill_rect(5, 0, 1, 20, '#ff00ff')
+                end",
+            ),
+            ("data/levels.txt", "first\nsecond\n"),
+            (
+                "tests/pixels.test.luau",
+                "test('pixels', function()
+                    sim.step()
+                    assert_equal({ sim.pixel(0, 0) }, { 0x20, 0x40, 0x60, 255 })
+                    assert_equal({ sim.pixel(5, 19) }, { 255, 0, 255, 255 })
+                    assert_equal({ sim.pixel(19, 19) }, { 0x20, 0x40, 0x60, 255 })
+                    local ok, err = pcall(sim.pixel, 20, 0)
+                    assert(not ok and string.find(err, 'from 0, 0 to 19, 19, not 20, 0'), err)
+                    ok, err = pcall(sim.pixel, 1.5, 0)
+                    assert(not ok, 'a pixel is whole')
+                end)
+                test('files', function()
+                    assert_equal(sim.read_file('../data/levels.txt'), 'first\\nsecond\\n')
+                    local ok, err = pcall(sim.read_file, 'missing.txt')
+                    assert(not ok and string.find(err, \"sim.read_file: can't read missing.txt\"), err)
+                end)",
+            ),
+        ],
+    );
+    assert_passed(&run(&folder));
 }
 
 #[test]
