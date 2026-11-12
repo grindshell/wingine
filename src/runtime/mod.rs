@@ -429,6 +429,8 @@
 mod audio;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod export;
+#[cfg(not(target_arch = "wasm32"))]
+mod fs_require;
 mod graphics;
 mod grid;
 #[cfg(feature = "egui")]
@@ -464,14 +466,15 @@ pub use native::link_library;
 use require::FilesRequirer as FileRequirer;
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::lua::mlua::luau::FsRequirer as FileRequirer;
+use fs_require::{FsRequirer as FileRequirer, Lookups};
+
 #[cfg(not(target_arch = "wasm32"))]
 use crate::watch::Watcher;
 use crate::{
     Context, Error, Game, Result, WindowConfig, WindowIcon,
     graphics::{Blend, Canvas, Color, Font, FontSettings, Model, Resolution, Texture},
     lua::{
-        Scripts, mlua,
+        Bytecode, Scripts, mlua,
         mlua::{
             FromLuaMulti,
             luau::{NavigateError, Require},
@@ -742,6 +745,35 @@ fn identity(name: &str) -> String {
     identity
 }
 
+/// What loading a game takes from loads before it, which its scripts can't tell from loading it
+/// afresh: where `require` finds modules, and the bytecode scripts compile to. A game loaded for a
+/// window makes its own, so a reload finds files changed since; a run of Luau tests shares one
+/// between all its games, whose files don't change under it.
+#[derive(Clone, Default)]
+pub(crate) struct Reuse {
+    #[cfg(not(target_arch = "wasm32"))]
+    lookups: Lookups,
+    /// Kept only for tests, as a window's load compiles each script once anyway.
+    bytecode: Option<Bytecode>,
+}
+
+impl Reuse {
+    /// What a run of Luau tests shares between its games: bytecode too.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn for_tests() -> Self {
+        Self {
+            lookups: Lookups::default(),
+            bytecode: Some(Bytecode::default()),
+        }
+    }
+
+    /// The bytecode kept, if it's kept.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn bytecode(&self) -> Option<&Bytecode> {
+        self.bytecode.as_ref()
+    }
+}
+
 /// A game written in Luau, loaded from its folder.
 pub struct LuauGame {
     // The VM goes before the libraries' state, which its values may hold.
@@ -774,7 +806,19 @@ impl LuauGame {
     /// Loads the game in `folder` with its settings, `config`, read already: the native
     /// libraries they list, then its `main.luau`.
     pub fn load_with(ctx: &mut Context, folder: impl AsRef<Path>, config: &Config) -> Result<Self> {
-        Self::load_keeping(ctx, folder.as_ref(), config, None)
+        Self::load_keeping(ctx, folder.as_ref(), config, None, Reuse::default())
+    }
+
+    /// Loads the game in `folder` as [`LuauGame::load_with`] does, taking what it can from
+    /// `reuse`, and adding what it learns to it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn load_reusing(
+        ctx: &mut Context,
+        folder: &Path,
+        config: &Config,
+        reuse: &Reuse,
+    ) -> Result<Self> {
+        Self::load_keeping(ctx, folder, config, None, reuse.clone())
     }
 
     /// Loads the game in `folder` as [`LuauGame::load_with`] does, but if that fails, returns a
@@ -829,8 +873,10 @@ impl LuauGame {
             // Frames ask the new game for an interface.
             ctx.gui.game_has_gui = true;
         }
-        let loaded =
-            config.and_then(|config| Self::load_keeping(ctx, &self.folder, &config, kept.clone()));
+        // Nothing is reused: a reload is for files that changed.
+        let loaded = config.and_then(|config| {
+            Self::load_keeping(ctx, &self.folder, &config, kept.clone(), Reuse::default())
+        });
         let mut game = match loaded {
             Ok(game) => game,
             Err(err) => match Self::stopped(ctx, &self.folder, &self.config, err) {
@@ -888,12 +934,14 @@ impl LuauGame {
     }
 
     /// Loads the game in `folder` with its settings, `config`: the native libraries they list,
-    /// then its `main.luau`, whose `window.reloaded()` returns `kept`.
+    /// then its `main.luau`, whose `window.reloaded()` returns `kept`, taking what it can from
+    /// `reuse`.
     fn load_keeping(
         ctx: &mut Context,
         folder: &Path,
         config: &Config,
         kept: Option<Value>,
+        reuse: Reuse,
     ) -> Result<Self> {
         let scripts = Scripts::new()?;
         let lua = scripts.lua();
@@ -916,13 +964,18 @@ impl LuauGame {
         #[cfg(feature = "egui")]
         gui::register(lua, &lent)?;
         let main = folder.join("main.luau");
+        #[cfg(not(target_arch = "wasm32"))]
+        let files = FileRequirer::new(reuse.lookups.clone(), reuse.bytecode.clone());
+        #[cfg(target_arch = "wasm32")]
+        let files = FileRequirer::new();
         let requirer = Requirer {
-            files: FileRequirer::new(),
+            files,
             main: format!("@{}", main.display()),
         };
         globals.set("require", lua.create_require_function(requirer)?)?;
         let natives = Natives::load(lua, &lent, ctx, folder, &config.libraries)?;
-        lent.lend(ctx, || scripts.load(&main))?;
+        let bytecode = reuse.bytecode.as_ref();
+        lent.lend(ctx, || scripts.load_with_bytecode(&main, bytecode))?;
         Ok(Self {
             scripts,
             natives,

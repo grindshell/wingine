@@ -25,9 +25,7 @@ pub(crate) fn is_file(path: &Path) -> bool {
     imp::is_file(path)
 }
 
-/// Whether there's a folder at `path`. Only the web's requirer needs it, where mlua's can't
-/// look.
-#[cfg(target_arch = "wasm32")]
+/// Whether there's a folder at `path`, as `require` asks.
 pub(crate) fn is_dir(path: &Path) -> bool {
     imp::is_dir(path)
 }
@@ -53,6 +51,10 @@ mod imp {
 
     pub fn is_file(path: &Path) -> bool {
         path.is_file()
+    }
+
+    pub fn is_dir(path: &Path) -> bool {
+        path.is_dir()
     }
 
     pub fn canonicalize(path: &Path) -> io::Result<PathBuf> {

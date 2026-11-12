@@ -125,11 +125,16 @@ fn each_test_starts_from_a_fresh_game() {
     let folder = game(
         "fresh",
         &[
-            ("main.luau", "state = { visits = 0 }"),
+            (
+                "main.luau",
+                "state = { visits = 0 } counter = require('./lib/counter')",
+            ),
+            ("lib/counter.luau", "return { count = 0 }"),
             (
                 "fresh.test.luau",
                 "test('first', function()
                     state.visits += 1
+                    counter.count += 1
                     marked = true
                     save.write('progress', { level = 3 })
                     input.bind('jump', { 'Space' })
@@ -137,6 +142,9 @@ fn each_test_starts_from_a_fresh_game() {
                 end)
                 test('second', function()
                     assert_equal(state.visits, 0)
+                    -- The run reads the module once, but runs it again for each game.
+                    assert_equal(require('./lib/counter').count, 0)
+                    assert(require('./lib/counter') == counter, 'the game has it')
                     assert_equal(marked, nil)
                     assert_equal(save.list(), {})
                     assert_equal(sim.frame_count(), 0)

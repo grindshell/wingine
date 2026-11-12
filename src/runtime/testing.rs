@@ -16,7 +16,10 @@
 //! [`Simulation`] runs it: its `main.luau` has run, but no frame has, its saves are in a folder
 //! of its own that starts empty, and its audio is silent. Frames come at a fixed 60 a second, and
 //! only when the test runs them. Test files run in the order of their paths, and their tests in
-//! the order they declare them, each loading the game and the file again.
+//! the order they declare them, each loading the game and the file again. Only what scripts can't
+//! tell from reading them afresh is kept between a run's games, since nothing changes the files
+//! under it: where `require` finds each module, and the bytecode each script compiles to. Every
+//! script still runs again in every game.
 //!
 //! Test code runs in the game's VM, lent the context as `update` is, so it reads and changes the
 //! game's globals as they are at the time (`pong.ball.vx`), calls the engine's functions, and
@@ -103,11 +106,12 @@ use std::{
 
 use mlua::{FromLua, Lua, MultiValue, Table, Thread, thread::ThreadStatus};
 
-use super::{Config, LuauGame, config};
+use super::{Config, LuauGame, Reuse, config};
 use crate::{
     Result,
     headless::{Comparison, Image, Simulation},
     input::{GamepadButton, Key, MouseButton, Stick},
+    lua::load_script,
 };
 
 /// The end of the names of test files.
@@ -386,12 +390,19 @@ pub fn run(
         })?;
     }
     let mut report = Report::default();
+    // Every game the run loads is the same files, read once.
+    let reuse = Reuse::for_tests();
     for file in test_files(folder) {
         let mut record = |outcome: Outcome| {
             on_outcome(&outcome);
             report.outcomes.push(outcome);
         };
-        let left_out = run_file(folder, &config, &file, options, &mut record);
+        let game = Game {
+            folder,
+            config: &config,
+            reuse: &reuse,
+        };
+        let left_out = run_file(&game, &file, options, &mut record);
         report.filtered_out += left_out.filtered_out;
         report.ignored += left_out.ignored;
     }
@@ -468,15 +479,22 @@ impl Loaded {
     }
 }
 
-/// Runs the tests in `file` in the game in `folder` that `options` picks, each against a fresh
+/// The game a run tests: its folder, its settings, and what its loads share.
+struct Game<'a> {
+    folder: &'a Path,
+    config: &'a Config,
+    reuse: &'a Reuse,
+}
+
+/// Runs the tests in `file` in `game` that `options` picks, each against a fresh copy of the
 /// game, recording their outcomes, and returns how many it left out.
 fn run_file(
-    folder: &Path,
-    config: &Config,
+    game: &Game,
     file: &str,
     options: &Options,
     record: &mut impl FnMut(Outcome),
 ) -> LeftOut {
+    let folder = game.folder;
     let path = folder.join(file);
     let outcome = |name: Option<&str>, failure: Option<String>, written| Outcome {
         file: file.to_owned(),
@@ -485,7 +503,7 @@ fn run_file(
         written,
     };
     // The first game loaded finds the file's tests, and runs the first.
-    let mut fresh = match load(folder, config, &path) {
+    let mut fresh = match load(game, &path) {
         Ok(loaded) => Some(loaded),
         Err(failure) => {
             record(outcome(None, Some(failure), Vec::new()));
@@ -518,7 +536,7 @@ fn run_file(
             left_out.ignored += 1;
             continue;
         }
-        let loaded = match fresh.take().map_or_else(|| load(folder, config, &path), Ok) {
+        let loaded = match fresh.take().map_or_else(|| load(game, &path), Ok) {
             Ok(loaded) if loaded.names() == names => loaded,
             Ok(_) => {
                 let failure = "the file declared different tests when it loaded again".to_owned();
@@ -571,21 +589,25 @@ fn tidy(folder: &Path, failure: &str) -> String {
         .join("\n")
 }
 
-/// Starts the game in `folder` with its settings, `config`, and loads the test file at `path` in
-/// it, or says why it couldn't.
-fn load(folder: &Path, config: &Config, path: &Path) -> std::result::Result<Loaded, String> {
-    let mut simulation = Simulation::new(&config.window, |ctx| {
-        LuauGame::load_with(ctx, folder, config)
+/// Starts a fresh copy of `game`, and loads the test file at `path` in it, or says why it
+/// couldn't.
+fn load(game: &Game, path: &Path) -> std::result::Result<Loaded, String> {
+    let mut simulation = Simulation::new(&game.config.window, |ctx| {
+        LuauGame::load_reusing(ctx, game.folder, game.config, game.reuse)
     })
     .map_err(|err| format!("the game didn't load: {err}"))?;
-    let tests =
-        declare(&mut simulation, path).map_err(|err| format!("the file didn't load: {err}"))?;
+    let tests = declare(&mut simulation, path, game.reuse)
+        .map_err(|err| format!("the file didn't load: {err}"))?;
     Ok(Loaded { tests, simulation })
 }
 
 /// Loads the test file at `path` in the simulation's game, with an environment of its own, and
 /// returns the tests it declared.
-fn declare(simulation: &mut Simulation<LuauGame>, path: &Path) -> Result<Vec<Declaration>> {
+fn declare(
+    simulation: &mut Simulation<LuauGame>,
+    path: &Path,
+    reuse: &Reuse,
+) -> Result<Vec<Declaration>> {
     let source = fs::read_to_string(path).map_err(|source| crate::Error::ReadFile {
         path: path.to_owned(),
         source,
@@ -597,11 +619,15 @@ fn declare(simulation: &mut Simulation<LuauGame>, path: &Path) -> Result<Vec<Dec
         ..Default::default()
     }));
     let environment = environment(lua, &declared)?;
-    let chunk = lua
-        .load(source)
-        .set_name(format!("@{}", path.display()))
-        .set_environment(environment);
-    game.lent.lend(ctx, || Ok(chunk.exec()?))?;
+    let name = format!("@{}", path.display());
+    let file = load_script(
+        lua,
+        source.as_bytes(),
+        name,
+        Some(environment),
+        reuse.bytecode(),
+    )?;
+    game.lent.lend(ctx, || Ok(file.call::<()>(())?))?;
     let mut declared = declared.borrow_mut();
     declared.loading = false;
     Ok(std::mem::take(&mut declared.tests))

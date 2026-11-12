@@ -257,6 +257,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     fmt,
     path::Path,
     rc::Rc,
@@ -386,12 +387,62 @@ pub(crate) fn count_down(left: &mut f64, seconds: f32) -> bool {
     *left <= 0.0
 }
 
+/// How scripts compile: at optimization level 2, where calls between Luau functions take half as
+/// long.
+fn compiler() -> mlua::chunk::Compiler {
+    mlua::chunk::Compiler::new().set_optimization_level(2)
+}
+
+/// The bytecode scripts compiled to, by their source, so a script loaded again isn't compiled
+/// again: a run of Luau tests keeps one, as its games load the same scripts for every test. A
+/// script that doesn't compile isn't kept, so loading it fails as it always does.
+#[derive(Clone, Default)]
+pub(crate) struct Bytecode(Rc<RefCell<BySource>>);
+
+/// Bytecode by the source it compiled from.
+type BySource = HashMap<Box<[u8]>, Rc<[u8]>>;
+
+impl Bytecode {
+    /// What `source` compiles to, kept or compiled now and kept, if it compiles.
+    fn of(&self, source: &[u8]) -> Option<Rc<[u8]>> {
+        if let Some(bytecode) = self.0.borrow().get(source) {
+            return Some(Rc::clone(bytecode));
+        }
+        let bytecode: Rc<[u8]> = compiler().compile(source).ok()?.into();
+        let kept = Rc::clone(&bytecode);
+        self.0.borrow_mut().insert(source.into(), kept);
+        Some(bytecode)
+    }
+}
+
+/// Loads the script `source` into `lua` as a function named `name` (`@` and its path, for a file)
+/// with `environment`, compiling it as scripts compile, or taking what it compiled to from
+/// `bytecode`.
+pub(crate) fn load_script(
+    lua: &mlua::Lua,
+    source: &[u8],
+    name: String,
+    environment: Option<mlua::Table>,
+    bytecode: Option<&Bytecode>,
+) -> mlua::Result<mlua::Function> {
+    let compiled = bytecode.and_then(|bytecode| bytecode.of(source));
+    let chunk = match &compiled {
+        Some(compiled) => lua.load(&compiled[..]),
+        None => lua.load(source),
+    };
+    let chunk = chunk.set_name(name);
+    match environment {
+        Some(environment) => chunk.set_environment(environment),
+        None => chunk,
+    }
+    .into_function()
+}
+
 impl Scripts {
     /// A VM with the built-ins and nothing else loaded.
     pub fn new() -> Result<Self> {
         let lua = mlua::Lua::new();
-        // Calls between Luau functions take half as long.
-        lua.set_compiler(mlua::chunk::Compiler::new().set_optimization_level(2));
+        lua.set_compiler(compiler());
         lua.set_app_data(Spawned::default());
         let began_wait = BeganWait::default();
         let globals = lua.globals();
@@ -447,15 +498,22 @@ impl Scripts {
 
     /// Runs the script file at `path`, which usually defines functions for later.
     pub fn load(&self, path: impl AsRef<Path>) -> Result<()> {
-        let path = path.as_ref();
+        self.load_with_bytecode(path.as_ref(), None)
+    }
+
+    /// Runs the script file at `path`, as [`Scripts::load`] does, taking what it compiles to
+    /// from `bytecode` if it holds it.
+    pub(crate) fn load_with_bytecode(
+        &self,
+        path: &Path,
+        bytecode: Option<&Bytecode>,
+    ) -> Result<()> {
         let source = crate::files::read_to_string(path).map_err(|source| Error::ReadFile {
             path: path.to_owned(),
             source,
         })?;
-        self.lua
-            .load(source)
-            .set_name(format!("@{}", path.display()))
-            .exec()?;
+        let name = format!("@{}", path.display());
+        load_script(&self.lua, source.as_bytes(), name, None, bytecode)?.call::<()>(())?;
         Ok(())
     }
 
@@ -2253,6 +2311,30 @@ mod tests {
             })
             .unwrap();
         count
+    }
+
+    #[test]
+    fn kept_bytecode_compiles_a_source_once_and_loads_as_the_source_would() {
+        let bytecode = Bytecode::default();
+        let source = b"local function twice(n) return n * 2 end return twice(21)";
+        for _ in 0..2 {
+            let scripts = Scripts::new().unwrap();
+            let loaded = load_script(scripts.lua(), source, "=kept".into(), None, Some(&bytecode));
+            assert_eq!(loaded.unwrap().call::<i32>(()).unwrap(), 42);
+        }
+        assert_eq!(bytecode.0.borrow().len(), 1, "compiled once");
+
+        // A script that doesn't compile fails as it does without, and isn't kept.
+        let broken = b"return (";
+        let scripts = Scripts::new().unwrap();
+        let lua = scripts.lua();
+        let kept = load_script(lua, broken, "=broken".into(), None, Some(&bytecode));
+        let compiled = load_script(lua, broken, "=broken".into(), None, None);
+        assert_eq!(
+            kept.unwrap_err().to_string(),
+            compiled.unwrap_err().to_string()
+        );
+        assert_eq!(bytecode.0.borrow().len(), 1);
     }
 
     #[test]

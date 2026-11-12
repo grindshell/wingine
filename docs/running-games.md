@@ -298,7 +298,9 @@ benchmark, is left out and counted as ignored, and `--ignored` runs only those:
 **Each test starts afresh.** Every test runs against a new copy of the game, as it is once its
 `main.luau` has run, before its first frame: its saves start empty and its audio is silent, and
 nothing one test changes reaches another. Test files run in the order of their paths, and their
-tests in the order they're declared.
+tests in the order they're declared. A run reads each script once, keeping where its modules are
+and what each script compiles to for every test after, so don't change the game's files while its
+tests run; every script still runs again for every test.
 
 **Tests read the game as it is.** A test file runs in the game's own VM, so it reads and changes
 the game's globals directly, as they are at the time: `pong.ball.vx`, after any number of frames.

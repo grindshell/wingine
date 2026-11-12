@@ -243,7 +243,13 @@ own right.
 - `export.rs`: `wingine export`, the CLI's executable copied as the game, beside `game/` and
   `licenses/`; on Windows it's patched to open no console and given the game's icon.
 - `testing.rs`: Luau games' own tests in `*.test.luau`, each against a fresh `Simulation`. A test
-  file's environment isn't Luau's "safe" one, so it reads the game's globals as they are.
+  file's environment isn't Luau's "safe" one, so it reads the game's globals as they are. A run
+  shares one `Reuse` between its games: `require`'s lookups and each script's bytecode, by its
+  source (`lua::Bytecode`), never anything a script made.
+- `fs_require.rs`: `require` off the web, navigating as mlua's `FsRequirer` does (a test holds it
+  to mlua's answers), but remembering whether each path is a file or folder (`Lookups`), once a
+  load in a window and once a run in tests: asking the file system for every `require` was a third
+  of a large game's load. `require.rs` is the web's, over the page's files.
 - `src/main.rs`: the `wingine` executable: run a game, `--watch`, `test`, `export`, and with no
   arguments, the `game` folder beside it.
 
