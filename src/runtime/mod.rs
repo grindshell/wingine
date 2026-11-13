@@ -230,7 +230,8 @@
 //!   `options.gravity`, a vector (9.81 down by default), and which the first node given to it
 //!   makes a world of that node's 3D view: bodies shaped like what nodes show, which `world:step`
 //!   moves on through time, characters `world:walk` walks among them, and sensors; rays and
-//!   overlaps ask it where things are.
+//!   overlaps ask it where things are. It follows its nodes by which of them were placed anew,
+//!   so what moves where no body is costs a large world nothing.
 //!
 //! See [`physics`](crate::physics) for how. An engine built without its `physics` feature fails to
 //! make either.

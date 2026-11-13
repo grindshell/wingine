@@ -4,8 +4,10 @@
 //! floors across it, crates resting on them, posts nested in groups and characters walking, or a
 //! 3D view of boxes, and report the median time `update` took over [`FRAMES`] updates, once the
 //! crates have come to rest. Each does something else beside stepping the world: nothing, setting a
-//! tile that isn't solid, casting rays and overlapping boxes, or walking characters. The Rust cases
-//! step a world of tumbling boxes by a sixtieth of a second, and by a 59.94 Hz display's frame.
+//! tile that isn't solid, casting rays and overlapping boxes, or walking characters. The big 3D
+//! view's cases are what a world of many bodies costs when the scene changes where no body is,
+//! or where few are. The Rust cases step a world of tumbling boxes by a sixtieth of a second, and
+//! by a 59.94 Hz display's frame.
 
 use std::{
     fmt::Write as _,
@@ -37,6 +39,12 @@ const POSTS: usize = 10;
 const WALKERS: usize = 20;
 /// Boxes of the 3D view, in groups of ten.
 const BOXES: usize = 300;
+/// Boxes of the big 3D view, ten to a room and four rooms to a chunk, so four nodes down from
+/// the view, as a level put together of rooms has them.
+const MANY: usize = 2000;
+/// Rigs in the big 3D view, each a chain of [`JOINTS`] nodes with no bodies.
+const RIGS: usize = 30;
+const JOINTS: usize = 12;
 /// Boxes tumbling in the Rust cases.
 const TUMBLING: usize = 300;
 
@@ -67,6 +75,31 @@ fn main() {
     fs::write(game.join("bench.scene.luau"), level_3d()).unwrap();
     fs::write(game.join("main.luau"), MAIN_3D).unwrap();
     report("3D: 100 rays among 300 boxes", update_time(&game));
+    // What following the scene costs a world of many bodies, few of which anything changes.
+    let level_many = level_3d_many();
+    for (name, case, work) in [
+        (
+            "3d-write",
+            "a bodiless node moved and a ray, 20 times",
+            WRITES,
+        ),
+        (
+            "3d-rigs",
+            "30 rigs of 12 joints posed, a ray each",
+            RIGS_POSED,
+        ),
+        (
+            "3d-room",
+            "a room of 20 added, asked of, removed",
+            ROOM_ADDED,
+        ),
+    ] {
+        let game = folder.join(name);
+        fs::create_dir_all(&game).unwrap();
+        fs::write(game.join("bench.scene.luau"), &level_many).unwrap();
+        fs::write(game.join("main.luau"), main_3d_many(work)).unwrap();
+        report(&format!("3D, {MANY} boxes: {case}"), update_time(&game));
+    }
 
     println!("Rust, {TUMBLING} boxes tumbling, the mean of {FRAMES} steps:");
     for (case, dt) in [
@@ -348,3 +381,135 @@ const MAIN_3D: &str = "
         end
         world:step(dt)
     end";
+
+/// A 3D view of [`MANY`] boxes, in rooms of ten, each turned, in chunks of four, in a group; a
+/// lamp, [`RIGS`] rigs of [`JOINTS`] nodes one inside the next, and a spare room of twenty boxes,
+/// none of them with bodies.
+fn level_3d_many() -> String {
+    let boxes = |count: usize, tag: &str| -> String {
+        let mut boxes = String::new();
+        for i in 0..count {
+            writeln!(
+                boxes,
+                "                {{ name = \"box{i}\", kind = \"mesh\", shape = \"cuboid\", \
+                 x = {}, z = {}, tags = {{ \"{tag}\" }} }},",
+                (i % 5) as f32 * 1.5,
+                (i / 5) as f32 * 1.5
+            )
+            .unwrap();
+        }
+        boxes
+    };
+    let mut chunks = String::new();
+    for chunk in 0..MANY / 40 {
+        let mut rooms = String::new();
+        for room in 0..4 {
+            writeln!(
+                rooms,
+                "            {{ name = \"room{room}\", kind = \"node\", x = {}, z = {}, yaw = {}, \
+                 children = {{\n{}            }} }},",
+                (room % 2) as f32 * 8.0,
+                (room / 2) as f32 * 8.0,
+                room as f32 * 1.5707964,
+                boxes(10, "solid")
+            )
+            .unwrap();
+        }
+        writeln!(
+            chunks,
+            "            {{ name = \"chunk{chunk}\", kind = \"node\", x = {}, z = {}, \
+             children = {{\n{rooms}            }} }},",
+            (chunk % 10) as f32 * 16.0 - 80.0,
+            (chunk / 10) as f32 * 16.0 - 40.0,
+        )
+        .unwrap();
+    }
+    let mut rigs = String::new();
+    for rig in 0..RIGS {
+        let joints = (1..JOINTS).fold(String::new(), |inside, joint| {
+            format!(
+                "{{ name = \"joint{joint}\", kind = \"node\", y = 0.1, tags = {{ \"joint\" }}, \
+                 children = {{ {inside} }} }},"
+            )
+        });
+        writeln!(
+            rigs,
+            "            {{ name = \"rig{rig}\", kind = \"node\", x = {}, y = 1, \
+             tags = {{ \"rig\", \"joint\" }}, children = {{ {joints} }} }},",
+            rig as f32 * 2.0 - 30.0
+        )
+        .unwrap();
+    }
+    format!(
+        "return {{
+    format = 4,
+    children = {{
+        {{
+            name = \"view\", kind = \"view3d\", width = 320, height = 180,
+            camera = {{ position = {{ 0, 30, 40 }}, target = {{ 0, 0, 0 }} }},
+            children = {{
+                {{ name = \"ground\", kind = \"node\", children = {{\n{chunks}                }} }},
+                {{ name = \"lamp\", kind = \"node\", y = 5 }},
+                {{ name = \"spare\", kind = \"node\", x = 200, children = {{\n{}                }} }},
+{rigs}            }},
+        }},
+    }},
+}}
+",
+        boxes(20, "spare")
+    )
+}
+
+/// The big 3D game, which steps the world each update after doing `work`.
+fn main_3d_many(work: &str) -> String {
+    format!(
+        "local level = scene.load('bench.scene.luau')
+        local view = level:find('view')
+        local world = physics.world_3d()
+        for _, node in level:tagged('solid') do
+            world:add(node)
+        end
+        local lamp = view:find('lamp')
+        local ground = view:find('ground')
+        local spare = view:find('spare')
+        local rigs = {{}}
+        for i, rig in level:tagged('rig') do
+            rigs[i] = rig:tagged('joint')
+        end
+        local down = vector.create(0, -1, 0)
+        local time = 0
+
+        function update(dt)
+            time += dt
+            {work}
+            world:step(dt)
+        end"
+    )
+}
+
+/// A node with no body at it or in it moved, and a ray asked after each move.
+const WRITES: &str = "
+    for i = 1, 20 do
+        lamp:set_position_3d(vector.create(i, 5, time))
+        world:ray(vector.create(i * 4 - 40, 10, i * 2 - 20), down)
+    end";
+
+/// Each rig's joints turned, as a clip poses them, and a ray asked after each rig.
+const RIGS_POSED: &str = "
+    for i, joints in rigs do
+        for _, joint in joints do
+            joint:set_orientation(time + i)
+        end
+        world:ray(vector.create(i * 4 - 60, 10, i - 15), down)
+    end";
+
+/// A room copied into the level and made solid, as a level loads part of itself, then removed.
+const ROOM_ADDED: &str = "
+    local room = ground:add(spare, 'new')
+    room:set_position_3d(vector.create(0, 0, 60))
+    for _, box in room:tagged('spare') do
+        world:add(box)
+    end
+    world:ray(vector.create(0, 10, 60), down)
+    room:remove()
+    world:ray(vector.create(0, 10, 60), down)";

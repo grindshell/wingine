@@ -205,6 +205,12 @@ Units are the view's, which Rapier is tuned for as metres: a crate half a unit a
 metre, and gravity pulls down at 9.81 units a second each second unless the world says otherwise.
 Bodies go when their nodes are removed from their scene. Whether a node is shown doesn't matter.
 
+Following nodes costs by what moved, not by how big the world is: before it's asked anything, a
+world looks at the bodies of the nodes placed anew since, and of the nodes inside those. So a
+level of thousands of fixed bodies costs nothing more for a camera that moves, a character
+that's posed, or anything else with no body at it or in it; moving a node that holds the whole
+level looks at every body in it.
+
 ```lua
 local level = scene.load("level.scene.luau")
 local view = level:find("view")

@@ -575,6 +575,32 @@ pub struct Scene {
     /// Slots whose nodes were removed, for new nodes.
     free: Vec<u32>,
     size: [f32; 2],
+    /// Which of its nodes have changed, once something has asked it to keep them: see
+    /// [`Scene::keep_changes`].
+    changes: Option<Changes>,
+}
+
+/// The nodes of a [`Scene`] that have changed, in the order they did, for what follows them.
+#[derive(Clone, Debug, Default)]
+struct Changes {
+    /// The nodes changed, the latest last, after the first `dropped` of them.
+    nodes: Vec<NodeId>,
+    /// How many changes it no longer has: the oldest, dropped as it filled.
+    dropped: u64,
+}
+
+impl Changes {
+    /// How many changes it holds at most. Full, it drops the older half, so what reads it finds
+    /// at least the last half of these there.
+    const KEPT: usize = 8192;
+
+    fn push(&mut self, id: NodeId) {
+        if self.nodes.len() == Self::KEPT {
+            self.nodes.drain(..Self::KEPT / 2);
+            self.dropped += (Self::KEPT / 2) as u64;
+        }
+        self.nodes.push(id);
+    }
 }
 
 /// Where a node is kept, and how many nodes have been kept there before it, so an ID of a removed
@@ -1427,6 +1453,7 @@ impl Scene {
             }],
             free: Vec::new(),
             size,
+            changes: None,
         }
     }
 
@@ -1467,9 +1494,41 @@ impl Scene {
     /// as nodes are added or removed, and as the scene's size changes. Particles moving on, or
     /// sent out or ended, don't change it. It's never the same as another scene's unless one's a
     /// copy of the other, so what's worked out from where nodes are, such as a physics world's
-    /// colliders, need be worked out again only when this changes.
+    /// colliders, need be worked out again only when this changes. Which nodes changed is
+    /// [`Scene::changes_since`]'s to say, for a scene asked to keep them.
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Has the scene keep which of its nodes change from now on, for
+    /// [`Scene::changes_since`]: what follows a few of a large scene's nodes, as a 3D physics
+    /// world does its bodies', then looks only at those that changed, not at them all whenever
+    /// [`Scene::revision`] does. A scene nothing has asked keeps none, and a copy of a scene
+    /// keeps them if it did.
+    pub fn keep_changes(&mut self) {
+        self.changes.get_or_insert_with(Changes::default);
+    }
+
+    /// How many changes the scene has counted since [`Scene::keep_changes`]: what to hand
+    /// [`Scene::changes_since`] later, for the changes after these.
+    pub fn changes_seen(&self) -> u64 {
+        self.changes
+            .as_ref()
+            .map_or(0, |changes| changes.dropped + changes.nodes.len() as u64)
+    }
+
+    /// The nodes changed since the scene had counted `seen` changes
+    /// ([`Scene::changes_seen`]), in the order they did, or `None` if it no longer has them all,
+    /// having kept only the last few thousand, or keeps none.
+    ///
+    /// A node is listed as [`Scene::revision`] changes with it: each time it's handed out to
+    /// change by [`Scene::get_mut`] or [`Scene::node_mut`], whatever's done with it then, and so
+    /// as often as it is; when a node is added inside it; and when it's removed, as is each node
+    /// inside it then. A node listed may be gone by now. The scene's size changing lists nothing.
+    pub fn changes_since(&self, seen: u64) -> Option<&[NodeId]> {
+        let changes = self.changes.as_ref()?;
+        let from = usize::try_from(seen.checked_sub(changes.dropped)?).ok()?;
+        changes.nodes.get(from..)
     }
 
     /// Adds the node `def` describes, and its children, at the end of `parent`'s children, which
@@ -1573,6 +1632,9 @@ impl Scene {
     /// the scene's [`Scene::revision`], whether the node is changed or not.
     pub fn get_mut(&mut self, id: NodeId) -> Option<&mut Node> {
         self.revision = next_revision();
+        if let Some(changes) = &mut self.changes {
+            changes.push(id);
+        }
         self.get_mut_unrevised(id)
     }
 
@@ -2434,6 +2496,9 @@ impl Scene {
         // Changes the revision.
         self.node_mut(parent).children.retain(|&child| child != id);
         for removed in self.descendants(id) {
+            if let Some(changes) = &mut self.changes {
+                changes.push(removed);
+            }
             let slot = &mut self.slots[removed.index as usize];
             slot.node = None;
             // A slot whose generations have run out is left empty, so no ID leads to it again.
@@ -3485,6 +3550,57 @@ mod tests {
         scene.remove(node).unwrap();
         assert!(changed(&scene), "a node removed");
         assert_ne!(Scene::empty([0.0; 2]).revision(), scene.revision());
+    }
+
+    #[test]
+    fn scenes_keep_which_nodes_changed_once_asked() {
+        let mut scene = Scene::empty([10.0, 10.0]);
+        let root = scene.root();
+        let a = scene.attach(Node::new("a".into(), Kind::Node), root);
+        assert_eq!(scene.changes_seen(), 0);
+        assert_eq!(scene.changes_since(0), None, "none kept until asked");
+
+        scene.keep_changes();
+        let seen = scene.changes_seen();
+        assert_eq!(scene.changes_since(seen), Some(&[][..]));
+        // A node handed out to change, as often as it is; one added, as its parent; one removed,
+        // after its parent, with each node inside it.
+        scene.node_mut(a).set_position([1.0, 2.0]);
+        scene.node_mut(a).set_position([3.0, 2.0]);
+        let b = scene.attach(Node::new("b".into(), Kind::Node), a);
+        scene.remove(a).unwrap();
+        assert_eq!(scene.changes_since(seen), Some(&[a, a, a, root, a, b][..]));
+        assert_eq!(scene.changes_since(seen + 4), Some(&[a, b][..]));
+        assert!(!scene.contains_node(a) && !scene.contains_node(b));
+        // Not for what keeps the revision, nor a size.
+        let seen = scene.changes_seen();
+        assert_eq!(seen, 6);
+        scene.advance_particles(root, 1.0);
+        scene.set_size([20.0, 10.0]);
+        assert_eq!(scene.changes_since(seen), Some(&[][..]));
+        assert_eq!(
+            scene.changes_since(seen + 1),
+            None,
+            "more than it has counted"
+        );
+        // A copy keeps its own from there.
+        let mut copy = scene.clone();
+        copy.node_mut(root);
+        assert_eq!(copy.changes_since(seen), Some(&[root][..]));
+        assert_eq!(scene.changes_since(seen), Some(&[][..]));
+
+        // Full, it drops the older half, and says so to what hadn't read them.
+        for _ in 0..Changes::KEPT {
+            scene.node_mut(root);
+        }
+        assert_eq!(scene.changes_seen(), seen + Changes::KEPT as u64);
+        assert_eq!(scene.changes_since(seen), None);
+        let half = (Changes::KEPT / 2) as u64;
+        assert_eq!(
+            scene.changes_since(half).map(<[NodeId]>::len),
+            Some(half as usize + 6)
+        );
+        assert_eq!(scene.changes_since(half - 1), None);
     }
 
     #[test]

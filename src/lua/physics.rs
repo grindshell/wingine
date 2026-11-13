@@ -78,6 +78,11 @@ fn followed(
 /// `overlap_box` and a sensor's `inside`) follow the nodes first, and return nodes, in the order
 /// they were added.
 ///
+/// Following costs by what has changed, not by how many bodies there are: the world has its
+/// scene keep which nodes change ([`Scene::keep_changes`]), and looks only at the bodies of
+/// those and of what's inside them (see [`PhysicsWorld3d::follow`]). So a write to a node with
+/// no body at it or in it, a view's camera or a rig's joint, costs the next query a lookup.
+///
 /// Its arithmetic gives the same bits on every platform, as Rapier's does: where it places a
 /// fixed body, it turns its node's yaw, pitch and roll into a transform with `libm`, not as the
 /// scene does for drawing, whose sines come from the platform's C library.
@@ -93,6 +98,46 @@ pub struct PhysicsWorld3d {
     by_node: HashMap<NodeId, usize>,
     /// The [`Scene::revision`] the bodies last followed their nodes at.
     followed: Option<u64>,
+    /// How many of the scene's changes ([`Scene::changes_seen`]) they had followed then.
+    seen: u64,
+    /// The nodes with a body at them or inside them.
+    holders: HashMap<NodeId, Holder>,
+    /// How many times a body has been looked at to follow its node.
+    looked: u64,
+}
+
+/// What a [`PhysicsWorld3d`] keeps to follow its nodes by, and what following them has cost:
+/// from [`PhysicsWorld3d::following`], for tests and benchmarks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Following {
+    /// How many nodes have bodies.
+    pub bodies: usize,
+    /// How many nodes the world keeps as having a body at them or inside them.
+    pub holders: usize,
+    /// How many times a body has been looked at to follow its node, since the world was made:
+    /// each body once when all are, and otherwise only those at and inside nodes that changed.
+    pub looked: u64,
+}
+
+/// A node of a [`PhysicsWorld3d`] with a body at it or inside it: with the others, the part of
+/// the view's tree that leads down to bodies, which the world keeps so that a change to a node
+/// says which bodies to look at.
+///
+/// - When the world has followed all its scene's changes, `placed` is how the node is placed
+///   now. Between, it's only ever made, for a node that had no holder, and never changed: so it
+///   differs from the node only while a change to that node is yet to be followed, and
+///   following that change looks at every body inside the node.
+/// - `parent` is the node's as the holder was made, which it stays, a scene having no way to
+///   move a node to another parent, and which is still here once the node is gone, when the
+///   scene no longer says what it was inside.
+#[derive(Clone, Copy, Debug)]
+struct Holder {
+    /// How many bodies are at the node or inside it.
+    bodies: u32,
+    /// How the node was placed in its parent when the bodies inside it last followed it.
+    placed: Local,
+    /// The node it's in, if that's placed in 3D too, and so has a holder.
+    parent: Option<NodeId>,
 }
 
 /// A node of a [`PhysicsWorld3d`] with a body.
@@ -560,6 +605,16 @@ impl PhysicsWorld3d {
         }
     }
 
+    /// What the world keeps to follow its nodes by, and how many bodies it has looked at doing
+    /// so: what shows that a change to a node costs by the bodies it holds.
+    pub fn following(&self) -> Following {
+        Following {
+            bodies: self.bodies.len(),
+            holders: self.holders.len(),
+            looked: self.looked,
+        }
+    }
+
     /// Fails unless `node` is in the world's view, which becomes its view if it has none yet.
     fn check(&mut self, node: &SceneNode) -> mlua::Result<()> {
         let view =
@@ -573,6 +628,11 @@ impl PhysicsWorld3d {
             }
             Some(_) => Ok(()),
             None => {
+                // From here on the scene says which nodes change, for `follow`.
+                node.scene
+                    .try_borrow_mut()
+                    .map_err(|_| mlua::Error::runtime("the scene is in use"))?
+                    .keep_changes();
                 self.view = Some((Rc::clone(&node.scene), view));
                 Ok(())
             }
@@ -614,6 +674,7 @@ impl PhysicsWorld3d {
             None => {
                 self.bodies.push(bodied);
                 self.by_node.insert(id, self.bodies.len() - 1);
+                self.hold(scene, id);
                 self.bodies.len() - 1
             }
         };
@@ -631,45 +692,239 @@ impl PhysicsWorld3d {
         }
     }
 
+    /// Counts a new body at `node`, which is in `scene`, in the holder of each node from it up to
+    /// the view, making those there aren't yet. One there already keeps how it says its node
+    /// was placed: the bodies inside it may yet have to follow a change to it.
+    fn hold(&mut self, scene: &Scene, node: NodeId) {
+        let mut at = Some(node);
+        while let Some(id) = at {
+            let node = scene.node(id);
+            let Some(placed) = Local::of(node) else {
+                break;
+            };
+            let parent = node
+                .parent()
+                .filter(|&parent| Local::of(scene.node(parent)).is_some());
+            self.holders
+                .entry(id)
+                .and_modify(|holder| holder.bodies += 1)
+                .or_insert(Holder {
+                    bodies: 1,
+                    placed,
+                    parent,
+                });
+            at = parent;
+        }
+    }
+
+    /// Counts the body at `node` gone, from each holder that counted it, by the parents they
+    /// kept: `node` and the nodes it was in may be gone themselves. A holder with no bodies left
+    /// goes too.
+    fn unhold(&mut self, node: NodeId) {
+        let mut at = Some(node);
+        while let Some(id) = at {
+            let Some(holder) = self.holders.get_mut(&id) else {
+                break;
+            };
+            holder.bodies -= 1;
+            at = holder.parent;
+            if holder.bodies == 0 {
+                self.holders.remove(&id);
+            }
+        }
+    }
+
+    /// Adds to `found` which of `bodies` are at `id`, a node of `scene`, and inside it, in the
+    /// order their nodes draw, going down only through nodes that have bodies inside.
+    fn inside(&self, scene: &Scene, id: NodeId, found: &mut Vec<usize>) {
+        let mut stack = vec![id];
+        while let Some(id) = stack.pop() {
+            found.extend(self.by_node.get(&id));
+            let children = scene.node(id).children().iter().rev();
+            stack.extend(children.filter(|child| self.holders.contains_key(child)));
+        }
+    }
+
     /// Brings the bodies up to date with their nodes: moved, by scripts or with the nodes
     /// they're in, reshaped, or gone. A body whose node can no longer be placed, such as one whose
     /// parent has been turned since it was added, stays where it was. Nothing is read again if the
     /// scene hasn't changed since they last followed it, as between queries.
+    ///
+    /// If it has, only the bodies of the nodes that changed and of the nodes inside those are
+    /// looked at ([`Scene::changes_since`]), unless the scene no longer has all the changes since,
+    /// when every body is. Either way the world is told the same things in the same order: of
+    /// its bodies in the order they were added, each gone or moved at its turn.
     fn follow(&mut self, scene: &Scene) {
         if self.followed == Some(scene.revision()) {
             return;
         }
+        let changes = self.followed.and(scene.changes_since(self.seen));
+        match changes {
+            Some(changes) => self.follow_changed(scene, changes),
+            None => self.follow_all(scene),
+        }
         self.followed = Some(scene.revision());
+        self.seen = scene.changes_seen();
+        #[cfg(debug_assertions)]
+        self.check_followed(scene);
+    }
+
+    /// Brings every body up to date with its node, and every holder with its.
+    fn follow_all(&mut self, scene: &Scene) {
+        self.looked += self.bodies.len() as u64;
         let world = &mut self.world;
-        let count = self.bodies.len();
+        let mut gone = Vec::new();
         self.bodies.retain_mut(|bodied| {
             if !scene.contains_node(bodied.node) {
                 world.remove(bodied.body);
+                gone.push(bodied.node);
                 return false;
             }
             follow_one(world, scene, bodied);
             true
         });
-        if self.bodies.len() != count {
+        if !gone.is_empty() {
+            for node in gone {
+                self.unhold(node);
+            }
             self.reindex();
         }
+        for (&id, holder) in &mut self.holders {
+            if let Some(placed) = scene.get(id).and_then(Local::of) {
+                holder.placed = placed;
+            }
+        }
+    }
+
+    /// Brings the bodies up to date with `changes`, the nodes of `scene` changed since they last
+    /// followed it: the body of one that's gone goes, and the bodies at and inside one that's
+    /// placed otherwise than its holder says follow their nodes. A node with no holder, or
+    /// placed as it was, changed nothing a body is placed by.
+    fn follow_changed(&mut self, scene: &Scene, changes: &[NodeId]) {
+        let mut marked = Vec::new();
+        let mut last = None;
+        for &id in changes {
+            // A node written several times over, as setting where it is and how it's turned.
+            if last == Some(id) {
+                continue;
+            }
+            last = Some(id);
+            let Some(node) = scene.get(id) else {
+                marked.extend(self.by_node.get(&id));
+                continue;
+            };
+            let Some(holder) = self.holders.get_mut(&id) else {
+                continue;
+            };
+            let Some(placed) = Local::of(node) else {
+                continue;
+            };
+            if placed == holder.placed {
+                continue;
+            }
+            holder.placed = placed;
+            self.inside(scene, id, &mut marked);
+        }
+        if marked.is_empty() {
+            return;
+        }
+        // In the order the bodies were added, as following them all goes through them.
+        marked.sort_unstable();
+        marked.dedup();
+        self.looked += marked.len() as u64;
+        let mut gone = Vec::new();
+        for &index in &marked {
+            let bodied = &mut self.bodies[index];
+            if scene.contains_node(bodied.node) {
+                follow_one(&mut self.world, scene, bodied);
+            } else {
+                self.world.remove(bodied.body);
+                gone.push(index);
+            }
+        }
+        if gone.is_empty() {
+            return;
+        }
+        for &index in &gone {
+            self.unhold(self.bodies[index].node);
+        }
+        let mut gone = gone.into_iter().peekable();
+        let mut index = 0;
+        self.bodies.retain(|_| {
+            let goes = gone.next_if_eq(&index).is_some();
+            index += 1;
+            !goes
+        });
+        self.reindex();
+    }
+
+    /// In debug builds, that following left what reading every node again would: no body whose
+    /// node is gone or placed otherwise than the body is, and no holder behind its node.
+    #[cfg(debug_assertions)]
+    fn check_followed(&self, scene: &Scene) {
+        for bodied in &self.bodies {
+            let described = || scene.describe(bodied.node);
+            assert!(
+                scene.contains_node(bodied.node),
+                "a body was left behind by a node that's gone"
+            );
+            if let Ok((_, placed)) = place(scene, bodied.node, bodied.kind) {
+                // Unless it's placed by a number that isn't one, which equals nothing.
+                let same = placed;
+                assert!(
+                    placed == bodied.placed || placed != same,
+                    "the body of {} didn't follow it",
+                    described()
+                );
+            }
+            assert!(
+                self.holders.contains_key(&bodied.node),
+                "the body of {} has no holder",
+                described()
+            );
+        }
+        let mut held = 0;
+        for (&id, holder) in &self.holders {
+            let placed = scene.get(id).and_then(Local::of);
+            let followed = placed.is_some_and(|placed| {
+                let same = placed;
+                placed == holder.placed || placed != same
+            });
+            assert!(followed, "a holder didn't follow its node");
+            held += usize::from(self.by_node.contains_key(&id));
+        }
+        assert_eq!(held, self.bodies.len(), "bodies' nodes without holders");
     }
 
     /// Brings the bodies of `moved` and the nodes inside them up to date, as the world moved
     /// them, and if the rest were up to date before, `was` the scene's revision then, counts them
-    /// all as up to date: so walking a character doesn't make the next query read every node.
+    /// all as up to date: so walking a character leaves the next query nothing to follow. If
+    /// they weren't, it does nothing, and the next [`PhysicsWorld3d::follow`] finds `moved`
+    /// among the scene's changes.
+    ///
+    /// Scripts can tell this is done as a walk or a step ends, not at the next query:
+    /// `is_resting` and `velocity` follow nothing, and a body inside a node the world moved is
+    /// awake by then. Each of `moved` is followed in turn, then what's inside it, in the order
+    /// they draw.
     fn follow_moved(&mut self, scene: &Scene, moved: &[NodeId], was: u64) {
         if self.followed != Some(was) {
             return;
         }
+        let mut inside = Vec::new();
         for &id in moved {
-            for inside in scene.descendants(id) {
-                if let Some(&index) = self.by_node.get(&inside) {
-                    follow_one(&mut self.world, scene, &mut self.bodies[index]);
-                }
+            inside.clear();
+            self.inside(scene, id, &mut inside);
+            self.looked += inside.len() as u64;
+            for &index in &inside {
+                follow_one(&mut self.world, scene, &mut self.bodies[index]);
+            }
+            let placed = Local::of(scene.node(id));
+            if let (Some(holder), Some(placed)) = (self.holders.get_mut(&id), placed) {
+                holder.placed = placed;
             }
         }
         self.followed = Some(scene.revision());
+        self.seen = scene.changes_seen();
     }
 
     /// Moves the nodes of dynamic bodies to where their bodies are.
@@ -801,6 +1056,7 @@ impl mlua::UserData for PhysicsWorld3d {
             if let Some(index) = world.body_of(&node) {
                 let bodied = world.bodies.remove(index);
                 world.world.remove(bodied.body);
+                world.unhold(bodied.node);
                 world.reindex();
             }
             Ok(())

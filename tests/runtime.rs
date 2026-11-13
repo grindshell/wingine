@@ -5160,6 +5160,588 @@ mod physics {
             .to_string();
         assert!(err.contains("which has no camera"), "{err}");
     }
+
+    /// A 3D view of some grounds, for worlds that follow many nodes: a floor and a wall, four crates,
+    /// one with a lid; a group `yard` holding a post, a gate, a load and a nook with a stone in
+    /// it; a turned group with a box; a `room` of three blocks to copy into `rooms`; and a walker
+    /// with a pack beside it.
+    const GROUNDS: &str = r##"return {
+    format = 2,
+    children = {
+        {
+            name = "view", kind = "view3d", width = 0, height = 0, stretch = { 1, 1 },
+            camera = { position = { 0, 6, 12 }, target = { 0, 0, 0 } },
+            children = {
+                { name = "floor", kind = "mesh", shape = "cuboid", y = -0.5, size = { 40, 1, 40 } },
+                { name = "wall", kind = "mesh", shape = "cuboid", x = 4.25, y = 1, size = { 0.5, 2, 40 } },
+                { name = "crate_1", kind = "mesh", shape = "cuboid", x = -2, y = 0.5, size = { 0.5, 0.5, 0.5 } },
+                { name = "crate_2", kind = "mesh", shape = "cuboid", x = -2, y = 1.25, size = { 0.5, 0.5, 0.5 } },
+                {
+                    name = "crate_3", kind = "mesh", shape = "cuboid", x = -1.75, y = 2.5, size = { 0.5, 0.5, 0.5 },
+                    children = {
+                        { name = "lid", kind = "mesh", shape = "cuboid", y = 0.3, size = { 0.5, 0.1, 0.5 } },
+                    },
+                },
+                { name = "crate_4", kind = "mesh", shape = "cuboid", x = 1, y = 3, z = 1, size = { 0.5, 0.5, 0.5 } },
+                {
+                    name = "yard", kind = "node", x = -6,
+                    children = {
+                        { name = "post", kind = "mesh", shape = "cuboid", y = 0.5, size = { 0.5, 1, 0.5 } },
+                        { name = "gate", kind = "mesh", shape = "cuboid", x = 1, y = 0.5, size = { 0.5, 1, 0.5 } },
+                        { name = "load", kind = "mesh", shape = "cuboid", y = 1, z = 1.5, size = { 0.5, 0.5, 0.5 } },
+                        {
+                            name = "nook", kind = "node", z = -2,
+                            children = {
+                                { name = "stone", kind = "mesh", shape = "cuboid", y = 0.25, size = { 0.5, 0.5, 0.5 } },
+                            },
+                        },
+                    },
+                },
+                {
+                    name = "turned", kind = "node", z = -5, yaw = 0.5,
+                    children = {
+                        { name = "box", kind = "mesh", shape = "cuboid", y = 0.25, size = { 0.5, 0.5, 0.5 } },
+                    },
+                },
+                {
+                    name = "room", kind = "node", x = 100,
+                    children = {
+                        { name = "a", kind = "mesh", shape = "cuboid", y = 0.5, size = { 1, 1, 1 } },
+                        { name = "b", kind = "mesh", shape = "cuboid", x = 1.5, y = 0.25, size = { 0.5, 0.5, 0.5 } },
+                        { name = "c", kind = "mesh", shape = "cuboid", y = 2, z = 1.5, size = { 0.5, 0.5, 0.5 } },
+                    },
+                },
+                { name = "rooms", kind = "node", z = 6 },
+                {
+                    name = "walker", kind = "node", y = 0.002,
+                    children = {
+                        { name = "pack", kind = "mesh", shape = "cuboid", x = 0.8, y = 0.25, size = { 0.5, 0.5, 0.5 } },
+                    },
+                },
+            },
+        },
+    },
+}"##;
+
+    /// The grounds' game: its world, and `run(steps)`, which changes the grounds at random by the
+    /// seed in `state`, walks the walker and steps the world, and returns everything asked of
+    /// the world on the way, as numbers: what `velocity` and `is_resting` say as `walk` and
+    /// `step` return, before anything is asked that follows the nodes, where nodes then are, and
+    /// what rays and overlaps find.
+    const GROUNDS_GAME: &str = r#"
+        yard_scene = scene.load('grounds.scene.luau')
+        view = yard_scene:find('view')
+        walker = view:find('walker')
+        pack = view:find('walker/pack')
+        yard = view:find('yard')
+        rooms = view:find('rooms')
+        world = physics.world_3d()
+        world:add(view:find('floor'))
+        world:add(view:find('wall'))
+        crates = {}
+        for i = 1, 4 do
+            crates[i] = view:find('crate_' .. i)
+            world:add(crates[i], { body = 'dynamic', shape = 'box' })
+        end
+        world:add(view:find('crate_3/lid'), { shape = 'box' })
+        world:add(view:find('yard/post'))
+        world:add(view:find('yard/gate'), { body = 'kinematic', shape = 'box' })
+        world:add(view:find('yard/load'), { body = 'dynamic', shape = 'box' })
+        world:add(view:find('yard/nook/stone'), { shape = 'box' })
+        world:add(view:find('turned/box'), { shape = 'box' })
+        world:add(walker, { character = { radius = 0.2, height = 1 } })
+        world:add(pack, { body = 'dynamic', shape = 'box' })
+
+        state = 1
+        made = 0
+        -- The rooms there are, each `{ node, a, b, c }`, a part `false` once it has no body.
+        built = {}
+
+        -- A whole number from 0 to `n - 1`, by Lehmer's generator, exact in doubles.
+        local function roll(n)
+            state = state * 48271 % 2147483647
+            return state % n
+        end
+
+        local results = {}
+        local function note(...)
+            for _, value in { ... } do
+                table.insert(results, if value == true then 1 elseif value == false then 0 else value)
+            end
+        end
+
+        local function code(name)
+            local sum = 0
+            for i = 1, #name do
+                sum = (sum * 31 + string.byte(name, i)) % 1000003
+            end
+            return sum
+        end
+
+        -- Every node with a body that moves, in a fixed order.
+        local function movers()
+            local found = { walker, pack, view:find('yard/gate'), view:find('yard/load') }
+            for _, crate in crates do
+                table.insert(found, crate)
+            end
+            for _, room in built do
+                if room.c then
+                    table.insert(found, room.c)
+                end
+            end
+            return found
+        end
+
+        -- What the world says without following its nodes.
+        local function unfollowed()
+            for _, node in movers() do
+                local velocity = world:velocity(node)
+                note(velocity.x, velocity.y, velocity.z, world:is_resting(node))
+            end
+        end
+
+        local function placed()
+            for _, node in movers() do
+                local at = node:position_3d()
+                local yaw, pitch, roll_ = node:orientation()
+                note(at.x, at.y, at.z, yaw, pitch, roll_)
+            end
+        end
+
+        local function ask()
+            local from = vector.create(roll(41) / 2 - 10, 8, roll(41) / 2 - 10)
+            local hit = world:ray(from, vector.create(0, -1, 0))
+            note(hit ~= nil)
+            if hit then
+                note(code(hit.node:name()), hit.distance, hit.point.x, hit.point.y, hit.point.z)
+            end
+            local across = world:ray(
+                vector.create(-12, 0.5, roll(21) / 2 - 5),
+                vector.create(1, 0, 0),
+                { except = walker }
+            )
+            note(across ~= nil)
+            if across then
+                note(code(across.node:name()), across.distance)
+            end
+            local middle = vector.create(roll(17) / 2 - 6, 0.5, roll(17) / 2 - 2)
+            for _, node in world:overlap_ball(middle, 2.5) do
+                note(code(node:name()))
+            end
+            note(-1)
+        end
+
+        local changes = {
+            function()
+                yard:set_position_3d(vector.create(-6 + roll(9) / 4, 0, roll(9) / 4 - 1))
+            end,
+            function()
+                view:find('turned'):set_orientation(roll(13) / 8)
+            end,
+            function()
+                view:find('yard/nook'):set_position_3d(vector.create(roll(5) / 4, 0, -2 - roll(5) / 4))
+            end,
+            function()
+                local crate = crates[roll(4) + 1]
+                crate:set_position_3d(vector.create(roll(9) / 2 - 2, 2 + roll(5) / 2, roll(9) / 2 - 2))
+            end,
+            -- A room built, its blocks solid: sometimes placed only once they are.
+            function()
+                if #built >= 6 then
+                    return
+                end
+                made += 1
+                local node = rooms:add(view:find('room'), 'room_' .. made)
+                local at = vector.create(roll(9) * 2 - 8, 0, roll(5) * 2)
+                local late = roll(2) == 0
+                if not late then
+                    node:set_position_3d(at)
+                end
+                local room = { node = node, a = node:find('a'), b = node:find('b'), c = node:find('c') }
+                world:add(room.a)
+                world:add(room.b, { body = 'kinematic', shape = 'box' })
+                world:add(room.c, { body = 'dynamic', shape = 'box' })
+                if late then
+                    node:set_position_3d(at)
+                end
+                table.insert(built, room)
+            end,
+            -- A room gone, bodies and all.
+            function()
+                if #built == 0 then
+                    return
+                end
+                table.remove(built, roll(#built) + 1).node:remove()
+            end,
+            -- A block of a room no longer solid.
+            function()
+                if #built == 0 then
+                    return
+                end
+                local room = built[roll(#built) + 1]
+                local part = ({ 'a', 'b', 'c' })[roll(3) + 1]
+                if room[part] then
+                    world:remove(room[part])
+                    room[part] = false
+                end
+            end,
+            -- Changes that place nothing.
+            function()
+                view:set_camera({ position = vector.create(roll(5), 6, 12), target = vector.zero })
+                crates[roll(4) + 1]:set_visible(roll(2) == 0)
+            end,
+            function()
+                walker:set_position_3d(vector.create(roll(9) / 2 - 3, 0.002, roll(9) / 2 - 2))
+            end,
+            function()
+                world:push(crates[roll(4) + 1], vector.create(roll(5) / 8 - 0.25, roll(3) / 8, roll(5) / 8 - 0.25))
+            end,
+            function()
+                rooms:set_position_3d(vector.create(roll(5) / 2 - 1, 0, 6 + roll(5) / 2))
+            end,
+            -- A block of a room given another body, or one again.
+            function()
+                if #built == 0 then
+                    return
+                end
+                local room = built[roll(#built) + 1]
+                local node = room.node:find('b')
+                world:add(node, if roll(2) == 0 then { shape = 'box' } else { body = 'kinematic', shape = 'box' })
+                room.b = node
+            end,
+            -- The group of rooms moved, and a body added in it before anything is asked.
+            function()
+                if #built == 0 then
+                    return
+                end
+                rooms:set_position_3d(vector.create(roll(5) / 2 - 1, 0, 6 + roll(5) / 2))
+                local room = built[roll(#built) + 1]
+                world:add(room.node:find('a'))
+                room.a = room.node:find('a')
+            end,
+        }
+
+        function run(steps)
+            results = {}
+            for _ = 1, steps do
+                for _ = 1, 1 + roll(3) do
+                    changes[roll(#changes) + 1]()
+                    if roll(3) == 0 then
+                        ask()
+                    end
+                end
+                local moved, grounded =
+                    world:walk(walker, vector.create((roll(5) - 2) / 40, -0.01, (roll(5) - 2) / 40))
+                note(moved.x, moved.y, moved.z, grounded)
+                unfollowed()
+                world:step(1 / 60)
+                unfollowed()
+                placed()
+                if roll(2) == 0 then
+                    ask()
+                end
+            end
+            return results
+        end
+    "#;
+
+    /// The grounds' game, loaded.
+    fn grounds(test: &str) -> Simulation<LuauGame> {
+        let folder = game(
+            test,
+            &[("grounds.scene.luau", GROUNDS), ("main.luau", GROUNDS_GAME)],
+        );
+        let mut simulation = simulation(&folder);
+        simulation.step();
+        simulation
+    }
+
+    /// What three hundred steps of the grounds from `seed` come to, a hash of the bits of each
+    /// hundred's answers after the one before's.
+    fn grounds_run(seed: u32) -> [u64; 3] {
+        let mut simulation = grounds(&format!("physics_3d_grounds_{seed}"));
+        simulation.exec(&format!("state = {seed}"));
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        let hashes = [(); 3].map(|()| {
+            let results: Vec<f64> = simulation.eval("run(100)");
+            assert!(results.len() > 5000, "{}", results.len());
+            for value in results {
+                hash = (hash ^ value.to_bits()).wrapping_mul(0x100_0000_01b3);
+            }
+            hash
+        });
+        // Rooms came and went on the way.
+        let (made, standing): (u32, u32) = simulation.eval("made, #built");
+        assert!(made > 20 && standing < made, "{made}, {standing}");
+        hashes
+    }
+
+    /// Worlds follow their nodes by what changed, and these runs were pinned when they read every
+    /// node again instead: nodes moved, turned, added and removed at random, bodies added and
+    /// removed, and everything a world can be asked hashed, bit for bit. A change to how worlds
+    /// follow their nodes mustn't change them; one to how bodies move changes these with the
+    /// course's and the quarry's.
+    #[test]
+    fn worlds_follow_changed_nodes_as_they_followed_every_node() {
+        let expected = [
+            (
+                1,
+                [
+                    0x23d5_30d5_aab0_17d7,
+                    0x10f9_eacd_8348_898d,
+                    0xe918_2846_e35a_139f,
+                ],
+            ),
+            (
+                7,
+                [
+                    0x4bb2_8cf1_6bc5_1e15,
+                    0x7674_a6ad_010d_78dd,
+                    0xee8a_db63_c091_7ec5,
+                ],
+            ),
+            (
+                2026,
+                [
+                    0xd954_5fd6_9073_83fd,
+                    0x0116_1f59_7bc2_0595,
+                    0xa555_08b9_e23a_6337,
+                ],
+            ),
+        ];
+        let found = expected.map(|(seed, _)| (seed, grounds_run(seed)));
+        assert_eq!(found, expected, "{found:#x?}");
+    }
+
+    #[test]
+    fn a_walk_wakes_what_is_inside_the_character_before_it_returns() {
+        let mut simulation = grounds("physics_3d_wake");
+        simulation.exec("for _ = 1, 240 do world:step(1 / 60) end");
+        assert!(simulation.eval::<bool>("world:is_resting(pack)"));
+        // Nothing is asked between the walk and what `is_resting` says, which follows nothing.
+        simulation.exec("world:walk(walker, vector.create(0.05, -0.01, 0))");
+        assert!(!simulation.eval::<bool>("world:is_resting(pack)"));
+        // A step follows the nodes as it begins, so one put elsewhere wakes it too.
+        simulation.exec(
+            "for _ = 1, 240 do world:step(1 / 60) end
+            rested = world:is_resting(pack)
+            walker:set_position_3d(vector.create(1, 0.002, 1))
+            world:step(1 / 60)",
+        );
+        assert!(simulation.eval::<bool>("rested"));
+        assert!(!simulation.eval::<bool>("world:is_resting(pack)"));
+    }
+
+    /// What the game's `world`, or another it names, keeps to follow its nodes by.
+    fn following(simulation: &mut Simulation<LuauGame>, world: &str) -> wingine::lua::Following {
+        let world: wingine::lua::mlua::AnyUserData = simulation.eval(world);
+        let world = world
+            .borrow::<wingine::lua::PhysicsWorld3d>()
+            .expect("a 3D physics world");
+        world.following()
+    }
+
+    /// What a ray straight down from 5 up over `x`, `z` hits first, but the walker, and how far
+    /// down.
+    fn under(simulation: &mut Simulation<LuauGame>, x: f32, z: f32) -> (String, f32) {
+        let ray = format!(
+            "world:ray(vector.create({x}, 5, {z}), vector.create(0, -1, 0), {{ except = walker }})"
+        );
+        let (name, distance, _) = hit(simulation, &ray).expect("the floor is under everything");
+        (name, distance)
+    }
+
+    #[test]
+    fn following_looks_only_at_the_bodies_of_nodes_placed_anew() {
+        let mut simulation = grounds("physics_3d_looks");
+        // Asked first, the world looks at every body.
+        assert_eq!(under(&mut simulation, 8.0, 8.0).0, "floor");
+        let all = following(&mut simulation, "world");
+        assert_eq!((all.bodies, all.looked), (14, 14));
+        let looked = |simulation: &mut Simulation<LuauGame>, change: &str| {
+            let before = following(simulation, "world").looked;
+            simulation.exec(change);
+            under(simulation, 8.0, 8.0);
+            following(simulation, "world").looked - before
+        };
+
+        // Nothing placed, nodes with no bodies placed, and a node put where it is: no body.
+        let nothing =
+            "view:set_camera({ position = vector.create(1, 6, 12), target = vector.zero })
+            crates[1]:set_visible(false)
+            view:find('room'):set_position_3d(vector.create(90, 0, 0))
+            view:find('room/a'):set_orientation(1)
+            rooms:add(view:find('room'), 'spare'):set_position_3d(vector.create(3, 0, 0))
+            yard:set_position_3d(yard:position_3d())";
+        assert_eq!(looked(&mut simulation, nothing), 0);
+        // A node placed anew: its body, and those inside it, however deep.
+        assert_eq!(
+            looked(
+                &mut simulation,
+                "crates[1]:set_position_3d(vector.create(0, 3, 0))"
+            ),
+            1
+        );
+        assert_eq!(
+            looked(
+                &mut simulation,
+                "yard:set_position_3d(vector.create(-8, 0, 0))"
+            ),
+            4
+        );
+        assert_eq!(under(&mut simulation, -8.0, 0.0), ("post".into(), 4.0));
+        assert_eq!(under(&mut simulation, -8.0, -2.0), ("stone".into(), 4.5));
+        assert_eq!(under(&mut simulation, -6.0, 0.0).0, "floor");
+        let nook = "view:find('yard/nook'):set_position_3d(vector.create(0, 0, -3))";
+        assert_eq!(looked(&mut simulation, nook), 1);
+        assert_eq!(under(&mut simulation, -8.0, -3.0).0, "stone");
+        assert_eq!(
+            looked(&mut simulation, "view:find('turned'):set_orientation(1)"),
+            1
+        );
+        // Written many times over, and with another, each body is still looked at once.
+        let often = "for i = 1, 5 do
+                yard:set_position_3d(vector.create(-8 - i, 0, 0))
+                crates[2]:set_visible(true)
+            end";
+        assert_eq!(looked(&mut simulation, often), 4);
+        assert_eq!(under(&mut simulation, -13.0, 0.0).0, "post");
+        // A walk follows what it moved, the walker and its pack, and leaves nothing to follow.
+        assert_eq!(
+            looked(
+                &mut simulation,
+                "world:walk(walker, vector.create(0.05, -0.01, 0))"
+            ),
+            2
+        );
+        // Nor does a body that goes cost the others anything.
+        assert_eq!(looked(&mut simulation, "crates[4]:remove()"), 1);
+        assert_eq!(following(&mut simulation, "world").bodies, 13);
+    }
+
+    #[test]
+    fn a_body_added_inside_a_moved_node_leaves_the_others_to_follow_it() {
+        let mut simulation = grounds("physics_3d_added_inside");
+        // A room in the group of them, at 6 along `z`, its block `a` solid.
+        simulation.exec(
+            "room = rooms:add(view:find('room'), 'room_1')
+            room:set_position_3d(vector.zero)
+            world:add(room:find('a'))",
+        );
+        assert_eq!(under(&mut simulation, 0.0, 6.0), ("a".into(), 4.0));
+        // The group moves, and before anything is asked another of its blocks is made solid,
+        // where the group now has it.
+        simulation.exec(
+            "rooms:set_position_3d(vector.create(10, 0, 6))
+            world:add(room:find('b'), { shape = 'box' })",
+        );
+        let before = following(&mut simulation, "world").looked;
+        assert_eq!(under(&mut simulation, 10.0, 6.0), ("a".into(), 4.0));
+        assert_eq!(under(&mut simulation, 11.5, 6.0), ("b".into(), 4.5));
+        assert_eq!(under(&mut simulation, 0.0, 6.0).0, "floor");
+        assert_eq!(under(&mut simulation, 1.5, 6.0).0, "floor");
+        // Both blocks were looked at, the one there already having moved.
+        assert_eq!(following(&mut simulation, "world").looked - before, 2);
+    }
+
+    #[test]
+    fn a_world_left_behind_by_its_scene_s_changes_follows_every_node() {
+        let mut simulation = grounds("physics_3d_left_behind");
+        simulation.exec(
+            "room = rooms:add(view:find('room'), 'room_1')
+            room:set_position_3d(vector.zero)
+            world:add(room:find('a'))",
+        );
+        assert_eq!(under(&mut simulation, 0.0, 6.0).0, "a");
+        let bodies = following(&mut simulation, "world").bodies as u64;
+        // The group moves, among more changes than a scene keeps.
+        let before = following(&mut simulation, "world").looked;
+        simulation.exec(
+            "rooms:set_position_3d(vector.create(10, 0, 6))
+            for _ = 1, 10000 do
+                crates[1]:set_visible(true)
+            end",
+        );
+        assert_eq!(under(&mut simulation, 10.0, 6.0).0, "a");
+        assert_eq!(following(&mut simulation, "world").looked - before, bodies);
+        // Moved back to where it was when the world last followed it by the scene's changes,
+        // it's followed there: every body's look took the group's place too.
+        let before = following(&mut simulation, "world").looked;
+        simulation.exec("rooms:set_position_3d(vector.create(0, 0, 6))");
+        assert_eq!(under(&mut simulation, 0.0, 6.0).0, "a");
+        assert_eq!(under(&mut simulation, 10.0, 6.0).0, "floor");
+        assert_eq!(following(&mut simulation, "world").looked - before, 1);
+    }
+
+    #[test]
+    fn rooms_that_come_and_go_leave_a_world_as_it_was() {
+        let mut simulation = grounds("physics_3d_come_and_go");
+        under(&mut simulation, 8.0, 8.0);
+        let start = following(&mut simulation, "world");
+        simulation.exec(
+            "for i = 1, 101 do
+                local room = rooms:add(view:find('room'), 'room_' .. i)
+                room:set_position_3d(vector.create(i % 5 * 3, 0, 0))
+                world:add(room:find('a'))
+                world:add(room:find('b'), { body = 'kinematic', shape = 'box' })
+                world:add(room:find('c'), { body = 'dynamic', shape = 'box' })
+                world:step(1 / 60)
+                -- With its node, with the node it's in, and by the world alone.
+                if i % 3 == 0 then
+                    room:find('a'):remove()
+                elseif i % 3 == 1 then
+                    world:remove(room:find('b'))
+                    world:remove(room:find('a'))
+                    world:remove(room:find('c'))
+                end
+                if i % 2 == 0 then
+                    world:step(1 / 60)
+                end
+                room:remove()
+            end",
+        );
+        // Unasked since the last went, whole, the world still has its three bodies.
+        assert_eq!(following(&mut simulation, "world").bodies, start.bodies + 3);
+        assert_eq!(under(&mut simulation, 0.0, 6.0).0, "floor");
+        let end = following(&mut simulation, "world");
+        assert_eq!((end.bodies, end.holders), (start.bodies, start.holders));
+    }
+
+    #[test]
+    fn worlds_of_one_scene_each_follow_it_at_their_own_pace() {
+        let mut simulation = grounds("physics_3d_two_worlds");
+        simulation.exec(
+            "other = physics.world_3d()
+            other:add(view:find('yard/post'), { shape = 'box' })
+            function other_under(x, z)
+                local hit = other:ray(vector.create(x, 5, z), vector.create(0, -1, 0))
+                return hit and hit.node:name()
+            end",
+        );
+        assert_eq!(
+            simulation
+                .eval::<Option<String>>("other_under(-6, 0)")
+                .as_deref(),
+            Some("post")
+        );
+        // The first follows the yard twice over while the other is asked nothing.
+        simulation.exec("yard:set_position_3d(vector.create(-8, 0, 0))");
+        assert_eq!(under(&mut simulation, -8.0, 0.0).0, "post");
+        simulation.exec("yard:set_position_3d(vector.create(-10, 0, 0))");
+        assert_eq!(under(&mut simulation, -10.0, 0.0).0, "post");
+        let before = following(&mut simulation, "other").looked;
+        assert_eq!(
+            simulation
+                .eval::<Option<String>>("other_under(-10, 0)")
+                .as_deref(),
+            Some("post")
+        );
+        assert_eq!(
+            simulation.eval::<Option<String>>("other_under(-6, 0)"),
+            None
+        );
+        assert_eq!(following(&mut simulation, "other").looked - before, 1);
+    }
 }
 
 /// Interfaces Luau games lay out in `gui(ui)`, driven by clicking their widgets by label.

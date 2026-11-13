@@ -290,7 +290,7 @@ use crate::{
 #[cfg(feature = "physics")]
 mod physics;
 #[cfg(feature = "physics")]
-pub use physics::{PhysicsWorld, PhysicsWorld3d};
+pub use physics::{Following, PhysicsWorld, PhysicsWorld3d};
 
 /// Built-ins written in Luau, defined before the sandbox makes the globals read-only, given as
 /// `...` a function telling the scheduler the seconds of a `wait` that's beginning. Each frame,

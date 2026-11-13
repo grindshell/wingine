@@ -67,6 +67,19 @@ fn main() {
         },
     );
 
+    // As a scene a 3D physics world follows is posed.
+    posed.keep_changes();
+    report(
+        "Scene::pose, the same, the scene keeping which nodes change",
+        POSES,
+        || {
+            for i in 0..POSES {
+                let clip = &clips[i % clips.len()];
+                posed.pose(root, clip, i as f32 * 0.013, 1.0).unwrap();
+            }
+        },
+    );
+
     report("Scene::add, a copy of the picker", COPIES, || {
         let mut scene = picker.clone();
         let root = scene.root();

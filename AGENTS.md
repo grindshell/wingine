@@ -194,10 +194,20 @@ own right.
     scene nodes' 2D transforms take their sines from `libm` (`Affine::from_parts_exact`) so
     colliders placed by them do too.
   - Luau's worlds (`src/lua/physics.rs`, and `physics/world2d.rs` beside it) are of scene nodes,
-    re-read before each move, walk, step or query to follow what scripts moved, unless the
+    followed before each move, walk, step or query to where scripts moved them, unless the
     scene's `revision` (bumped by every `get_mut`, but not by particles) hasn't changed; they give
     nodes back in the order they were added. Tile maps are solid by `Tilemap::solid_rects`,
     reshaped only when the map's `solid_revision` changes and the boxes differ.
+  - The 2D world then reads every collider's node again, placed as they are by layout. The 3D
+    world reads only the bodies of nodes placed anew and of what's inside them: its scene keeps
+    which nodes change (`Scene::keep_changes`, a list of the last few thousand, which a world
+    left further behind than that makes up for by reading every body), and the world keeps a
+    `Holder` for each node with bodies inside, with how it was placed and its parent, so a
+    change where no body is costs a lookup and a body that goes is counted out though its node
+    is gone. Both ways tell Rapier the same things in the same order, bodies in the order added,
+    which `tests/runtime.rs` pins; debug builds check after each follow that reading every body
+    would find nothing more (`check_followed`). `walk` and `step` follow what they moved before
+    they return (`follow_moved`), which `is_resting` and `velocity`, following nothing, show.
   - A step up to 5% past a sixtieth is taken whole (`physics::parts`), so a 59.94 Hz display
     doesn't double Rapier's work.
 - `src/headless.rs`: `Headless` renders a canvas to an image; `Simulation` runs a whole `Game` at
@@ -326,8 +336,9 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
   `export`, `native`) and per example game. Games' tests check their Luau state through
   `Simulation::eval` and `exec`, and run their own Luau tests through `runtime::testing::run`.
 - `benches/drawing.rs`: what drawing sprites and text costs from Rust, Luau and native libraries;
-  `physics.rs`, what Luau worlds' steps, tiles, queries and walks cost, and Rust steps of a
-  sixtieth and a 59.94 Hz frame; `scenes.rs`, what posing, adding, loading instanced scenes and
+  `physics.rs`, what Luau worlds' steps, tiles, queries and walks cost, what a 3D world of 2,000
+  bodies costs as nodes without bodies move, rigs are posed and a room comes and goes, and Rust
+  steps of a sixtieth and a 59.94 Hz frame; `scenes.rs`, what posing, adding, loading instanced scenes and
   moving particles in stacks cost; `scripts.rs`, what waiting tasks cost. CI doesn't run them.
   Their numbers shift by a third with unrelated changes, and by a quarter between runs of one
   build, so run each a few times, and compare builds by running them in turn. A build started
