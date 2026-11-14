@@ -69,6 +69,13 @@ impl Model {
         &self.inner.files
     }
 
+    /// What tells the model from others while handles to it are kept: handles to the same model
+    /// have the same. Never 0.
+    #[cfg(feature = "physics")]
+    pub(crate) fn id(&self) -> usize {
+        Arc::as_ptr(&self.inner).addr()
+    }
+
     /// Its parts, each drawn with a draw call of its own.
     pub fn parts(&self) -> &[ModelPart] {
         &self.inner.parts

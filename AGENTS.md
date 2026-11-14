@@ -217,6 +217,18 @@ own right.
     which `tests/runtime.rs` pins; debug builds check after each follow that reading every body
     would find nothing more (`check_followed`). `walk` and `step` follow what they moved before
     they return (`follow_moved`), which `is_resting` and `velocity`, following nothing, show.
+  - The 3D world makes each model's or mesh's shape once for each way it's shaped and stretched
+    (`Shapes`, keyed by its `Arc`, held), a `Shape3d::Made` that every body of a copy shares,
+    posed where its node is: a fixed body too, its node's whole transform split into a pose and
+    a shaping (`split`), unless a parent stretches it across how it's turned, when its shape is
+    made where it is in the world, as every fixed body's once was. One turned by quarter turns
+    is only moved, its shaping turning its shape, since a ray turned into each of two pieces'
+    coordinates rounds otherwise in each, and slipped through the seam between them. Only
+    dynamic bodies are weighed (`weighed`): weighing a mesh costs a twentieth of making it, and
+    was done twice. Posing changed fixed bodies' answers in their last bits, and where a falling
+    body lands by up to millimetres:
+    `worlds_of_copies_of_models_end_the_same_to_the_bit_on_every_platform` says what it was
+    measured against.
   - A step up to 5% past a sixtieth is taken whole (`physics::parts`), so a 59.94 Hz display
     doesn't double Rapier's work.
 - `src/headless.rs`: `Headless` renders a canvas to an image; `Simulation` runs a whole `Game` at
@@ -346,8 +358,8 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
   `Simulation::eval` and `exec`, and run their own Luau tests through `runtime::testing::run`.
 - `benches/drawing.rs`: what drawing sprites and text costs from Rust, Luau and native libraries;
   `physics.rs`, what Luau worlds' steps, tiles, queries and walks cost, what a 3D world of 2,000
-  bodies costs as nodes without bodies move, rigs are posed and a room comes and goes, and Rust
-  steps of a sixtieth and a 59.94 Hz frame; `scenes.rs`, what posing, adding, loading instanced scenes and
+  bodies costs as nodes without bodies move, rigs are posed and a room comes and goes, what
+  adding a hundred copies of a model costs, and Rust steps of a sixtieth and a 59.94 Hz frame; `scenes.rs`, what posing, adding, loading instanced scenes and
   moving particles in stacks cost; `scripts.rs`, what waiting tasks cost. CI doesn't run them.
   Their numbers shift by a third with unrelated changes, and by a quarter between runs of one
   build, so run each a few times, and compare builds by running them in turn. A build started

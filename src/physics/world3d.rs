@@ -55,6 +55,54 @@ pub enum Shape3d {
         radius: f32,
         height: f32,
     },
+    /// A shape made solid already, by [`Shape3d::made`], which every body given it shares.
+    Made(MadeShape3d),
+}
+
+impl Shape3d {
+    /// This shape made solid, as [`World3d::add`] makes a body's, for bodies to share: a body
+    /// given it costs only its placing, where one given the shape itself costs making its
+    /// triangles solid again, which takes some tenths of a millisecond for a few hundred. So a
+    /// level built of copies of a few models makes a shape for each model and shares it. Fails
+    /// as adding a body would, for anything but the body's kind: triangles still only shape a
+    /// fixed body, and only one that moves must have something inside to weigh.
+    pub fn made(&self) -> Result<Self, String> {
+        let (shape, offset) = solid(self)?;
+        Ok(Self::Made(MadeShape3d { shape, offset }))
+    }
+
+    /// Whether it's triangles, which only fixed bodies are shaped by.
+    fn is_triangles(&self) -> bool {
+        match self {
+            Self::Triangles { .. } => true,
+            Self::Made(made) => made.shape.as_trimesh().is_some(),
+            _ => false,
+        }
+    }
+}
+
+/// A [`Shape3d`] made solid once, by [`Shape3d::made`], for bodies to share. A clone of it shares
+/// it too, and is equal only to those of the same.
+#[derive(Clone)]
+pub struct MadeShape3d {
+    shape: SharedShape,
+    /// Where it is in its body's coordinates: a box's middle, or a ball's.
+    offset: Pose,
+}
+
+impl PartialEq for MadeShape3d {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.shape.0, &other.shape.0) && self.offset == other.offset
+    }
+}
+
+impl std::fmt::Debug for MadeShape3d {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MadeShape3d")
+            .field("shape", &self.shape.shape_type())
+            .field("offset", &self.offset)
+            .finish()
+    }
 }
 
 /// Where a body is and how it's turned, as a node placed in 3D is: turned by `yaw`, `pitch` and
@@ -94,12 +142,19 @@ impl Pose3d {
 
     /// From how Rapier has it.
     fn from_rapier(pose: &Pose) -> Self {
+        let matrix = rapier3d::math::Matrix::from_quat(pose.rotation);
+        let axes = [matrix.x_axis, matrix.y_axis, matrix.z_axis].map(Into::into);
+        Self::from_axes(pose.translation.into(), axes)
+    }
+
+    /// At `position`, turned so that its `x`, `y` and `z` lie along `axes`, which are each of
+    /// length 1 and at right angles to each other, as a rotation's are.
+    pub(crate) fn from_axes(position: [f32; 3], axes: [[f32; 3]; 3]) -> Self {
         // The rotation's columns, x, y and z: yaw * pitch * roll is
         //   [ cy cz + sy sx sz,  sy sx cz - cy sz,  sy cx ]
         //   [ cx sz,             cx cz,             -sx   ]
         //   [ cy sx sz - sy cz,  sy sz + cy sx cz,  cy cx ]
-        let matrix = rapier3d::math::Matrix::from_quat(pose.rotation);
-        let [x, y, z] = [matrix.x_axis, matrix.y_axis, matrix.z_axis];
+        let [x, y, z] = axes.map(Vector::from);
         let pitch = libm::asinf((-z.y).clamp(-1.0, 1.0));
         let (yaw, roll) = if z.x * z.x + z.z * z.z > 1.0e-12 {
             (libm::atan2f(z.x, z.z), libm::atan2f(x.y, y.y))
@@ -108,7 +163,7 @@ impl Pose3d {
             (libm::atan2f(-x.z, x.x), 0.0)
         };
         Self {
-            position: pose.translation.into(),
+            position,
             yaw,
             pitch,
             roll,
@@ -181,10 +236,11 @@ pub struct Walked3d {
 ///
 /// Its coordinates are a 3D view's world's: right-handed, with `y` up, as glTF's are, and its
 /// units the view's, which Rapier tunes itself for as metres. Bodies are fixed, dynamic or
-/// kinematic ([`BodyKind`]), each a [`Shape3d`] placed by a [`Pose3d`]. Characters walk with
-/// [`World3d::walk`], which moves a cylinder as a kinematic body is moved, stopping at what's solid
-/// and sliding along it, stepping up onto stairs, walking up and down slopes, and pushing dynamic
-/// bodies out of the way.
+/// kinematic ([`BodyKind`]), each a [`Shape3d`] placed by a [`Pose3d`]; a shape made once
+/// ([`Shape3d::made`]) is shared by every body given it, which then costs only its placing, and
+/// only dynamic bodies are weighed. Characters walk with [`World3d::walk`], which moves a
+/// cylinder as a kinematic body is moved, stopping at what's solid and sliding along it, stepping
+/// up onto stairs, walking up and down slopes, and pushing dynamic bodies out of the way.
 ///
 /// Scripts ask where things are by rays ([`World3d::cast_ray`]), by shapes overlapping bodies
 /// ([`World3d::overlapping`]), and by sensors ([`Body3d::sensor`]), areas nothing bumps into that
@@ -241,7 +297,7 @@ impl World3d {
             check_sensor(body.kind, &body.shape)?;
         }
         let collider = collider(&body.shape, body.kind)?
-            .density(body.material.density)
+            .density(weighed(body.kind, body.material.density))
             .friction(body.material.friction)
             .restitution(body.material.bounce);
         let collider = sensed(collider, body.sensor);
@@ -283,7 +339,7 @@ impl World3d {
             self.rapier.remove_collider(handle);
         }
         let made = made
-            .density(material.density)
+            .density(weighed(kind, material.density))
             .friction(material.friction)
             .restitution(material.bounce);
         let collider = self
@@ -969,7 +1025,7 @@ fn excepts(except: &[BodyId], collider: &Collider) -> bool {
 /// through, which triangles aren't.
 fn check_sensor(kind: BodyKind, shape: &Shape3d) -> Result<(), String> {
     check_sensor_kind(kind)?;
-    if matches!(shape, Shape3d::Triangles { .. }) {
+    if shape.is_triangles() {
         return Err(
             "a sensor is an area, solid all through, which triangles aren't: give it a hull, a \
              box or a ball"
@@ -993,17 +1049,45 @@ fn sensed(collider: ColliderBuilder, sensor: bool) -> ColliderBuilder {
 
 /// A collider of `shape`, for a body of `kind`.
 fn collider(shape: &Shape3d, kind: BodyKind) -> Result<ColliderBuilder, String> {
+    if kind != BodyKind::Fixed && shape.is_triangles() {
+        return Err(
+            "only fixed bodies are shaped by their triangles: give one that moves a hull, a box \
+             or a ball"
+                .into(),
+        );
+    }
+    let (shape, offset) = solid(shape)?;
+    // What's flat weighs nothing, which only what doesn't fall can. Only what falls is weighed,
+    // which for many triangles costs a twentieth of making them solid.
+    if kind == BodyKind::Dynamic {
+        let mass = shape.mass_properties(1.0).mass();
+        if mass.is_nan() || mass <= 0.0 {
+            return Err(
+                "it's flat, with nothing inside to weigh: give what falls some depth".into(),
+            );
+        }
+    }
+    Ok(ColliderBuilder::new(shape).position(offset))
+}
+
+/// How dense a collider of a body of `kind` is, of `density`: as dense as its material if the
+/// body falls, and otherwise of no weight, so Rapier doesn't weigh its shape as it's added, which
+/// a body that doesn't move by forces has no use for.
+fn weighed(kind: BodyKind, density: f32) -> f32 {
+    if kind == BodyKind::Dynamic {
+        density
+    } else {
+        0.0
+    }
+}
+
+/// `shape` made solid, and where it is in its body's coordinates, or why it can't be.
+fn solid(shape: &Shape3d) -> Result<(SharedShape, Pose), String> {
     let finite = |values: &[f32]| values.iter().all(|value| value.is_finite());
     let point = |point: &[f32; 3]| Vector::from(*point);
-    let collider = match shape {
+    let at = |middle: Vector| Pose::from_translation(middle);
+    Ok(match shape {
         Shape3d::Triangles { points, triangles } => {
-            if kind != BodyKind::Fixed {
-                return Err(
-                    "only fixed bodies are shaped by their triangles: give one that moves a \
-                     hull, a box or a ball"
-                        .into(),
-                );
-            }
             if !points.iter().all(|point| finite(point)) {
                 return Err("its triangles' corners must be finite".into());
             }
@@ -1042,7 +1126,7 @@ fn collider(shape: &Shape3d, kind: BodyKind) -> Result<ColliderBuilder, String> 
                 )
             })
             .map_err(|err| format!("its triangles can't be made solid: {err}"))?;
-            ColliderBuilder::new(shape)
+            (shape, Pose::IDENTITY)
         }
         Shape3d::Hull(points) => {
             if !points.iter().all(|point| finite(point)) {
@@ -1051,7 +1135,7 @@ fn collider(shape: &Shape3d, kind: BodyKind) -> Result<ColliderBuilder, String> 
             let points: Vec<Vector> = points.iter().map(point).collect();
             let shape = SharedShape::convex_hull(&points)
                 .ok_or("it has too few corners to make a shape of")?;
-            ColliderBuilder::new(shape)
+            (shape, Pose::IDENTITY)
         }
         Shape3d::Box(bounds) => {
             let half = Vector::from(bounds.size()) / 2.0;
@@ -1061,15 +1145,14 @@ fn collider(shape: &Shape3d, kind: BodyKind) -> Result<ColliderBuilder, String> 
             if half.min_element() < 0.0 {
                 return Err("a box's corners must be its least and its most".into());
             }
-            ColliderBuilder::new(SharedShape::cuboid(half.x, half.y, half.z))
-                .position(Pose::from_translation(Vector::from(bounds.center())))
+            let shape = SharedShape::cuboid(half.x, half.y, half.z);
+            (shape, at(Vector::from(bounds.center())))
         }
         Shape3d::Ball { center, radius } => {
             if !(finite(center) && radius.is_finite() && *radius > 0.0) {
                 return Err(format!("a ball needs a radius more than 0, not {radius}"));
             }
-            ColliderBuilder::new(SharedShape::ball(*radius))
-                .position(Pose::from_translation(point(center)))
+            (SharedShape::ball(*radius), at(point(center)))
         }
         Shape3d::Cylinder { radius, height } => {
             if !(radius.is_finite() && height.is_finite() && *radius > 0.0 && *height > 0.0) {
@@ -1077,16 +1160,11 @@ fn collider(shape: &Shape3d, kind: BodyKind) -> Result<ColliderBuilder, String> 
                     "a cylinder needs a radius and a height more than 0, not {radius} and {height}"
                 ));
             }
-            ColliderBuilder::new(SharedShape::cylinder(height / 2.0, *radius))
-                .position(Pose::from_translation(Vector::Y * (height / 2.0)))
+            let shape = SharedShape::cylinder(height / 2.0, *radius);
+            (shape, at(Vector::Y * (height / 2.0)))
         }
-    };
-    // What's flat weighs nothing, which only what doesn't fall can.
-    let mass = collider.shape.mass_properties(1.0).mass();
-    if kind == BodyKind::Dynamic && (mass.is_nan() || mass <= 0.0) {
-        return Err("it's flat, with nothing inside to weigh: give what falls some depth".into());
-    }
-    Ok(collider)
+        Shape3d::Made(made) => (made.shape.clone(), made.offset),
+    })
 }
 
 #[cfg(test)]
@@ -1473,6 +1551,104 @@ mod tests {
             radius: f32::NAN,
         };
         assert!(world.add(&fixed(ball)).is_err());
+        assert_eq!(world.len(), 3);
+    }
+
+    #[test]
+    fn bodies_share_a_shape_made_once() {
+        let mut world = World3d::new();
+        // A slope of two triangles, rising along x, made once and posed twice.
+        let slope = Shape3d::Triangles {
+            points: vec![
+                [0.0, 0.0, -1.0],
+                [0.0, 0.0, 1.0],
+                [2.0, 1.0, 1.0],
+                [2.0, 1.0, -1.0],
+            ],
+            triangles: vec![[0, 1, 2], [0, 2, 3]],
+        };
+        let made = slope.made().unwrap();
+        assert_eq!(made, made.clone());
+        assert_ne!(
+            made,
+            slope.made().unwrap(),
+            "another made of the same is another"
+        );
+        let here = world.add(&fixed(made.clone())).unwrap();
+        let turned = Body3d {
+            pose: Pose3d {
+                position: [10.0, 0.0, 0.0],
+                yaw: FRAC_PI_2,
+                ..Pose3d::default()
+            },
+            ..fixed(made.clone())
+        };
+        let there = world.add(&turned).unwrap();
+        let down = |world: &mut World3d, x: f32, z: f32| {
+            let hit = world.cast_ray([x, 5.0, z], [0.0, -1.0, 0.0], f32::MAX, &[]);
+            hit.map(|hit| (hit.body, hit.point[1]))
+        };
+        let (body, y) = down(&mut world, 1.0, 0.0).expect("it hit the slope");
+        assert!(body == here && (y - 0.5).abs() < 1.0e-6, "{y}");
+        // Turned a quarter turn left, it rises along -z.
+        let (body, y) = down(&mut world, 10.0, -1.5).expect("it hit the turned slope");
+        assert!(body == there && (y - 0.75).abs() < 1.0e-6, "{y}");
+        // Made, triangles still only shape fixed bodies, and no sensors.
+        let moving = Body3d {
+            kind: BodyKind::Kinematic,
+            ..fixed(made.clone())
+        };
+        let err = world.add(&moving).unwrap_err();
+        assert!(err.contains("only fixed bodies"), "{err}");
+        let sensor = Body3d {
+            sensor: true,
+            ..fixed(made)
+        };
+        assert!(
+            world
+                .add(&sensor)
+                .unwrap_err()
+                .contains("a sensor is an area")
+        );
+        // What falls must have something inside, made or not; what can't be made, can't be.
+        let flat = Shape3d::Hull(vec![
+            [0.0; 3],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+        ]);
+        let falling = Body3d {
+            kind: BodyKind::Dynamic,
+            ..fixed(flat.made().unwrap())
+        };
+        assert!(world.add(&falling).unwrap_err().contains("flat"));
+        let ball = Shape3d::Ball {
+            center: [0.0; 3],
+            radius: 0.0,
+        };
+        assert!(ball.made().unwrap_err().contains("radius"));
+        // A body reshaped by a made shape, and a box made, off its middle, falling onto it.
+        world
+            .set_shape(
+                here,
+                &Shape3d::Box(bounds([-5.0, -1.0, -5.0], [5.0, 0.0, 5.0]))
+                    .made()
+                    .unwrap(),
+            )
+            .unwrap();
+        let block = Shape3d::Box(bounds([-0.25, 0.0, -0.25], [0.25, 0.5, 0.25]))
+            .made()
+            .unwrap();
+        let crate_ = Body3d {
+            shape: block,
+            ..crate_at([0.0, 2.0, 0.0])
+        };
+        let id = world.add(&crate_).unwrap();
+        for _ in 0..180 {
+            world.step(FRAME);
+        }
+        let at = world.pose(id).unwrap().position;
+        assert!(at[1].abs() < 0.01, "{at:?}");
         assert_eq!(world.len(), 3);
     }
 

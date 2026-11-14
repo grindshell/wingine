@@ -211,6 +211,16 @@ level of thousands of fixed bodies costs nothing more for a camera that moves, a
 that's posed, or anything else with no body at it or in it; moving a node that holds the whole
 level looks at every body in it.
 
+Adding bodies costs by how many models there are, not by how many copies of them: copies of a
+model share their bodies' shape. A world makes a model's shape once for each way a body is
+shaped by it, stretched, and turned by quarter turns, keeps it as long as the world lasts, and
+places a copy's body where its node is. So a level built of a kit's pieces loads at what a few
+dozen of them cost, where making a shape of a few hundred triangles takes a few tenths of a
+millisecond. Pieces turned by quarter turns meet edge to edge exactly, with no crack between
+them, however far from the middle of the world. The one exception is a node that something it's
+in stretches along other axes than it's turned by, such as a node turned inside a group
+stretched along `x`: its body's shape is made for it alone, where it is.
+
 ```lua
 local level = scene.load("level.scene.luau")
 local view = level:find("view")

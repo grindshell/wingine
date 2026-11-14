@@ -5556,32 +5556,35 @@ mod physics {
     /// node again instead: nodes moved, turned, added and removed at random, bodies added and
     /// removed, and everything a world can be asked hashed, bit for bit. A change to how worlds
     /// follow their nodes mustn't change them; one to how bodies move changes these with the
-    /// course's and the quarry's.
+    /// course's and the quarry's. They were pinned again when fixed bodies were posed where
+    /// their nodes are: these grounds are of bodies that start out touching, at Rapier's margin
+    /// for contacts or flush, which the least change tips one way or the other, so from the
+    /// first steps they went otherwise.
     #[test]
     fn worlds_follow_changed_nodes_as_they_followed_every_node() {
         let expected = [
             (
                 1,
                 [
-                    0x23d5_30d5_aab0_17d7,
-                    0x10f9_eacd_8348_898d,
-                    0xe918_2846_e35a_139f,
+                    0x98c9_43d3_87c0_61e7,
+                    0xa6cb_f752_a348_898d,
+                    0x08aa_9c3f_f915_254f,
                 ],
             ),
             (
                 7,
                 [
-                    0x4bb2_8cf1_6bc5_1e15,
-                    0x7674_a6ad_010d_78dd,
-                    0xee8a_db63_c091_7ec5,
+                    0x8c58_ef88_0fe4_c037,
+                    0xb7d4_b763_6d54_ef3d,
+                    0x5a0b_6cdc_b5c3_66b7,
                 ],
             ),
             (
                 2026,
                 [
-                    0xd954_5fd6_9073_83fd,
-                    0x0116_1f59_7bc2_0595,
-                    0xa555_08b9_e23a_6337,
+                    0xd8cb_03e6_b99a_bbef,
+                    0x6cb3_4ece_cfe3_c4f7,
+                    0x6105_9a46_f08d_b017,
                 ],
             ),
         ];
@@ -5817,6 +5820,534 @@ mod physics {
             None
         );
         assert_eq!(following(&mut simulation, "other").looked - before, 1);
+    }
+
+    /// A 3D view to fill with copies of the example props: a template of each, far off, and the
+    /// groups their copies go in, one turned and one stretched.
+    #[cfg(feature = "models")]
+    const COPIES: &str = r##"return {
+    format = 2,
+    children = {
+        {
+            name = "view", kind = "view3d", width = 0, height = 0, stretch = { 1, 1 },
+            camera = { position = { 0, 8, 14 }, target = { 0, 0, 0 } },
+            children = {
+                { name = "crate", kind = "model", x = 100, model = "models/crate.glb" },
+                { name = "table", kind = "model", x = 100, model = "models/table.glb" },
+                { name = "barrel", kind = "model", x = 100, model = "models/barrel.glb" },
+                { name = "ground", kind = "node" },
+                { name = "things", kind = "node" },
+                { name = "terrace", kind = "node", x = 4, z = -6, yaw = 0.25 },
+                { name = "skewed", kind = "node", x = 7, z = 2.5, scale_x = 2 },
+                { name = "falling", kind = "node" },
+                { name = "walker", kind = "node", x = -7, y = 0.002, z = -6.5 },
+            },
+        },
+    },
+}"##;
+
+    /// What every game of the copies starts with: the scene, a world, and `copy`, which copies a
+    /// template into a group, placed, turned and stretched; and `tiles()`, which lays a floor of
+    /// crates stretched into tiles 3 across, their tops at 0, turned by quarter turns, in the
+    /// world.
+    #[cfg(feature = "models")]
+    const COPIES_MAIN: &str = r#"
+        copies_scene = scene.load('copies.scene.luau')
+        view = copies_scene:find('view')
+        walker = view:find('walker')
+        world = physics.world_3d()
+        QUARTER = 1.5707964
+
+        function copy(template, parent, name, at, turned, stretched)
+            local node = view:find(parent):add(view:find(template), name)
+            node:set_position_3d(at)
+            local yaw, pitch, roll = table.unpack(turned or { 0, 0, 0 })
+            node:set_orientation(yaw, pitch, roll)
+            node:set_scale_3d(stretched or vector.one)
+            return node
+        end
+
+        function tiles()
+            for i = 0, 5 do
+                for j = 0, 5 do
+                    local tile = copy(
+                        'crate', 'ground', 'tile_' .. i .. '_' .. j,
+                        vector.create(-7.5 + 3 * i, -0.75, -7.5 + 3 * j),
+                        { (i + j) % 4 * QUARTER, 0, 0 }, vector.create(4, 1, 4)
+                    )
+                    world:add(tile)
+                end
+            end
+        end
+    "#;
+
+    /// The copies' game, for a run pinned bit for bit: the floor, tables and barrels turned
+    /// every way, stretched, mirrored, tilted, and sheared by the group they're in, shaped by
+    /// their triangles and otherwise, two sensors, crates and barrels falling onto them, and a
+    /// walker. `run(steps)` moves some of them now and then, walks the walker, steps the world,
+    /// and returns everything asked of it on the way, as numbers.
+    #[cfg(feature = "models")]
+    const COPIES_GAME: &str = r#"
+        step = 0
+        tiles()
+
+        things = {}
+        local function thing(template, name, at, turned, stretched, options)
+            things[name] = copy(template, 'things', name, at, turned, stretched)
+            world:add(things[name], options)
+        end
+        thing('table', 't1', vector.create(-6, 0, -2))
+        thing('table', 't2', vector.create(-3, 0, -2), { QUARTER, 0, 0 })
+        thing('table', 't3', vector.create(0, 0, -2), { 2 * QUARTER, 0, 0 })
+        thing('table', 't4', vector.create(3, 0, -2), { 0.3, 0, 0 })
+        thing('table', 't5', vector.create(-6, 0, 2), { 1.1, 0, 0 }, vector.create(1.5, 1, 1))
+        thing('table', 't6', vector.create(-3, 0, 2), nil, vector.create(1, 2, 1))
+        thing('table', 't7', vector.create(0, 0, 2), { 3 * QUARTER, 0, 0 }, vector.create(-1, 1, 1))
+        thing('table', 't8', vector.create(3, 0.05, 2), { 0.7, 0.15, -0.1 })
+        thing('barrel', 'b1', vector.create(-7, 0, 6))
+        thing('barrel', 'b2', vector.create(-4, 0, 6.2), { 0.4, 0, 0 })
+        thing('barrel', 'b3', vector.create(-1, 0, 6.5), nil, nil, { shape = 'hull' })
+        thing('barrel', 'b4', vector.create(2, 0, 6), { 0.9, 0, 0 }, nil, { shape = 'box' })
+        thing('barrel', 'b5', vector.create(5, 0, 6.1), nil, nil, { shape = 'ball' })
+        thing('barrel', 'b6', vector.create(7.5, 0, -7.5), { 2 * QUARTER, 0, 0 }, vector.create(1.5, 1.5, 1.5))
+        thing('crate', 'ramp', vector.create(7, -0.3, -2), { -QUARTER, 0.25, 0 }, vector.create(2, 0.6, 4))
+        thing('crate', 'pit', vector.create(-1.5, 0, 4.2), nil, vector.create(2, 1, 2), { sensor = true, shape = 'box' })
+        thing('barrel', 'gate', vector.create(-6, 0, 0), nil, nil, { sensor = true, body = 'kinematic' })
+
+        local terrace = {
+            copy('table', 'terrace', 'top', vector.zero),
+            copy('barrel', 'terrace', 'keg', vector.create(1.2, 0, 0.3)),
+            copy('crate', 'terrace', 'box', vector.create(-1, 0, 0.2), { 0.5, 0, 0 }),
+        }
+        for _, node in terrace do
+            world:add(node)
+        end
+        world:add(copy('barrel', 'skewed', 'skew', vector.zero, { 0.7, 0, 0 }))
+
+        falling = {}
+        for i = 1, 9 do
+            local template = if i <= 6 then 'crate' else 'barrel'
+            local at = vector.create(-6.2 + (i - 1) % 6 * 3.05, 1.5 + i * 0.4, if i <= 6 then -1.9 else 5.5)
+            if i == 6 then
+                at = vector.create(-3.1, 2.5, 2.1)
+            end
+            falling[i] = copy(template, 'falling', 'falling_' .. i, at, { i * 0.3, i * 0.1, 0 })
+            world:add(falling[i], { body = 'dynamic', shape = if i <= 6 then 'box' else 'hull' })
+        end
+        world:add(walker, { character = { radius = 0.3, height = 1.6 } })
+        movers = table.clone(falling)
+        table.insert(movers, walker)
+
+        local results = {}
+        local function note(...)
+            for _, value in { ... } do
+                table.insert(results, if value == true then 1 elseif value == false then 0 else value)
+            end
+        end
+
+        local function code(name)
+            local sum = 0
+            for i = 1, #name do
+                sum = (sum * 31 + string.byte(name, i)) % 1000003
+            end
+            return sum
+        end
+
+        local function noted_hit(hit)
+            note(hit ~= nil)
+            if hit then
+                local p, n = hit.point, hit.normal
+                note(code(hit.node:name()), hit.distance, p.x, p.y, p.z, n.x, n.y, n.z)
+            end
+        end
+
+        local function noted_nodes(nodes)
+            for _, node in nodes do
+                note(code(node:name()))
+            end
+            note(-1)
+        end
+
+        -- Queries of what's fixed pass what moves, which tumbles otherwise for the least change.
+        local function ask()
+            local still = { except = movers }
+            for i = 0, 23 do
+                local x = -8.3 + 0.73 * i
+                local z = -7.9 + (step * 0.37 + i * 1.13) % 15.8
+                noted_hit(world:ray(vector.create(x, 5, z), vector.create(0, -1, 0), still))
+            end
+            for i = 0, 5 do
+                local z = -6.8 + i * 2.31 + step % 7 * 0.05
+                noted_hit(world:ray(vector.create(-9, 0.3 + i % 2 * 0.17, z), vector.create(1, 0, 0.05 * (i - 2)), still))
+            end
+            noted_hit(world:ray(vector.create(8.5, 3, -8.5), vector.create(-1, -0.4, 1), { distance = 20, except = movers }))
+            local around = vector.create(-6.03 + step % 13, 0.6, -2.03 + step % 5)
+            noted_nodes(world:overlap_ball(around, 1.2, still))
+            noted_nodes(world:overlap_ball(vector.create(3, 0.4, 2), 0.9, still))
+            noted_nodes(world:overlap_box(vector.create(-4.03, 0.02, 5), vector.create(0.47 + step % 3, 1, 7), still))
+            noted_nodes(world:inside(things.pit))
+            noted_nodes(world:inside(things.gate))
+        end
+
+        local function placed()
+            for _, node in falling do
+                local at = node:position_3d()
+                local yaw, pitch, roll = node:orientation()
+                note(at.x, at.y, at.z, yaw, pitch, roll, world:is_resting(node))
+            end
+        end
+
+        local WALKS = {
+            vector.create(0.04, -0.01, 0),
+            vector.create(0, -0.01, 0.04),
+            vector.create(-0.03, -0.01, 0.01),
+            vector.create(0.02, -0.01, -0.035),
+        }
+
+        function run(steps)
+            results = {}
+            for _ = 1, steps do
+                step += 1
+                if step % 60 == 0 then
+                    local k = step // 60
+                    view:find('terrace'):set_position_3d(vector.create(4 + 0.25 * k, 0, -6))
+                    view:find('terrace'):set_orientation(0.25 + 0.1 * k)
+                end
+                if step == 90 then
+                    things.t6:set_scale_3d(vector.create(1, 1.5, 1))
+                end
+                if step == 140 then
+                    things.t7:set_orientation(0.6)
+                end
+                if step == 200 then
+                    world:remove(things.t1)
+                end
+                if step == 230 then
+                    world:add(things.t1)
+                end
+                if step % 100 == 50 then
+                    local i = step // 100 + 1
+                    falling[i]:set_position_3d(vector.create(-6.1 + i * 3, 3, -2))
+                end
+                things.gate:set_position_3d(vector.create(-6 + step % 240 / 20, 0, 0))
+                local moved, grounded = world:walk(walker, WALKS[step // 75 % 4 + 1])
+                note(moved.x, moved.y, moved.z, grounded)
+                world:step(1 / 60)
+                placed()
+                ask()
+            end
+            return results
+        end
+    "#;
+
+    /// A game of the copies, `COPIES_MAIN` and then `main`, loaded, with the example props it
+    /// copies.
+    #[cfg(feature = "models")]
+    fn copies(test: &str, main: &str) -> Simulation<LuauGame> {
+        let main = format!("{COPIES_MAIN}\n{main}");
+        let folder = game(test, &[("copies.scene.luau", COPIES), ("main.luau", &main)]);
+        let models = folder.join("models");
+        fs::create_dir_all(&models).unwrap();
+        for file in ["table.glb", "crate.glb", "crate.png", "barrel.glb"] {
+            let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/models");
+            fs::copy(from.join(file), models.join(file)).unwrap();
+        }
+        let mut simulation = simulation(&folder);
+        simulation.step();
+        if let Some(err) = simulation.game().error() {
+            panic!("the game stopped: {err}");
+        }
+        simulation
+    }
+
+    /// Fixed bodies are posed where their nodes are, their shapes shared by copies of a model, so
+    /// what's asked of them is worked out in their own coordinates: these were pinned when that
+    /// began, against what they were when each fixed body was shaped where it is in the world.
+    /// Then, every answer of a ray, an overlap and a sensor was the same, or within 8 millionths,
+    /// over the 300 steps, but for three rays down a seam between two tiles, which hit the one or
+    /// the other, and one along an edge of the ramp, which passed it; walks were within a
+    /// millionth; and what fell was the same until it landed on a table, and then within 3
+    /// millimetres, and from there as anything tumbling is for the least change, which isn't
+    /// what's pinned. A change to how bodies move or are shaped changes this with the course's
+    /// and the quarry's.
+    #[test]
+    #[cfg(feature = "models")]
+    fn worlds_of_copies_of_models_end_the_same_to_the_bit_on_every_platform() {
+        let mut simulation = copies("physics_3d_copies", COPIES_GAME);
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        let mut count = 0;
+        for _ in 0..3 {
+            let results: Vec<f64> = simulation.eval("run(100)");
+            count += results.len();
+            for value in results {
+                hash = (hash ^ value.to_bits()).wrapping_mul(0x100_0000_01b3);
+            }
+        }
+        assert!(count > 50_000, "{count}");
+        assert_eq!(hash, 0x4032_eee5_4791_aa7d, "{hash:#x}");
+    }
+
+    /// How many shapes the game's `world` has made.
+    #[cfg(feature = "models")]
+    fn shapes(simulation: &mut Simulation<LuauGame>) -> u64 {
+        following(simulation, "world").shapes
+    }
+
+    #[test]
+    #[cfg(feature = "models")]
+    fn copies_of_a_model_share_its_shape() {
+        let mut simulation = copies("physics_3d_shared", "tiles()");
+        // Thirty-six crates stretched alike, turned by quarter turns: a shape each way they're
+        // turned, since a body turned by quarter turns has its shape turned.
+        assert_eq!(shapes(&mut simulation), 4);
+        // A hundred tables turned by quarter turns, and ten barrels.
+        simulation.exec(
+            "for i = 1, 100 do
+                local at = vector.create(i % 10 - 5, 0, i // 10 - 5)
+                world:add(copy('table', 'things', 'table_' .. i, at, { i % 4 * QUARTER, 0, 0 }))
+            end
+            for i = 1, 10 do
+                world:add(copy('barrel', 'things', 'barrel_' .. i, vector.create(i - 5, 0, 7)))
+            end",
+        );
+        assert_eq!(shapes(&mut simulation), 9);
+        // Stretched, mirrored, or shaped as a box, another each, and again none; turned other
+        // than by quarter turns, the same as not turned.
+        simulation.exec(
+            "for i = 1, 3 do
+                local turned = { i * 0.4, 0, 0 }
+                world:add(copy('table', 'things', 'tall_' .. i, vector.create(i, 0, 8), turned, vector.create(1, 2, 1)))
+                world:add(copy('table', 'things', 'mirrored_' .. i, vector.create(i, 0, -8), turned, vector.create(-1, 1, 1)))
+                world:add(copy('table', 'things', 'boxed_' .. i, vector.create(i, 2, -8)), { shape = 'box' })
+                world:add(copy('table', 'things', 'turned_' .. i, vector.create(i, 2, 8), turned))
+            end",
+        );
+        assert_eq!(shapes(&mut simulation), 12);
+        // Stretched across how it's turned, a body is shaped where it is, each its own.
+        simulation.exec(
+            "for i = 1, 2 do
+                world:add(copy('barrel', 'skewed', 'skew_' .. i, vector.create(0, 0, i), { 0.7, 0, 0 }))
+            end",
+        );
+        assert_eq!(shapes(&mut simulation), 14);
+        // Moved, turned other than by quarter turns, and taken out and put back, they make none.
+        simulation.exec(
+            "view:find('things'):set_position_3d(vector.create(0.5, 0, 0))
+            view:find('things'):set_orientation(0.4)
+            world:remove(view:find('things/table_7'))
+            world:add(view:find('things/table_7'))",
+        );
+        let (name, distance, _) = hit(
+            &mut simulation,
+            "world:ray(vector.create(0.5, 5, 0), vector.create(0, -1, 0))",
+        )
+        .expect("it hit a table");
+        // Table 55, which was in the middle of the group, and is still.
+        assert_eq!(name, "table_55");
+        assert!((distance - 4.5).abs() < 1.0e-5, "{distance}");
+        assert_eq!(shapes(&mut simulation), 14);
+        assert_eq!(
+            following(&mut simulation, "world").bodies,
+            36 + 100 + 10 + 12 + 2
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "models")]
+    fn rays_hit_copies_where_they_are() {
+        let mut simulation = copies(
+            "physics_3d_posed",
+            "tiles()
+            for i = 0, 3 do
+                local turned = { i * QUARTER, 0, 0 }
+                world:add(copy('table', 'things', 'table_' .. i, vector.create(i * 2 - 3, 0, 0), turned))
+                world:add(copy('table', 'things', 'mirrored_' .. i, vector.create(i * 2 - 3, 0, 3), turned, vector.create(-1, 1, 1)))
+                world:add(copy('table', 'things', 'tall_' .. i, vector.create(i * 2 - 3, 0, -3), turned, vector.create(1, 2, 1)))
+            end
+            world:add(copy('table', 'things', 'tilted', vector.create(5, 1, 5), { 0, 0, QUARTER }))
+            world:add(copy('barrel', 'skewed', 'skew', vector.zero, { 0.7, 0, 0 }))",
+        );
+        let down = |simulation: &mut Simulation<LuauGame>, x: f32, z: f32| {
+            let ray = format!("world:ray(vector.create({x}, 5, {z}), vector.create(0, -1, 0))");
+            hit(simulation, &ray).expect("the floor is under everything")
+        };
+        // Each tile, turned each quarter turn, at the top of the floor, facing up.
+        for i in 0..6 {
+            for j in 0..6 {
+                let (x, z) = (i as f32 * 3.0 - 7.9, j as f32 * 3.0 - 7.2);
+                let (name, distance, at) = down(&mut simulation, x, z);
+                if name.starts_with("tile") {
+                    assert_eq!(name, format!("tile_{i}_{j}"));
+                    assert!((distance - 5.0).abs() < 1.0e-5, "{distance}");
+                    assert_eq!(at[3..], [0.0, 1.0, 0.0]);
+                }
+            }
+        }
+        // Each table, turned each quarter turn, mirrored or stretched, at the top of its top.
+        for i in 0..4 {
+            let x = i as f32 * 2.0 - 3.0 + 0.2;
+            for (name, z, top) in [
+                ("table", 0.1, 0.5),
+                ("mirrored", 3.1, 0.5),
+                ("tall", -2.9, 1.0),
+            ] {
+                let (found, distance, at) = down(&mut simulation, x, z);
+                assert_eq!(found, format!("{name}_{i}"));
+                assert!(
+                    (distance - (5.0 - top)).abs() < 1.0e-5,
+                    "{name}_{i}: {distance}"
+                );
+                assert_eq!(at[3..], [0.0, 1.0, 0.0], "{name}_{i}");
+            }
+        }
+        // Rolled onto its side, standing at 5 along x, the table's legs reach toward x and the
+        // underside of its top, 0.44 up them, faces that way, between them.
+        let side = "world:ray(vector.create(8, 1.3, 5), vector.create(-1, 0, 0))";
+        let (name, distance, at) = hit(&mut simulation, side).expect("it hit the tilted table");
+        assert_eq!(name, "tilted");
+        assert!((distance - 3.44).abs() < 1.0e-5, "{distance}");
+        assert_eq!(at[3..], [1.0, 0.0, 0.0]);
+        // The barrel in a group stretched along x, across how it's turned: twice as wide along x.
+        let skew = "world:ray(vector.create(4, 0.35, 2.5), vector.create(1, 0, 0))";
+        let (name, distance, _) = hit(&mut simulation, skew).expect("it hit the barrel");
+        assert_eq!(name, "skew");
+        assert!(distance > 2.3 && distance < 2.42, "{distance}");
+    }
+
+    #[test]
+    #[cfg(feature = "models")]
+    fn rays_along_the_seams_between_copies_hit_them() {
+        // Far from the middle of the world, where numbers are coarser: a floor, and a wall of
+        // crates stretched into blocks 3 long, 2 high and 6 deep, their faces meeting edge to
+        // edge 3 from their middles, each turned a quarter turn one way or the other. Turned by
+        // quarter turns, a body is only moved, its shape turned, so where two meet, a ray turned
+        // into each one's coordinates isn't rounded otherwise in each, and finds no crack.
+        let mut simulation = copies(
+            "physics_3d_watertight",
+            "view:find('ground'):set_position_3d(vector.create(800, 0, -600))
+            tiles()
+            for k = 0, 9 do
+                local at = vector.create(812.15, 0, -600 + 3 * k)
+                local turned = { (1 + 2 * (k % 2)) * QUARTER, 0, 0 }
+                world:add(copy('crate', 'things', 'panel_' .. k, at, turned, vector.create(4, 2.6666667, 8)))
+            end",
+        );
+        // Down the floor's seams, and at the wall's.
+        let mut rays = Vec::new();
+        for seam in 0..5 {
+            let on = seam as f32 * 3.0 - 6.0;
+            for along in 0..12 {
+                let off = along as f32 * 1.5 - 8.25;
+                for (x, z) in [(800.0 + on, off - 600.0), (800.0 + off, on - 600.0)] {
+                    rays.push(([x, 5.0, z], [0.0, -1.0, 0.0], "tile", 5.0));
+                }
+            }
+        }
+        for seam in 0..9 {
+            let z = seam as f32 * 3.0 + 1.5 - 600.0;
+            for y in [0.3, 1.0, 1.7] {
+                rays.push(([816.5, y, z], [-1.0, 0.0, 0.0], "panel", 1.35));
+            }
+        }
+        for ([x, y, z], [dx, dy, dz], name, expected) in rays {
+            let ray =
+                format!("world:ray(vector.create({x}, {y}, {z}), vector.create({dx}, {dy}, {dz}))");
+            let (found, distance, _) =
+                hit(&mut simulation, &ray).unwrap_or_else(|| panic!("{x}, {y}, {z}"));
+            assert!(
+                found.starts_with(name) && (distance - expected).abs() < 1.0e-4,
+                "{x}, {y}, {z}: {found} at {distance}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "models")]
+    fn characters_walk_across_copies_without_catching_on_their_seams() {
+        let mut simulation = copies(
+            "physics_3d_seams",
+            "tiles()
+            walker:set_position_3d(vector.create(-8.6, 0.002, -4.4))
+            world:add(walker, { character = { radius = 0.3, height = 1.6 } })",
+        );
+        // Along x across five seams, between tiles turned each quarter turn, then along z across
+        // four.
+        for (motion, steps) in [([0.05, 0.0], 340), ([0.0, 0.05], 260)] {
+            for _ in 0..steps {
+                let walk = format!(
+                    "(function()
+                        local moved, grounded = world:walk(walker, vector.create({}, -0.01, {}))
+                        world:step(1 / 60)
+                        return moved.x, moved.y, moved.z, grounded
+                    end)()",
+                    motion[0], motion[1]
+                );
+                let (x, y, z, grounded): (f32, f32, f32, bool) = simulation.eval(&walk);
+                assert!(grounded);
+                assert!(
+                    (x - motion[0]).abs() < 1.0e-5
+                        && y.abs() < 1.0e-5
+                        && (z - motion[1]).abs() < 1.0e-5,
+                    "{x}, {y}, {z}"
+                );
+            }
+        }
+        let feet: (f32, f32, f32) = simulation
+            .eval("(function() local at = walker:position_3d() return at.x, at.y, at.z end)()");
+        assert!(
+            (feet.0 - 8.4).abs() < 1.0e-3 && (feet.2 - 8.6).abs() < 1.0e-3,
+            "{feet:?}"
+        );
+        assert!((feet.1 - 0.002).abs() < 1.0e-4, "{feet:?}");
+    }
+
+    #[test]
+    #[cfg(feature = "models")]
+    fn fixed_bodies_follow_their_nodes_posed_anew() {
+        // A table in the group turned a little, at 4 along x and -6 along z.
+        let mut simulation = copies(
+            "physics_3d_posed_anew",
+            "tiles()
+            top = copy('table', 'terrace', 'top', vector.zero)
+            world:add(top)
+            mirrored = copy('table', 'things', 'mirrored', vector.create(-5, 0, 5), nil, vector.create(-1, 1, 1))
+            world:add(mirrored)
+            fallen = copy('crate', 'falling', 'fallen', vector.create(-5, 1.5, 5), nil, vector.create(0.3, 0.3, 0.3))
+            world:add(fallen, { body = 'dynamic', shape = 'box' })",
+        );
+        let down = |simulation: &mut Simulation<LuauGame>, x: f32, z: f32| {
+            let ray = format!("world:ray(vector.create({x}, 5, {z}), vector.create(0, -1, 0))");
+            hit(simulation, &ray).map(|(name, distance, _)| (name, distance))
+        };
+        let (name, distance) = down(&mut simulation, 4.0, -5.9).expect("it hit the table");
+        assert!(
+            name == "top" && (distance - 4.5).abs() < 1.0e-5,
+            "{name}, {distance}"
+        );
+        let made = shapes(&mut simulation);
+        // The group moved and turned: the table is posed where it put it, and no shape made.
+        let before = following(&mut simulation, "world").looked;
+        simulation.exec(
+            "view:find('terrace'):set_position_3d(vector.create(-2, 0, -2))
+            view:find('terrace'):set_orientation(2.4)",
+        );
+        let (name, distance) = down(&mut simulation, -2.0, -2.0).expect("it hit the table");
+        assert!(
+            name == "top" && (distance - 4.5).abs() < 1.0e-5,
+            "{name}, {distance}"
+        );
+        assert_eq!(down(&mut simulation, 4.0, -5.9).unwrap().0, "tile_4_1");
+        assert_eq!(shapes(&mut simulation), made);
+        assert_eq!(following(&mut simulation, "world").looked - before, 1);
+        // Stretched, it's shaped anew, and as high as it stretches.
+        simulation.exec("top:set_scale_3d(vector.create(1, 2, 1))");
+        let (_, distance) = down(&mut simulation, -2.0, -2.0).expect("it hit the table");
+        assert!((distance - 4.0).abs() < 1.0e-5, "{distance}");
+        assert_eq!(shapes(&mut simulation), made + 1);
+        // A crate dropped onto the mirrored table rests on its top, which faces up.
+        simulation.exec("for _ = 1, 120 do world:step(1 / 60) end");
+        let y: f32 = simulation.eval("fallen:position_3d().y");
+        assert!((y - 0.5).abs() < 0.01, "{y}");
     }
 }
 

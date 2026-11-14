@@ -374,6 +374,8 @@ fn the_same_run_ends_the_same_to_the_bit_on_every_platform() {
     check(&simulation);
     let hash = hash_of_the_course(&mut simulation);
     // Rapier's enhanced determinism, and `libm` for the rest, make this the same on Windows and
-    // Linux, debug and release. A change to how the course plays, or to physics, changes it.
-    assert_eq!(hash, 0x7d8a_ea08_8420_3fdd, "{hash:#x}");
+    // Linux, debug and release. A change to how the course plays, or to physics, changes it: as
+    // fixed bodies were posed where their nodes are, every number in it moved by 3 tenths of a
+    // millionth at most.
+    assert_eq!(hash, 0x4087_f9f3_30e4_82f3, "{hash:#x}");
 }

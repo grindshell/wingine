@@ -6,8 +6,9 @@
 //! crates have come to rest. Each does something else beside stepping the world: nothing, setting a
 //! tile that isn't solid, casting rays and overlapping boxes, or walking characters. The big 3D
 //! view's cases are what a world of many bodies costs when the scene changes where no body is,
-//! or where few are. The Rust cases step a world of tumbling boxes by a sixtieth of a second, and
-//! by a 59.94 Hz display's frame.
+//! or where few are; the copies' what adding fixed bodies of copies of a model costs, as a level
+//! built of a kit's pieces loads. The Rust cases step a world of tumbling boxes by a sixtieth of
+//! a second, and by a 59.94 Hz display's frame.
 
 use std::{
     fmt::Write as _,
@@ -45,6 +46,8 @@ const MANY: usize = 2000;
 /// Rigs in the big 3D view, each a chain of [`JOINTS`] nodes with no bodies.
 const RIGS: usize = 30;
 const JOINTS: usize = 12;
+/// Copies of a model added to a world, and removed, each update.
+const COPIES: usize = 100;
 /// Boxes tumbling in the Rust cases.
 const TUMBLING: usize = 300;
 
@@ -99,6 +102,28 @@ fn main() {
         fs::write(game.join("bench.scene.luau"), &level_many).unwrap();
         fs::write(game.join("main.luau"), main_3d_many(work)).unwrap();
         report(&format!("3D, {MANY} boxes: {case}"), update_time(&game));
+    }
+    // What adding fixed bodies costs, as a level of copies of a kit's pieces loads.
+    let kit = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/kenney_prototype-kit/Models/GLB format");
+    for (name, case, copied) in [
+        ("3d-copies", "860 triangles", "vehicle"),
+        ("3d-boxes", "a box", "box"),
+    ] {
+        let game = folder.join(name);
+        fs::create_dir_all(game.join("models/Textures")).unwrap();
+        fs::copy(kit.join("vehicle.glb"), game.join("models/vehicle.glb")).unwrap();
+        fs::copy(
+            kit.join("Textures/colormap.png"),
+            game.join("models/Textures/colormap.png"),
+        )
+        .unwrap();
+        fs::write(game.join("bench.scene.luau"), LEVEL_COPIES).unwrap();
+        fs::write(game.join("main.luau"), main_copies(copied)).unwrap();
+        report(
+            &format!("3D: {COPIES} copies of {case}, added and removed"),
+            update_time(&game),
+        );
     }
 
     println!("Rust, {TUMBLING} boxes tumbling, the mean of {FRAMES} steps:");
@@ -502,6 +527,51 @@ const RIGS_POSED: &str = "
         end
         world:ray(vector.create(i * 4 - 60, 10, i - 15), down)
     end";
+
+/// A 3D view of what's copied, far off: a model, a box, and a group to copy the copies into.
+const LEVEL_COPIES: &str = "return {
+    format = 4,
+    children = {
+        {
+            name = \"view\", kind = \"view3d\", width = 320, height = 180,
+            camera = { position = { 0, 30, 40 }, target = { 0, 0, 0 } },
+            children = {
+                { name = \"vehicle\", kind = \"model\", x = 500, model = \"models/vehicle.glb\" },
+                { name = \"box\", kind = \"mesh\", shape = \"cuboid\", x = 500 },
+                { name = \"group\", kind = \"node\", x = 500 },
+            },
+        },
+    },
+}
+";
+
+/// The copies' game, which each update copies `copied` into a group [`COPIES`] times, each
+/// turned by a quarter turn more than the one before, adds a fixed body for each, asks a ray,
+/// and removes the group, before stepping the world.
+fn main_copies(copied: &str) -> String {
+    format!(
+        "local level = scene.load('bench.scene.luau')
+        local view = level:find('view')
+        local copied = view:find('{copied}')
+        local group = view:find('group')
+        local world = physics.world_3d()
+        local down = vector.create(0, -1, 0)
+
+        function update(dt)
+            local copies = view:add(group, 'copies')
+            copies:set_position_3d(vector.zero)
+            for i = 1, {COPIES} do
+                local copy = copies:add(copied, 'copy' .. i)
+                copy:set_position_3d(vector.create(i % 10 * 3, 0, i // 10 * 3))
+                copy:set_orientation(i % 4 * 1.5707964)
+                world:add(copy)
+            end
+            world:ray(vector.create(3, 10, 3), down)
+            copies:remove()
+            world:step(dt)
+        end"
+    )
+}
 
 /// A room copied into the level and made solid, as a level loads part of itself, then removed.
 const ROOM_ADDED: &str = "

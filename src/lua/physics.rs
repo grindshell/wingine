@@ -10,6 +10,7 @@ pub use world2d::PhysicsWorld;
 
 use super::{SceneNode, check_finite, not_3d, vector, vector3};
 use crate::{
+    graphics::{Mesh, Model},
     math::{Affine3, Bounds3},
     physics::{Body3d, BodyId, BodyKind, Character3d, Material, Pose3d, Shape3d, World3d},
     scene::{Kind, Node, NodeId, Scene},
@@ -83,6 +84,14 @@ fn followed(
 /// those and of what's inside them (see [`PhysicsWorld3d::follow`]). So a write to a node with
 /// no body at it or in it, a view's camera or a rig's joint, costs the next query a lookup.
 ///
+/// Adding a body costs by how many models and meshes there are, not by how many bodies: the
+/// world makes the shape of a model, shaped one way and stretched one way, once, and keeps it
+/// for as long as it lasts, for every body of a copy of the model to share ([`Shapes`]). A body
+/// is posed where its node is, its shape in its own coordinates, a fixed one too: unless a node
+/// it's in stretches it across how it turns it, which no pose can, when its shape is made for
+/// it alone, where it is in the world. A fixed body turned by quarter turns has its shape
+/// turned, and is only moved, so that pieces of a kit meet exactly ([`split`]).
+///
 /// Its arithmetic gives the same bits on every platform, as Rapier's does: where it places a
 /// fixed body, it turns its node's yaw, pitch and roll into a transform with `libm`, not as the
 /// scene does for drawing, whose sines come from the platform's C library.
@@ -104,6 +113,8 @@ pub struct PhysicsWorld3d {
     holders: HashMap<NodeId, Holder>,
     /// How many times a body has been looked at to follow its node.
     looked: u64,
+    /// The shapes it has made of what its nodes show.
+    shapes: Shapes,
 }
 
 /// What a [`PhysicsWorld3d`] keeps to follow its nodes by, and what following them has cost:
@@ -117,6 +128,91 @@ pub struct Following {
     /// How many times a body has been looked at to follow its node, since the world was made:
     /// each body once when all are, and otherwise only those at and inside nodes that changed.
     pub looked: u64,
+    /// How many shapes it has made of what nodes show, since it was made: one for each model or
+    /// mesh, way of shaping, stretch and turn by quarter turns its bodies have had, and one each
+    /// time a body was shaped where it is in the world, its node stretched across how it's
+    /// turned.
+    pub shapes: u64,
+}
+
+/// The shapes a [`PhysicsWorld3d`] has made of what its nodes show, kept for as long as it lasts,
+/// so that the bodies of copies of a model, shaped and stretched alike, share one: a level is
+/// some dozens of models, and as many shapes, however many bodies.
+#[derive(Default)]
+struct Shapes {
+    kept: HashMap<ShapeKey, Kept>,
+    /// How many it has made, kept or not.
+    made: u64,
+}
+
+/// What a kept shape is of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ShapeKey {
+    /// The model or mesh it was made of, by [`shown_id`].
+    of: usize,
+    shaped: Shaped,
+    /// The bits of its shaping: the axes of the transform its points are moved by, in its body's
+    /// coordinates (see [`Placed::Fixed`]).
+    shaping: [u32; 9],
+}
+
+/// A shape a [`PhysicsWorld3d`] keeps, and the model or mesh it was made of, held so that no
+/// other is where it was while the shape is kept by it.
+struct Kept {
+    shape: Shape3d,
+    _of: Box<dyn std::any::Any>,
+}
+
+/// What tells the mesh or model `kind` shows from others while it's held, if it shows one.
+fn shown_id(kind: &Kind) -> Option<usize> {
+    match kind {
+        Kind::Mesh(mesh) => Some(mesh.mesh.id()),
+        Kind::Model(model) => Some(model.model.id()),
+        _ => None,
+    }
+}
+
+/// A handle to the mesh or model `kind` shows, if it shows one.
+fn shown_handle(kind: &Kind) -> Option<Box<dyn std::any::Any>> {
+    match kind {
+        Kind::Mesh(mesh) => Some(Box::new(Mesh::clone(&mesh.mesh))),
+        Kind::Model(model) => Some(Box::new(Model::clone(&model.model))),
+        _ => None,
+    }
+}
+
+impl Shapes {
+    /// The shape of a body of `id`, a node of `scene`, shaped as `shaped` says, its points moved
+    /// by `shaping`, which only stretches them, or turns them by quarter turns too: the one kept,
+    /// if there is one, or else made and kept.
+    fn kept(
+        &mut self,
+        scene: &Scene,
+        id: NodeId,
+        shaped: Shaped,
+        shaping: &Affine3,
+    ) -> Result<Shape3d, String> {
+        let kind = scene.node(id).kind();
+        let [x, y, z] =
+            [shaping.x_axis, shaping.y_axis, shaping.z_axis].map(|axis| axis.map(f32::to_bits));
+        let key = ShapeKey {
+            of: shown_id(kind).ok_or_else(|| shows_nothing(scene, id))?,
+            shaped,
+            shaping: [x[0], x[1], x[2], y[0], y[1], y[2], z[0], z[1], z[2]],
+        };
+        if let Some(kept) = self.kept.get(&key) {
+            return Ok(kept.shape.clone());
+        }
+        let ((points, triangles), bounds) = shown(scene, id)?;
+        self.made += 1;
+        let shape = shape_of(points, triangles, &bounds, shaped, shaping, true).made()?;
+        let kept = Kept {
+            shape: shape.clone(),
+            _of: shown_handle(kind).expect("it shows a mesh or a model"),
+        };
+        self.kept.insert(key, kept);
+        Ok(shape)
+    }
 }
 
 /// A node of a [`PhysicsWorld3d`] with a body at it or inside it: with the others, the part of
@@ -156,7 +252,7 @@ struct Bodied {
 }
 
 /// What a body is shaped as, from what its node shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Shaped {
     Triangles,
     Hull,
@@ -176,8 +272,13 @@ impl Shaped {
 /// How a node with a body was placed.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Placed {
-    /// A fixed body's node, by its transform from its own coordinates to the view's world's.
-    Fixed(Affine3),
+    /// A fixed body's node, by its transform from its own coordinates to the view's world's, and
+    /// if that can be split into a pose and a shaping ([`split`]), its shaping: what its shape's
+    /// points are moved by in the body's coordinates, as they're posed where the node is.
+    Fixed {
+        transform: Affine3,
+        shaping: Option<Affine3>,
+    },
     /// A body's that moves: in its parent, and where the nodes it's in put its parent's origin,
     /// so moving them moves the body too.
     Moving { local: Local, origin: [f32; 3] },
@@ -450,11 +551,87 @@ fn read_character(options: &mlua::Table, scene: &Scene, id: NodeId) -> mlua::Res
     })
 }
 
+/// `transform` split into a pose, where it puts the origin and how it turns, and a shaping, the
+/// rest, if it can be: if its axes are at right angles to each other, as they are when it only
+/// moves, turns and stretches, and not when a parent stretches what's in it across how it's
+/// turned.
+///
+/// The shaping stretches along the node's own axes, a mirrored one by less than 0 along `x`,
+/// rounded to within a millionth, so that a node turned by sines that don't square to 1 exactly,
+/// as most don't, isn't stretched by a hair: copies of a model, however they're turned, share a
+/// shape. A node turned by quarter turns, as a kit's pieces are, is turned by its shaping, its
+/// axes exactly the world's, and its pose only moves it: so what's asked of it isn't turned into
+/// its coordinates, and where pieces meet edge to edge they meet to the bit, as they did when
+/// fixed bodies were shaped where they are, with no crack between them for a ray to pass.
+fn split(transform: &Affine3) -> Option<(Pose3d, Affine3)> {
+    // To within rounding of the sines it was turned by.
+    const SQUARE: f32 = 1.0e-5;
+    // How near an axis of the world one of its axes is, to be along it.
+    const ALONG: f32 = 1.0e-6;
+    let axes = [transform.x_axis, transform.y_axis, transform.z_axis];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let lengths = axes.map(|axis| dot(axis, axis).sqrt());
+    if !lengths
+        .iter()
+        .all(|&length| length > 0.0 && length.is_finite())
+    {
+        return None;
+    }
+    let square = [(0, 1), (0, 2), (1, 2)]
+        .iter()
+        .all(|&(a, b)| dot(axes[a], axes[b]).abs() <= SQUARE * lengths[a] * lengths[b]);
+    if !square {
+        return None;
+    }
+    let mirrored = transform.determinant() < 0.0;
+    let turned = [0, 1, 2].map(|i| {
+        let length = if mirrored && i == 0 {
+            -lengths[i]
+        } else {
+            lengths[i]
+        };
+        axes[i].map(|value| value / length)
+    });
+    // To the nearest of every sixteenth of the numbers an `f32` can be, rounding the bits of its
+    // length's mantissa, which leaves it with 20.
+    let mut stretch = lengths.map(|length| f32::from_bits((length.to_bits() + 8) & !15));
+    if mirrored {
+        stretch[0] = -stretch[0];
+    }
+    // Which axis of the world each of its own lies along, and which way, if each does.
+    let along = |axis: [f32; 3]| {
+        let k = (0..3).find(|&k| (axis[k].abs() - 1.0).abs() <= ALONG)?;
+        let rest = (0..3).all(|j| j == k || axis[j].abs() <= ALONG);
+        rest.then_some((k, axis[k].signum()))
+    };
+    if let [Some(x), Some(y), Some(z)] = turned.map(along) {
+        let column = |(k, sign): (usize, f32), stretch: f32| {
+            let mut column = [0.0; 3];
+            column[k] = sign * stretch;
+            column
+        };
+        let shaping = Affine3 {
+            x_axis: column(x, stretch[0]),
+            y_axis: column(y, stretch[1]),
+            z_axis: column(z, stretch[2]),
+            translation: [0.0; 3],
+        };
+        return Some((Pose3d::at(transform.translation), shaping));
+    }
+    let pose = Pose3d::from_axes(transform.translation, turned);
+    Some((pose, Affine3::from_scale(stretch)))
+}
+
 /// Where a body of `kind` for the node `id` goes, and how it's placed, or why it can't be.
 fn place(scene: &Scene, id: NodeId, kind: BodyKind) -> Result<(Pose3d, Placed), String> {
     let local = Local::of(scene.node(id)).expect("bodies' nodes are in 3D views");
     if kind == BodyKind::Fixed {
-        return Ok((Pose3d::default(), Placed::Fixed(exact_transform(scene, id))));
+        let transform = exact_transform(scene, id);
+        let (pose, shaping) = match split(&transform) {
+            Some((pose, shaping)) => (pose, Some(shaping)),
+            None => (Pose3d::default(), None),
+        };
+        return Ok((pose, Placed::Fixed { transform, shaping }));
     }
     let origin = parent_origin(scene, id)?;
     let pose = Pose3d {
@@ -466,9 +643,70 @@ fn place(scene: &Scene, id: NodeId, kind: BodyKind) -> Result<(Pose3d, Placed), 
     Ok((pose, Placed::Moving { local, origin }))
 }
 
+/// The error for a body of the node `id` that shows nothing to shape it by.
+fn shows_nothing(scene: &Scene, id: NodeId) -> String {
+    format!(
+        "{} shows nothing to shape a body by: only meshes and models do",
+        scene.describe(id)
+    )
+}
+
+/// The corners and triangles of what the node `id` shows, in its own coordinates, and the box
+/// around them, or why it shows nothing to shape a body by.
+fn shown(scene: &Scene, id: NodeId) -> Result<(Triangles, Bounds3), String> {
+    let (points, triangles) =
+        geometry(scene.node(id).kind()).ok_or_else(|| shows_nothing(scene, id))?;
+    let bounds = Bounds3::from_points(points.iter().copied())
+        .ok_or_else(|| format!("{} shows nothing, having no corners", scene.describe(id)))?;
+    Ok(((points, triangles), bounds))
+}
+
+/// A body's shape of `points` and `triangles`, whose box is `bounds`, shaped as `shaped` says,
+/// their points moved by `transform`: mirrored, if it mirrors them. If `aligned`, it keeps a box
+/// along the axes, as a shaping does, and a box is a box; otherwise a box is the hull of its
+/// corners.
+fn shape_of(
+    points: Vec<[f32; 3]>,
+    triangles: Vec<[u32; 3]>,
+    bounds: &Bounds3,
+    shaped: Shaped,
+    transform: &Affine3,
+    aligned: bool,
+) -> Shape3d {
+    let points = || points.iter().map(|&point| transform.apply(point)).collect();
+    match shaped {
+        Shaped::Triangles => {
+            // Mirrored, its triangles face the other way round.
+            let mirrored = transform.determinant() < 0.0;
+            let triangles = triangles
+                .iter()
+                .map(|&[a, b, c]| if mirrored { [a, c, b] } else { [a, b, c] })
+                .collect();
+            Shape3d::Triangles {
+                points: points(),
+                triangles,
+            }
+        }
+        Shaped::Hull => Shape3d::Hull(points()),
+        Shaped::Box if aligned => {
+            let moved = Bounds3::from_points(corners(bounds).map(|c| transform.apply(c)));
+            Shape3d::Box(moved.expect("a box has corners"))
+        }
+        Shaped::Box => Shape3d::Hull(corners(bounds).map(|c| transform.apply(c)).to_vec()),
+        Shaped::Ball => {
+            let (center, radius) = ball_of(bounds);
+            Shape3d::Ball {
+                center: transform.apply(center),
+                radius: radius * longest_axis(transform),
+            }
+        }
+    }
+}
+
 /// The shape of a body of the node `id`, placed as `placed` says, shaped as `shaped` says, or a
-/// character's.
+/// character's: one of `shapes`, unless it can't be posed.
 fn shape(
+    shapes: &mut Shapes,
     scene: &Scene,
     id: NodeId,
     shaped: Shaped,
@@ -481,73 +719,32 @@ fn shape(
             height: character.height,
         });
     }
-    let (points, triangles) = geometry(scene.node(id).kind()).ok_or_else(|| {
-        format!(
-            "{} shows nothing to shape a body by: only meshes and models do",
-            scene.describe(id)
-        )
-    })?;
-    let bounds = Bounds3::from_points(points.iter().copied())
-        .ok_or_else(|| format!("{} shows nothing, having no corners", scene.describe(id)))?;
-    Ok(match placed {
-        // In the view's world, by the node's whole transform.
-        Placed::Fixed(transform) => {
-            let points = || points.iter().map(|&point| transform.apply(point)).collect();
-            match shaped {
-                Shaped::Triangles => {
-                    let mirrored = transform.determinant() < 0.0;
-                    let triangles = triangles
-                        .iter()
-                        .map(|&[a, b, c]| if mirrored { [a, c, b] } else { [a, b, c] })
-                        .collect();
-                    Shape3d::Triangles {
-                        points: points(),
-                        triangles,
-                    }
-                }
-                Shaped::Hull => Shape3d::Hull(points()),
-                Shaped::Box => Shape3d::Hull(corners(&bounds).map(|c| transform.apply(c)).to_vec()),
-                Shaped::Ball => {
-                    let (center, radius) = ball_of(&bounds);
-                    Shape3d::Ball {
-                        center: transform.apply(center),
-                        radius: radius * longest_axis(transform),
-                    }
-                }
-            }
-        }
-        // In the body's own coordinates, stretched as the node is.
+    match placed {
+        Placed::Fixed {
+            shaping: Some(shaping),
+            ..
+        } => shapes.kept(scene, id, shaped, shaping),
         Placed::Moving { local, .. } => {
-            let stretch = |point: [f32; 3]| [0, 1, 2].map(|i| point[i] * local.scale[i]);
-            match shaped {
-                Shaped::Triangles => Shape3d::Triangles {
-                    points: points.into_iter().map(stretch).collect(),
-                    triangles,
-                },
-                Shaped::Hull => Shape3d::Hull(points.into_iter().map(stretch).collect()),
-                Shaped::Box => {
-                    let stretched = Bounds3::from_points(corners(&bounds).map(stretch));
-                    Shape3d::Box(stretched.expect("a box has corners"))
-                }
-                Shaped::Ball => {
-                    let (center, radius) = ball_of(&bounds);
-                    let most = local
-                        .scale
-                        .iter()
-                        .fold(0.0_f32, |most, s| most.max(s.abs()));
-                    Shape3d::Ball {
-                        center: stretch(center),
-                        radius: radius * most,
-                    }
-                }
-            }
+            shapes.kept(scene, id, shaped, &Affine3::from_scale(local.scale))
         }
-    })
+        // Where it is in the view's world, by its node's whole transform, which no pose can be.
+        Placed::Fixed {
+            transform,
+            shaping: None,
+        } => {
+            let ((points, triangles), bounds) = shown(scene, id)?;
+            shapes.made += 1;
+            Ok(shape_of(
+                points, triangles, &bounds, shaped, transform, false,
+            ))
+        }
+    }
 }
 
-/// Brings `bodied`'s body up to date with its node, which is in `scene`. A body whose node can no
-/// longer be placed stays where it was.
-fn follow_one(world: &mut World3d, scene: &Scene, bodied: &mut Bodied) {
+/// Brings `bodied`'s body up to date with its node, which is in `scene`, shaping it anew from
+/// `shapes` if it's stretched otherwise. A body whose node can no longer be placed stays where
+/// it was.
+fn follow_one(world: &mut World3d, shapes: &mut Shapes, scene: &Scene, bodied: &mut Bodied) {
     let Ok((pose, placed)) = place(scene, bodied.node, bodied.kind) else {
         return;
     };
@@ -558,12 +755,27 @@ fn follow_one(world: &mut World3d, scene: &Scene, bodied: &mut Bodied) {
         (Placed::Moving { local: now, .. }, Placed::Moving { local: was, .. }) => {
             now.scale != was.scale
         }
+        (
+            Placed::Fixed {
+                shaping: Some(now), ..
+            },
+            Placed::Fixed {
+                shaping: Some(was), ..
+            },
+        ) => now != was,
         _ => true,
     };
     if reshaped {
         let character = bodied.character.as_ref();
         // A shape that can't be made, such as one squashed flat that falls, stays as it was.
-        if let Ok(shape) = shape(scene, bodied.node, bodied.shaped, character, &placed) {
+        if let Ok(shape) = shape(
+            shapes,
+            scene,
+            bodied.node,
+            bodied.shaped,
+            character,
+            &placed,
+        ) {
             let _ = world.set_shape(bodied.body, &shape);
         }
     }
@@ -574,8 +786,8 @@ fn follow_one(world: &mut World3d, scene: &Scene, bodied: &mut Bodied) {
             world.set_pose(bodied.body, Pose3d::at(pose.position));
         }
         Some(_) => world.put(bodied.body, Pose3d::at(pose.position)),
-        None if bodied.kind != BodyKind::Fixed => world.set_pose(bodied.body, pose),
-        None => {}
+        // A fixed body at once, wherever it is.
+        None => world.set_pose(bodied.body, pose),
     }
     bodied.placed = placed;
 }
@@ -612,6 +824,7 @@ impl PhysicsWorld3d {
             bodies: self.bodies.len(),
             holders: self.holders.len(),
             looked: self.looked,
+            shapes: self.shapes.made,
         }
     }
 
@@ -647,7 +860,15 @@ impl PhysicsWorld3d {
             Some(_) => Pose3d::at(pose.position),
             None => pose,
         };
-        let shape = shape(scene, id, asked.shaped, asked.character.as_ref(), &placed)?;
+        let character = asked.character.as_ref();
+        let shape = shape(
+            &mut self.shapes,
+            scene,
+            id,
+            asked.shaped,
+            character,
+            &placed,
+        )?;
         let body = self.world.add(&Body3d {
             kind: asked.kind,
             shape,
@@ -773,6 +994,7 @@ impl PhysicsWorld3d {
     fn follow_all(&mut self, scene: &Scene) {
         self.looked += self.bodies.len() as u64;
         let world = &mut self.world;
+        let shapes = &mut self.shapes;
         let mut gone = Vec::new();
         self.bodies.retain_mut(|bodied| {
             if !scene.contains_node(bodied.node) {
@@ -780,7 +1002,7 @@ impl PhysicsWorld3d {
                 gone.push(bodied.node);
                 return false;
             }
-            follow_one(world, scene, bodied);
+            follow_one(world, shapes, scene, bodied);
             true
         });
         if !gone.is_empty() {
@@ -836,7 +1058,7 @@ impl PhysicsWorld3d {
         for &index in &marked {
             let bodied = &mut self.bodies[index];
             if scene.contains_node(bodied.node) {
-                follow_one(&mut self.world, scene, bodied);
+                follow_one(&mut self.world, &mut self.shapes, scene, bodied);
             } else {
                 self.world.remove(bodied.body);
                 gone.push(index);
@@ -916,7 +1138,8 @@ impl PhysicsWorld3d {
             self.inside(scene, id, &mut inside);
             self.looked += inside.len() as u64;
             for &index in &inside {
-                follow_one(&mut self.world, scene, &mut self.bodies[index]);
+                let bodied = &mut self.bodies[index];
+                follow_one(&mut self.world, &mut self.shapes, scene, bodied);
             }
             let placed = Local::of(scene.node(id));
             if let (Some(holder), Some(placed)) = (self.holders.get_mut(&id), placed) {
