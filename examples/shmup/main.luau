@@ -17,6 +17,7 @@
 -- Run with `cargo run --release -- examples/shmup`. `examples/native-danmaku` says how to build
 -- the library and where to put it.
 
+local wg = require("@wingine")
 local art = require("./art")
 local bullets = require("./bullets")
 local enemies = require("./enemies")
@@ -35,22 +36,22 @@ local MESSAGE_SECONDS = 2.5
 -- Stars drifting down behind the field, at up to this many pixels a second.
 local STARS = 60
 local STAR_SPEED = 40
-local STAR_COLORS = { graphics.color("#3a405c"), graphics.color("#5a628c"), graphics.color("#8a92b8") }
+local STAR_COLORS = { wg.graphics.color("#3a405c"), wg.graphics.color("#5a628c"), wg.graphics.color("#8a92b8") }
 
-local BACKGROUND = graphics.color("#14182c")
-local FLASH = graphics.color({ r = 1, g = 1, b = 1, a = 0.35 })
+local BACKGROUND = wg.graphics.color("#14182c")
+local FLASH = wg.graphics.color({ r = 1, g = 1, b = 1, a = 0.35 })
 
-input.bind("up", { "Up", "W" })
-input.bind("down", { "Down", "S" })
-input.bind("left", { "Left", "A" })
-input.bind("right", { "Right", "D" })
-input.bind("focus", { "LeftShift", "RightShift" })
-input.bind("shoot", { "Z", "J" })
-input.bind("bomb", { "X", "K" })
-input.bind("confirm", { "Z", "J", "Space", "Enter" })
-input.bind("pause", { "Escape", "P" })
-input.bind("switch", { "Tab" })
-input.bind("restart", { "R" })
+wg.input.bind("up", { "Up", "W" })
+wg.input.bind("down", { "Down", "S" })
+wg.input.bind("left", { "Left", "A" })
+wg.input.bind("right", { "Right", "D" })
+wg.input.bind("focus", { "LeftShift", "RightShift" })
+wg.input.bind("shoot", { "Z", "J" })
+wg.input.bind("bomb", { "X", "K" })
+wg.input.bind("confirm", { "Z", "J", "Space", "Enter" })
+wg.input.bind("pause", { "Escape", "P" })
+wg.input.bind("switch", { "Tab" })
+wg.input.bind("restart", { "R" })
 
 -- The bullet systems there are: Luau's own, and Rust's if the library loaded.
 local systems = { { name = "Luau", bullets = bullets } }
@@ -216,16 +217,16 @@ local function update_title()
 end
 
 local function update_play(dt: number)
-    if input.pressed("pause") then
+    if wg.input.pressed("pause") then
         shmup.paused = not shmup.paused
         sounds.pause(shmup.paused)
     end
     if shmup.paused then
-        if input.pressed("bomb") then
+        if wg.input.pressed("bomb") then
             shmup.mode = "title"
             shmup.paused = false
             shmup.bullets.clear()
-            audio.stop_sounds()
+            wg.audio.stop_sounds()
         end
         return
     end
@@ -250,7 +251,7 @@ end
 function update(dt: number)
     shmup.frame_updates += 1
     update_stars(dt)
-    if input.pressed("switch") then
+    if wg.input.pressed("switch") then
         shmup.switch_system()
     end
     if shmup.mode == "title" then
@@ -258,15 +259,15 @@ function update(dt: number)
     elseif shmup.mode == "play" then
         update_play(dt)
     elseif shmup.mode == "stress" then
-        if input.pressed("pause") then
+        if wg.input.pressed("pause") then
             shmup.mode = "title"
             shmup.bullets.clear()
-        elseif input.pressed("restart") then
+        elseif wg.input.pressed("restart") then
             stress.start()
         else
             stress.update(dt)
         end
-    elseif input.pressed("confirm") then
+    elseif wg.input.pressed("confirm") then
         -- Game over, or the stage cleared.
         shmup.mode = "title"
         shmup.bullets.clear()
@@ -280,10 +281,10 @@ end
 function draw()
     shmup.last_frame_updates = shmup.frame_updates
     shmup.frame_updates = 0
-    graphics.clear(BACKGROUND)
+    wg.graphics.clear(BACKGROUND)
     field.camera()
     for _, star in stars do
-        graphics.fill_rect(star.x, star.y, 1, if star.speed > 30 then 2 else 1, star.color)
+        wg.graphics.fill_rect(star.x, star.y, 1, if star.speed > 30 then 2 else 1, star.color)
     end
     if shmup.mode ~= "title" and shmup.mode ~= "stress" then
         enemies.draw()
@@ -291,9 +292,9 @@ function draw()
     end
     shmup.bullets.draw()
     if shmup.player.bombing > 0 and shmup.mode == "play" then
-        graphics.fill_rect(0, 0, field.WIDTH, field.HEIGHT, FLASH)
+        wg.graphics.fill_rect(0, 0, field.WIDTH, field.HEIGHT, FLASH)
     end
-    graphics.set_camera(nil)
+    wg.graphics.set_camera(nil)
     hud.draw()
 end
 

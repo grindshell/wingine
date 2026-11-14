@@ -296,7 +296,7 @@ impl Natives {
             };
             if !lua.globals().get::<mlua::Value>(&*library.name)?.is_nil() {
                 return Err(fail(format!(
-                    "its table `{}` is taken by the engine or another library",
+                    "its table `{}` is taken by Luau or another library",
                     library.name
                 )));
             }

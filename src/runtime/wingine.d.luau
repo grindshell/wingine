@@ -4,59 +4,65 @@
 -- `tests/runtime.rs` checks it declares every function the engine's tables hold, and
 -- `src/runtime/gui.rs` every method of `Ui`.
 --
+-- The API is a module, not globals, so this declares no globals but tests': its tables are types,
+-- gathered in `Wingine`, which `require("@wingine")` returns. luau-lsp reads that through a file
+-- a game's `.luaurc` aliases as `wingine`, `wingine.luau` beside this one, which says only that
+-- it returns a `Wingine`; the engine never follows the alias. Every type is exported, so a script
+-- can name one: `local camera: Camera3d`.
+--
 -- A game's own `update`, `draw`, `gui`, `close_requested` and `reloading` aren't declared, since
 -- the game defines them. Write `function gui(ui: Ui)`, so luau-lsp knows what `ui` is.
 
 --- A color: a hex string such as `"#f2c14e"` or `"#00000080"`, a table of components from 0 to 1
 --- (`a` is 1 if left out), or a number `0xRRGGBBAA`, which passes fastest.
-type Color = string | number | ColorComponents
+export type Color = string | number | ColorComponents
 
 --- A color as components from 0 to 1. `a` is opacity, and 1 if left out.
-type ColorComponents = { r: number, g: number, b: number, a: number? }
+export type ColorComponents = { r: number, g: number, b: number, a: number? }
 
 --- A rectangle: its top-left corner, `x` and `y`, and its size.
-type Rect = { x: number, y: number, width: number, height: number }
+export type Rect = { x: number, y: number, width: number, height: number }
 
 --- A key's name, such as `"Space"`, `"W"` or `"Digit1"`, in any case. Keys are physical, named for
 --- where they are on a US QWERTY keyboard.
-type Key = string
+export type Key = string
 
 --- `"left"`, `"right"`, `"middle"`, `"back"` or `"forward"`, in any case.
-type MouseButton = string
+export type MouseButton = string
 
 --- A gamepad button's name, such as `"South"`, `"Start"` or `"DPadUp"`, or a stick's direction,
 --- such as `"LeftStickLeft"`, in any case. Buttons are named for where they are on the gamepad.
-type GamepadButton = string
+export type GamepadButton = string
 
 --- What an action is bound to: a `Key`, a `GamepadButton`, or a mouse button as `"MouseLeft"`,
 --- `"MouseRight"`, `"MouseMiddle"`, `"MouseBack"` or `"MouseForward"`, in any case, since `"Left"`
 --- and `"Right"` are the arrow keys.
-type Control = string
+export type Control = string
 
 --- A direction on the grid.
-type Direction = "up" | "down" | "left" | "right"
+export type Direction = "up" | "down" | "left" | "right"
 
 --- How a window covers the screen: `"borderless"`, a window without borders covering it, or
 --- `"exclusive"`, the screen given over to the game at a video mode of its own. Nil where these
 --- take one is a window of its own size.
-type Fullscreen = "borderless" | "exclusive"
+export type Fullscreen = "borderless" | "exclusive"
 
 --- How a fixed resolution fills the window: `"whole"`, scaled up by the largest whole number that
 --- fits, with black bars; `"fit"`, as large as fits keeping its shape, filling the window's height
 --- or width; or `"stretch"`, filling it both ways.
-type Scaling = "whole" | "fit" | "stretch"
+export type Scaling = "whole" | "fit" | "stretch"
 
 --- How what's drawn mixes with what's under it: `"normal"`, covering it as much as it's opaque;
 --- `"add"`, adding to it, only ever brightening, for fire and glows; `"multiply"`, multiplying it,
 --- only ever darkening, for shadows and night; or `"screen"`, brightening it as much as its color
 --- is bright, never past white, for soft light.
-type Blend = "normal" | "add" | "multiply" | "screen"
+export type Blend = "normal" | "add" | "multiply" | "screen"
 
 --- What an emitter of particles sends out, how often, and how its particles move and look as they
 --- age: for `graphics.new_particles` and particles nodes. Ranges are `{ least, most }`, each
 --- particle getting a value between them at random, or one number for every particle. Lists over a
 --- particle's life are spread evenly from its start to its end.
-type ParticleSettings = {
+export type ParticleSettings = {
     --- Whether it sends particles out at its `rate`. By default, true.
     emitting: boolean?,
     --- Particles a second, while emitting. By default, 10.
@@ -99,7 +105,7 @@ type ParticleSettings = {
 }
 
 --- How `audio.play` plays a sound.
-type PlaySettings = {
+export type PlaySettings = {
     --- Linear volume: 1 is as recorded. By default, 1.
     volume: number?,
     --- Playback speed, which changes the pitch with it: 2 is twice as fast and an octave higher.
@@ -114,7 +120,7 @@ type PlaySettings = {
 }
 
 --- How `graphics.load_font` draws a TrueType or OpenType font.
-type FontSettings = {
+export type FontSettings = {
     --- How many pixels its em is. A pixel font made as a TrueType font is drawn at the size it was
     --- made for, or a whole number of times it, to fit its pixels.
     size: number,
@@ -124,7 +130,7 @@ type FontSettings = {
 }
 
 --- A kind of tile, for `tileset:add`.
-type Tile = {
+export type Tile = {
     --- The sprite drawn, stretched to fill the cell.
     sprite: Sprite,
     --- A color the sprite's colors are multiplied by. By default, white.
@@ -134,7 +140,7 @@ type Tile = {
 }
 
 --- How long the frame before took, in seconds measured on the CPU, and how much it drew.
-type FrameStats = {
+export type FrameStats = {
     --- The whole frame: updating, drawing, rendering, and waiting for vsync and the GPU.
     frame: number,
     --- The frame's updates: `update`, the tasks and native libraries' update hooks.
@@ -165,7 +171,7 @@ type FrameStats = {
 
 --- A camera looking into a 3D world, for a `View3d`. 3D coordinates are right-handed with `y` up:
 --- looking along `-z`, `x` points right and `z` toward the camera.
-type Camera3d = {
+export type Camera3d = {
     --- Where the camera is.
     position: vector,
     --- The point it looks at, which shows in the middle of the view.
@@ -186,7 +192,7 @@ type Camera3d = {
 
 --- How a 3D view is lit: by a sun, from one direction, and ambient light from all around. White
 --- light shows surfaces as they are, and the two together light them no brighter than that.
-type Lighting = {
+export type Lighting = {
     --- The way the sun's light goes. By default, down from above, a little to the right and in
     --- front: `vector.create(-0.3, -1, -0.5)`.
     direction: vector?,
@@ -203,7 +209,7 @@ type Lighting = {
 --- What a light gives: a light node's settings, for `node:light` and `node:set_light`. Its light
 --- falls off in a straight line, to nothing at its range, and adds to the view's other light, all
 --- of it together no brighter than white.
-type LightSettings = {
+export type LightSettings = {
     --- Its light on a surface facing it squarely, at its place. By default, white. From
     --- `node:light`, a number.
     color: Color?,
@@ -227,7 +233,7 @@ type LightSettings = {
 }
 
 --- A light at a place in a 3D view, for `graphics.begin_3d`.
-type Light = LightSettings & {
+export type Light = LightSettings & {
     --- Where it is.
     position: vector,
     --- The way a spot light shines: a light with a `cone` has one.
@@ -240,7 +246,7 @@ type Light = LightSettings & {
 --- background, so clear the canvas to the fog's color for the far side of a world to fade into
 --- what's behind it. A light none of whose reach is nearer than `far` lights nothing that shows,
 --- so isn't one of the view's.
-type Fog = {
+export type Fog = {
     --- What things fade to. By default, white. From `node:fog`, a number.
     color: Color?,
     --- How far from the camera fog begins, in world units, 0 or more. By default, 0.
@@ -250,7 +256,7 @@ type Fog = {
 }
 
 --- A 3D view, for `graphics.begin_3d`, `graphics.project` and `graphics.ray`.
-type View3d = {
+export type View3d = {
     camera: Camera3d,
     --- Where on the canvas the view shows. By default, the whole canvas.
     rect: Rect?,
@@ -262,7 +268,7 @@ type View3d = {
 
 --- How `graphics.draw_mesh` places and colors a mesh: scaled, rolled, pitched and turned, in that
 --- order, about its origin.
-type MeshOptions = {
+export type MeshOptions = {
     --- Radians to turn about `y`, counter-clockwise seen from above.
     yaw: number?,
     --- Radians to turn about `x`, counter-clockwise seen from `+x`.
@@ -283,7 +289,7 @@ type MeshOptions = {
 }
 
 --- A corner of a mesh's triangles, for `graphics.new_mesh`.
-type MeshVertex = {
+export type MeshVertex = {
     position: vector,
     --- Which way the surface faces here, for lighting. By default, up.
     normal: vector?,
@@ -296,7 +302,7 @@ type MeshVertex = {
 }
 
 --- The triangles of a mesh, for `graphics.new_mesh`.
-type MeshData = {
+export type MeshData = {
     vertices: { MeshVertex },
     --- Three vertices for each triangle, counting from 1, counter-clockwise seen from the side it
     --- faces. Triangles show only from that side.
@@ -304,7 +310,7 @@ type MeshData = {
 }
 
 --- A 2D physics world, for `physics.world`.
-type WorldOptions = {
+export type WorldOptions = {
     --- How many of the scene's units make a metre, which Rapier tunes itself for and densities
     --- are of a square of. By default, 16.
     metre: number?,
@@ -315,7 +321,7 @@ type WorldOptions = {
 
 --- How `world:add` makes a node solid in 2D, or gives it a body. A tile map or a tile layer is
 --- solid where its solid tiles are, and takes none of these.
-type ColliderOptions = {
+export type ColliderOptions = {
     --- Whether only the node's edges are solid, keeping what's inside in and what's outside out,
     --- rather than all of it. Only for a fixed box. By default, false.
     edges: boolean?,
@@ -339,7 +345,7 @@ type ColliderOptions = {
 }
 
 --- A 2D character's size and how it walks, for `ColliderOptions.character`.
-type CharacterOptions2d = {
+export type CharacterOptions2d = {
     --- How wide its box is. By default, as wide as what its node covers.
     width: number?,
     --- How tall it is, from its feet, its node's position. By default, as tall as what its node
@@ -355,14 +361,14 @@ type CharacterOptions2d = {
 }
 
 --- A 3D physics world, for `physics.world_3d`.
-type World3dOptions = {
+export type World3dOptions = {
     --- How fast dynamic bodies falling speed up each second. By default, 9.81 down, as Earth's
     --- gravity does in metres.
     gravity: vector?,
 }
 
 --- How `world:add` gives a node in a 3D view a body.
-type BodyOptions = {
+export type BodyOptions = {
     --- How it moves: not at all (`"fixed"`, the default), as it's pushed and falls
     --- (`"dynamic"`), or where its node is put (`"kinematic"`, a character's).
     body: ("fixed" | "dynamic" | "kinematic")?,
@@ -385,7 +391,7 @@ type BodyOptions = {
 }
 
 --- How `world:ray` looks, in 2D or 3D.
-type RayOptions = {
+export type RayOptions = {
     --- How far it goes, in lengths of its direction. By default, as far as there is.
     distance: number?,
     --- A node, or a list of them, whose colliders or bodies it goes through.
@@ -393,13 +399,13 @@ type RayOptions = {
 }
 
 --- How a world's overlaps look: `overlap_circle`, `overlap_ball` and `overlap_box`.
-type OverlapOptions = {
+export type OverlapOptions = {
     --- A node, or a list of them, whose colliders or bodies don't count.
     except: (SceneNode | { SceneNode })?,
 }
 
 --- Where a 2D world's `world:ray` hit a collider, in the scene's coordinates.
-type RayHit = {
+export type RayHit = {
     --- The node whose collider it hit.
     node: SceneNode,
     --- How far along the ray, in lengths of its direction.
@@ -414,7 +420,7 @@ type RayHit = {
 }
 
 --- Where a 3D world's `world:ray` hit a body.
-type RayHit3d = {
+export type RayHit3d = {
     --- The node whose body it hit.
     node: SceneNode,
     --- How far along the ray, in lengths of its direction.
@@ -427,7 +433,7 @@ type RayHit3d = {
 }
 
 --- A character's size and how it walks, for `BodyOptions.character`.
-type CharacterOptions = {
+export type CharacterOptions = {
     --- How far it reaches out from its middle. By default, half the widest its node's box is
     --- across the ground.
     radius: number?,
@@ -444,7 +450,7 @@ type CharacterOptions = {
 
 --- A window of an interface, for `ui:window`. Positions and sizes are in points: the window's
 --- logical pixels, not the canvas's.
-type WindowOptions = {
+export type WindowOptions = {
     --- The text in its title bar, which also tells it apart from other windows.
     title: string,
     --- Where its top-left corner starts. It can be dragged elsewhere.
@@ -460,10 +466,10 @@ type WindowOptions = {
 }
 
 --- An edge of the window, which a panel runs along.
-type PanelSide = "left" | "right" | "top" | "bottom"
+export type PanelSide = "left" | "right" | "top" | "bottom"
 
 --- A panel of an interface, for `ui:panel`.
-type PanelOptions = {
+export type PanelOptions = {
     side: PanelSide,
     --- The width it starts at, or for the top and bottom, its height, in points.
     size: number?,
@@ -473,7 +479,7 @@ type PanelOptions = {
 
 --- How `ui.menu` finds its items and takes input. The actions are named as `input.bind` binds
 --- them, and one that isn't bound does nothing.
-type MenuOptions = {
+export type MenuOptions = {
     --- Makes the items the nodes inside the menu's node with this tag, in the order they draw,
     --- rather than its children.
     tag: string?,
@@ -495,7 +501,7 @@ type MenuOptions = {
 }
 
 --- What happened to a menu in an update.
-type MenuEvent = "moved" | "picked" | "cancelled"
+export type MenuEvent = "moved" | "picked" | "cancelled"
 
 --- A rectangle of an image, to draw, from a sprite sheet.
 declare extern type Sprite with
@@ -1054,7 +1060,7 @@ end
 
 --- Drawing, the camera, blend modes, sprites, animations, particles, text and 3D views. Drawing
 --- works only in `draw`.
-declare graphics: {
+export type GraphicsApi = {
     --- Fills the canvas with `color`, discarding anything drawn so far this frame.
     clear: (color: Color) -> (),
     --- Fills a rectangle with its top-left corner at `x`, `y`.
@@ -1155,7 +1161,7 @@ declare graphics: {
 
 --- The keyboard, mouse and gamepads, and actions bound to keys and buttons. Works while the game
 --- loads and in `update`.
-declare input: {
+export type InputApi = {
     --- Binds `action` to keys, mouse buttons and gamepad buttons, replacing what it was bound to
     --- before. With `gamepad`, only that gamepad's buttons count; without, any gamepad's do.
     bind: (action: string, controls: { Control }, gamepad: number?) -> (),
@@ -1238,7 +1244,7 @@ declare input: {
 }
 
 --- Sound effects and music, from WAV or OGG Vorbis files. Volumes are linear: 1 is as recorded.
-declare audio: {
+export type AudioApi = {
     --- Loads the sound effect at `path`, decoding all of it into memory.
     load: (path: string) -> Sound,
     --- Makes a sound effect of the samples in a buffer, 32-bit floats from -1 to 1, `rate` of them
@@ -1269,7 +1275,7 @@ declare audio: {
 }
 
 --- Tilesets and maps of tiles in layers.
-declare tilemap: {
+export type TilemapApi = {
     --- Returns an empty tileset of tiles `tile_width` by `tile_height` world units.
     new_tileset: (tile_width: number, tile_height: number) -> Tileset,
     --- Returns a map `columns` by `rows` cells, with no layers yet, of a copy of `tileset`.
@@ -1277,7 +1283,7 @@ declare tilemap: {
 }
 
 --- Characters that walk from tile to tile.
-declare grid: {
+export type GridApi = {
     --- Returns a mover on the tile at `column`, `row`, facing down, that takes `step_time` seconds
     --- a step.
     new_mover: (column: number, row: number, step_time: number) -> GridMover,
@@ -1288,7 +1294,7 @@ declare grid: {
 }
 
 --- Bodies and characters among a scene's nodes, in 2D and in its 3D views.
-declare physics: {
+export type PhysicsApi = {
     --- Returns an empty physics world, which the first node given to it makes a world of that
     --- node's scene.
     world: (options: WorldOptions?) -> PhysicsWorld,
@@ -1297,7 +1303,7 @@ declare physics: {
     world_3d: (options: World3dOptions?) -> PhysicsWorld3d,
 }
 
-declare scene: {
+export type SceneApi = {
     --- Loads the scene file at `path` and returns its root, a scene of its own.
     load: (path: string) -> SceneNode,
     --- Returns the clips of the scene file at `path`, by name.
@@ -1305,7 +1311,7 @@ declare scene: {
 }
 
 --- Menus over scenes' nodes, which games show as they like.
-declare ui: {
+export type UiApi = {
     --- Returns a menu of `node`'s items: its children, such as a stack's, or with `options.tag`,
     --- the nodes inside it with that tag. Those shown are the items, where they're drawn, which
     --- must be in canvas pixels, without a camera, for the mouse to point at them.
@@ -1315,7 +1321,7 @@ declare ui: {
 --- Data kept between runs of the game, in saves named with letters, digits, `_` and `-`, but no
 --- name Windows keeps for a device, such as "con". Saves hold plain data: booleans, numbers, strings, and tables of them that are lists or have strings
 --- for keys. Works at any time.
-declare save: {
+export type SaveApi = {
     --- Writes `data` to the save `name`, replacing any.
     write: (name: string, data: any) -> (),
     --- Returns the data in the save `name`, or nil if there's no such save.
@@ -1327,7 +1333,7 @@ declare save: {
 }
 
 --- The game's window.
-declare window: {
+export type WindowApi = {
     --- Closes the window once the frame has drawn, which ends the game. Works while the game
     --- loads, in `update`, `gui` and `close_requested`.
     quit: () -> (),
@@ -1355,7 +1361,7 @@ declare window: {
 --- Math functions that give the same bits on every platform, unlike `math`'s, which come from the
 --- C library Luau is built with. Each takes what `math`'s function of the same name takes, and
 --- costs about five times as much to call.
-declare exact: {
+export type ExactApi = {
     sin: (x: number) -> number,
     cos: (x: number) -> number,
     tan: (x: number) -> number,
@@ -1375,7 +1381,7 @@ declare exact: {
 
 --- Rectangles, such as `node:bounds()` returns. Written in Luau, so they cost what a script's own
 --- functions do.
-declare rect: {
+export type RectApi = {
     --- Whether `a` and `b` overlap. Rectangles that only touch don't.
     overlaps: (a: Rect, b: Rect) -> boolean,
     --- Whether the point `x`, `y` is in `r`, counting its top and left edges but not its bottom and
@@ -1383,24 +1389,49 @@ declare rect: {
     contains: (r: Rect, x: number, y: number) -> boolean,
 }
 
---- Returns `value` moved toward `target` by `step`, 0 or more, but no further than `target`.
-declare function approach(value: number, target: number, step: number): number
-
---- Starts `f(...)` as a task, running it until it first waits or finishes. The engine resumes it
---- every update from then on.
-declare function spawn<A...>(f: (A...) -> ...any, ...: A...): ()
-
---- Pauses the task for `seconds` of game time, or until the next update. Works only in tasks.
-declare function wait(seconds: number?): ()
-
---- Pauses the task until `condition()` returns true, checking once each update. Works only in
---- tasks.
-declare function wait_until(condition: () -> boolean): ()
+--- The engine's API, which `require("@wingine")` returns: `local wg = require("@wingine")`.
+export type Wingine = {
+    --- Drawing, the camera, blend modes, sprites, animations, particles, text and 3D views.
+    --- Drawing works only in `draw`.
+    graphics: GraphicsApi,
+    --- Actions, keys, the mouse, gamepads and typed text.
+    input: InputApi,
+    --- Sounds and music.
+    audio: AudioApi,
+    --- Tilesets and maps of tiles in layers.
+    tilemap: TilemapApi,
+    --- Characters that walk from tile to tile.
+    grid: GridApi,
+    --- Bodies and characters among a scene's nodes, in 2D and in its 3D views.
+    physics: PhysicsApi,
+    --- Scene files, loaded.
+    scene: SceneApi,
+    --- Menus over scenes' nodes, which games show as they like.
+    ui: UiApi,
+    --- Data kept between runs of the game.
+    save: SaveApi,
+    --- The game's window.
+    window: WindowApi,
+    --- Math functions that give the same bits on every platform, unlike `math`'s.
+    exact: ExactApi,
+    --- Rectangles, such as `node:bounds()` returns.
+    rect: RectApi,
+    --- Returns `value` moved toward `target` by `step`, 0 or more, but no further than `target`.
+    approach: (value: number, target: number, step: number) -> number,
+    --- Starts `f(...)` as a task, running it until it first waits or finishes. The engine resumes
+    --- it every update from then on.
+    spawn: <A...>(f: (A...) -> ...any, A...) -> (),
+    --- Pauses the task for `seconds` of game time, or until the next update. Works only in tasks.
+    wait: (seconds: number?) -> (),
+    --- Pauses the task until `condition()` returns true, checking once each update. Works only in
+    --- tasks.
+    wait_until: (condition: () -> boolean) -> (),
+}
 
 -- What only tests have: the files named `*.test.luau` that `wingine test` runs.
 
 --- How a test runs.
-type TestOptions = {
+export type TestOptions = {
     --- Seconds of game time it may run before it fails, 60 by default.
     time_limit: number?,
     --- Whether it runs only when the ignored tests are asked for (`wingine test --ignored`), as a
@@ -1409,7 +1440,7 @@ type TestOptions = {
 }
 
 --- How a screenshot matches its reference.
-type ScreenshotOptions = {
+export type ScreenshotOptions = {
     --- How much a channel of a pixel may differ, from 0 to 255: 2 by default.
     tolerance: number?,
     --- How many pixels may differ by more: 0 by default.

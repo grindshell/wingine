@@ -108,41 +108,41 @@ fn main() {
     );
     report(
         "Luau: graphics.draw_sprite(sprite, x, y)",
-        luau("draw-sprite", each("graphics.draw_sprite(sprite, x, y)")),
+        luau("draw-sprite", each("wg.graphics.draw_sprite(sprite, x, y)")),
     );
     report(
         "Luau: graphics.draw_sprite_rotated(sprite, x, y, angle)",
         luau(
             "draw-sprite-rotated",
-            each("graphics.draw_sprite_rotated(sprite, x, y, ANGLE)"),
+            each("wg.graphics.draw_sprite_rotated(sprite, x, y, ANGLE)"),
         ),
     );
     report(
         "Luau: graphics.draw_sprite(sprite, x, y, \"#ff8040\")",
         luau(
             "draw-sprite-hex",
-            each("graphics.draw_sprite(sprite, x, y, '#ff8040')"),
+            each("wg.graphics.draw_sprite(sprite, x, y, '#ff8040')"),
         ),
     );
     report(
         "Luau: graphics.draw_sprite(sprite, x, y, 0xff8040ff)",
         luau(
             "draw-sprite-number",
-            each("graphics.draw_sprite(sprite, x, y, 0xff8040ff)"),
+            each("wg.graphics.draw_sprite(sprite, x, y, 0xff8040ff)"),
         ),
     );
     report(
         "Luau: graphics.draw_sprite(sprite, x, y, { r, g, b })",
         luau(
             "draw-sprite-table",
-            each("graphics.draw_sprite(sprite, x, y, TINT)"),
+            each("wg.graphics.draw_sprite(sprite, x, y, TINT)"),
         ),
     );
     report(
         "Luau: graphics.fill_rect(x, y, 8, 8, \"#ff8040\")",
         luau(
             "fill-rect",
-            each("graphics.fill_rect(x, y, 8, 8, '#ff8040')"),
+            each("wg.graphics.fill_rect(x, y, 8, 8, '#ff8040')"),
         ),
     );
     report(
@@ -264,8 +264,9 @@ const MOVE_BULLETS: &str = "
 /// A Luau game whose `draw` runs `draw`.
 fn luau_game(draw: &str) -> String {
     format!(
-        "local SPRITES = {SPRITES}
-        local sprite = graphics.load_sprite_sheet('sprite.png', {SIZE}, {SIZE}):sprite(0, 0)
+        "local wg = require('@wingine')
+        local SPRITES = {SPRITES}
+        local sprite = wg.graphics.load_sprite_sheet('sprite.png', {SIZE}, {SIZE}):sprite(0, 0)
         local TINT = {{ r = 1, g = 0.5, b = 0.25 }}
         local ANGLE = {ANGLE}
         local calls = 0

@@ -5,7 +5,7 @@ The game's window, and the game in it.
 ## `window.quit`
 
 ```lua
-window.quit()
+wg.window.quit()
 ```
 
 Closes the window once the frame has drawn, which ends the game. It works while the game loads, in
@@ -13,12 +13,14 @@ Closes the window once the frame has drawn, which ends the game. It works while 
 but not in `draw`. A game that saves on the way out writes its save before quitting:
 
 ```lua
-input.bind("quit", { "Escape" })
+local wg = require("@wingine")
+
+wg.input.bind("quit", { "Escape" })
 
 function update(dt: number)
-    if input.pressed("quit") then
-        save.write("progress", progress)
-        window.quit()
+    if wg.input.pressed("quit") then
+        wg.save.write("progress", progress)
+        wg.window.quit()
     end
 end
 ```
@@ -31,6 +33,7 @@ returns `false`. A game with something to lose returns `false`, asks the player,
 `window.quit()` once they've answered:
 
 ```lua
+local wg = require("@wingine")
 local asking = false
 
 function close_requested(): boolean
@@ -39,9 +42,9 @@ function close_requested(): boolean
 end
 
 function update(dt: number)
-    if asking and input.key_pressed("Y") then
-        window.quit()
-    elseif asking and input.key_pressed("N") then
+    if asking and wg.input.key_pressed("Y") then
+        wg.window.quit()
+    elseif asking and wg.input.key_pressed("N") then
         asking = false
     end
 end
@@ -69,7 +72,7 @@ unless it has a fixed [`resolution`](../project-structure.md#resolution), which 
 ### `window.fullscreen`
 
 ```lua
-window.fullscreen(): ("borderless" | "exclusive")?
+wg.window.fullscreen(): ("borderless" | "exclusive")?
 ```
 
 Returns how the window covers the screen, or `nil` if it's a window of its own size: as it opened,
@@ -79,20 +82,22 @@ green button or a browser's Escape. A window that couldn't be exclusive is `"bor
 ### `window.set_fullscreen`
 
 ```lua
-window.set_fullscreen(mode: ("borderless" | "exclusive")?)
+wg.window.set_fullscreen(mode: ("borderless" | "exclusive")?)
 ```
 
 Makes the window cover the screen as `mode` says, or a window of its own size again for `nil`,
 once the frame has drawn. Wingine binds no key to it, so a game binds its own, as Pong binds F11:
 
 ```lua
-input.bind("fullscreen", { "F11" })
+local wg = require("@wingine")
+
+wg.input.bind("fullscreen", { "F11" })
 
 function update(dt: number)
-    if input.pressed("fullscreen") and window.fullscreen() then
-        window.set_fullscreen(nil)
-    elseif input.pressed("fullscreen") then
-        window.set_fullscreen("borderless")
+    if wg.input.pressed("fullscreen") and wg.window.fullscreen() then
+        wg.window.set_fullscreen(nil)
+    elseif wg.input.pressed("fullscreen") then
+        wg.window.set_fullscreen("borderless")
     end
 end
 ```
@@ -124,7 +129,7 @@ canvas is scaled.
 ### `window.scaling`
 
 ```lua
-window.scaling(): "whole" | "fit" | "stretch"
+wg.window.scaling(): "whole" | "fit" | "stretch"
 ```
 
 Returns how a fixed resolution fills the window.
@@ -132,7 +137,7 @@ Returns how a fixed resolution fills the window.
 ### `window.set_scaling`
 
 ```lua
-window.set_scaling(scaling: "whole" | "fit" | "stretch")
+wg.window.set_scaling(scaling: "whole" | "fit" | "stretch")
 ```
 
 Scales a fixed resolution by `scaling` from the frame that draws next.
@@ -144,7 +149,7 @@ fullscreen is only noted: its frames stay the size they were.
 ## `window.reloaded`
 
 ```lua
-window.reloaded(): any
+wg.window.reloaded(): any
 ```
 
 Returns a copy of what the game before this one returned from its
@@ -157,9 +162,11 @@ A game carries on where it was by making its state as it would to start, then co
 kept over it, so fields a new version of the game adds keep their starting values:
 
 ```lua
+local wg = require("@wingine")
+
 game = { level = 1, coins = 0, lives = 3 }
 
-local kept = window.reloaded()
+local kept = wg.window.reloaded()
 if kept then
     for key, value in kept do
         game[key] = value

@@ -2111,7 +2111,7 @@ fn luau_lsp_checks_scripts_as_they_are_typed() {
     let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join("editor/script-checked");
     let _ = fs::remove_dir_all(&folder);
     fs::create_dir_all(&folder).unwrap();
-    let main = "local font = graphics.default_font()\n\nfunction draw()\n    graphics.draw_text(font, \"hi\", 0, 0, \"#ffffff\")\nend\n";
+    let main = "local wg = require(\"@wingine\")\nlocal font = wg.graphics.default_font()\n\nfunction draw()\n    wg.graphics.draw_text(font, \"hi\", 0, 0, \"#ffffff\")\nend\n";
     fs::write(folder.join("main.luau"), main).unwrap();
     let mut simulation = editor(Some(folder));
     simulation.game_mut().open_script("main.luau").unwrap();
@@ -2157,7 +2157,7 @@ fn luau_lsp_checks_scripts_as_they_are_typed() {
     let end = main.chars().count();
     simulation.game_mut().scripts_mut().go_to(end);
     simulation.run_frames(2);
-    simulation.type_text("graphics.draw_t");
+    simulation.type_text("wg.graphics.draw_t");
     wait_for(&mut simulation, "completions", |editor| {
         !editor.scripts().completions().is_empty()
     });
@@ -2175,7 +2175,7 @@ fn luau_lsp_checks_scripts_as_they_are_typed() {
     );
     simulation.tap(Key::Enter);
     simulation.run_frames(2);
-    assert!(script_text(&simulation).ends_with("graphics.draw_text"));
+    assert!(script_text(&simulation).ends_with("wg.graphics.draw_text"));
 
     // Opening its call shows its parameters.
     simulation.type_text("(");
@@ -2198,7 +2198,7 @@ fn luau_lsp_checks_scripts_as_they_are_typed() {
         wrong_font(editor).is_some()
     });
     let problem = wrong_font(simulation.game()).unwrap();
-    assert_eq!((problem.start.line, problem.start.character), (5, 19));
+    assert_eq!((problem.start.line, problem.start.character), (6, 22));
     assert_eq!(problem.severity, Severity::Error);
 }
 

@@ -6,11 +6,13 @@
 -- orbs in row 1, rice in row 2 (pointing right, so it turns to the way it's heading), and the
 -- player's shot in row 3.
 
+local wg = require("@wingine")
+
 local art = {}
 
-local tiles = graphics.load_sprite_sheet("kenney_1-bit-pack.png", 16, 16)
-local small = graphics.load_sprite_sheet("bullets.png", 8, 8)
-local large = graphics.load_sprite_sheet("bullets.png", 16, 16)
+local tiles = wg.graphics.load_sprite_sheet("kenney_1-bit-pack.png", 16, 16)
+local small = wg.graphics.load_sprite_sheet("bullets.png", 8, 8)
+local large = wg.graphics.load_sprite_sheet("bullets.png", 16, 16)
 
 art.player = tiles:sprite(31, 2)
 art.ghost = tiles:sprite(27, 8)

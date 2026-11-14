@@ -8,15 +8,16 @@ as in [tilemaps](tilemap.md). Everything here works any time.
 
 ```lua
 -- `map` is a Tilemap with 16x16 tiles, made as on the tilemap page, and `hero` a Sprite.
+local wg = require("@wingine")
 local TILE = 16
-local player = grid.new_mover(5, 5, 0.2) -- column 5, row 5, a fifth of a second a step
+local player = wg.grid.new_mover(5, 5, 0.2) -- column 5, row 5, a fifth of a second a step
 
 -- Actions named after the directions they walk.
 local DIRECTIONS = { "up", "down", "left", "right" }
-input.bind("up", { "Up", "W" })
-input.bind("down", { "Down", "S" })
-input.bind("left", { "Left", "A" })
-input.bind("right", { "Right", "D" })
+wg.input.bind("up", { "Up", "W" })
+wg.input.bind("down", { "Down", "S" })
+wg.input.bind("left", { "Left", "A" })
+wg.input.bind("right", { "Right", "D" })
 
 local function blocked(column: number, row: number): boolean
     return map:is_solid(column, row)
@@ -25,7 +26,7 @@ end
 function update(dt: number)
     player:update(dt)
     for _, direction in DIRECTIONS do
-        if input.held(direction) then
+        if wg.input.held(direction) then
             player:step(direction, blocked)
             break
         end
@@ -34,9 +35,9 @@ end
 
 function draw()
     local x, y = map:tile_to_world(player:position())
-    graphics.set_camera(x + TILE / 2, y + TILE / 2, map:bounds())
-    graphics.draw_tilemap(map)
-    graphics.draw_sprite(hero, x, y)
+    wg.graphics.set_camera(x + TILE / 2, y + TILE / 2, map:bounds())
+    wg.graphics.draw_tilemap(map)
+    wg.graphics.draw_sprite(hero, x, y)
 end
 ```
 
@@ -50,7 +51,7 @@ even pace, however updates fall.
 ### `grid.new_mover`
 
 ```lua
-grid.new_mover(column: number, row: number, step_time: number): GridMover
+wg.grid.new_mover(column: number, row: number, step_time: number): GridMover
 ```
 
 Returns a mover standing on the tile at `column`, `row` and facing down, which takes `step_time`
@@ -59,7 +60,7 @@ seconds to walk from one tile to the next. `step_time` must be above 0.
 ### `grid.neighbor`
 
 ```lua
-grid.neighbor(direction: Direction, column: number, row: number): (number, number)
+wg.grid.neighbor(direction: Direction, column: number, row: number): (number, number)
 ```
 
 Returns the column and row of the next tile from `column`, `row` in `direction`. Rows grow
@@ -69,7 +70,7 @@ there's none past those, and asking for one fails.
 ### `grid.opposite`
 
 ```lua
-grid.opposite(direction: Direction): Direction
+wg.grid.opposite(direction: Direction): Direction
 ```
 
 Returns the opposite direction: `"down"` for `"up"`, and so on. An NPC the player talks to turns to

@@ -30,12 +30,14 @@
 -- Run with `cargo run -- examples/orchard`. The art was drawn pixel by pixel for it. The game's
 -- state is in the global table `orchard`, where tests can see it.
 
-local orchard_scene = scene.load("orchard.scene.luau")
-local clips = scene.clips("picker.scene.luau")
+local wg = require("@wingine")
 
-input.bind("left", { "Left", "A" })
-input.bind("right", { "Right", "D" })
-input.bind("again", { "Space", "Enter" })
+local orchard_scene = wg.scene.load("orchard.scene.luau")
+local clips = wg.scene.clips("picker.scene.luau")
+
+wg.input.bind("left", { "Left", "A" })
+wg.input.bind("right", { "Right", "D" })
+wg.input.bind("again", { "Space", "Enter" })
 
 -- Pixels a second the picker walks, and how far it goes either way.
 local SPEED = 80
@@ -246,10 +248,10 @@ end
 local function walk(dt: number)
     local direction = 0
     if not orchard.over_at then
-        if input.held("left") then
+        if wg.input.held("left") then
             direction -= 1
         end
-        if input.held("right") then
+        if wg.input.held("right") then
             direction += 1
         end
     end
@@ -342,7 +344,7 @@ end
 
 function update(dt: number)
     orchard.time += dt
-    if orchard.over_at and input.pressed("again") then
+    if orchard.over_at and wg.input.pressed("again") then
         again()
     end
     drift(dt)
@@ -353,12 +355,12 @@ function update(dt: number)
 end
 
 function draw()
-    graphics.clear("#000000")
+    wg.graphics.clear("#000000")
     local camera = orchard.camera
-    graphics.set_camera(camera.x, camera.y, ORCHARD, camera.zoom)
+    wg.graphics.set_camera(camera.x, camera.y, ORCHARD, camera.zoom)
     for _, node in world do
-        graphics.draw_scene(node)
+        wg.graphics.draw_scene(node)
     end
-    graphics.set_camera(nil)
-    graphics.draw_scene(hud_node)
+    wg.graphics.set_camera(nil)
+    wg.graphics.draw_scene(hud_node)
 end

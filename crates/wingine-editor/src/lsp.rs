@@ -7,7 +7,9 @@
 //! server says something.
 //!
 //! The server checks scripts against the engine's API through its definitions file,
-//! [`wingine::runtime::DEFINITIONS`], which the editor writes to a folder of its own for it.
+//! [`wingine::runtime::DEFINITIONS`], and reads what `require("@wingine")` returns from
+//! [`wingine::runtime::API_MODULE`], which the base `.luaurc` aliases as `wingine`: the editor
+//! writes all three to a folder of its own for it.
 
 use std::{
     collections::HashMap,
@@ -25,8 +27,10 @@ use serde_json::{Value, json};
 use wingine::Waker;
 
 /// Luau's settings for every game, under any `.luaurc` of the game's own. The engine calls a
-/// game's global `update` and `draw`, which Luau would otherwise warn are never used.
-pub const BASE_LUAURC: &str = r#"{ "lint": { "FunctionUnused": false } }"#;
+/// game's global `update` and `draw`, which Luau would otherwise warn are never used; and
+/// `@wingine` is the file beside this one that says what the engine's API is.
+pub const BASE_LUAURC: &str =
+    r#"{ "lint": { "FunctionUnused": false }, "aliases": { "wingine": "./wingine" } }"#;
 
 /// What luau-lsp is run as, unless `WINGINE_LUAU_LSP` names another program: one on the `PATH`.
 pub const PROGRAM: &str = "luau-lsp";
@@ -518,10 +522,15 @@ fn settings() -> Value {
     })
 }
 
-/// Writes the definitions file and base `.luaurc` the server is run with, if they aren't written
-/// already, to a folder of the editor's own named for what's in them, and returns their paths.
+/// Writes the definitions file and base `.luaurc` the server is run with, and the module the base
+/// aliases, if they aren't written already, to a folder of the editor's own named for what's in
+/// them, and returns the paths of the first two.
 pub fn support_files() -> io::Result<(PathBuf, PathBuf)> {
-    let contents = format!("{}{BASE_LUAURC}", wingine::runtime::DEFINITIONS);
+    let contents = format!(
+        "{}{BASE_LUAURC}{}",
+        wingine::runtime::DEFINITIONS,
+        wingine::runtime::API_MODULE
+    );
     // FNV-1a, so editors of other versions of the engine each have their own.
     let hash = contents
         .bytes()
@@ -534,9 +543,11 @@ pub fn support_files() -> io::Result<(PathBuf, PathBuf)> {
     fs::create_dir_all(&folder)?;
     let definitions = folder.join("wingine.d.luau");
     let luaurc = folder.join("base.luaurc");
+    let module = folder.join("wingine.luau");
     for (path, contents) in [
         (&definitions, wingine::runtime::DEFINITIONS),
         (&luaurc, BASE_LUAURC),
+        (&module, wingine::runtime::API_MODULE),
     ] {
         if fs::read_to_string(path).ok().as_deref() != Some(contents) {
             fs::write(path, contents)?;

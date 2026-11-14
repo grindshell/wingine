@@ -7,14 +7,24 @@
 //! without holding up the game:
 //!
 //! ```lua
+//! local wg = require("@wingine")
+//!
 //! function open_gate()
 //!     say("The gate creaks open…")  -- a game function that waits for the player
-//!     wait(0.5)
+//!     wg.wait(0.5)
 //!     remove_gate()
 //! end
 //! ```
 //!
-//! Every script can use these built-ins:
+//! The engine's API is a module, not globals: `require("@wingine")` returns it, a table no file
+//! holds, the same one for every script ([`Scripts::api`]). A game adds its own tables and
+//! functions to it before loading its first script, when it's frozen; the Luau runtime adds
+//! `graphics`, `input` and the rest. Requirers answer `@wingine` before looking at any `.luaurc`,
+//! so an alias of the same name there, as a game gives its language server, is never followed.
+//! Luau's own `print` and `require` are globals, as are functions a game makes globals with
+//! [`Scripts::set_function`].
+//!
+//! The module holds these built-ins, and `print` is a global:
 //!
 //! - `wait(seconds)` pauses the task for `seconds` of game time. Without an argument, it waits
 //!   for the next frame.
@@ -265,7 +275,11 @@ use std::{
 };
 
 pub use mlua;
-use mlua::{ErrorContext, FromLua, FromLuaMulti, IntoLua, IntoLuaMulti, thread::ThreadStatus};
+use mlua::{
+    ErrorContext, FromLua, FromLuaMulti, IntoLua, IntoLuaMulti,
+    luau::{NavigateError, Require},
+    thread::ThreadStatus,
+};
 
 use crate::{
     Error, Fullscreen, Result,
@@ -292,14 +306,16 @@ mod physics;
 #[cfg(feature = "physics")]
 pub use physics::{Following, PhysicsWorld, PhysicsWorld3d};
 
-/// Built-ins written in Luau, defined before the sandbox makes the globals read-only, given as
-/// `...` a function telling the scheduler the seconds of a `wait` that's beginning. Each frame,
+/// Built-ins written in Luau, given as `...` a function telling the scheduler the seconds of a
+/// `wait` that's beginning, and returning the table of them that starts the API. Each frame,
 /// `update` resumes waiting tasks with the frame's duration, which `coroutine.yield` returns, but
 /// for those in a `wait`, which it resumes only once it's counted their seconds down.
 const PRELUDE: &str = r#"
 local begin_wait = ...
 
-function wait(seconds: number?)
+local api = {}
+
+function api.wait(seconds: number?)
     -- As arithmetic, so a time that isn't a number fails here, as it did when tasks counted it.
     local seconds = (seconds or 0) - 0
     -- None is only the next frame, as every yield waits.
@@ -309,7 +325,7 @@ function wait(seconds: number?)
     coroutine.yield()
 end
 
-function wait_until(condition: () -> boolean)
+function api.wait_until(condition: () -> boolean)
     while not condition() do
         coroutine.yield()
     end
@@ -318,7 +334,7 @@ end
 type Rect = { x: number, y: number, width: number, height: number }
 
 -- As `Rect::overlaps` and `Rect::contains`, edge for edge.
-rect = {}
+local rect = {}
 
 function rect.overlaps(a: Rect, b: Rect): boolean
     return a.x < b.x + b.width and b.x < a.x + a.width and a.y < b.y + b.height and b.y < a.y + a.height
@@ -328,17 +344,128 @@ function rect.contains(r: Rect, x: number, y: number): boolean
     return r.x <= x and x < r.x + r.width and r.y <= y and y < r.y + r.height
 end
 
-function approach(value: number, target: number, step: number): number
+api.rect = table.freeze(rect)
+
+function api.approach(value: number, target: number, step: number): number
     if value < target then
         return math.min(value + step, target)
     end
     return math.max(value - step, target)
 end
+
+return api
 "#;
+
+/// The alias scripts require the engine's API by: `require("@wingine")`.
+pub const API_ALIAS: &str = "wingine";
+
+/// What `require("@wingine")` finds: the engine's API, a table no file holds. Requirers ask it
+/// before looking at any `.luaurc`, so an alias of the same name there, which a game gives its
+/// language server, is never followed.
+pub(crate) struct ApiModule {
+    api: mlua::Table,
+    /// Whether the requirer is at the API, rather than at a path.
+    chosen: bool,
+}
+
+impl ApiModule {
+    /// What the module is kept by once it's required, which no file's path is.
+    const CACHE_KEY: &str = "@wingine";
+
+    pub(crate) fn new(api: mlua::Table) -> Self {
+        Self { api, chosen: false }
+    }
+
+    /// Goes to the API if `alias` is its, in any case, as aliases are.
+    pub(crate) fn choose(&mut self, alias: &str) -> std::result::Result<(), NavigateError> {
+        self.chosen = alias.eq_ignore_ascii_case(API_ALIAS);
+        if self.chosen {
+            Ok(())
+        } else {
+            Err(NavigateError::NotFound)
+        }
+    }
+
+    /// Leaves the API, for a path. It has nothing in it to go to: `@wingine/graphics` is a
+    /// field, not a module.
+    pub(crate) fn leave(&mut self) -> bool {
+        std::mem::take(&mut self.chosen)
+    }
+
+    pub(crate) fn is_chosen(&self) -> bool {
+        self.chosen
+    }
+
+    pub(crate) fn cache_key() -> String {
+        Self::CACHE_KEY.to_owned()
+    }
+
+    pub(crate) fn loader(&self, lua: &mlua::Lua) -> mlua::Result<mlua::Function> {
+        let api = self.api.clone();
+        lua.create_function(move |_, _: mlua::MultiValue| Ok(api.clone()))
+    }
+}
+
+/// `require` for scripts that have no files to require, as a Rust game's: only
+/// `require("@wingine")`. The Luau runtime gives its games a requirer of their own, which finds
+/// their files and answers `@wingine` the same way first.
+struct ApiRequirer(ApiModule);
+
+impl Require for ApiRequirer {
+    fn is_require_allowed(&self, _chunk_name: &str) -> bool {
+        true
+    }
+
+    fn reset(&mut self, _chunk_name: &str) -> std::result::Result<(), NavigateError> {
+        self.0.leave();
+        Ok(())
+    }
+
+    fn jump_to_alias(&mut self, _path: &str) -> std::result::Result<(), NavigateError> {
+        self.0.leave();
+        Err(NavigateError::NotFound)
+    }
+
+    fn to_alias_override(&mut self, alias: &str) -> std::result::Result<(), NavigateError> {
+        self.0.choose(alias)
+    }
+
+    fn to_parent(&mut self) -> std::result::Result<(), NavigateError> {
+        self.0.leave();
+        Err(NavigateError::NotFound)
+    }
+
+    fn to_child(&mut self, _name: &str) -> std::result::Result<(), NavigateError> {
+        self.0.leave();
+        Err(NavigateError::NotFound)
+    }
+
+    fn has_module(&self) -> bool {
+        self.0.is_chosen()
+    }
+
+    fn cache_key(&self) -> String {
+        ApiModule::cache_key()
+    }
+
+    fn has_config(&self) -> bool {
+        false
+    }
+
+    fn config(&self) -> std::io::Result<Vec<u8>> {
+        Err(std::io::ErrorKind::NotFound.into())
+    }
+
+    fn loader(&self, lua: &mlua::Lua) -> mlua::Result<mlua::Function> {
+        self.0.loader(lua)
+    }
+}
 
 /// A Luau VM for a game's scripts, and the tasks running in it.
 pub struct Scripts {
     lua: mlua::Lua,
+    /// What `require("@wingine")` returns.
+    api: mlua::Table,
     tasks: Vec<Task>,
     next_task: u64,
     began_wait: BeganWait,
@@ -439,7 +566,8 @@ pub(crate) fn load_script(
 }
 
 impl Scripts {
-    /// A VM with the built-ins and nothing else loaded.
+    /// A VM with the built-ins and nothing else loaded: `print`, and the API that
+    /// `require("@wingine")` returns.
     pub fn new() -> Result<Self> {
         let lua = mlua::Lua::new();
         lua.set_compiler(compiler());
@@ -448,24 +576,38 @@ impl Scripts {
         let globals = lua.globals();
         globals.set("print", lua.create_function(print)?)?;
         let began = Rc::clone(&began_wait);
-        let spawn = lua.create_function(move |lua, args| spawn(lua, &began, args))?;
-        globals.set("spawn", spawn)?;
-        globals.set("exact", exact_math(&lua)?)?;
-        let began = Rc::clone(&began_wait);
         let begin_wait = lua.create_function(move |_, seconds: f64| {
             began.set(Some(seconds));
             Ok(())
         })?;
-        lua.load(PRELUDE)
-            .set_name("=prelude")
-            .call::<()>(begin_wait)?;
+        let api: mlua::Table = lua.load(PRELUDE).set_name("=prelude").call(begin_wait)?;
+        let began = Rc::clone(&began_wait);
+        let spawn = lua.create_function(move |lua, args| spawn(lua, &began, args))?;
+        api.set("spawn", spawn)?;
+        api.set("exact", exact_math(&lua)?)?;
+        let require = lua.create_require_function(ApiRequirer(ApiModule::new(api.clone())))?;
+        globals.set("require", require)?;
         lua.sandbox(true)?;
         Ok(Self {
             lua,
+            api,
             tasks: Vec::new(),
             next_task: 0,
             began_wait,
         })
+    }
+
+    /// What `require("@wingine")` returns: the built-ins, and what the game adds to them before
+    /// its first script loads, when it's frozen.
+    pub fn api(&self) -> &mlua::Table {
+        &self.api
+    }
+
+    /// Freezes the API, as a script is about to run, if it isn't already.
+    fn freeze_api(&self) {
+        if !self.api.is_readonly() {
+            self.api.set_readonly(true);
+        }
     }
 
     /// The seconds of the `wait` a script began as it last yielded, if it began one, for whatever
@@ -513,12 +655,14 @@ impl Scripts {
             source,
         })?;
         let name = format!("@{}", path.display());
+        self.freeze_api();
         load_script(&self.lua, source.as_bytes(), name, None, bytecode)?.call::<()>(())?;
         Ok(())
     }
 
     /// Runs Luau `source`, naming it `name` in error messages.
     pub fn load_source(&self, name: &str, source: &str) -> Result<()> {
+        self.freeze_api();
         self.lua.load(source).set_name(format!("={name}")).exec()?;
         Ok(())
     }
@@ -690,6 +834,7 @@ fn exact_math(lua: &mlua::Lua) -> mlua::Result<mlua::Table> {
             })
         })?,
     )?;
+    exact.set_readonly(true);
     Ok(exact)
 }
 
@@ -2376,7 +2521,9 @@ mod tests {
 
     #[test]
     fn a_task_runs_until_it_waits_then_once_a_frame() {
-        let mut scripts = scripts("function run() tick() wait() tick() wait() tick() end");
+        let mut scripts = scripts(
+            "local wg = require('@wingine') function run() tick() wg.wait() tick() wg.wait() tick() end",
+        );
         let count = counter(&scripts);
         let task = scripts.spawn("run", ()).unwrap();
         assert_eq!(count.get(), 1, "ran up to the first wait");
@@ -2391,7 +2538,8 @@ mod tests {
 
     #[test]
     fn waiting_takes_game_time() {
-        let mut scripts = scripts("function run() wait(0.5) tick() end");
+        let mut scripts =
+            scripts("local wg = require('@wingine') function run() wg.wait(0.5) tick() end");
         let count = counter(&scripts);
         scripts.spawn("run", ()).unwrap();
         for _ in 0..29 {
@@ -2404,7 +2552,8 @@ mod tests {
 
     #[test]
     fn waiting_counts_frames_of_any_length_as_luau_would() {
-        let mut scripts = scripts("function run() wait(0.3) tick() end");
+        let mut scripts =
+            scripts("local wg = require('@wingine') function run() wg.wait(0.3) tick() end");
         let count = counter(&scripts);
         scripts.spawn("run", ()).unwrap();
         // Counted in Luau's numbers, 0.3 less three of `f32`'s 0.1, a little over a tenth, is a
@@ -2426,14 +2575,16 @@ mod tests {
         yielding.update(FRAME).unwrap();
         assert_eq!(count.get(), 1);
 
-        let mut late = scripts("function run() wait('soon') end");
+        let mut late = scripts("local wg = require('@wingine') function run() wg.wait('soon') end");
         let err = late.spawn("run", ()).unwrap_err();
         assert!(err.to_string().contains("arithmetic"), "{err}");
     }
 
     #[test]
     fn wait_until_checks_once_a_frame() {
-        let mut scripts = scripts("function run() wait_until(is_open) tick() end");
+        let mut scripts = scripts(
+            "local wg = require('@wingine') function run() wg.wait_until(is_open) tick() end",
+        );
         let count = counter(&scripts);
         let open = Rc::new(Cell::new(false));
         let is_open = Rc::clone(&open);
@@ -2451,7 +2602,7 @@ mod tests {
     #[test]
     fn rect_tests_rectangles_as_rect_does() {
         let scripts = Scripts::new().unwrap();
-        let rect: mlua::Table = scripts.lua().globals().get("rect").unwrap();
+        let rect: mlua::Table = scripts.api().get("rect").unwrap();
         let overlaps: mlua::Function = rect.get("overlaps").unwrap();
         let contains: mlua::Function = rect.get("contains").unwrap();
         let a = Rect::new(1.0, 2.0, 3.0, 2.0);
@@ -2473,7 +2624,10 @@ mod tests {
         }
         assert!(overlapping > 0);
         let err = scripts
-            .load_source("change", "rect.overlaps = nil")
+            .load_source(
+                "change",
+                "local wg = require('@wingine') wg.rect.overlaps = nil",
+            )
             .unwrap_err();
         assert!(err.to_string().contains("readonly"), "{err}");
     }
@@ -2481,8 +2635,9 @@ mod tests {
     #[test]
     fn approach_moves_toward_a_target_without_passing_it() {
         let scripts = Scripts::new().unwrap();
+        let function: mlua::Function = scripts.api().get("approach").unwrap();
         let approach = |value: f64, target: f64, step: f64| -> f64 {
-            scripts.call("approach", (value, target, step)).unwrap()
+            function.call((value, target, step)).unwrap()
         };
         assert_eq!(approach(0.0, 10.0, 3.0), 3.0);
         assert_eq!(approach(9.0, 10.0, 3.0), 10.0);
@@ -2495,8 +2650,9 @@ mod tests {
     #[test]
     fn scripts_spawn_tasks_that_run_alongside() {
         let mut scripts = scripts(
-            "function child(times) for _ = 1, times do tick() wait() end end
-             function parent() spawn(child, 3) wait() tick() end",
+            "local wg = require('@wingine')
+             function child(times) for _ = 1, times do tick() wg.wait() end end
+             function parent() wg.spawn(child, 3) wg.wait() tick() end",
         );
         let count = counter(&scripts);
         let parent = scripts.spawn("parent", ()).unwrap();
@@ -2516,7 +2672,10 @@ mod tests {
         let mut scripts = Scripts::new().unwrap();
         let count = counter(&scripts);
         scripts
-            .load_source("test", "spawn(function() tick() wait() tick() end)")
+            .load_source(
+                "test",
+                "local wg = require('@wingine') wg.spawn(function() tick() wg.wait() tick() end)",
+            )
             .unwrap();
         assert_eq!(count.get(), 1);
         scripts.update(FRAME).unwrap();
@@ -2527,14 +2686,15 @@ mod tests {
     #[test]
     fn a_failing_task_stops_and_the_others_carry_on() {
         let mut scripts = scripts(
-            "function fail() wait() error(\"broken\") end
-             function steady() while true do tick() wait() end end",
+            "local wg = require('@wingine')
+             function fail() wg.wait() error(\"broken\") end
+             function steady() while true do tick() wg.wait() end end",
         );
         let count = counter(&scripts);
         let failing = scripts.spawn("fail", ()).unwrap();
         let steady = scripts.spawn("steady", ()).unwrap();
         let err = scripts.update(FRAME).unwrap_err();
-        assert!(err.to_string().contains("test:1: broken"), "{err}");
+        assert!(err.to_string().contains("test:2: broken"), "{err}");
         assert!(!scripts.is_running(failing));
         assert!(scripts.is_running(steady));
         assert_eq!(count.get(), 2);
@@ -2545,7 +2705,7 @@ mod tests {
     #[test]
     fn a_task_failing_as_it_starts_does_not_fail_its_caller() {
         let mut scripts = scripts(
-            "function parent() spawn(function() error('broken') end) tick() wait() tick() end",
+            "local wg = require('@wingine') function parent() wg.spawn(function() error('broken') end) tick() wg.wait() tick() end",
         );
         let count = counter(&scripts);
         let parent = scripts.spawn("parent", ()).unwrap();
@@ -2559,7 +2719,9 @@ mod tests {
 
     #[test]
     fn cancelled_tasks_stop() {
-        let mut scripts = scripts("function run() while true do tick() wait() end end");
+        let mut scripts = scripts(
+            "local wg = require('@wingine') function run() while true do tick() wg.wait() end end",
+        );
         let count = counter(&scripts);
         let task = scripts.spawn("run", ()).unwrap();
         scripts.cancel(task);
@@ -2570,7 +2732,7 @@ mod tests {
 
     #[test]
     fn calling_a_function_that_waits_fails() {
-        let scripts = scripts("function run() wait(1) end");
+        let scripts = scripts("local wg = require('@wingine') function run() wg.wait(1) end");
         let err = scripts.call::<()>("run", ()).unwrap_err();
         assert!(
             err.to_string().contains("start it with `Scripts::spawn`"),

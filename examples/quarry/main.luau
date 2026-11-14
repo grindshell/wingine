@@ -19,11 +19,13 @@
 -- (<https://kenney.nl/assets/1-bit-pack>, CC0). The game's state is in the global table `quarry`,
 -- where tests can see it.
 
-input.bind("left", { "Left", "A" })
-input.bind("right", { "Right", "D" })
-input.bind("jump", { "Space", "Up", "W" })
-input.bind("restart", { "R" })
-input.bind("debug", { "F1" })
+local wg = require("@wingine")
+
+wg.input.bind("left", { "Left", "A" })
+wg.input.bind("right", { "Right", "D" })
+wg.input.bind("jump", { "Space", "Up", "W" })
+wg.input.bind("restart", { "R" })
+wg.input.bind("debug", { "F1" })
 
 -- What of the player bumps into things: a box this wide and tall, standing on the middle of its
 -- feet.
@@ -31,18 +33,18 @@ local WIDTH = 8
 local HEIGHT = 14
 
 -- The colors of F1's outlines: the bodies, and the player's box.
-local DEBUG_BODY = graphics.color("#5ad2ff")
-local DEBUG_PLAYER = graphics.color("#7ad27a")
+local DEBUG_BODY = wg.graphics.color("#5ad2ff")
+local DEBUG_PLAYER = wg.graphics.color("#7ad27a")
 
 quarry = {}
 
 -- Loads the level and makes it physical, starting the game over.
 local function start()
-    local level = scene.load("quarry.scene.luau")
+    local level = wg.scene.load("quarry.scene.luau")
     local player = level:find("player")
     local props = player:props()
     -- Dynamic bodies fall as the player does.
-    local world = physics.world({ gravity = props.gravity })
+    local world = wg.physics.world({ gravity = props.gravity })
     world:add(level:find("level"))
     for _, node in level:tagged("solid") do
         world:add(node)
@@ -102,8 +104,8 @@ end
 
 -- Runs and jumps the player as the keys say, falling as gravity pulls it.
 local function walk(dt: number)
-    local across = if quarry.won then 0 else input.axis("left", "right")
-    if quarry.grounded and not quarry.won and input.pressed("jump") then
+    local across = if quarry.won then 0 else wg.input.axis("left", "right")
+    if quarry.grounded and not quarry.won and wg.input.pressed("jump") then
         quarry.falling = -quarry.jump
     end
     quarry.falling += quarry.gravity * dt
@@ -132,11 +134,11 @@ end
 start()
 
 function update(dt: number)
-    if input.pressed("restart") then
+    if wg.input.pressed("restart") then
         start()
         return
     end
-    if input.pressed("debug") then
+    if wg.input.pressed("debug") then
         quarry.debug = not quarry.debug
     end
     quarry.lift_time += dt
@@ -159,21 +161,21 @@ end
 local function outline(node, color: number)
     local bounds = node:bounds()
     if bounds then
-        graphics.outline_rect(bounds.x, bounds.y, bounds.width, bounds.height, color)
+        wg.graphics.outline_rect(bounds.x, bounds.y, bounds.width, bounds.height, color)
     end
 end
 
 function draw()
-    graphics.clear("#1c1a24")
-    graphics.draw_scene(quarry.scene)
+    wg.graphics.clear("#1c1a24")
+    wg.graphics.draw_scene(quarry.scene)
     if quarry.debug then
         for _, crate in quarry.crates do
             outline(crate, DEBUG_BODY)
         end
         outline(quarry.lift, DEBUG_BODY)
         local x, y = quarry.boulder:position()
-        graphics.outline_circle(x, y, 8, DEBUG_BODY)
+        wg.graphics.outline_circle(x, y, 8, DEBUG_BODY)
         local feet_x, feet_y = quarry.player:position()
-        graphics.outline_rect(feet_x - WIDTH / 2, feet_y - HEIGHT, WIDTH, HEIGHT, DEBUG_PLAYER)
+        wg.graphics.outline_rect(feet_x - WIDTH / 2, feet_y - HEIGHT, WIDTH, HEIGHT, DEBUG_PLAYER)
     end
 end

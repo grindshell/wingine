@@ -16,8 +16,10 @@
 --
 -- Run with `cargo run -- examples/cellar`.
 
-local font = graphics.default_font()
-local level = scene.load("cellar.scene.luau")
+local wg = require("@wingine")
+
+local font = wg.graphics.default_font()
+local level = wg.scene.load("cellar.scene.luau")
 local view = level:find("view") :: SceneNode
 local hero = view:find("hero") :: SceneNode
 
@@ -36,7 +38,7 @@ for _, direction in DIRECTIONS do
         left = { "Left", "A" },
         right = { "Right", "D" },
     }
-    input.bind(direction, keys[direction])
+    wg.input.bind(direction, keys[direction])
 end
 
 type Prop = { node: SceneNode, kind: string, column: number, row: number }
@@ -85,7 +87,7 @@ end
 local start_column, start_row = tile_of(hero)
 
 cellar = {
-    mover = grid.new_mover(start_column, start_row, STEP_TIME),
+    mover = wg.grid.new_mover(start_column, start_row, STEP_TIME),
     level = level,
     -- The level's 3D view.
     world = view,
@@ -120,7 +122,7 @@ end
 
 -- The prop the mouse points at, the nearest whose box the ray under it goes through, or nil.
 function cellar.pointed_prop(): Prop?
-    local x, y = input.mouse_position()
+    local x, y = wg.input.mouse_position()
     if x == nil or y == nil then
         return nil
     end
@@ -153,7 +155,7 @@ function update(dt: number)
         end
     end
     for _, direction in DIRECTIONS do
-        if input.held(direction) then
+        if wg.input.held(direction) then
             if direction == "left" or direction == "right" then
                 cellar.facing_left = direction == "left"
             end
@@ -164,13 +166,13 @@ function update(dt: number)
 end
 
 function draw()
-    graphics.clear("#101014")
+    wg.graphics.clear("#101014")
     view:set_camera(cellar.view().camera)
     for i, candle in cellar.candles do
         if candle.lit then
             -- Flickering, each candle in its own time, and glowing as it burns.
             local glow = 0.9 + 0.1 * math.sin(cellar.time * 9 + i * 2)
-            local color = graphics.color({ r = glow, g = glow * 0.85, b = glow * 0.45 })
+            local color = wg.graphics.color({ r = glow, g = glow * 0.85, b = glow * 0.45 })
             candle.node:set_tint(color)
             candle.node:set_glow(color)
             candle.flame:set_light({ energy = glow })
@@ -179,12 +181,12 @@ function draw()
     hero:set_position_3d(cellar.hero_position())
     local width, height = hero:size()
     hero:set_size(if cellar.facing_left then -math.abs(width) else math.abs(width), height)
-    graphics.draw_scene(level)
+    wg.graphics.draw_scene(level)
 
     -- The HUD, over the view.
-    local canvas_width = graphics.size()
-    graphics.fill_rect(0, 0, canvas_width, 14, "#00000080")
-    graphics.draw_text(font, `Candles lit: {cellar.lit}/{#cellar.candles}`, 4, 3, "#ffffff")
+    local canvas_width = wg.graphics.size()
+    wg.graphics.fill_rect(0, 0, canvas_width, 14, "#00000080")
+    wg.graphics.draw_text(font, `Candles lit: {cellar.lit}/{#cellar.candles}`, 4, 3, "#ffffff")
     local pointed = cellar.pointed
     if pointed then
         -- Its name, just over its top.
@@ -194,7 +196,7 @@ function draw()
             local x, y = view:project(top)
             if x and y then
                 local name_width = font:measure(pointed.kind)
-                graphics.draw_text(font, pointed.kind, x - name_width / 2, y - 10, "#e0d8c8")
+                wg.graphics.draw_text(font, pointed.kind, x - name_width / 2, y - 10, "#e0d8c8")
             end
         end
     end
@@ -204,7 +206,7 @@ function draw()
         if x and y then
             local message = "Every candle is lit!"
             local text_width = font:measure(message)
-            graphics.draw_text(font, message, x - text_width / 2, y - 10, "#ffd870")
+            wg.graphics.draw_text(font, message, x - text_width / 2, y - 10, "#ffd870")
         end
     end
 end

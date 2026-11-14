@@ -132,12 +132,13 @@ fn each_test_starts_from_a_fresh_game() {
             ("lib/counter.luau", "return { count = 0 }"),
             (
                 "fresh.test.luau",
-                "test('first', function()
+                "local wg = require('@wingine')
+                    test('first', function()
                     state.visits += 1
                     counter.count += 1
                     marked = true
-                    save.write('progress', { level = 3 })
-                    input.bind('jump', { 'Space' })
+                    wg.save.write('progress', { level = 3 })
+                    wg.input.bind('jump', { 'Space' })
                     sim.step()
                 end)
                 test('second', function()
@@ -146,7 +147,7 @@ fn each_test_starts_from_a_fresh_game() {
                     assert_equal(require('./lib/counter').count, 0)
                     assert(require('./lib/counter') == counter, 'the game has it')
                     assert_equal(marked, nil)
-                    assert_equal(save.list(), {})
+                    assert_equal(wg.save.list(), {})
                     assert_equal(sim.frame_count(), 0)
                     local ok = pcall(sim.press_action, 'jump')
                     assert(not ok, 'the binding went with the game')
@@ -198,23 +199,24 @@ fn waits_and_input_reach_the_game() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "seen = { frames = 0, jumps = 0, keys = 0, clicks = 0, fires = 0, text = '' }
-                input.bind('jump', { 'Space' })
-                input.bind('fire', { 'South' })
+                "local wg = require('@wingine')
+                seen = { frames = 0, jumps = 0, keys = 0, clicks = 0, fires = 0, text = '' }
+                wg.input.bind('jump', { 'Space' })
+                wg.input.bind('fire', { 'South' })
                 function update(dt)
                     seen.frames += 1
-                    if input.pressed('jump') then seen.jumps += 1 end
-                    if input.key_pressed('W') then seen.keys += 1 end
-                    seen.held = input.key_held('W')
-                    if input.mouse_pressed('right') then
+                    if wg.input.pressed('jump') then seen.jumps += 1 end
+                    if wg.input.key_pressed('W') then seen.keys += 1 end
+                    seen.held = wg.input.key_held('W')
+                    if wg.input.mouse_pressed('right') then
                         seen.clicks += 1
-                        seen.at = { input.mouse_position() }
+                        seen.at = { wg.input.mouse_position() }
                     end
-                    if input.pressed('fire') then seen.fires += 1 end
-                    if input.key_pressed('C') then input.set_mouse_captured(true) end
-                    seen.moved = { input.mouse_motion() }
-                    seen.lean = input.button_strength('LeftStickRight')
-                    seen.text ..= input.text()
+                    if wg.input.pressed('fire') then seen.fires += 1 end
+                    if wg.input.key_pressed('C') then wg.input.set_mouse_captured(true) end
+                    seen.moved = { wg.input.mouse_motion() }
+                    seen.lean = wg.input.button_strength('LeftStickRight')
+                    seen.text ..= wg.input.text()
                 end
                 function close_requested()
                     seen.asked = true
@@ -223,12 +225,13 @@ fn waits_and_input_reach_the_game() {
             ),
             (
                 "input.test.luau",
-                "test('time', function()
-                    wait(0.5)
+                "local wg = require('@wingine')
+                    test('time', function()
+                    wg.wait(0.5)
                     assert_equal(seen.frames, 30)
                     sim.run_for(1)
                     assert_equal(seen.frames, 90)
-                    wait_until(function() return seen.frames >= 100 end)
+                    wg.wait_until(function() return seen.frames >= 100 end)
                     assert_equal(seen.frames, 100)
                     assert_equal(sim.frame_count(), 100)
                 end)
@@ -299,12 +302,13 @@ fn tests_fail_when_the_game_stops_or_their_time_runs_out() {
             ),
             (
                 "stopping.test.luau",
-                "test('the game stops', function()
+                "local wg = require('@wingine')
+                test('the game stops', function()
                     broken = true
                     sim.step()
                 end)
                 test('never', function()
-                    wait_until(function() return false end)
+                    wg.wait_until(function() return false end)
                 end, { time_limit = 0.5 })
                 test('too long', function()
                     sim.run_for(61)
@@ -327,7 +331,7 @@ fn tests_fail_when_the_game_stops_or_their_time_runs_out() {
         "{never}"
     );
     assert!(
-        never.contains("stopping.test.luau:6"),
+        never.contains("stopping.test.luau:7"),
         "it says where: {never}"
     );
     let long = failure(&report, "stopping.test.luau: too long");
@@ -340,7 +344,10 @@ fn what_sim_cant_do_is_an_error_where_it_was_asked() {
     let folder = game(
         "refusals",
         &[
-            ("main.luau", "input.bind('fire', { 'South' })"),
+            (
+                "main.luau",
+                "local wg = require('@wingine') wg.input.bind('fire', { 'South' })",
+            ),
             (
                 "refusals.test.luau",
                 "test('an unbound action', function()
@@ -546,9 +553,10 @@ fn tests_read_the_frames_pixels_and_files() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "function draw()
-                    graphics.clear('#204060')
-                    graphics.fill_rect(5, 0, 1, 20, '#ff00ff')
+                "local wg = require('@wingine')
+                    function draw()
+                    wg.graphics.clear('#204060')
+                    wg.graphics.fill_rect(5, 0, 1, 20, '#ff00ff')
                 end",
             ),
             ("data/levels.txt", "first\nsecond\n"),
@@ -577,7 +585,9 @@ fn tests_read_the_frames_pixels_and_files() {
 
 #[test]
 fn screenshots_match_their_references() {
-    let shade = |color: &str| format!("function draw() graphics.clear('{color}') end");
+    let shade = |color: &str| {
+        format!("local wg = require('@wingine') function draw() wg.graphics.clear('{color}') end")
+    };
     let test = "test('court', function()
         sim.step()
         assert(sim.matches_screenshot('shots/court.png'))
@@ -659,7 +669,9 @@ fn frames_that_dont_match_stay_in_the_output_folder() {
     let root = game("climbing", &[]);
     let far = root.join("references/far.png");
     let far = far.to_string_lossy().replace('\\', "/");
-    let shade = |color: &str| format!("function draw() graphics.clear('{color}') end");
+    let shade = |color: &str| {
+        format!("local wg = require('@wingine') function draw() wg.graphics.clear('{color}') end")
+    };
     let test = format!(
         "test('beside', function()
             sim.step()

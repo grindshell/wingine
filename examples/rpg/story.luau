@@ -5,6 +5,7 @@
 -- while creatures roam Shrine Hill, until the player beats Gloamfang at the shrine; "cleared",
 -- until they tell the elder; then "done".
 
+local wg = require("@wingine")
 local dialogue = require("./dialogue")
 local items = require("./items")
 local shop = require("./shop")
@@ -41,7 +42,7 @@ local STOCK = {
     "iron_sword",
     "bronze_shield",
 }
-local chime = audio.load("sounds/chime.wav")
+local chime = wg.audio.load("sounds/chime.wav")
 
 -- A function that says text in the dialogue box as `speaker`, waiting for the player to close
 -- it.
@@ -82,7 +83,7 @@ function story.talk.elder()
         if answer == 1 then
             rpg.quest = "accepted"
             open_gate()
-            audio.play(chime)
+            wg.audio.play(chime)
             elder(
                 "Thank you. I've unlatched the north gate. Follow the path up the hill, and go "
                     .. "carefully."
@@ -163,7 +164,7 @@ function story.defeated(kind: string)
     local shrine = rpg.levels.shrine
     world.clear_foes(shrine)
     rpg.quest = "cleared"
-    audio.play(chime)
+    wg.audio.play(chime)
     narrate("A breeze stirs the shrine's wind chimes… and, for the first time in days, they ring.")
     narrate("The other creatures scatter into the trees. Shrine Hill is quiet again.")
     calm_shrine()
@@ -187,7 +188,7 @@ function story.events.well()
     local max_hp = items.stats().max_hp
     if rpg.hp < max_hp then
         rpg.hp = max_hp
-        audio.play(chime, { speed = 1.5 })
+        wg.audio.play(chime, { speed = 1.5 })
         narrate("You drink from the well. The cold water clears your head and restores you.")
     else
         narrate("The village well. The rope is new; the stones are very old.")
@@ -208,7 +209,7 @@ function story.events.seal_stone()
     if story.reached("cleared") then
         narrate("The halves of the seal stone have drawn back together. A hairline crack remains.")
     elseif rpg.quest == "accepted" then
-        audio.play(chime, { speed = 0.5 })
+        wg.audio.play(chime, { speed = 0.5 })
         narrate(
             "The seal stone stands at the heart of the shrine… split clean in two, from crown to "
                 .. "root."

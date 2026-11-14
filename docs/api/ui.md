@@ -8,14 +8,15 @@ reading [`menu:selected`](#menuselected) as it draws. `ui.menu` works any time, 
 `gui`, since it reads the player's input.
 
 ```lua
-local title = scene.load("title.scene.luau")
+local wg = require("@wingine")
+local title = wg.scene.load("title.scene.luau")
 -- A stack of the choices, each a row with a pointer and a label.
 local choices = title:find("choices")
-local menu = ui.menu(choices)
+local menu = wg.ui.menu(choices)
 
-input.bind("up", { "Up", "W" })
-input.bind("down", { "Down", "S" })
-input.bind("confirm", { "Space", "Enter" })
+wg.input.bind("up", { "Up", "W" })
+wg.input.bind("down", { "Down", "S" })
+wg.input.bind("confirm", { "Space", "Enter" })
 
 function update(dt: number)
     local happened, item = menu:update()
@@ -28,7 +29,7 @@ function draw()
     for i, row in menu:items() do
         row:find("pointer"):set_visible(i == menu:selected())
     end
-    graphics.draw_scene(title)
+    wg.graphics.draw_scene(title)
 end
 ```
 
@@ -55,7 +56,7 @@ there. Items are numbered from 1, in order.
 ## `ui.menu`
 
 ```lua
-ui.menu(node: SceneNode, options: MenuOptions?): Menu
+wg.ui.menu(node: SceneNode, options: MenuOptions?): Menu
 ```
 
 Returns a menu of `node`'s items, its children, with the first that can be picked selected.
@@ -71,7 +72,7 @@ Returns a menu of `node`'s items, its children, with the first that can be picke
 
 ```lua
 -- The RPG's menus pick with the key it interacts with.
-local menu = ui.menu(panel, { confirm = "interact" })
+local menu = wg.ui.menu(panel, { confirm = "interact" })
 ```
 
 A menu made while the game loads or updates notes where the cursor is, so the item under it isn't

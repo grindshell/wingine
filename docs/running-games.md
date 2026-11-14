@@ -64,13 +64,15 @@ boolean, number, string, or table of them. Pong keeps its match this way, so cha
 computer plays changes it mid-rally:
 
 ```lua
+local wg = require("@wingine")
+
 pong = { score = { left = 0, right = 0 }, phase = "ready" --[[ and the rest ]] }
 
 function reloading()
     return pong
 end
 
-local kept = window.reloaded()
+local kept = wg.window.reloaded()
 if kept then
     for key, value in kept do
         pong[key] = value
@@ -136,7 +138,7 @@ To handle an error rather than stop, use Luau's `pcall`:
 
 ```lua
 local ok, err = pcall(function()
-    sprites = graphics.load_sprite_sheet("missing.png", 16, 16)
+    sprites = wg.graphics.load_sprite_sheet("missing.png", 16, 16)
 end)
 if not ok then
     print("no sprites:", err)
@@ -256,14 +258,16 @@ checks its state with [`assert_equal`](api/testing.md#assert_equal), as Pong's d
 
 ```lua
 -- pong.test.luau
+local wg = require("@wingine")
+
 test("missing the ball scores for the other side", function()
     pong.ball = { x = 100, y = 20, vx = -200, vy = 0 }
     pong.phase = "rally"
-    wait_until(function() return pong.phase ~= "rally" end)
+    wg.wait_until(function() return pong.phase ~= "rally" end)
     assert_equal(pong.score, { left = 0, right = 1 })
 
     -- The next serve goes to the player, who lost the point, a second later.
-    wait(1.1)
+    wg.wait(1.1)
     assert(pong.ball.vx < 0, "toward the player")
 end)
 ```
@@ -423,11 +427,12 @@ Measure before optimizing: the time usually goes somewhere other than where it's
 drew, which a game can show as it runs:
 
 ```lua
-local font = graphics.default_font()
+local wg = require("@wingine")
+local font = wg.graphics.default_font()
 
 function draw()
     -- ...
-    local stats = graphics.frame_stats()
+    local stats = wg.graphics.frame_stats()
     local text = string.format(
         "%.1f ms: update %.1f, draw %.1f, render %.1f\n%d quads, %d draw calls",
         stats.frame * 1000,
@@ -437,7 +442,7 @@ function draw()
         stats.quads,
         stats.draw_calls
     )
-    graphics.draw_text(font, text, 4, 4, "#ffffff")
+    wg.graphics.draw_text(font, text, 4, 4, "#ffffff")
 end
 ```
 

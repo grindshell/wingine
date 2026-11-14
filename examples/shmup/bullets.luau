@@ -40,6 +40,8 @@
 --   bullets as they are. It fails as `spawn` does.
 -- - `system.positions()` returns a list of every bullet's `x` and `y`, for tests.
 
+local wg = require("@wingine")
+
 local bullets = {}
 
 type Kind = {
@@ -193,8 +195,8 @@ function bullets.count(): number
     return count
 end
 
-local draw_sprite = graphics.draw_sprite
-local draw_sprite_rotated = graphics.draw_sprite_rotated
+local draw_sprite = wg.graphics.draw_sprite
+local draw_sprite_rotated = wg.graphics.draw_sprite_rotated
 
 function bullets.draw()
     for i = 1, count do

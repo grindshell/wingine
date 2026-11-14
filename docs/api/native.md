@@ -472,8 +472,8 @@ and `Canvas::draw_meshes` and `Canvas::draw_billboards` draw in the view begun l
 library or the script began it, so a library's function can draw into a script's view:
 
 ```lua
-graphics.begin_3d(view)
-graphics.draw_mesh(floor, vector.zero)
+wg.graphics.begin_3d(view)
+wg.graphics.draw_mesh(floor, vector.zero)
 particles.draw_3d() -- billboards, from the library, in the same view
 ```
 

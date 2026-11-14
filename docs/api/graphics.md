@@ -38,7 +38,7 @@ functions work only in `draw`.
 ### `graphics.clear`
 
 ```lua
-graphics.clear(color: Color)
+wg.graphics.clear(color: Color)
 ```
 
 Fills the canvas with `color`, discarding anything drawn so far this frame. Games usually call it
@@ -47,7 +47,7 @@ first in `draw`; without it, the canvas is black.
 ### `graphics.fill_rect`
 
 ```lua
-graphics.fill_rect(x: number, y: number, width: number, height: number, color: Color)
+wg.graphics.fill_rect(x: number, y: number, width: number, height: number, color: Color)
 ```
 
 Fills a rectangle with its top-left corner at `x`, `y`. A translucent color blends with what's
@@ -55,7 +55,7 @@ under it.
 
 ```lua
 -- A half-transparent black panel over the bottom of a 320x180 canvas.
-graphics.fill_rect(0, 140, 320, 40, "#00000080")
+wg.graphics.fill_rect(0, 140, 320, 40, "#00000080")
 ```
 
 Like everything drawn, a shape covers the pixels whose middles are inside it. Pixel `x`, `y` is
@@ -65,7 +65,7 @@ and a 1-pixel line or outline is crisp along the middles of pixels, at `x + 0.5`
 ### `graphics.outline_rect`
 
 ```lua
-graphics.outline_rect(x: number, y: number, width: number, height: number, color: Color, thickness: number?)
+wg.graphics.outline_rect(x: number, y: number, width: number, height: number, color: Color, thickness: number?)
 ```
 
 Draws the outline of the rectangle `fill_rect` would fill, `thickness` wide (by default 1) inside
@@ -75,13 +75,13 @@ along its sides. An outline thick enough to meet itself fills the rectangle.
 ```lua
 -- A hitbox, outlined over the fighter, with its bounds from a scene node.
 local box = hitbox:bounds()
-graphics.outline_rect(box.x, box.y, box.width, box.height, "#ff4040c0")
+wg.graphics.outline_rect(box.x, box.y, box.width, box.height, "#ff4040c0")
 ```
 
 ### `graphics.draw_line`
 
 ```lua
-graphics.draw_line(x1: number, y1: number, x2: number, y2: number, color: Color, thickness: number?)
+wg.graphics.draw_line(x1: number, y1: number, x2: number, y2: number, color: Color, thickness: number?)
 ```
 
 Draws a line from `x1`, `y1` to `x2`, `y2`, `thickness` wide (by default 1), centered on the line
@@ -91,13 +91,13 @@ A line 1 wide lights a row or column of pixels when it runs along their middles,
 across the pixels of row 5, from column 0 to column 10:
 
 ```lua
-graphics.draw_line(0, 5.5, 11, 5.5, "#ffffff") -- the pixels fill_rect(0, 5, 11, 1) fills
+wg.graphics.draw_line(0, 5.5, 11, 5.5, "#ffffff") -- the pixels fill_rect(0, 5, 11, 1) fills
 ```
 
 ### `graphics.fill_circle`
 
 ```lua
-graphics.fill_circle(x: number, y: number, radius: number, color: Color)
+wg.graphics.fill_circle(x: number, y: number, radius: number, color: Color)
 ```
 
 Fills a circle of `radius` about `x`, `y`. It's drawn as a polygon with as many sides as its size
@@ -110,7 +110,7 @@ A circle about the corner between four pixels covers whole pixels evenly on all 
 ### `graphics.outline_circle`
 
 ```lua
-graphics.outline_circle(x: number, y: number, radius: number, color: Color, thickness: number?)
+wg.graphics.outline_circle(x: number, y: number, radius: number, color: Color, thickness: number?)
 ```
 
 Draws the outline of the circle `fill_circle` would fill, `thickness` wide (by default 1) inside
@@ -118,13 +118,13 @@ its edge, as evenly as `outline_rect`. An outline thick enough to meet itself fi
 
 ```lua
 -- A shield's bubble, shrinking as it wears down.
-graphics.outline_circle(fighter.x, fighter.y - 12, 6 + 12 * shield, "#80ccff", 2)
+wg.graphics.outline_circle(fighter.x, fighter.y - 12, 6 + 12 * shield, "#80ccff", 2)
 ```
 
 ### `graphics.draw_sprite`
 
 ```lua
-graphics.draw_sprite(sprite: Sprite, x: number, y: number, tint: Color?, width: number?, height: number?)
+wg.graphics.draw_sprite(sprite: Sprite, x: number, y: number, tint: Color?, width: number?, height: number?)
 ```
 
 Draws `sprite` with its top-left corner at `x`, `y`, stretched to `width` by `height` (by
@@ -134,10 +134,10 @@ leaves them as they are).
 Tinting a white sprite colors it; tinting with alpha fades it:
 
 ```lua
-graphics.draw_sprite(coin, 40, 20)
-graphics.draw_sprite(coin, 60, 20, "#ff8080") -- reddened
-graphics.draw_sprite(coin, 80, 20, { r = 1, g = 1, b = 1, a = 0.5 }) -- half faded
-graphics.draw_sprite(coin, 100, 20, nil, 32, 32) -- twice the size of a 16x16 sprite
+wg.graphics.draw_sprite(coin, 40, 20)
+wg.graphics.draw_sprite(coin, 60, 20, "#ff8080") -- reddened
+wg.graphics.draw_sprite(coin, 80, 20, { r = 1, g = 1, b = 1, a = 0.5 }) -- half faded
+wg.graphics.draw_sprite(coin, 100, 20, nil, 32, 32) -- twice the size of a 16x16 sprite
 ```
 
 Sprites are sampled nearest-neighbor, so pixel art stays crisp. Consecutive sprites from the same
@@ -147,7 +147,7 @@ cheaper than alternating between sheets.
 ### `graphics.draw_sprite_rotated`
 
 ```lua
-graphics.draw_sprite_rotated(sprite: Sprite, x: number, y: number, angle: number, tint: Color?, width: number?, height: number?)
+wg.graphics.draw_sprite_rotated(sprite: Sprite, x: number, y: number, angle: number, tint: Color?, width: number?, height: number?)
 ```
 
 Draws `sprite` as [`draw_sprite`](#graphicsdraw_sprite) does, then turned by `angle` radians about
@@ -156,13 +156,13 @@ own center at `cx`, `cy`:
 
 ```lua
 local width, height = arrow:size()
-graphics.draw_sprite_rotated(arrow, cx - width / 2, cy - height / 2, angle)
+wg.graphics.draw_sprite_rotated(arrow, cx - width / 2, cy - height / 2, angle)
 ```
 
 ### `graphics.draw_sprite_sliced`
 
 ```lua
-graphics.draw_sprite_sliced(sprite: Sprite, x: number, y: number, width: number, height: number, slice: number | { number }, tint: Color?)
+wg.graphics.draw_sprite_sliced(sprite: Sprite, x: number, y: number, width: number, height: number, slice: number | { number }, tint: Color?)
 ```
 
 Draws `sprite` sliced to fill `width` by `height` with its top-left corner at `x`, `y`, as a frame
@@ -174,17 +174,18 @@ default. [Panels](../scenes.md#stacks-and-panels) in scenes draw their sprites t
 
 ```lua
 -- A frame 5 texels square, its border and corners 2 texels in, around a box of any size.
-local frame = graphics.load_sprite_sheet("frame.png", 5, 5):sprite(0, 0)
+local wg = require("@wingine")
+local frame = wg.graphics.load_sprite_sheet("frame.png", 5, 5):sprite(0, 0)
 
 function draw()
-    graphics.draw_sprite_sliced(frame, 8, 8, 120, 40, 2)
+    wg.graphics.draw_sprite_sliced(frame, 8, 8, 120, 40, 2)
 end
 ```
 
 ### `graphics.draw_text`
 
 ```lua
-graphics.draw_text(font: Font, text: string, x: number, y: number, color: Color)
+wg.graphics.draw_text(font: Font, text: string, x: number, y: number, color: Color)
 ```
 
 Draws `text` with its top-left corner at `x`, `y`, rounded to whole pixels so pixel fonts stay
@@ -192,17 +193,18 @@ crisp. `"\n"` starts a new line. Text isn't wrapped; lay it out with
 [`font:layout`](#fontlayout) to wrap it.
 
 ```lua
-local font = graphics.default_font()
+local wg = require("@wingine")
+local font = wg.graphics.default_font()
 
 function draw()
-    graphics.draw_text(font, `Score: {score}`, 4, 4, "#ffffff")
+    wg.graphics.draw_text(font, `Score: {score}`, 4, 4, "#ffffff")
 end
 ```
 
 ### `graphics.draw_text_layout`
 
 ```lua
-graphics.draw_text_layout(layout: TextLayout, x: number, y: number, color: Color, glyphs: number?)
+wg.graphics.draw_text_layout(layout: TextLayout, x: number, y: number, color: Color, glyphs: number?)
 ```
 
 Draws text laid out with [`font:layout`](#fontlayout), as `draw_text` draws text. With `glyphs`,
@@ -211,6 +213,7 @@ the text a little at a time, as dialogue does in RPGs. Since the text is laid ou
 don't jump from one line to the next as they appear.
 
 ```lua
+local wg = require("@wingine")
 local layout = font:layout("Welcome to Mossbrook. The elder is expecting you.", 200)
 local shown = 0
 -- Characters a second.
@@ -221,14 +224,14 @@ function update(dt: number)
 end
 
 function draw()
-    graphics.draw_text_layout(layout, 60, 120, "#ffffff", shown)
+    wg.graphics.draw_text_layout(layout, 60, 120, "#ffffff", shown)
 end
 ```
 
 ### `graphics.draw_tilemap`
 
 ```lua
-graphics.draw_tilemap(map: Tilemap, layer: number?)
+wg.graphics.draw_tilemap(map: Tilemap, layer: number?)
 ```
 
 Draws `map`, every layer in order, or only `layer`. The map's top-left corner is at the world's
@@ -239,15 +242,15 @@ Drawing one layer at a time lets a game draw characters between layers, such as 
 but under treetops:
 
 ```lua
-graphics.draw_tilemap(map, 0) -- the ground
+wg.graphics.draw_tilemap(map, 0) -- the ground
 draw_characters()
-graphics.draw_tilemap(map, 1) -- treetops and roofs
+wg.graphics.draw_tilemap(map, 1) -- treetops and roofs
 ```
 
 ### `graphics.draw_scene`
 
 ```lua
-graphics.draw_scene(node: SceneNode)
+wg.graphics.draw_scene(node: SceneNode)
 ```
 
 Draws `node` and every node inside it, each before its children, where they are in their
@@ -261,13 +264,14 @@ so nodes [anchored](../scenes.md#laying-out-screens) to its edges follow them wh
 size.
 
 ```lua
-local level = scene.load("level.scene.luau")
+local wg = require("@wingine")
+local level = wg.scene.load("level.scene.luau")
 
 function draw()
-    graphics.set_camera(player_x, player_y)
-    graphics.draw_scene(level:find("world"))
-    graphics.set_camera(nil)
-    graphics.draw_scene(level:find("hud"))
+    wg.graphics.set_camera(player_x, player_y)
+    wg.graphics.draw_scene(level:find("world"))
+    wg.graphics.set_camera(nil)
+    wg.graphics.draw_scene(level:find("hud"))
 end
 ```
 
@@ -276,8 +280,8 @@ end
 ### `graphics.set_camera`
 
 ```lua
-graphics.set_camera(x: number, y: number, bounds: Rect?, zoom: number?)
-graphics.set_camera(nil)
+wg.graphics.set_camera(x: number, y: number, bounds: Rect?, zoom: number?)
+wg.graphics.set_camera(nil)
 ```
 
 Centers the view on world position `x`, `y` for everything drawn after this call, so positions
@@ -295,15 +299,17 @@ is larger than the bounds centers them.
 with no camera.
 
 ```lua
+local wg = require("@wingine")
+
 function draw()
     -- The world, centered on the player's middle and kept inside the map.
-    graphics.set_camera(player.x + 8, player.y + 8, map:bounds())
-    graphics.draw_tilemap(map)
-    graphics.draw_sprite(player.sprite, player.x, player.y)
+    wg.graphics.set_camera(player.x + 8, player.y + 8, map:bounds())
+    wg.graphics.draw_tilemap(map)
+    wg.graphics.draw_sprite(player.sprite, player.x, player.y)
 
     -- The HUD, in canvas pixels.
-    graphics.set_camera(nil)
-    graphics.draw_text(font, `HP {player.hp}`, 4, 4, "#ffffff")
+    wg.graphics.set_camera(nil)
+    wg.graphics.draw_text(font, `HP {player.hp}`, 4, 4, "#ffffff")
 end
 ```
 
@@ -311,11 +317,11 @@ A camera that keeps two players in view zooms out as they move apart:
 
 ```lua
 -- Zoomed to fit both players with 48 pixels to spare around them, but no further in than 2.
-local width, height = graphics.size()
+local width, height = wg.graphics.size()
 local spread_x = math.abs(a.x - b.x) + 96
 local spread_y = math.abs(a.y - b.y) + 96
 local zoom = math.min(2, width / spread_x, height / spread_y)
-graphics.set_camera((a.x + b.x) / 2, (a.y + b.y) / 2, stage_bounds, zoom)
+wg.graphics.set_camera((a.x + b.x) / 2, (a.y + b.y) / 2, stage_bounds, zoom)
 ```
 
 At whole-number zooms, every texel of pixel art covers the same number of canvas pixels, and at
@@ -334,7 +340,7 @@ pixel one way or the other each frame.
 ### `graphics.set_blend`
 
 ```lua
-graphics.set_blend(blend: Blend)
+wg.graphics.set_blend(blend: Blend)
 ```
 
 Mixes everything drawn after this call with what's under it as `blend` says, until it's set again
@@ -349,15 +355,17 @@ does, and a translucent color or sprite blends as much as it's opaque, in every 
 | `"screen"` | Brightens what's under it as much as its color is bright, but never past white, more gently than adding. | Soft light, mist, a lamp's pool of light |
 
 ```lua
+local wg = require("@wingine")
+
 function draw()
-    graphics.draw_scene(level)
+    wg.graphics.draw_scene(level)
     -- Night over the whole scene, then a lamp's light over that.
-    graphics.set_blend("multiply")
-    graphics.fill_rect(0, 0, 320, 180, "#5868a8")
-    graphics.set_blend("screen")
-    graphics.draw_sprite(glow, lamp_x - 32, lamp_y - 32, "#ffb060", 64, 64)
-    graphics.set_blend("normal")
-    graphics.draw_text(font, "Night falls", 4, 4, "#ffffff")
+    wg.graphics.set_blend("multiply")
+    wg.graphics.fill_rect(0, 0, 320, 180, "#5868a8")
+    wg.graphics.set_blend("screen")
+    wg.graphics.draw_sprite(glow, lamp_x - 32, lamp_y - 32, "#ffb060", 64, 64)
+    wg.graphics.set_blend("normal")
+    wg.graphics.draw_text(font, "Night falls", 4, 4, "#ffffff")
 end
 ```
 
@@ -372,7 +380,7 @@ drawn opaque.
 ### `graphics.size`
 
 ```lua
-graphics.size(): (number, number)
+wg.graphics.size(): (number, number)
 ```
 
 Returns the canvas's width and height in canvas pixels. With a fixed
@@ -384,7 +392,7 @@ first frame will have.
 ### `graphics.color`
 
 ```lua
-graphics.color(color: Color, opacity: number?): number
+wg.graphics.color(color: Color, opacity: number?): number
 ```
 
 Returns `color` as a number `0xRRGGBBAA`. Numbers are the fastest way to pass a color: the engine
@@ -392,11 +400,12 @@ reads a hex string or table again every time it's passed, which costs more than 
 Code that draws a lot turns its colors into numbers once:
 
 ```lua
-local BULLET = graphics.color("#f2c14e")
+local wg = require("@wingine")
+local BULLET = wg.graphics.color("#f2c14e")
 
 function draw()
     for _, bullet in bullets do
-        graphics.draw_sprite(pellet, bullet.x, bullet.y, BULLET)
+        wg.graphics.draw_sprite(pellet, bullet.x, bullet.y, BULLET)
     end
 end
 ```
@@ -406,19 +415,20 @@ see-through, and a translucent one half as opaque as it was. The alpha it makes 
 to 1. That's how a color made a number once fades, by a different amount each frame:
 
 ```lua
-local SHIELD = graphics.color("#6ec6ff80")
+local wg = require("@wingine")
+local SHIELD = wg.graphics.color("#6ec6ff80")
 
 function draw()
     -- Fades out over the shield's last second.
     local opacity = math.min(shield.seconds_left, 1)
-    graphics.fill_circle(player.x, player.y, 12, graphics.color(SHIELD, opacity))
+    wg.graphics.fill_circle(player.x, player.y, 12, wg.graphics.color(SHIELD, opacity))
 end
 ```
 
 ### `graphics.frame_stats`
 
 ```lua
-graphics.frame_stats(): FrameStats
+wg.graphics.frame_stats(): FrameStats
 ```
 
 Returns how long the frame before this one took, and how much it drew, as a table. Times are in
@@ -450,7 +460,7 @@ a grid of sprites the same size.
 ### `graphics.load_sprite_sheet`
 
 ```lua
-graphics.load_sprite_sheet(path: string, tile_width: number, tile_height: number): SpriteSheet
+wg.graphics.load_sprite_sheet(path: string, tile_width: number, tile_height: number): SpriteSheet
 ```
 
 Loads the PNG image at `path`, relative to the game's folder, divided into a grid of sprites
@@ -461,8 +471,8 @@ Each image is read once: loading it again, even divided differently, reuses it, 
 hold sprites of different sizes:
 
 ```lua
-local small = graphics.load_sprite_sheet("bullets.png", 8, 8)
-local large = graphics.load_sprite_sheet("bullets.png", 16, 16)
+local small = wg.graphics.load_sprite_sheet("bullets.png", 8, 8)
+local large = wg.graphics.load_sprite_sheet("bullets.png", 16, 16)
 ```
 
 For an image that's a single sprite, use its whole size: `load_sprite_sheet("title.png", 320,
@@ -522,7 +532,8 @@ It doesn't keep time itself: the game keeps how long it has been playing, and as
 to draw. So one animation can be shared by every character that plays it, each at its own time.
 
 ```lua
-local walk = graphics.new_animation({ sheet:sprite(0, 2), sheet:sprite(1, 2) }, 0.2)
+local wg = require("@wingine")
+local walk = wg.graphics.new_animation({ sheet:sprite(0, 2), sheet:sprite(1, 2) }, 0.2)
 local walk_time = 0
 
 function update(dt: number)
@@ -534,14 +545,14 @@ function update(dt: number)
 end
 
 function draw()
-    graphics.draw_sprite(walk:frame(walk_time), player.x, player.y)
+    wg.graphics.draw_sprite(walk:frame(walk_time), player.x, player.y)
 end
 ```
 
 ### `graphics.new_animation`
 
 ```lua
-graphics.new_animation(frames: { Sprite }, frame_time: number): Animation
+wg.graphics.new_animation(frames: { Sprite }, frame_time: number): Animation
 ```
 
 Returns an animation that shows each sprite in `frames` for `frame_time` seconds, in order, then
@@ -627,7 +638,8 @@ nodes; a game makes emitters of its own with `graphics.new_particles`, for effec
 go, such as a burst where something breaks.
 
 ```lua
-local dust = graphics.new_particles({
+local wg = require("@wingine")
+local dust = wg.graphics.new_particles({
     rate = 0, lifetime = { 0.3, 0.6 }, speed = { 20, 40 }, gravity = { 0, 60 }, drag = 2,
     scales = { 2, 0 }, colors = { "#d8c8a0", "#d8c8a000" },
 })
@@ -641,8 +653,8 @@ function update(dt: number)
 end
 
 function draw()
-    graphics.draw_scene(level)
-    graphics.draw_particles(dust)
+    wg.graphics.draw_scene(level)
+    wg.graphics.draw_particles(dust)
 end
 ```
 
@@ -682,7 +694,7 @@ emitters by the same steps gets the same particles on every platform.
 ### `graphics.new_particles`
 
 ```lua
-graphics.new_particles(settings: ParticleSettings?, sprite: Sprite?): Particles
+wg.graphics.new_particles(settings: ParticleSettings?, sprite: Sprite?): Particles
 ```
 
 Returns an emitter with `settings`, at the origin, with no particles yet. Each particle shows
@@ -692,7 +704,7 @@ on a setting there isn't, or one out of range, saying which.
 ### `graphics.draw_particles`
 
 ```lua
-graphics.draw_particles(particles: Particles)
+wg.graphics.draw_particles(particles: Particles)
 ```
 
 Draws the emitter's particles, oldest first, in its blend mode, then goes back to the mode drawing
@@ -820,7 +832,7 @@ shows each kind.
 ### `graphics.default_font`
 
 ```lua
-graphics.default_font(): Font
+wg.graphics.default_font(): Font
 ```
 
 Returns the built-in pixel font.
@@ -828,7 +840,7 @@ Returns the built-in pixel font.
 ### `graphics.load_font`
 
 ```lua
-graphics.load_font(path: string, settings: FontSettings?): Font
+wg.graphics.load_font(path: string, settings: FontSettings?): Font
 ```
 
 Loads a font. Without `settings`, `path` is a [font file](#font-files), `*.font.luau`, which
@@ -845,12 +857,13 @@ Each file is read once: loading it again, even at another size, reuses it. Fonts
 game loads and updates, not in `draw`.
 
 ```lua
-local title = graphics.load_font("fonts/title.font.luau")
-local body = graphics.load_font("fonts/Hack-Regular.ttf", { size = 13 })
+local wg = require("@wingine")
+local title = wg.graphics.load_font("fonts/title.font.luau")
+local body = wg.graphics.load_font("fonts/Hack-Regular.ttf", { size = 13 })
 
 function draw()
-    graphics.draw_text(title, "The Stone Shrine", 8, 8, "#f2c14e")
-    graphics.draw_text(body, "Ελληνικά, Кириллица", 8, 32, "#ffffff")
+    wg.graphics.draw_text(title, "The Stone Shrine", 8, 8, "#f2c14e")
+    wg.graphics.draw_text(body, "Ελληνικά, Кириллица", 8, 32, "#ffffff")
 end
 ```
 
@@ -934,8 +947,8 @@ of the ink on the longest line; the height is a whole number of lines. To center
 
 ```lua
 local width, height = font:measure("Game over")
-local canvas_width, canvas_height = graphics.size()
-graphics.draw_text(font, "Game over", (canvas_width - width) / 2, (canvas_height - height) / 2, "#ffffff")
+local canvas_width, canvas_height = wg.graphics.size()
+wg.graphics.draw_text(font, "Game over", (canvas_width - width) / 2, (canvas_height - height) / 2, "#ffffff")
 ```
 
 #### `font:line_height`
@@ -1000,30 +1013,31 @@ a good size for 1. Angles in 3D are radians, and positive angles turn counter-cl
 their axis, seen from its positive end.
 
 ```lua
-local crate = graphics.new_cube(1)
-local ground = graphics.new_plane(6, 6)
-local hero = graphics.load_sprite_sheet("tiles.png", 16, 16):sprite(27, 0)
-local font = graphics.default_font()
+local wg = require("@wingine")
+local crate = wg.graphics.new_cube(1)
+local ground = wg.graphics.new_plane(6, 6)
+local hero = wg.graphics.load_sprite_sheet("tiles.png", 16, 16):sprite(27, 0)
+local font = wg.graphics.default_font()
 
 local view = {
     camera = { position = vector.create(0, 4, 6), target = vector.create(0, 0.5, 0) },
 }
 
 function draw()
-    graphics.clear("#8cc4e8")
-    graphics.begin_3d(view)
-    graphics.draw_mesh(ground, vector.zero, { tint = "#4f8a3c" })
-    graphics.draw_mesh(crate, vector.create(0, 0.5, 0), { yaw = 0.3, tint = "#b07a48" })
-    graphics.draw_billboard(hero, vector.create(1.5, 0, 0.5))
+    wg.graphics.clear("#8cc4e8")
+    wg.graphics.begin_3d(view)
+    wg.graphics.draw_mesh(ground, vector.zero, { tint = "#4f8a3c" })
+    wg.graphics.draw_mesh(crate, vector.create(0, 0.5, 0), { yaw = 0.3, tint = "#b07a48" })
+    wg.graphics.draw_billboard(hero, vector.create(1.5, 0, 0.5))
     -- Anything else drawn ends the view, and goes over it.
-    graphics.draw_text(font, "Crates: 1", 4, 4, "#ffffff")
+    wg.graphics.draw_text(font, "Crates: 1", 4, 4, "#ffffff")
 end
 ```
 
 ### `graphics.begin_3d`
 
 ```lua
-graphics.begin_3d(view: View3d)
+wg.graphics.begin_3d(view: View3d)
 ```
 
 Begins a 3D view over what's been drawn so far. The meshes and billboards drawn after it go in it,
@@ -1085,7 +1099,7 @@ squarely the surface faces it, and each light's the same way, added together.
 
 ```lua
 -- A dark room: a lamp on the wall, and a spot light over the middle of the floor.
-graphics.begin_3d({
+wg.graphics.begin_3d({
     camera = camera,
     lighting = {
         color = "#000000",
@@ -1120,7 +1134,7 @@ round, so draw that one with `casts_shadow = false`. The sun casts no shadows.
 
 ```lua
 -- A lamp whose light stops at the crate, but not at its own bulb, which it's inside.
-graphics.begin_3d({
+wg.graphics.begin_3d({
     camera = camera,
     lighting = {
         color = "#000000",
@@ -1128,9 +1142,9 @@ graphics.begin_3d({
         lights = { { position = lamp, color = "#ffd9a0", range = 8, shadows = true } },
     },
 })
-graphics.draw_mesh(ground, vector.zero)
-graphics.draw_mesh(crate, vector.create(1, 0.5, 0))
-graphics.draw_mesh(bulb, lamp, { casts_shadow = false })
+wg.graphics.draw_mesh(ground, vector.zero)
+wg.graphics.draw_mesh(crate, vector.create(1, 0.5, 0))
+wg.graphics.draw_mesh(bulb, lamp, { casts_shadow = false })
 ```
 
 A light with shadows draws the view's meshes that cast them again, from where it is, into shadow
@@ -1163,12 +1177,13 @@ parts of a world loaded around the player, can't be seen to.
 
 ```lua
 -- Dusk: the ground fades into the sky from 24 units off, and is gone at 48.
-local SKY = graphics.color("#10141f")
+local wg = require("@wingine")
+local SKY = wg.graphics.color("#10141f")
 
 function draw()
-    graphics.clear(SKY)
-    graphics.begin_3d({ camera = camera, fog = { color = SKY, near = 24, far = 48 } })
-    graphics.draw_mesh(ground, vector.zero)
+    wg.graphics.clear(SKY)
+    wg.graphics.begin_3d({ camera = camera, fog = { color = SKY, near = 24, far = 48 } })
+    wg.graphics.draw_mesh(ground, vector.zero)
 end
 ```
 
@@ -1188,14 +1203,14 @@ counts toward the view's 32 lights. It fades into fog as anything does.
 
 ```lua
 -- A sign that reads in the dark, and the lamp over it, which lights what's under it.
-graphics.draw_model(sign, vector.create(0, 3, -4), { glow = "#ffffff" })
-graphics.draw_mesh(bulb, lamp, { casts_shadow = false, glow = "#ffffff" })
+wg.graphics.draw_model(sign, vector.create(0, 3, -4), { glow = "#ffffff" })
+wg.graphics.draw_mesh(bulb, lamp, { casts_shadow = false, glow = "#ffffff" })
 ```
 
 ### `graphics.draw_mesh`
 
 ```lua
-graphics.draw_mesh(mesh: Mesh, position: vector, options: MeshOptions?)
+wg.graphics.draw_mesh(mesh: Mesh, position: vector, options: MeshOptions?)
 ```
 
 Draws `mesh` in the 3D view begun last, with its origin at `position`. Drawing one when no view is
@@ -1219,8 +1234,8 @@ them, and the rest are drawn opaque: meshes don't blend.
 
 ```lua
 -- A crate turned the way the player last walked, showing planks, and a ball stretched tall.
-graphics.draw_mesh(crate, vector.create(2, 0.5, -1), { yaw = facing, sprite = planks })
-graphics.draw_mesh(ball, vector.create(0, 1, 0), { scale = vector.create(1, 2, 1), tint = "#e05040" })
+wg.graphics.draw_mesh(crate, vector.create(2, 0.5, -1), { yaw = facing, sprite = planks })
+wg.graphics.draw_mesh(ball, vector.create(0, 1, 0), { scale = vector.create(1, 2, 1), tint = "#e05040" })
 ```
 
 A view's meshes that are the same mesh, showing the same sprite sheet's texture, are drawn together
@@ -1230,7 +1245,7 @@ takes a draw call for each kind.
 ### `graphics.draw_model`
 
 ```lua
-graphics.draw_model(model: Model, position: vector, options: MeshOptions?)
+wg.graphics.draw_model(model: Model, position: vector, options: MeshOptions?)
 ```
 
 Draws each part of a [model](#models) in the 3D view begun last, as
@@ -1242,16 +1257,16 @@ own colors all of them show whatever lights them. Parts whose file's materials e
 besides, whatever `options` say. Each part is a draw call of its own.
 
 ```lua
-local barrel = graphics.load_model("models/barrel.glb")
+local barrel = wg.graphics.load_model("models/barrel.glb")
 
 -- In draw, in a view: a barrel standing on the tile at column, row, turned a little.
-graphics.draw_model(barrel, vector.create(column + 0.5, 0, row + 0.5), { yaw = 0.3 })
+wg.graphics.draw_model(barrel, vector.create(column + 0.5, 0, row + 0.5), { yaw = 0.3 })
 ```
 
 ### `graphics.draw_billboard`
 
 ```lua
-graphics.draw_billboard(sprite: Sprite, position: vector, tint: Color?, width: number?, height: number?, glow: Color?)
+wg.graphics.draw_billboard(sprite: Sprite, position: vector, tint: Color?, width: number?, height: number?, glow: Color?)
 ```
 
 Draws `sprite` standing upright in the 3D view begun last, with the middle of its bottom edge at
@@ -1271,13 +1286,13 @@ does. Drawing one when no view is open is an error.
 ```lua
 -- The player, a tile tall, facing the way they last walked.
 local sprite = if player.facing == "left" then hero:flipped_x() else hero
-graphics.draw_billboard(sprite, player.position)
+wg.graphics.draw_billboard(sprite, player.position)
 ```
 
 ### `graphics.project`
 
 ```lua
-graphics.project(view: View3d, point: vector): (number?, number?)
+wg.graphics.project(view: View3d, point: vector): (number?, number?)
 ```
 
 Returns where `point` shows on the canvas through `view`, in the coordinates its rect is in, or
@@ -1286,10 +1301,10 @@ plane. Points to the sides of the view are outside its rect, but still placed. L
 in a 3D view are drawn where it puts them:
 
 ```lua
-local x, y = graphics.project(view, player.position + vector.create(0, 1.2, 0))
+local x, y = wg.graphics.project(view, player.position + vector.create(0, 1.2, 0))
 if x and y then
     local width = font:measure(player.name)
-    graphics.draw_text(font, player.name, x - width / 2, y - 10, "#ffffff")
+    wg.graphics.draw_text(font, player.name, x - width / 2, y - 10, "#ffffff")
 end
 ```
 
@@ -1299,7 +1314,7 @@ whole canvas.
 ### `graphics.ray`
 
 ```lua
-graphics.ray(view: View3d, x: number, y: number): (vector, vector)
+wg.graphics.ray(view: View3d, x: number, y: number): (vector, vector)
 ```
 
 Returns the ray into `view` through `x`, `y` on the canvas: where it starts, on the camera's near
@@ -1307,9 +1322,9 @@ plane, and the way it goes, a vector of length 1. Everything that shows at that 
 it. To find the point on the ground, at height 0, under the mouse:
 
 ```lua
-local mouse_x, mouse_y = input.mouse_position()
+local mouse_x, mouse_y = wg.input.mouse_position()
 if mouse_x and mouse_y then
-    local origin, direction = graphics.ray(view, mouse_x, mouse_y)
+    local origin, direction = wg.graphics.ray(view, mouse_x, mouse_y)
     if direction.y < 0 then
         pointed_at = origin + direction * (-origin.y / direction.y)
     end
@@ -1321,7 +1336,7 @@ Works when [`project`](#graphicsproject) does.
 ### `graphics.hit_box`
 
 ```lua
-graphics.hit_box(origin: vector, direction: vector, min: vector, max: vector): number?
+wg.graphics.hit_box(origin: vector, direction: vector, min: vector, max: vector): number?
 ```
 
 Returns how far along the ray from `origin` going `direction` it enters the box between the
@@ -1336,15 +1351,15 @@ box the ray enters is what the mouse points at:
 ```lua
 -- The prop under the mouse, the nearest one first, or nil.
 local function pointed_prop()
-    local x, y = input.mouse_position()
+    local x, y = wg.input.mouse_position()
     if x == nil or y == nil then
         return nil
     end
-    local origin, direction = graphics.ray(view, x, y)
+    local origin, direction = wg.graphics.ray(view, x, y)
     local nearest, nearest_distance = nil, math.huge
     for _, prop in props do
         local low, high = prop.model:bounds()
-        local distance = graphics.hit_box(origin, direction, low + prop.position, high + prop.position)
+        local distance = wg.graphics.hit_box(origin, direction, low + prop.position, high + prop.position)
         if distance and distance < nearest_distance then
             nearest, nearest_distance = prop, distance
         end
@@ -1364,7 +1379,7 @@ A mesh is triangles, uploaded to the GPU once and drawn as many times as a game 
 ### `graphics.new_cube`
 
 ```lua
-graphics.new_cube(size: number): Mesh
+wg.graphics.new_cube(size: number): Mesh
 ```
 
 Returns a cube `size` along each side, centered on its origin. Each side shows the whole sprite it's
@@ -1373,7 +1388,7 @@ drawn with, upright seen from outside, and the top shows it with its top toward 
 ### `graphics.new_cuboid`
 
 ```lua
-graphics.new_cuboid(width: number, height: number, depth: number): Mesh
+wg.graphics.new_cuboid(width: number, height: number, depth: number): Mesh
 ```
 
 Returns a box `width` along `x`, `height` along `y` and `depth` along `z`, centered on its origin,
@@ -1382,7 +1397,7 @@ showing the sprite as a cube does.
 ### `graphics.new_plane`
 
 ```lua
-graphics.new_plane(width: number, depth: number): Mesh
+wg.graphics.new_plane(width: number, depth: number): Mesh
 ```
 
 Returns a flat rectangle facing up, `width` along `x` and `depth` along `z`, centered on its origin,
@@ -1391,7 +1406,7 @@ showing the sprite once across it with its top toward `-z`. It shows only from a
 ### `graphics.new_sphere`
 
 ```lua
-graphics.new_sphere(radius: number, segments: number?, rings: number?): Mesh
+wg.graphics.new_sphere(radius: number, segments: number?, rings: number?): Mesh
 ```
 
 Returns a sphere of `radius` about its origin, made of `segments` slices around it (16 by default,
@@ -1405,7 +1420,7 @@ inside out.
 ### `graphics.new_mesh`
 
 ```lua
-graphics.new_mesh(data: MeshData): Mesh
+wg.graphics.new_mesh(data: MeshData): Mesh
 ```
 
 Returns a mesh of the triangles `data` describes, a table of `vertices` and `indices`. Each vertex
@@ -1438,7 +1453,7 @@ for row = 0, 7 do
         end
     end
 end
-local floor = graphics.new_mesh({ vertices = vertices, indices = indices })
+local floor = wg.graphics.new_mesh({ vertices = vertices, indices = indices })
 ```
 
 An index that isn't one of the vertices, or a count of indices that isn't three for each triangle,
@@ -1472,7 +1487,7 @@ a 3D modelling program such as Blender. Models are drawn with [`draw_model`](#gr
 ### `graphics.load_model`
 
 ```lua
-graphics.load_model(path: string): Model
+wg.graphics.load_model(path: string): Model
 ```
 
 Loads the model file at `path`, relative to the game's folder: glTF 2.0, as a binary `.glb` or as a

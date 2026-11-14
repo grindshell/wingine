@@ -49,7 +49,7 @@ tests are declared only as their file loads, at its top level.
 ```lua
 test("the computer wins a whole match", function()
     sim.tap("Space")
-    wait_until(function() return pong.phase == "over" end)
+    wg.wait_until(function() return pong.phase == "over" end)
     assert_equal(pong.winner, "right")
 end, { time_limit = 300 })
 ```

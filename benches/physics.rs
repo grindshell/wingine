@@ -302,8 +302,9 @@ fn level_2d() -> String {
 /// The 2D game, which steps the world each update after doing `work`.
 fn main_2d(work: &str) -> String {
     format!(
-        "local level = scene.load('bench.scene.luau')
-        local world = physics.world()
+        "local wg = require('@wingine')
+        local level = wg.scene.load('bench.scene.luau')
+        local world = wg.physics.world()
         world:add(level:find('level'))
         for _, node in level:tagged('solid') do
             world:add(node)
@@ -392,9 +393,10 @@ fn level_3d() -> String {
 }
 
 /// The 3D game, casting rays down onto the boxes each update before stepping.
-const MAIN_3D: &str = "
-    local level = scene.load('bench.scene.luau')
-    local world = physics.world_3d()
+const MAIN_3D: &str = "local wg = require('@wingine')
+    
+    local level = wg.scene.load('bench.scene.luau')
+    local world = wg.physics.world_3d()
     for _, node in level:tagged('solid') do
         world:add(node)
     end
@@ -488,9 +490,10 @@ fn level_3d_many() -> String {
 /// The big 3D game, which steps the world each update after doing `work`.
 fn main_3d_many(work: &str) -> String {
     format!(
-        "local level = scene.load('bench.scene.luau')
+        "local wg = require('@wingine')
+        local level = wg.scene.load('bench.scene.luau')
         local view = level:find('view')
-        local world = physics.world_3d()
+        local world = wg.physics.world_3d()
         for _, node in level:tagged('solid') do
             world:add(node)
         end
@@ -550,11 +553,12 @@ const LEVEL_COPIES: &str = "return {
 /// and removes the group, before stepping the world.
 fn main_copies(copied: &str) -> String {
     format!(
-        "local level = scene.load('bench.scene.luau')
+        "local wg = require('@wingine')
+        local level = wg.scene.load('bench.scene.luau')
         local view = level:find('view')
         local copied = view:find('{copied}')
         local group = view:find('group')
-        local world = physics.world_3d()
+        local world = wg.physics.world_3d()
         local down = vector.create(0, -1, 0)
 
         function update(dt)

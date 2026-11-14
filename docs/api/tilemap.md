@@ -7,17 +7,18 @@ Everything here works any time, apart from drawing a map, which is
 [`graphics.draw_tilemap`](graphics.md#graphicsdraw_tilemap).
 
 ```lua
+local wg = require("@wingine")
 local TILE = 16
-local sheet = graphics.load_sprite_sheet("tiles.png", TILE, TILE)
+local sheet = wg.graphics.load_sprite_sheet("tiles.png", TILE, TILE)
 
 -- The kinds of tile.
-local tileset = tilemap.new_tileset(TILE, TILE)
+local tileset = wg.tilemap.new_tileset(TILE, TILE)
 local GRASS = tileset:add({ sprite = sheet:sprite(0, 0) })
 local WALL = tileset:add({ sprite = sheet:sprite(1, 0), solid = true })
 local FLOWER = tileset:add({ sprite = sheet:sprite(2, 0), tint = "#f2c14e" })
 
 -- A 20x12 map: grass everywhere, with a wall around the edge and a flower in the middle.
-local map = tilemap.new(tileset, 20, 12)
+local map = wg.tilemap.new(tileset, 20, 12)
 local ground = map:add_layer()
 local above = map:add_layer()
 for row = 0, 11 do
@@ -33,8 +34,8 @@ map:set(above, 10, 6, FLOWER)
 
 function draw()
     -- Centered on the map's middle.
-    graphics.set_camera(10 * TILE, 6 * TILE, map:bounds())
-    graphics.draw_tilemap(map)
+    wg.graphics.set_camera(10 * TILE, 6 * TILE, map:bounds())
+    wg.graphics.draw_tilemap(map)
 end
 ```
 
@@ -47,7 +48,7 @@ tileset file, which is easier to edit than code, and which a tool can write. The
 ### `tilemap.new_tileset`
 
 ```lua
-tilemap.new_tileset(tile_width: number, tile_height: number): Tileset
+wg.tilemap.new_tileset(tile_width: number, tile_height: number): Tileset
 ```
 
 Returns an empty tileset of tiles `tile_width` by `tile_height` world units, which are canvas
@@ -75,7 +76,7 @@ Adds a kind of tile and returns its ID, for placing it with [`map:set`](#mapset)
 ### `tilemap.new`
 
 ```lua
-tilemap.new(tileset: Tileset, columns: number, rows: number): Tilemap
+wg.tilemap.new(tileset: Tileset, columns: number, rows: number): Tilemap
 ```
 
 Returns a map `columns` by `rows` cells in size, with no layers yet, built from a copy of
@@ -175,7 +176,7 @@ step:
 
 ```lua
 local x, y = map:tile_to_world(player:position())
-graphics.draw_sprite(hero, x, y)
+wg.graphics.draw_sprite(hero, x, y)
 ```
 
 #### `map:world_to_tile`

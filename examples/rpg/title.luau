@@ -5,6 +5,7 @@
 -- the name and the menu are laid out in `title.scene.luau`, whose menu is a panel that fits its
 -- choices, copies of its hidden `choice` row.
 
+local wg = require("@wingine")
 local conf = require("./conf")
 local look = require("./look")
 local world = require("./world")
@@ -45,11 +46,11 @@ local STARS = {
     { 290, 100 },
 }
 
-title.scene = scene.load("title.scene.luau")
+title.scene = wg.scene.load("title.scene.luau")
 local panel = title.scene:find("menu")
 local template = panel:find("choice")
 -- Picks among the panel's rows, those shown.
-local menu = ui.menu(panel, { confirm = "interact" })
+local menu = wg.ui.menu(panel, { confirm = "interact" })
 
 -- The choices, in order, while the title is open.
 title.choices = nil :: { string }?
@@ -104,17 +105,17 @@ function title.draw(woods_only: boolean?)
     if not choices then
         return
     end
-    graphics.clear(SKY)
+    wg.graphics.clear(SKY)
     for _, star in STARS do
-        graphics.fill_rect(star[1], star[2], 1, 1, STAR)
+        wg.graphics.fill_rect(star[1], star[2], 1, 1, STAR)
     end
-    graphics.fill_rect(0, GROUND_TOP, WIDTH, HEIGHT - GROUND_TOP, GROUND)
+    wg.graphics.fill_rect(0, GROUND_TOP, WIDTH, HEIGHT - GROUND_TOP, GROUND)
     for _, tree in TREES do
         local sprite = world.sprite(tree.cell[1], tree.cell[2])
-        graphics.draw_sprite(sprite, tree.x, GROUND_TOP - TILE + 4, TREE)
+        wg.graphics.draw_sprite(sprite, tree.x, GROUND_TOP - TILE + 4, TREE)
     end
     local player = rpg.player
-    graphics.draw_sprite(player.sprite, (WIDTH - TILE) / 2, GROUND_TOP - TILE + 6, player.tint)
+    wg.graphics.draw_sprite(player.sprite, (WIDTH - TILE) / 2, GROUND_TOP - TILE + 6, player.tint)
     if woods_only then
         return
     end
@@ -125,7 +126,7 @@ function title.draw(woods_only: boolean?)
         row:find("pointer"):set_visible(selected)
         row:find("label"):set_color(if selected then look.TEXT else look.DIM)
     end
-    graphics.draw_scene(title.scene)
+    wg.graphics.draw_scene(title.scene)
 end
 
 return title

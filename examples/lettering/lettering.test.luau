@@ -1,6 +1,8 @@
 -- The specimen's tests, which `cargo run -- test examples/lettering` runs, each against a fresh
 -- game with no frames run yet. They read and change its state, the global `lettering`, as it is.
 
+local wg = require("@wingine")
+
 local function revealed(): boolean
     return lettering.shown >= lettering.paragraph:glyph_count()
 end
@@ -30,7 +32,7 @@ test("the paragraph reveals a glyph at a time, then again", function()
     sim.step()
     assert(lettering.shown > 0 and lettering.shown < 1, "a part of a glyph a frame")
     assert(lettering.paragraph:line_count() > 1, "wrapped")
-    wait_until(revealed)
-    wait(2.1)
+    wg.wait_until(revealed)
+    wg.wait(2.1)
     assert(lettering.shown < 10, "starting again")
 end)

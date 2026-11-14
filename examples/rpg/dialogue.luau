@@ -8,6 +8,7 @@
 -- in `dialogue.scene.luau`, over the box's right end: a panel that fits them, copies of its hidden
 -- `choice` row beside copies of its `detail`, and to its left, the highlighted choice's note.
 
+local wg = require("@wingine")
 local look = require("./look")
 local conf = require("./conf")
 
@@ -27,10 +28,10 @@ local MIN_LINES = 2
 -- Seconds between flashes of the marker that says there's more.
 local BLINK_SECONDS = 0.4
 
-local font = graphics.default_font()
-local blip = audio.load("sounds/blip.wav")
+local font = wg.graphics.default_font()
+local blip = wg.audio.load("sounds/blip.wav")
 
-dialogue.scene = scene.load("dialogue.scene.luau")
+dialogue.scene = wg.scene.load("dialogue.scene.luau")
 local question = dialogue.scene:find("question")
 local note = question:find("note")
 local labels = question:find("choices/labels")
@@ -99,7 +100,7 @@ local function open(text: string, speaker: string?): Box
 end
 
 local function wait_for(box: Box)
-    wait_until(function()
+    wg.wait_until(function()
         return box.closed
     end)
 end
@@ -161,7 +162,7 @@ end
 -- Shows the box's choices, once its text is revealed, and returns the menu that picks one.
 local function show_choices(box: Box): Menu
     question:set_visible(true)
-    local menu = ui.menu(labels, { confirm = "interact" })
+    local menu = wg.ui.menu(labels, { confirm = "interact" })
     box.menu = menu
     return menu
 end
@@ -172,7 +173,7 @@ function dialogue.update(dt: number)
         return
     end
     local total = box.layout:glyph_count()
-    local confirm = input.pressed("interact")
+    local confirm = wg.input.pressed("interact")
     if box.shown < total then
         if confirm then
             box.shown = total
@@ -180,7 +181,7 @@ function dialogue.update(dt: number)
             local blips = box.shown // GLYPHS_PER_BLIP
             box.shown = math.min(box.shown + dt * REVEAL_RATE, total)
             if box.shown // GLYPHS_PER_BLIP > blips then
-                audio.play(blip)
+                wg.audio.play(blip)
             end
         end
         if box.shown >= total and box.choices then
@@ -236,26 +237,26 @@ function dialogue.draw()
     local height = box_height(box.layout)
     local x, y = MARGIN, HEIGHT - MARGIN - height
     look.panel(x, y, width, height)
-    graphics.draw_text_layout(box.layout, x + PADDING, y + PADDING - 1, look.TEXT, box.shown)
+    wg.graphics.draw_text_layout(box.layout, x + PADDING, y + PADDING - 1, look.TEXT, box.shown)
 
     if box.speaker then
         local name_width = font:measure(box.speaker)
         look.panel(x, y - line_height - 1, name_width + PADDING * 2, line_height + 2)
-        graphics.draw_text(font, box.speaker, x + PADDING, y - line_height + 1, look.HIGHLIGHT)
+        wg.graphics.draw_text(font, box.speaker, x + PADDING, y - line_height + 1, look.HIGHLIGHT)
     end
 
     if box.menu then
         show_selected(box)
-        graphics.draw_scene(dialogue.scene)
+        wg.graphics.draw_scene(dialogue.scene)
         return
     end
     local complete = box.shown >= box.layout:glyph_count()
     if complete and not box.choices and box.idle % (BLINK_SECONDS * 2) < BLINK_SECONDS then
         -- A little arrow in the corner, saying there's more to read.
         local right, bottom = x + width - PADDING, y + height - PADDING + 1
-        graphics.fill_rect(right - 5, bottom - 3, 5, 1, look.BORDER)
-        graphics.fill_rect(right - 4, bottom - 2, 3, 1, look.BORDER)
-        graphics.fill_rect(right - 3, bottom - 1, 1, 1, look.BORDER)
+        wg.graphics.fill_rect(right - 5, bottom - 3, 5, 1, look.BORDER)
+        wg.graphics.fill_rect(right - 4, bottom - 2, 3, 1, look.BORDER)
+        wg.graphics.fill_rect(right - 3, bottom - 1, 1, 1, look.BORDER)
     end
 end
 

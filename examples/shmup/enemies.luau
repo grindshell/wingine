@@ -2,6 +2,7 @@
 -- an update with the update's `dt`, so scripts read as steps that `wait` between them. An enemy
 -- whose script ends has left; one shot down is gone at once.
 
+local wg = require("@wingine")
 local art = require("./art")
 local field = require("./field")
 local sounds = require("./sfx")
@@ -18,12 +19,12 @@ type Look = {
 }
 
 local LOOKS: { [string]: Look } = {
-    ghost = { sprite = art.ghost, tint = graphics.color("#9be8ff"), size = 16, radius = 7 },
-    bat = { sprite = art.bat, tint = graphics.color("#ffb3e6"), size = 16, radius = 7 },
-    octopus = { sprite = art.octopus, tint = graphics.color("#c8a2ff"), size = 16, radius = 8 },
+    ghost = { sprite = art.ghost, tint = wg.graphics.color("#9be8ff"), size = 16, radius = 7 },
+    bat = { sprite = art.bat, tint = wg.graphics.color("#ffb3e6"), size = 16, radius = 7 },
+    octopus = { sprite = art.octopus, tint = wg.graphics.color("#c8a2ff"), size = 16, radius = 8 },
     boss = {
         sprite = art.boss,
-        tint = graphics.color("#ff7b9c"),
+        tint = wg.graphics.color("#ff7b9c"),
         size = 32,
         radius = 14,
         boss = true,
@@ -32,7 +33,7 @@ local LOOKS: { [string]: Look } = {
 
 -- Seconds an enemy flashes when hit.
 local FLASH_SECONDS = 0.05
-local FLASH = graphics.color("#ffffff")
+local FLASH = wg.graphics.color("#ffffff")
 -- How far from a shot's center an enemy is hit.
 local SHOT_RADIUS = 4
 
@@ -192,7 +193,7 @@ function enemies.draw()
         local look = enemy.look
         local tint = if enemy.flash > 0 and flicker then FLASH else look.tint
         local half = look.size / 2
-        graphics.draw_sprite(look.sprite, enemy.x - half, enemy.y - half, tint, look.size, look.size)
+        wg.graphics.draw_sprite(look.sprite, enemy.x - half, enemy.y - half, tint, look.size, look.size)
     end
 end
 

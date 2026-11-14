@@ -11,6 +11,8 @@
 -- Run with `cargo run -- examples/lettering`.
 
 -- Hack's size as it's loaded, pixels to the em, and the sizes the sample can be.
+
+local wg = require("@wingine")
 local HACK_SIZE = 13
 local SMALLEST = 8
 local LARGEST = 48
@@ -30,14 +32,14 @@ local BACKGROUND = "#14182c"
 local INK = "#e8e4dc"
 local DIM = "#8a92b8"
 
-input.bind("bigger", { "Up", "W" })
-input.bind("smaller", { "Down", "S" })
+wg.input.bind("bigger", { "Up", "W" })
+wg.input.bind("smaller", { "Down", "S" })
 
-local hack = graphics.load_font("fonts/Hack-Regular.ttf", { size = HACK_SIZE })
-local width = graphics.size()
+local hack = wg.graphics.load_font("fonts/Hack-Regular.ttf", { size = HACK_SIZE })
+local width = wg.graphics.size()
 
 lettering = {
-    specimen = scene.load("lettering.scene.luau"),
+    specimen = wg.scene.load("lettering.scene.luau"),
     -- The sample line's size, and Hack at it.
     size = 18,
     sample = hack:scaled(18 / HACK_SIZE),
@@ -57,10 +59,10 @@ local function resize(size: number)
 end
 
 function update(dt: number)
-    if input.pressed("bigger") or input.repeated("bigger") then
+    if wg.input.pressed("bigger") or wg.input.repeated("bigger") then
         resize(lettering.size + 1)
     end
-    if input.pressed("smaller") or input.repeated("smaller") then
+    if wg.input.pressed("smaller") or wg.input.repeated("smaller") then
         resize(lettering.size - 1)
     end
 
@@ -71,9 +73,9 @@ function update(dt: number)
 end
 
 function draw()
-    graphics.clear(BACKGROUND)
-    graphics.draw_scene(lettering.specimen)
+    wg.graphics.clear(BACKGROUND)
+    wg.graphics.draw_scene(lettering.specimen)
     local sample = `Up and Down: {lettering.size} px`
-    graphics.draw_text(lettering.sample, sample, MARGIN, SAMPLE_Y, INK)
-    graphics.draw_text_layout(lettering.paragraph, MARGIN, PARAGRAPH_Y, DIM, lettering.shown)
+    wg.graphics.draw_text(lettering.sample, sample, MARGIN, SAMPLE_Y, INK)
+    wg.graphics.draw_text_layout(lettering.paragraph, MARGIN, PARAGRAPH_Y, DIM, lettering.shown)
 end

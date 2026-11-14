@@ -17,7 +17,8 @@ pub enum Kind {
     Number,
     String,
     Comment,
-    /// The engine's tables and built-ins, and Luau's standard library.
+    /// Luau's standard library and built-ins. The engine's API is a module, so its tables are
+    /// fields, as in `wg.graphics`.
     Global,
     /// A name called as a function.
     Function,
@@ -42,18 +43,7 @@ const CONTROL: [&str; 13] = [
 /// Words that are keywords only where a name couldn't be: `type Point = ...`, but `type(x)`.
 const CONTEXTUAL: [&str; 3] = ["type", "export", "continue"];
 const LITERALS: [&str; 3] = ["true", "false", "nil"];
-const GLOBALS: [&str; 39] = [
-    // The engine's.
-    "graphics",
-    "input",
-    "audio",
-    "tilemap",
-    "grid",
-    "scene",
-    "spawn",
-    "wait",
-    "wait_until",
-    // Luau's.
+const GLOBALS: [&str; 30] = [
     "print",
     "require",
     "math",
@@ -358,18 +348,29 @@ mod tests {
             ]
         );
         assert_eq!(
-            kinds("graphics.draw_sprite(hero.graphics, x)"),
+            kinds("math.max(hero.math, x)"),
             [
-                ("graphics", Global),
+                ("math", Global),
                 (".", Symbol),
-                ("draw_sprite", Function),
+                ("max", Function),
                 ("(", Symbol),
                 ("hero", Name),
                 (".", Symbol),
-                ("graphics", Name),
+                ("math", Name),
                 (",", Symbol),
                 ("x", Name),
                 (")", Symbol),
+            ]
+        );
+        // The engine's API is a module's fields.
+        assert_eq!(
+            kinds("wg.graphics.clear(x)")[..5],
+            [
+                ("wg", Name),
+                (".", Symbol),
+                ("graphics", Name),
+                (".", Symbol),
+                ("clear", Function),
             ]
         );
     }

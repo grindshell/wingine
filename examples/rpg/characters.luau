@@ -1,6 +1,8 @@
 -- Characters: the player and the people and animals they meet, each walking the grid with a
 -- mover from the engine.
 
+local wg = require("@wingine")
+
 local characters = {}
 
 -- Seconds a character takes to walk one tile, unless it says otherwise.
@@ -51,7 +53,7 @@ function characters.new(options): Character
     local step_time = options.step_time or STEP_TIME
     local walk = nil
     if options.stride then
-        walk = graphics.new_animation({ options.stride, options.sprite }, step_time / 2)
+        walk = wg.graphics.new_animation({ options.stride, options.sprite }, step_time / 2)
     end
     local character = {
         name = options.name,
@@ -61,7 +63,7 @@ function characters.new(options): Character
         walk_left = walk and walk:flipped_x(),
         walk_time = 0,
         tint = options.tint,
-        mover = grid.new_mover(column, row, step_time),
+        mover = wg.grid.new_mover(column, row, step_time),
         facing_left = false,
         home_facing = facing,
         talk = options.talk,
@@ -119,7 +121,7 @@ end
 -- The tile in front of the character.
 function characters.facing_tile(character: Character): (number, number)
     local column, row = character.mover:tile()
-    return grid.neighbor(character.mover:facing(), column, row)
+    return wg.grid.neighbor(character.mover:facing(), column, row)
 end
 
 -- Where the character is in the world, snapped to whole pixels so it doesn't jitter against
@@ -142,7 +144,7 @@ end
 function characters.draw(character: Character, map)
     local sprite = characters.sprite(character)
     local x, y = characters.position(character, map)
-    graphics.draw_sprite(sprite, x, y, character.tint)
+    wg.graphics.draw_sprite(sprite, x, y, character.tint)
 end
 
 return characters

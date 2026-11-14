@@ -22,6 +22,7 @@
 -- tinted when drawn. `strides.png` is a copy with its people and creatures mid-stride, for
 -- walking.
 
+local wg = require("@wingine")
 local bag = require("./bag")
 local battle = require("./battle")
 local characters = require("./characters")
@@ -98,12 +99,12 @@ local ALERT = "#f2c14e"
 -- The actions, bound as the player chose, or to their defaults.
 controls.load()
 
-local bump = audio.load("sounds/bump.wav")
-local blip = audio.load("sounds/blip.wav")
-local chime = audio.load("sounds/chime.wav")
-audio.set_music_volume(MUSIC_VOLUME)
+local bump = wg.audio.load("sounds/bump.wav")
+local blip = wg.audio.load("sounds/blip.wav")
+local chime = wg.audio.load("sounds/chime.wav")
+wg.audio.set_music_volume(MUSIC_VOLUME)
 
-local font = graphics.default_font()
+local font = wg.graphics.default_font()
 
 -- Everything that changes as the game plays. It's global so that tests can see it.
 rpg = {
@@ -155,7 +156,7 @@ local function level_named(name: string): world.Level
     local level = rpg.levels[name]
     if not level then
         local map = MAPS[name] or error(`there's no map called {name}`)
-        level = world.build(name, scene.load(map))
+        level = world.build(name, wg.scene.load(map))
         rpg.levels[name] = level
     end
     return level
@@ -183,7 +184,7 @@ end
 -- the game saves what it changed, unless it's still on the title screen.
 local function run_event(f, ...)
     rpg.busy += 1
-    spawn(function(...)
+    wg.spawn(function(...)
         local ok, err = pcall(f, ...)
         rpg.busy -= 1
         if not ok then
@@ -199,7 +200,7 @@ end
 local function fade_to(target: number, seconds: number)
     local from, start = rpg.fade, rpg.time
     repeat
-        wait()
+        wg.wait()
         local progress = math.min((rpg.time - start) / seconds, 1)
         rpg.fade = from + (target - from) * progress
     until progress >= 1
@@ -221,8 +222,8 @@ local function encounter(character: characters.Character)
     characters.face_toward(character, rpg.player)
     characters.face_toward(rpg.player, character)
     character.alert = true
-    audio.play(blip, { speed = 0.5 })
-    wait(ALERT_SECONDS)
+    wg.audio.play(blip, { speed = 0.5 })
+    wg.wait(ALERT_SECONDS)
     character.alert = false
     -- `battle.fight` takes itself off the screen if it fails.
     local ok, outcome = pcall(battle.fight, character.foe :: string)
@@ -295,7 +296,7 @@ local function find(level: world.Level, column: number, row: number, place)
     if found.item then
         items.give(found.item)
     end
-    audio.play(chime, { speed = 1.5 })
+    wg.audio.play(chime, { speed = 1.5 })
     dialogue.say(found.text)
 end
 
@@ -338,9 +339,9 @@ end
 -- Walks the player with the keys, a tile at a time.
 local function walk()
     local player = rpg.player
-    local held = direction_where(input.held)
+    local held = direction_where(wg.input.held)
     -- A tap shorter than a frame is pressed but never held, so presses count too.
-    local pressed = direction_where(input.pressed)
+    local pressed = direction_where(wg.input.pressed)
     local queued = rpg.queued
     rpg.queued = nil
     local direction = held or pressed or queued
@@ -351,7 +352,7 @@ local function walk()
     local stepped = characters.step(player, direction, world.blocker(level, player))
     -- Walking into something thuds, but only now and then while the key is held.
     if not stepped and (held or pressed) and rpg.bump_cooldown == 0 then
-        audio.play(bump)
+        wg.audio.play(bump)
         rpg.bump_cooldown = BUMP_SECONDS
     end
 end
@@ -412,7 +413,7 @@ function update(dt: number)
         return
     end
     rpg.bump_cooldown = math.max(rpg.bump_cooldown - dt, 0)
-    if input.key_pressed("F1") then
+    if wg.input.key_pressed("F1") then
         rpg.debugging = not rpg.debugging
     end
     -- The map stands still during a battle.
@@ -436,7 +437,7 @@ function update(dt: number)
     local player = rpg.player
     if player.mover:is_moving() then
         -- Presses last one frame, so remember a tap made mid-step for when the step ends.
-        local pressed = direction_where(input.pressed)
+        local pressed = direction_where(wg.input.pressed)
         if pressed then
             rpg.queued = pressed
         end
@@ -448,9 +449,9 @@ function update(dt: number)
         run_event(travel, exit)
     elseif foe then
         run_event(encounter, foe)
-    elseif input.pressed("interact") then
+    elseif wg.input.pressed("interact") then
         interact()
-    elseif input.pressed("menu") then
+    elseif wg.input.pressed("menu") then
         run_event(bag.visit)
     else
         walk()
@@ -460,8 +461,8 @@ end
 -- Draws `text` on a dark panel, with its top-left corner at `x`, `y`.
 local function label(text: string, x: number, y: number, color)
     local width, height = font:measure(text)
-    graphics.fill_rect(x - 3, y - 2, width + 6, height + 2, HUD_PANEL)
-    graphics.draw_text(font, text, x, y, color)
+    wg.graphics.fill_rect(x - 3, y - 2, width + 6, height + 2, HUD_PANEL)
+    wg.graphics.draw_text(font, text, x, y, color)
 end
 
 local function draw_hud()
@@ -487,9 +488,9 @@ local function draw_hud()
             local title = font:scaled(2)
             local width, height = title:measure(banner.text)
             local x, y = math.round((WIDTH - width) / 2), 24
-            local backing = graphics.color(HUD_PANEL, alpha)
-            graphics.fill_rect(x - 6, y - 4, width + 12, height + 4, backing)
-            graphics.draw_text(title, banner.text, x, y, graphics.color(TEXT, alpha))
+            local backing = wg.graphics.color(HUD_PANEL, alpha)
+            wg.graphics.fill_rect(x - 6, y - 4, width + 12, height + 4, backing)
+            wg.graphics.draw_text(title, banner.text, x, y, wg.graphics.color(TEXT, alpha))
         end
     end
 
@@ -504,11 +505,11 @@ end
 
 -- Draws the map, its characters and the HUD.
 local function draw_world()
-    graphics.clear(BACKGROUND)
+    wg.graphics.clear(BACKGROUND)
     local level = rpg.level :: world.Level
     local x, y = characters.position(rpg.player, level.map)
-    graphics.set_camera(x + TILE / 2, y + TILE / 2, level.map:bounds())
-    graphics.draw_scene(level.map)
+    wg.graphics.set_camera(x + TILE / 2, y + TILE / 2, level.map:bounds())
+    wg.graphics.draw_scene(level.map)
     for _, character in level.characters do
         characters.draw(character, level.map)
         if character.alert then
@@ -517,12 +518,12 @@ local function draw_world()
             local alert_x, alert_y = characters.position(character, level.map)
             alert_x += (TILE - width) / 2
             alert_y -= height
-            graphics.fill_rect(alert_x - 2, alert_y - 1, width + 4, height + 1, HUD_PANEL)
-            graphics.draw_text(font, "!", alert_x, alert_y, ALERT)
+            wg.graphics.fill_rect(alert_x - 2, alert_y - 1, width + 4, height + 1, HUD_PANEL)
+            wg.graphics.draw_text(font, "!", alert_x, alert_y, ALERT)
         end
     end
 
-    graphics.set_camera(nil)
+    wg.graphics.set_camera(nil)
     draw_hud()
 end
 
@@ -542,7 +543,7 @@ function draw()
     bag.draw()
     dialogue.draw()
     if rpg.fade > 0 then
-        graphics.fill_rect(0, 0, WIDTH, HEIGHT, graphics.color(SHADE, rpg.fade))
+        wg.graphics.fill_rect(0, 0, WIDTH, HEIGHT, wg.graphics.color(SHADE, rpg.fade))
     end
 end
 

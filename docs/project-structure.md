@@ -52,24 +52,25 @@ engine calls when the player presses the close button, and one that carries on w
 [reloads](running-games.md#reloading-as-you-work) defines [`reloading`](api/globals.md#reloading).
 
 ```lua
+local wg = require("@wingine")
 local player = require("./player")
 
-local sheet = graphics.load_sprite_sheet("sprites.png", 16, 16)
-local jump = audio.load("sounds/jump.wav")
+local sheet = wg.graphics.load_sprite_sheet("sprites.png", 16, 16)
+local jump = wg.audio.load("sounds/jump.wav")
 
-input.bind("jump", { "Space", "W", "Up" })
-audio.play_music("sounds/music.ogg")
+wg.input.bind("jump", { "Space", "W", "Up" })
+wg.audio.play_music("sounds/music.ogg")
 
 function update(dt: number)
-    if input.pressed("jump") and player.on_ground() then
+    if wg.input.pressed("jump") and player.on_ground() then
         player.jump()
-        audio.play(jump)
+        wg.audio.play(jump)
     end
     player.update(dt)
 end
 
 function draw()
-    graphics.clear("#1d232b")
+    wg.graphics.clear("#1d232b")
     player.draw(sheet)
 end
 ```
@@ -123,13 +124,13 @@ as a list of steps:
 local function blink_warning()
     for _ = 1, 3 do
         warning_visible = true
-        wait(0.25)
+        wg.wait(0.25)
         warning_visible = false
-        wait(0.25)
+        wg.wait(0.25)
     end
 end
 
-spawn(blink_warning)
+wg.spawn(blink_warning)
 ```
 
 `spawn(f, ...)` starts `f(...)` as a task, which runs straight away until it first waits.
@@ -163,14 +164,18 @@ return player
 ```
 
 A module runs once, the first time it's required, and `require` returns what it returns. Modules
-see the engine's tables and the game's globals, as `main.luau` does. `main.luau` can require
-`conf.luau` too, to read the game's settings, such as its resolution.
+see the game's globals, as `main.luau` does. `main.luau` can require `conf.luau` too, to read the
+game's settings, such as its resolution.
+
+The engine's API is a module too, which isn't a file: every script that uses it requires it,
+`local wg = require("@wingine")`, and calls `wg.graphics.draw_text`, `wg.input.held` and the rest
+through it. None of it is a global. See [the API reference](api/README.md).
 
 ### Globals and the sandbox
 
 Scripts run in Luau's sandbox. The standard library (`math`, `string`, `table` and the rest) and
-the engine's tables are read-only, so a script can't add to them or replace their functions.
-Globals a script defines, such as `update`, are seen by every script loaded after it.
+the engine's module and its tables are read-only, so a script can't add to them or replace their
+functions. Globals a script defines, such as `update`, are seen by every script loaded after it.
 
 One consequence of the sandbox surprises people. Luau assumes that, in a sandbox, globals don't
 change under a script, so when a script loads, it looks up each `global.field` and
@@ -185,11 +190,12 @@ local hud = require("./hud") -- loads after `state` exists
 
 ```lua
 -- hud.luau
+local wg = require("@wingine")
 local hud = {}
 
 function hud.draw()
     -- Always "0": `state.score` was looked up when hud.luau loaded.
-    graphics.draw_text(graphics.default_font(), tostring(state.score), 4, 4, "#ffffff")
+    wg.graphics.draw_text(wg.graphics.default_font(), tostring(state.score), 4, 4, "#ffffff")
 end
 
 return hud

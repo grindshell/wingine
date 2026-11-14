@@ -3,6 +3,7 @@
 -- card shot down without the player being hit or bombing pays its bonus, which shrinks as time
 -- passes.
 
+local wg = require("@wingine")
 local art = require("./art")
 local enemies = require("./enemies")
 local field = require("./field")
@@ -28,7 +29,7 @@ local function opening(enemy)
         angle += 0.15
         for _ = 1, 3 do
             patterns.aimed(rice.red, enemy.x, enemy.y, 5, 0.6, 170)
-            wait(0.3)
+            wg.wait(0.3)
         end
         enemies.move_to(enemy, HOME_X + patterns.random(-60, 60), HOME_Y + patterns.random(-20, 20), 0.6)
     end
@@ -44,7 +45,7 @@ local function petals(enemy)
         local curl = if ring % 2 == 0 then 0.35 else -0.35
         patterns.ring(colors[ring % #colors + 1], enemy.x, enemy.y, 28, angle, 180, -150, curl, 40)
         angle += 0.2
-        wait(0.3)
+        wg.wait(0.3)
         if ring % 8 == 0 then
             patterns.aimed(orb.white, enemy.x, enemy.y, 3, 0.3, 120)
         end
@@ -66,7 +67,7 @@ local function helix(enemy)
         if volley % 40 == 0 then
             patterns.aimed(orb.green, enemy.x, enemy.y, 5, 0.8, 100)
         end
-        wait(0.05)
+        wg.wait(0.05)
     end
 end
 
@@ -85,7 +86,7 @@ local function rain(enemy)
         if volley % 10 == 0 then
             patterns.aimed(orb.purple, enemy.x, enemy.y, 7, 0.9, 110)
         end
-        wait(0.12)
+        wg.wait(0.12)
         if volley % 30 == 0 then
             enemies.move_to(enemy, HOME_X + patterns.random(-70, 70), HOME_Y + patterns.random(-10, 30), 0.8)
         end
@@ -155,7 +156,7 @@ function boss.script(enemy)
     enemies.move_to(enemy, HOME_X, HOME_Y, 2)
     for number, card in boss.CARDS do
         run_card(enemy, card, number)
-        wait(REST_SECONDS)
+        wg.wait(REST_SECONDS)
         if number < #boss.CARDS then
             enemies.move_to(enemy, HOME_X, HOME_Y, 0.5)
         end

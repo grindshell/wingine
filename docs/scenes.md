@@ -7,7 +7,8 @@ screen, a character. The game loads it with
 changes them, and draws the whole tree with one call:
 
 ```lua
-local garden = scene.load("garden.scene.luau")
+local wg = require("@wingine")
+local garden = wg.scene.load("garden.scene.luau")
 local sails = garden:find("mill/sails")
 
 function update(dt: number)
@@ -15,7 +16,7 @@ function update(dt: number)
 end
 
 function draw()
-    graphics.draw_scene(garden)
+    wg.graphics.draw_scene(garden)
 end
 ```
 
@@ -634,11 +635,12 @@ what was drawn before it, and nodes after it draw over it. Scripts move nodes in
 nearest first:
 
 ```lua
-local level = scene.load("cellar.scene.luau")
+local wg = require("@wingine")
+local level = wg.scene.load("cellar.scene.luau")
 local view = level:find("view")
 
 function update(dt: number)
-    local x, y = input.mouse_position()
+    local x, y = wg.input.mouse_position()
     if x and y then
         local under = view:pick(x, y)[1]
         if under and under:has_tag("solid") then
@@ -749,8 +751,9 @@ how long it has played, and [poses](api/scene.md#nodepose) a node with it then.
 [`scene.clips`](api/scene.md#sceneclips) returns a file's clips:
 
 ```lua
-local hero = scene.load("level.scene.luau"):find("hero")
-local clips = scene.clips("hero.scene.luau")
+local wg = require("@wingine")
+local hero = wg.scene.load("level.scene.luau"):find("hero")
+local clips = wg.scene.clips("hero.scene.luau")
 local time = 0
 
 function update(dt: number)
@@ -799,7 +802,7 @@ fields too. Files are written at the newest format, 4.
 [`node:tagged`](api/scene.md#nodetagged) finds every node with a tag:
 
 ```lua
-local garden = scene.load("garden.scene.luau")
+local garden = wg.scene.load("garden.scene.luau")
 local player = garden:find("player")
 local solids = garden:tagged("solid")
 
@@ -829,7 +832,7 @@ A tilemap node answers questions about its map, as a [`Tilemap`](api/tilemap.md#
 in the scene's coordinates, and its layers' cells can change:
 
 ```lua
-local level = scene.load("level.scene.luau")
+local level = wg.scene.load("level.scene.luau")
 local map = level:find("map")
 local trees = level:find("map/trees")
 
@@ -845,7 +848,7 @@ whole scene, and [`node:remove`](api/scene.md#noderemove):
 
 ```lua
 -- A bat, from a scene of its own, at the cave's mouth.
-local bat = level:find("creatures"):add(scene.load("bat.scene.luau"), "bat_1")
+local bat = level:find("creatures"):add(wg.scene.load("bat.scene.luau"), "bat_1")
 bat:set_position(cave_x, cave_y)
 
 -- Later, beaten.
@@ -859,12 +862,13 @@ A scene drawn without a camera is in canvas pixels, which is where
 [`node:contains`](api/scene.md#nodecontains) tells which button the mouse is over:
 
 ```lua
-local menu = scene.load("menu.scene.luau")
+local wg = require("@wingine")
+local menu = wg.scene.load("menu.scene.luau")
 local buttons = menu:tagged("button")
 
 function update(dt: number)
-    local x, y = input.mouse_position()
-    if x and y and input.mouse_pressed("left") then
+    local x, y = wg.input.mouse_position()
+    if x and y and wg.input.mouse_pressed("left") then
         for _, button in buttons do
             if button:contains(x, y) then
                 start(button:props().action)
@@ -874,7 +878,7 @@ function update(dt: number)
 end
 
 function draw()
-    graphics.draw_scene(menu)
+    wg.graphics.draw_scene(menu)
 end
 ```
 
@@ -884,7 +888,8 @@ by where the items are drawn, wraps, passes over items that can't be picked, and
 what the player did, while the game shows the selection however it likes:
 
 ```lua
-local menu = ui.menu(screen:find("buttons"))
+local wg = require("@wingine")
+local menu = wg.ui.menu(screen:find("buttons"))
 
 function update(dt: number)
     local happened, item = menu:update()

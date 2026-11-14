@@ -50,7 +50,7 @@ Draw a scene with [`graphics.draw_scene`](graphics.md#graphicsdraw_scene).
 ### `scene.load`
 
 ```lua
-scene.load(path: string): SceneNode
+wg.scene.load(path: string): SceneNode
 ```
 
 Loads the scene file at `path`, relative to the game's folder, and the scene files its instances
@@ -69,7 +69,7 @@ the problem is. Works while the game loads and in `update`.
 ### `scene.clips`
 
 ```lua
-scene.clips(path: string): { [string]: Clip }
+wg.scene.clips(path: string): { [string]: Clip }
 ```
 
 Returns the [clips](../scenes.md#clips) of the scene file at `path`, by name, for posing nodes
@@ -77,7 +77,7 @@ with [`node:pose`](#nodepose). The file is read once, whether it's loaded, place
 its clips. A file that can't be read, or that isn't a scene, is an error. Works at any time.
 
 ```lua
-local clips = scene.clips("hero.scene.luau")
+local clips = wg.scene.clips("hero.scene.luau")
 hero:pose(clips.walk, walk_time)
 ```
 
@@ -338,8 +338,8 @@ A scene drawn without a camera is in canvas pixels, as the mouse's position is, 
 tells whether the mouse is over a node:
 
 ```lua
-local x, y = input.mouse_position()
-if x and y and menu:find("quit"):contains(x, y) and input.mouse_pressed("left") then
+local x, y = wg.input.mouse_position()
+if x and y and menu:find("quit"):contains(x, y) and wg.input.mouse_pressed("left") then
     quit_to_title()
 end
 ```
@@ -747,7 +747,7 @@ A light has no box, so it's never among them. Nothing is under a point outside t
 drawn without a camera is in canvas pixels, as the mouse is.
 
 ```lua
-local x, y = input.mouse_position()
+local x, y = wg.input.mouse_position()
 local under = if x and y then view:pick(x, y)[1] else nil
 ```
 
@@ -776,12 +776,12 @@ outside the view. Everything that shows at that point lies along it, and a physi
 
 ```lua
 -- A click kicks the crate under the mouse.
-local x, y = input.mouse_position()
+local x, y = wg.input.mouse_position()
 local origin, direction
 if x and y then
     origin, direction = view:ray(x, y)
 end
-if origin and direction and input.pressed("click") then
+if origin and direction and wg.input.pressed("click") then
     local hit = world:ray(origin, direction)
     if hit and hit.node:has_tag("crate") then
         world:push(hit.node, direction * 2)
@@ -872,7 +872,7 @@ name, so copying one takes a `name`.
 
 ```lua
 -- A bat, from a scene of its own, in the level's creatures.
-local bat = level:find("creatures"):add(scene.load("bat.scene.luau"), "bat_1")
+local bat = level:find("creatures"):add(wg.scene.load("bat.scene.luau"), "bat_1")
 bat:set_position(48, 96)
 ```
 

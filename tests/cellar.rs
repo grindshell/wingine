@@ -130,7 +130,7 @@ fn the_mouse_points_at_props() {
     assert!(simulation.eval::<bool>("cellar.pointed == nil"));
     // Where the middle of the crate east of the start shows.
     let (x, y): (f32, f32) = simulation.eval(
-        "graphics.project(
+        "require('@wingine').graphics.project(
             { camera = cellar.view().camera, rect = { x = 0, y = 0, width = 320, height = 180 } },
             vector.create(8.5, 0.375, 3.5)
         )",
@@ -242,7 +242,7 @@ fn the_camera_follows_the_hero() {
     // Where the hero shows: the middle of the canvas, the camera looking at their feet. Outside a
     // frame, the view needs its rect: there's no canvas to fill.
     let shown: (f32, f32) = simulation.eval(
-        "graphics.project(
+        "require('@wingine').graphics.project(
             { camera = cellar.view().camera, rect = { x = 0, y = 0, width = 320, height = 180 } },
             cellar.hero_position()
         )",

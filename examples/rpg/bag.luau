@@ -3,6 +3,7 @@
 -- of a task, through menus in the dialogue box, with the stats in a panel beside them, laid out
 -- in `bag.scene.luau`: a panel that fits its lines, copies of its hidden `line`.
 
+local wg = require("@wingine")
 local dialogue = require("./dialogue")
 local items = require("./items")
 local look = require("./look")
@@ -14,7 +15,7 @@ local NOTHING = "—"
 -- Stats raised by gear.
 local RAISED = "#8fd16a"
 
-bag.scene = scene.load("bag.scene.luau")
+bag.scene = wg.scene.load("bag.scene.luau")
 
 -- The panel's lines by what they show: the stats, then each slot's gear, then coins.
 local lines = {}
@@ -145,7 +146,7 @@ function bag.draw()
         show(slot, name_of(rpg.equipped[slot]))
     end
     show("coins", tostring(rpg.coins))
-    graphics.draw_scene(bag.scene)
+    wg.graphics.draw_scene(bag.scene)
 end
 
 return bag

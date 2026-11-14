@@ -27,8 +27,8 @@ Each takes what `math`'s function of the same name takes.
 ```lua
 -- A launch angle turned by the player's stick, the same on every platform.
 local radians = math.rad(angle)
-fighter.vx = exact.cos(radians) * speed
-fighter.vy = -exact.sin(radians) * speed
+fighter.vx = wg.exact.cos(radians) * speed
+fighter.vy = -wg.exact.sin(radians) * speed
 ```
 
 ## When to use them

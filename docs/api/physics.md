@@ -24,11 +24,12 @@ removed from its scene is solid nowhere. Whether a node is shown doesn't matter.
 Seen from above, as in the garden, a character slides among them with `world:move`:
 
 ```lua
-local level = scene.load("level.scene.luau")
+local wg = require("@wingine")
+local level = wg.scene.load("level.scene.luau")
 local player = level:find("player")
 
 -- Everything tagged `solid` is in the way, and the edges of the ground keep the player on it.
-local world = physics.world()
+local world = wg.physics.world()
 for _, wall in level:tagged("solid") do
     world:add(wall)
 end
@@ -38,14 +39,14 @@ world:add(level:find("ground"), { edges = true })
 local FEET = { x = -4, y = -2, width = 8, height = 2 }
 local SPEED = 64
 
-input.bind("left", { "Left", "A" })
-input.bind("right", { "Right", "D" })
-input.bind("up", { "Up", "W" })
-input.bind("down", { "Down", "S" })
+wg.input.bind("left", { "Left", "A" })
+wg.input.bind("right", { "Right", "D" })
+wg.input.bind("up", { "Up", "W" })
+wg.input.bind("down", { "Down", "S" })
 
 function update(dt: number)
-    local dx = input.axis("left", "right")
-    local dy = input.axis("up", "down")
+    local dx = wg.input.axis("left", "right")
+    local dy = wg.input.axis("up", "down")
     if dx ~= 0 or dy ~= 0 then
         -- As fast diagonally as straight.
         local step = SPEED * dt / math.sqrt(dx * dx + dy * dy)
@@ -54,8 +55,8 @@ function update(dt: number)
 end
 
 function draw()
-    graphics.clear("#000000")
-    graphics.draw_scene(level)
+    wg.graphics.clear("#000000")
+    wg.graphics.draw_scene(level)
 end
 ```
 
@@ -85,11 +86,12 @@ each second, 157 pixels at 16 to a metre, unless the world says otherwise; games
 more, and those seen from above, none.
 
 ```lua
-local level = scene.load("level.scene.luau")
+local wg = require("@wingine")
+local level = wg.scene.load("level.scene.luau")
 local player = level:find("player")
 
 local GRAVITY = 600
-local world = physics.world({ gravity = GRAVITY })
+local world = wg.physics.world({ gravity = GRAVITY })
 -- The level's tile map is solid where its tiles are.
 world:add(level:find("map"))
 for _, crate in level:tagged("crate") do
@@ -99,9 +101,9 @@ world:add(level:find("boulder"), { body = "dynamic", shape = "circle" })
 world:add(level:find("lift"), { body = "kinematic" })
 world:add(player, { character = { width = 8, height = 14, step = 4 } })
 
-input.bind("left", { "Left", "A" })
-input.bind("right", { "Right", "D" })
-input.bind("jump", { "Space" })
+wg.input.bind("left", { "Left", "A" })
+wg.input.bind("right", { "Right", "D" })
+wg.input.bind("jump", { "Space" })
 
 local SPEED = 90
 local JUMP = 230
@@ -110,11 +112,11 @@ local falling = 0
 local grounded = false
 
 function update(dt: number)
-    if grounded and input.pressed("jump") then
+    if grounded and wg.input.pressed("jump") then
         falling = -JUMP
     end
     falling += GRAVITY * dt
-    local across = input.axis("left", "right") * SPEED * dt
+    local across = wg.input.axis("left", "right") * SPEED * dt
     local _, _, on_ground = world:walk(player, across, falling * dt)
     grounded = on_ground
     if grounded then
@@ -124,8 +126,8 @@ function update(dt: number)
 end
 
 function draw()
-    graphics.clear("#000000")
-    graphics.draw_scene(level)
+    wg.graphics.clear("#000000")
+    wg.graphics.draw_scene(level)
 end
 ```
 
@@ -222,11 +224,12 @@ in stretches along other axes than it's turned by, such as a node turned inside 
 stretched along `x`: its body's shape is made for it alone, where it is.
 
 ```lua
-local level = scene.load("level.scene.luau")
+local wg = require("@wingine")
+local level = wg.scene.load("level.scene.luau")
 local view = level:find("view")
 local player = view:find("player")
 
-local world = physics.world_3d()
+local world = wg.physics.world_3d()
 for _, node in view:tagged("solid") do
     world:add(node)
 end
@@ -235,11 +238,11 @@ for _, crate in view:tagged("crate") do
 end
 world:add(player, { character = { radius = 0.2, height = 0.7, step = 0.3 } })
 
-input.bind("left", { "Left", "A" })
-input.bind("right", { "Right", "D" })
-input.bind("up", { "Up", "W" })
-input.bind("down", { "Down", "S" })
-input.bind("jump", { "Space" })
+wg.input.bind("left", { "Left", "A" })
+wg.input.bind("right", { "Right", "D" })
+wg.input.bind("up", { "Up", "W" })
+wg.input.bind("down", { "Down", "S" })
+wg.input.bind("jump", { "Space" })
 
 local SPEED = 2.5
 local JUMP = 5
@@ -249,12 +252,12 @@ local rising = 0
 local grounded = false
 
 function update(dt: number)
-    if grounded and input.pressed("jump") then
+    if grounded and wg.input.pressed("jump") then
         rising = JUMP
     end
     rising -= GRAVITY * dt
-    local across = input.axis("left", "right") * SPEED * dt
-    local along = input.axis("up", "down") * SPEED * dt
+    local across = wg.input.axis("left", "right") * SPEED * dt
+    local along = wg.input.axis("up", "down") * SPEED * dt
     local _, on_ground = world:walk(player, vector.create(across, rising * dt, along))
     grounded = on_ground
     if grounded then
@@ -264,10 +267,10 @@ function update(dt: number)
 end
 
 function draw()
-    graphics.clear("#a8c8e8")
+    wg.graphics.clear("#a8c8e8")
     local feet = player:position_3d()
     view:set_camera({ position = feet + vector.create(0, 4, 5), target = feet })
-    graphics.draw_scene(level)
+    wg.graphics.draw_scene(level)
 end
 ```
 
@@ -322,7 +325,7 @@ end
 ### `physics.world`
 
 ```lua
-physics.world(options: { metre: number?, gravity: number? }?): PhysicsWorld
+wg.physics.world(options: { metre: number?, gravity: number? }?): PhysicsWorld
 ```
 
 Returns an empty 2D physics world, with `metre` of the scene's units to a metre, 16 by default,
@@ -335,7 +338,7 @@ Nodes in 3D views have no place in one: they go in a world from `physics.world_3
 ### `physics.world_3d`
 
 ```lua
-physics.world_3d(options: { gravity: vector? }?): PhysicsWorld3d
+wg.physics.world_3d(options: { gravity: vector? }?): PhysicsWorld3d
 ```
 
 Returns an empty 3D physics world, whose dynamic bodies fall with `gravity`, 9.81 down by default.

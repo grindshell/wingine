@@ -252,20 +252,21 @@ Build it again, and copy it to `stars-game/native/` again, as before. Then repla
 `stars-game/main.luau`:
 
 ```lua
-local font = graphics.default_font()
+local wg = require("@wingine")
+local font = wg.graphics.default_font()
 
 stars.add(300)
 
 function update(dt: number)
-    if input.key_pressed("Space") then
+    if wg.input.key_pressed("Space") then
         stars.add(300)
     end
 end
 
 function draw()
-    graphics.clear("#0b0e1a")
+    wg.graphics.clear("#0b0e1a")
     stars.draw()
-    graphics.draw_text(font, `{stars.count()} stars: Space for more`, 4, 4, "#f2c14e")
+    wg.graphics.draw_text(font, `{stars.count()} stars: Space for more`, 4, 4, "#f2c14e")
 end
 ```
 

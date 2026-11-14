@@ -1,6 +1,7 @@
 -- The stage: waves of fairies, then the boss. `stage.run` is a script the game resumes once an
 -- update, so the waves read in the order they come.
 
+local wg = require("@wingine")
 local art = require("./art")
 local boss = require("./boss")
 local enemies = require("./enemies")
@@ -22,7 +23,7 @@ local function ghost(stop_y: number, away: number)
         enemies.move_to(enemy, enemy.x, stop_y, 1)
         for _ = 1, 2 do
             patterns.aimed(pellet.cyan, enemy.x, enemy.y, 3, 0.4, 130)
-            wait(0.6)
+            wg.wait(0.6)
         end
         enemies.drift(enemy, away * 90, -30, 4)
     end
@@ -51,7 +52,7 @@ local function octopus(enemy)
         if volley % 14 == 0 then
             patterns.aimed(orb.yellow, enemy.x, enemy.y, 3, 0.5, 120)
         end
-        wait(0.07)
+        wg.wait(0.07)
     end
     enemies.drift(enemy, 0, -60, 3)
 end
@@ -66,37 +67,37 @@ end
 
 -- The fairies' waves.
 local function waves()
-    wait(1.5)
+    wg.wait(1.5)
     -- Ghosts down the left, then the right.
     for i = 0, 4 do
         enemies.spawn("ghost", 40 + i * 24, -12, SMALL_HP, SMALL_POINTS, ghost(70 + i * 10, -1))
-        wait(0.35)
+        wg.wait(0.35)
     end
-    wait(2)
+    wg.wait(2)
     for i = 0, 4 do
         local x = field.WIDTH - 40 - i * 24
         enemies.spawn("ghost", x, -12, SMALL_HP, SMALL_POINTS, ghost(70 + i * 10, 1))
-        wait(0.35)
+        wg.wait(0.35)
     end
-    wait(2.5)
+    wg.wait(2.5)
     -- Bats swooping across from both sides.
     for i = 0, 5 do
         local from_left = i % 2 == 0
         local x = if from_left then -12 else field.WIDTH + 12
         enemies.spawn("bat", x, 20 + i * 8, SMALL_HP, SMALL_POINTS, bat(if from_left then 120 else -120))
-        wait(0.5)
+        wg.wait(0.5)
     end
     wait_clear(4)
     -- A large fairy, with ghosts on either side.
     enemies.spawn("octopus", field.WIDTH / 2, -16, LARGE_HP, LARGE_POINTS, octopus)
-    wait(1.5)
+    wg.wait(1.5)
     for i = 0, 3 do
         enemies.spawn("ghost", 30, -12, SMALL_HP, SMALL_POINTS, ghost(50 + i * 25, -1))
         enemies.spawn("ghost", field.WIDTH - 30, -12, SMALL_HP, SMALL_POINTS, ghost(50 + i * 25, 1))
-        wait(0.8)
+        wg.wait(0.8)
     end
     wait_clear(8)
-    wait(1)
+    wg.wait(1)
 end
 
 -- Runs the stage: the waves, unless `practice` is "boss", then the boss.
@@ -105,14 +106,14 @@ function stage.run(practice: string?)
         waves()
     end
     shmup.show("Warning!", "A powerful presence approaches")
-    wait(2)
+    wg.wait(2)
     local the_boss = enemies.spawn("boss", field.WIDTH / 2, -24, 1, 0, boss.script)
     shmup.boss = the_boss
     while table.find(shmup.enemies, the_boss) do
-        wait()
+        wg.wait()
     end
     shmup.boss = nil
-    wait(1.5)
+    wg.wait(1.5)
     shmup.finish()
 end
 

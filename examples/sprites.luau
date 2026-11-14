@@ -8,6 +8,8 @@
 --   bat_fly(direction)  starts the bat flying one tile "up", "down", "left" or "right"
 --   play_sound(name)    plays a sound effect: "chime"
 
+local wg = require("@wingine")
+
 function read_note()
     play_sound("chime")
     say("A note on the door reads: “Gone to find the key. Don’t wait up!”")
@@ -20,7 +22,7 @@ function bat()
     while true do
         for _, direction in loop do
             bat_fly(direction)
-            wait(0.5)
+            wg.wait(0.5)
         end
     end
 end

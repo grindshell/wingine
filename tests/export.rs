@@ -76,7 +76,7 @@ fn exported_games_start_with_nothing_but_a_double_click() {
             ("conf.luau", CONF),
             (
                 "main.luau",
-                "function draw() graphics.clear(require('./look').background) end",
+                "local wg = require('@wingine') function draw() wg.graphics.clear(require('./look').background) end",
             ),
             ("look.luau", "return { background = '#336699' }"),
             ("look.test.luau", "test('left out', function() end)"),

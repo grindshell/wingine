@@ -1,6 +1,7 @@
 -- The playfield, where the player, enemies and bullets are. Its coordinates are pixels from its
 -- top-left corner, which is at `X`, `Y` on the canvas.
 
+local wg = require("@wingine")
 local conf = require("./conf")
 
 local field = {
@@ -14,7 +15,7 @@ local field = {
 
 -- Draws whatever comes next in field coordinates.
 function field.camera()
-    graphics.set_camera(
+    wg.graphics.set_camera(
         conf.resolution.width / 2 - field.X,
         conf.resolution.height / 2 - field.Y
     )

@@ -1,7 +1,8 @@
 # Native libraries
 
 A native library is compiled code, written in Rust, that a game loads when it starts. It adds a
-global table to the game's Luau, as the engine's `graphics` and `input` are, holding:
+global table to the game's Luau, named for it, much as the engine's module holds `graphics` and
+`input`, holding:
 
 - **Functions** scripts call, such as `particles.count()`.
 - **Classes** of objects scripts hold and call methods on, such as an emitter made by
@@ -117,7 +118,7 @@ script loaded, or ones it creates from pixels:
 ```lua
 -- After the shmup: the game loads the sprite, and the library draws it for every pellet. A
 -- pellet hits within 2 pixels of its center, and isn't turned to the way it's heading.
-local sheet = graphics.load_sprite_sheet("bullets.png", 8, 8)
+local sheet = wg.graphics.load_sprite_sheet("bullets.png", 8, 8)
 local pellet = danmaku.kind(sheet:sprite(0, 0), 2, false)
 ```
 

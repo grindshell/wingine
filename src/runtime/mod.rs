@@ -14,6 +14,13 @@
 //! [`lua`](crate::lua) module, which also lists how engine types such as colors and keys are
 //! written in Luau.
 //!
+//! The engine's API is a module, which a script requires: `local wg = require("@wingine")`, then
+//! `wg.graphics.color`, `wg.input.held` and so on. It isn't a file: the engine answers
+//! `@wingine` before looking at any `.luaurc`, so a game can alias the name to a file of types for
+//! its language server, which the engine never follows. Its only globals are Luau's `print` and
+//! `require`, the functions it defines for the engine to call, its native libraries' tables, and
+//! whatever it makes global itself.
+//!
 //! The game's settings come from an optional `conf.luau` that returns a table, which the engine
 //! reads before the game starts. Every setting is optional:
 //!
@@ -64,7 +71,8 @@
 //! `require("./opponent")`. Files the engine loads, such as sounds and images, are relative to
 //! the game's folder.
 //!
-//! The engine's API is in ten global tables:
+//! The module holds the built-ins `wait`, `wait_until`, `spawn`, `exact`, `rect` and `approach`,
+//! and ten tables:
 //!
 //! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.color`, `graphics.default_font`,
 //! `graphics.frame_stats`, `graphics.new_animation`, `graphics.new_particles` and
@@ -480,7 +488,7 @@ use crate::{
     Context, Error, Game, Result, WindowConfig, WindowIcon,
     graphics::{Blend, Canvas, Color, Font, FontSettings, Model, Resolution, Texture},
     lua::{
-        Bytecode, Scripts, mlua,
+        ApiModule, Bytecode, Scripts, mlua,
         mlua::{
             FromLuaMulti,
             luau::{NavigateError, Require},
@@ -494,11 +502,16 @@ use crate::{
 const WATCH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The types of the engine's API for Luau games, as a definitions file for
-/// [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp): the global tables and built-ins, the
+/// [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp): the API's tables and built-ins, the
 /// userdata they hand out and the values they take, with their docs, so a language server checks
 /// scripts against the engine and shows its docs on hover. It's `wingine.d.luau`, next to this
 /// file.
 pub const DEFINITIONS: &str = include_str!("wingine.d.luau");
+
+/// What `require("@wingine")` returns, for luau-lsp: a module whose type is the definitions'
+/// `Wingine`, which a game's `.luaurc` aliases as `wingine`, as the editor's base one does. The
+/// engine never runs it. It's `wingine.luau`, next to this file.
+pub const API_MODULE: &str = include_str!("wingine.luau");
 
 /// Runs the Luau game in `folder` until its window is closed. See the [module docs](self).
 ///
@@ -954,19 +967,19 @@ impl LuauGame {
         let lent = Lent::default();
         let font = ctx.default_font().clone();
         let textures = Textures::default();
-        let globals = lua.globals();
+        let api = scripts.api();
         let graphics = graphics::module(lua, &lent, folder, textures.clone(), font.clone())?;
-        globals.set("graphics", graphics)?;
-        globals.set("input", input::module(lua, &lent)?)?;
-        globals.set("audio", audio::module(lua, &lent, folder)?)?;
-        globals.set("tilemap", tilemap::module(lua)?)?;
-        globals.set("grid", grid::module(lua)?)?;
-        globals.set("physics", physics::module(lua)?)?;
+        api.set("graphics", graphics)?;
+        api.set("input", input::module(lua, &lent)?)?;
+        api.set("audio", audio::module(lua, &lent, folder)?)?;
+        api.set("tilemap", tilemap::module(lua)?)?;
+        api.set("grid", grid::module(lua)?)?;
+        api.set("physics", physics::module(lua)?)?;
         let scene = scene::module(lua, &lent, folder.to_owned(), textures)?;
-        globals.set("scene", scene)?;
-        globals.set("ui", ui::module(lua, &lent)?)?;
-        globals.set("save", save::module(lua, ctx.saves())?)?;
-        globals.set("window", window::module(lua, &lent, kept)?)?;
+        api.set("scene", scene)?;
+        api.set("ui", ui::module(lua, &lent)?)?;
+        api.set("save", save::module(lua, ctx.saves())?)?;
+        api.set("window", window::module(lua, &lent, kept)?)?;
         #[cfg(feature = "egui")]
         gui::register(lua, &lent)?;
         let main = folder.join("main.luau");
@@ -976,9 +989,11 @@ impl LuauGame {
         let files = FileRequirer::new();
         let requirer = Requirer {
             files,
+            api: ApiModule::new(api.clone()),
             main: format!("@{}", main.display()),
         };
-        globals.set("require", lua.create_require_function(requirer)?)?;
+        lua.globals()
+            .set("require", lua.create_require_function(requirer)?)?;
         let natives = Natives::load(lua, &lent, ctx, folder, &config.libraries)?;
         let bytecode = reuse.bytecode.as_ref();
         lent.lend(ctx, || scripts.load_with_bytecode(&main, bytecode))?;
@@ -1168,8 +1183,10 @@ fn draw_error(canvas: &mut Canvas, font: &Font, err: &Error) {
 /// Finds the modules a game's scripts `require` as mlua's own requirer does, by their paths
 /// relative to the script requiring them, but has chunks that aren't files, named `=name`, such as
 /// those tests run, require as the game's `main.luau` does, so they get the modules the game has.
+/// `@wingine` is the engine's API, whatever any `.luaurc` says.
 struct Requirer {
     files: FileRequirer,
+    api: ApiModule,
     /// The chunk name of the game's `main.luau`.
     main: String,
 }
@@ -1188,40 +1205,55 @@ impl Require for Requirer {
     }
 
     fn reset(&mut self, chunk_name: &str) -> Result<(), NavigateError> {
+        self.api.leave();
         let name = Self::requiring_as(&self.main, chunk_name);
         self.files.reset(name)
     }
 
     fn jump_to_alias(&mut self, path: &str) -> Result<(), NavigateError> {
+        self.api.leave();
         self.files.jump_to_alias(path)
     }
 
     fn to_alias_override(&mut self, alias: &str) -> Result<(), NavigateError> {
-        self.files.to_alias_override(alias)
+        match self.api.choose(alias) {
+            Ok(()) => Ok(()),
+            Err(_) => self.files.to_alias_override(alias),
+        }
     }
 
     fn to_alias_fallback(&mut self, alias: &str) -> Result<(), NavigateError> {
+        self.api.leave();
         self.files.to_alias_fallback(alias)
     }
 
     fn to_parent(&mut self) -> Result<(), NavigateError> {
+        if self.api.leave() {
+            return Err(NavigateError::NotFound);
+        }
         self.files.to_parent()
     }
 
     fn to_child(&mut self, name: &str) -> Result<(), NavigateError> {
+        if self.api.leave() {
+            return Err(NavigateError::NotFound);
+        }
         self.files.to_child(name)
     }
 
     fn has_module(&self) -> bool {
-        self.files.has_module()
+        self.api.is_chosen() || self.files.has_module()
     }
 
     fn cache_key(&self) -> String {
+        if self.api.is_chosen() {
+            return ApiModule::cache_key();
+        }
         self.files.cache_key()
     }
 
     fn has_config(&self) -> bool {
-        self.files.has_config()
+        !self.api.is_chosen() && self.files.has_config()
     }
 
     fn config(&self) -> std::io::Result<Vec<u8>> {
@@ -1229,6 +1261,9 @@ impl Require for Requirer {
     }
 
     fn loader(&self, lua: &mlua::Lua) -> mlua::Result<mlua::Function> {
+        if self.api.is_chosen() {
+            return self.api.loader(lua);
+        }
         self.files.loader(lua)
     }
 }

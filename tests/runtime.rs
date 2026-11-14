@@ -159,27 +159,30 @@ fn games_read_the_wheel_what_was_pressed_and_what_actions_are_bound_to() {
         "pressed_controls",
         &[(
             "main.luau",
-            "input.bind('jump', { 'South', 'Space', 'W' }, 2)
+            "local wg = require('@wingine')
+            wg.input.bind('jump', { 'South', 'Space', 'W' }, 2)
             pressed = {}
             turned = {}
             function update()
-                local x, y = input.wheel()
+                local x, y = wg.input.wheel()
                 if x ~= 0 or y ~= 0 then
                     table.insert(turned, { x, y })
                 end
-                for _, control in input.pressed_controls() do
+                for _, control in wg.input.pressed_controls() do
                     table.insert(pressed, control)
                 end
             end",
         )],
     );
     let mut simulation = simulation(&folder);
-    let (controls, gamepad): (Vec<String>, Option<u32>) = simulation.eval("input.bindings('jump')");
+    let (controls, gamepad): (Vec<String>, Option<u32>) =
+        simulation.eval("require('@wingine').input.bindings('jump')");
     assert_eq!(
         (controls, gamepad),
         (vec!["South".into(), "Space".into(), "W".into()], Some(2))
     );
-    let (controls, gamepad): (Vec<String>, Option<u32>) = simulation.eval("input.bindings('fly')");
+    let (controls, gamepad): (Vec<String>, Option<u32>) =
+        simulation.eval("require('@wingine').input.bindings('fly')");
     assert!(controls.is_empty() && gamepad.is_none());
 
     // Keys, gamepad buttons and mouse buttons, in the order they're pressed.
@@ -214,25 +217,26 @@ fn games_capture_the_mouse_and_read_how_far_it_moved() {
         "mouse_capture",
         &[(
             "main.luau",
-            "input.bind('fire', { 'LeftControl', 'mouseleft' })
-            input.bind('aim', { 'MouseRight' })
+            "local wg = require('@wingine')
+            wg.input.bind('fire', { 'LeftControl', 'mouseleft' })
+            wg.input.bind('aim', { 'MouseRight' })
             moved = {}
             seen = { fires = 0, aimed = 0 }
             function update()
-                if input.key_pressed('Escape') then
-                    input.set_mouse_captured(false)
-                elseif input.mouse_pressed('left') and not input.mouse_captured() then
-                    input.set_mouse_captured(true)
-                elseif input.pressed('fire') then
+                if wg.input.key_pressed('Escape') then
+                    wg.input.set_mouse_captured(false)
+                elseif wg.input.mouse_pressed('left') and not wg.input.mouse_captured() then
+                    wg.input.set_mouse_captured(true)
+                elseif wg.input.pressed('fire') then
                     seen.fires += 1
                 end
-                if input.held('aim') then
+                if wg.input.held('aim') then
                     seen.aimed += 1
                 end
-                seen.strength = input.strength('aim')
-                seen.captured = input.mouse_captured()
-                seen.x, seen.y = input.mouse_position()
-                local x, y = input.mouse_motion()
+                seen.strength = wg.input.strength('aim')
+                seen.captured = wg.input.mouse_captured()
+                seen.x, seen.y = wg.input.mouse_position()
+                local x, y = wg.input.mouse_motion()
                 if x ~= 0 or y ~= 0 then
                     table.insert(moved, { x, y })
                 end
@@ -241,7 +245,7 @@ fn games_capture_the_mouse_and_read_how_far_it_moved() {
     );
     let mut simulation = simulation(&folder);
     assert_eq!(
-        simulation.eval::<Vec<String>>("(input.bindings('fire'))"),
+        simulation.eval::<Vec<String>>("(require('@wingine').input.bindings('fire'))"),
         ["LeftControl", "MouseLeft"]
     );
 
@@ -308,9 +312,10 @@ fn games_cover_the_screen_and_scale_as_they_say() {
             ),
             (
                 "main.luau",
-                "opened = { window.fullscreen(), window.scaling() }
+                "local wg = require('@wingine')
+                opened = { wg.window.fullscreen(), wg.window.scaling() }
                 function draw()
-                    local _, err = pcall(window.set_fullscreen, 'exclusive')
+                    local _, err = pcall(wg.window.set_fullscreen, 'exclusive')
                     drawing = tostring(err)
                 end",
             ),
@@ -321,21 +326,24 @@ fn games_cover_the_screen_and_scale_as_they_say() {
         simulation.eval::<(String, String)>("opened[1], opened[2]"),
         ("borderless".into(), "whole".into())
     );
-    simulation.exec("window.set_fullscreen('exclusive')");
+    simulation.exec("local wg = require('@wingine') wg.window.set_fullscreen('exclusive')");
     assert_eq!(simulation.context().fullscreen(), Fullscreen::Exclusive);
     assert_eq!(
-        simulation.eval::<String>("window.fullscreen()"),
+        simulation.eval::<String>("require('@wingine').window.fullscreen()"),
         "exclusive"
     );
-    simulation.exec("window.set_fullscreen(nil)");
+    simulation.exec("local wg = require('@wingine') wg.window.set_fullscreen(nil)");
     assert_eq!(simulation.context().fullscreen(), Fullscreen::Off);
-    assert!(simulation.eval::<bool>("window.fullscreen() == nil"));
-    simulation.exec("window.set_fullscreen('borderless') window.set_fullscreen(false)");
+    assert!(simulation.eval::<bool>("require('@wingine').window.fullscreen() == nil"));
+    simulation.exec("local wg = require('@wingine') wg.window.set_fullscreen('borderless') wg.window.set_fullscreen(false)");
     assert_eq!(simulation.context().fullscreen(), Fullscreen::Off);
 
-    simulation.exec("window.set_scaling('fit')");
+    simulation.exec("local wg = require('@wingine') wg.window.set_scaling('fit')");
     assert_eq!(simulation.context().scaling(), Scaling::Fit);
-    assert_eq!(simulation.eval::<String>("window.scaling()"), "fit");
+    assert_eq!(
+        simulation.eval::<String>("require('@wingine').window.scaling()"),
+        "fit"
+    );
 
     // Not while the game draws, and only as there are.
     simulation.step();
@@ -343,7 +351,7 @@ fn games_cover_the_screen_and_scale_as_they_say() {
     assert!(drawing.contains("not in `draw`"), "{drawing}");
     assert_eq!(simulation.context().fullscreen(), Fullscreen::Off);
     let err = simulation
-        .try_exec("window.set_scaling('smooth')")
+        .try_exec("local wg = require('@wingine') wg.window.set_scaling('smooth')")
         .unwrap_err()
         .to_string();
     assert!(
@@ -351,7 +359,7 @@ fn games_cover_the_screen_and_scale_as_they_say() {
         "{err}"
     );
     let err = simulation
-        .try_exec("window.set_fullscreen('windowed')")
+        .try_exec("local wg = require('@wingine') wg.window.set_fullscreen('windowed')")
         .unwrap_err()
         .to_string();
     assert!(
@@ -366,15 +374,16 @@ fn scripts_see_the_stats_of_the_frame_before() {
         "frame_stats",
         &[(
             "main.luau",
-            "loading = graphics.frame_stats()
+            "local wg = require('@wingine')
+            loading = wg.graphics.frame_stats()
             seen = {}
             function update()
-                table.insert(seen, graphics.frame_stats())
+                table.insert(seen, wg.graphics.frame_stats())
             end
             function draw()
-                drawing = graphics.frame_stats()
-                graphics.fill_rect(0, 0, 1, 1, '#ffffff')
-                graphics.fill_rect(1, 1, 1, 1, '#ffffff')
+                drawing = wg.graphics.frame_stats()
+                wg.graphics.fill_rect(0, 0, 1, 1, '#ffffff')
+                wg.graphics.fill_rect(1, 1, 1, 1, '#ffffff')
             end",
         )],
     );
@@ -399,11 +408,12 @@ fn frames_without_updates_draw_with_the_stats_of_the_frame_before() {
             ("conf.luau", "return { update_rate = 30 }"),
             (
                 "main.luau",
-                "seen = {}
+                "local wg = require('@wingine')
+                seen = {}
                 function draw()
-                    table.insert(seen, graphics.frame_stats().quads)
+                    table.insert(seen, wg.graphics.frame_stats().quads)
                     for _ = 1, #seen do
-                        graphics.fill_rect(0, 0, 1, 1, '#ffffff')
+                        wg.graphics.fill_rect(0, 0, 1, 1, '#ffffff')
                     end
                 end",
             ),
@@ -527,27 +537,28 @@ fn update_and_tasks_run_each_frame_and_draw_draws() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "frames = 0
+                "local wg = require('@wingine')
+                frames = 0
                 ticks = 0
                 jumped = false
-                input.bind('jump', { 'Space' })
-                spawn(function()
+                wg.input.bind('jump', { 'Space' })
+                wg.spawn(function()
                     while true do
                         ticks += 1
-                        wait()
+                        wg.wait()
                     end
                 end)
 
                 function update(dt)
                     frames += 1
-                    if input.pressed('jump') then
+                    if wg.input.pressed('jump') then
                         jumped = true
                     end
                 end
 
                 function draw()
-                    graphics.clear('#ff0000')
-                    graphics.fill_rect(0, 0, 10, 10, { r = 0, g = 0, b = 1 })
+                    wg.graphics.clear('#ff0000')
+                    wg.graphics.fill_rect(0, 0, 10, 10, { r = 0, g = 0, b = 1 })
                 end",
             ),
         ],
@@ -575,13 +586,14 @@ fn tasks_started_in_update_resume_on_the_next_frame() {
         "spawn_in_update",
         &[(
             "main.luau",
-            "frames = 0
+            "local wg = require('@wingine')
+            frames = 0
             resumed_on = nil
             function update()
                 frames += 1
                 if frames == 2 then
-                    spawn(function()
-                        wait()
+                    wg.spawn(function()
+                        wg.wait()
                         resumed_on = frames
                     end)
                 end
@@ -601,11 +613,12 @@ fn a_task_failing_as_it_starts_does_not_stop_the_game() {
         "spawn_failing",
         &[(
             "main.luau",
-            "frames = 0
+            "local wg = require('@wingine')
+            frames = 0
             function update()
                 frames += 1
                 if frames == 1 then
-                    spawn(function() error('lost the map') end)
+                    wg.spawn(function() error('lost the map') end)
                 end
             end",
         )],
@@ -654,7 +667,7 @@ fn drawing_only_works_in_draw() {
         "drawing_in_update",
         &[(
             "main.luau",
-            "function update() graphics.fill_rect(0, 0, 1, 1, '#ffffff') end",
+            "local wg = require('@wingine') function update() wg.graphics.fill_rect(0, 0, 1, 1, '#ffffff') end",
         )],
     );
     let mut simulation = simulation(&folder);
@@ -667,7 +680,10 @@ fn drawing_only_works_in_draw() {
 fn input_and_audio_do_not_work_in_draw() {
     let folder = game(
         "input_in_draw",
-        &[("main.luau", "function draw() input.held('jump') end")],
+        &[(
+            "main.luau",
+            "local wg = require('@wingine') function draw() wg.input.held('jump') end",
+        )],
     );
     let mut simulation = simulation(&folder);
     simulation.step();
@@ -681,10 +697,11 @@ fn scripts_quit_the_game() {
         "quitting",
         &[(
             "main.luau",
-            "input.bind('quit', { 'Escape' })
+            "local wg = require('@wingine')
+            wg.input.bind('quit', { 'Escape' })
             function update()
-                if input.pressed('quit') then
-                    window.quit()
+                if wg.input.pressed('quit') then
+                    wg.window.quit()
                 end
             end",
         )],
@@ -698,7 +715,10 @@ fn scripts_quit_the_game() {
     // The window closes after the frame has drawn, so quitting while drawing would be too late.
     let folder = game(
         "quitting_in_draw",
-        &[("main.luau", "function draw() window.quit() end")],
+        &[(
+            "main.luau",
+            "local wg = require('@wingine') function draw() wg.window.quit() end",
+        )],
     );
     let mut drawing = simulation(&folder);
     drawing.step();
@@ -716,21 +736,22 @@ fn close_requested_decides_whether_the_window_closes() {
         "closing_asked",
         &[(
             "main.luau",
-            "asked = 0
+            "local wg = require('@wingine')
+            asked = 0
             willing = false
-            input.bind('yes', { 'Y' })
+            wg.input.bind('yes', { 'Y' })
             function close_requested()
                 asked += 1
                 -- What's lent to `update` is lent here too.
-                input.held('yes')
+                wg.input.held('yes')
                 if willing then
                     return nil
                 end
                 return false
             end
             function update()
-                if asked > 0 and input.pressed('yes') then
-                    window.quit()
+                if asked > 0 and wg.input.pressed('yes') then
+                    wg.window.quit()
                 end
             end",
         )],
@@ -769,8 +790,9 @@ fn scripts_require_modules_relative_to_themselves() {
             ),
             (
                 "lib/numbers.luau",
-                "-- Modules see the engine's tables too.
-                input.bind('confirm', { 'Enter' })
+                "local wg = require('@wingine')
+                -- Modules see the engine's tables too.
+                wg.input.bind('confirm', { 'Enter' })
                 return { double = function(n) return n * 2 end }",
             ),
         ],
@@ -813,11 +835,11 @@ fn tests_run_luau_in_the_game_between_frames() {
     assert_eq!(simulation.eval::<u32>("require('./lib/counter').count"), 13);
 
     // It's lent the context, so the engine's functions work in it.
-    simulation.exec("input.bind('jump', { 'Space' })");
+    simulation.exec("local wg = require('@wingine') wg.input.bind('jump', { 'Space' })");
     simulation.key_down(Key::Space);
-    assert!(simulation.eval::<bool>("input.held('jump')"));
+    assert!(simulation.eval::<bool>("require('@wingine').input.held('jump')"));
     assert_eq!(
-        simulation.eval::<(f32, f32)>("graphics.size()"),
+        simulation.eval::<(f32, f32)>("require('@wingine').graphics.size()"),
         (1280.0, 720.0)
     );
 
@@ -827,7 +849,7 @@ fn tests_run_luau_in_the_game_between_frames() {
         .unwrap_err();
     assert!(err.to_string().contains("test:2:"), "{err}");
     let err = simulation
-        .try_exec("graphics.clear('#000000')")
+        .try_exec("local wg = require('@wingine') wg.graphics.clear('#000000')")
         .unwrap_err();
     assert!(err.to_string().contains("only works in `draw`"), "{err}");
     simulation.step();
@@ -840,14 +862,15 @@ fn held_keys_repeat_for_scripts() {
         "key_repeat",
         &[(
             "main.luau",
-            "input.bind('east', { 'L', 'DPadRight' })
+            "local wg = require('@wingine')
+            wg.input.bind('east', { 'L', 'DPadRight' })
             steps = 0
             repeats = 0
             function update()
-                if input.pressed('east') or input.repeated('east') then
+                if wg.input.pressed('east') or wg.input.repeated('east') then
                     steps += 1
                 end
-                if input.key_repeated('L') then
+                if wg.input.key_repeated('L') then
                     repeats += 1
                 end
             end",
@@ -871,13 +894,14 @@ fn scripts_read_what_is_typed() {
         "typed",
         &[(
             "main.luau",
-            "typed = ''
+            "local wg = require('@wingine')
+            typed = ''
             composing = ''
             function update()
-                typed ..= input.text()
-                composing = input.composition()
-                if input.key_pressed('Tab') then
-                    input.set_input_method({ x = 2, y = 2, width = 40, height = 10 })
+                typed ..= wg.input.text()
+                composing = wg.input.composition()
+                if wg.input.key_pressed('Tab') then
+                    wg.input.set_input_method({ x = 2, y = 2, width = 40, height = 10 })
                 end
             end",
         )],
@@ -906,28 +930,29 @@ fn gamepads_are_read_by_number_and_through_actions() {
         "gamepads",
         &[(
             "main.luau",
-            "input.bind('jump', { 'Space', 'South' })
-            input.bind('p2_jump', { 'South' }, 2)
-            input.bind('left', { 'A', 'LeftStickLeft' })
-            input.bind('right', { 'D', 'LeftStickRight' })
-            input.bind('shield', { 'RightTrigger' })
-            local _, err = pcall(input.bind, 'dodge', { 'Shift' })
+            "local wg = require('@wingine')
+            wg.input.bind('jump', { 'Space', 'South' })
+            wg.input.bind('p2_jump', { 'South' }, 2)
+            wg.input.bind('left', { 'A', 'LeftStickLeft' })
+            wg.input.bind('right', { 'D', 'LeftStickRight' })
+            wg.input.bind('shield', { 'RightTrigger' })
+            local _, err = pcall(wg.input.bind, 'dodge', { 'Shift' })
             bind_error = tostring(err)
             seen = nil
             function update()
                 seen = {
-                    gamepads = input.gamepads(),
-                    name = input.gamepad_name(1),
-                    unknown = input.gamepad_name(3),
-                    jump = input.pressed('jump'),
-                    p2_jump = input.held('p2_jump'),
-                    axis = input.axis('left', 'right'),
-                    shield = input.strength('shield'),
-                    shield_held = input.held('shield'),
-                    south_on_1 = input.button_pressed('South', 1),
-                    south_on_2 = input.button_held('South', 2),
-                    south_released = input.button_released('South'),
-                    trigger = input.button_strength('rightTrigger'),
+                    gamepads = wg.input.gamepads(),
+                    name = wg.input.gamepad_name(1),
+                    unknown = wg.input.gamepad_name(3),
+                    jump = wg.input.pressed('jump'),
+                    p2_jump = wg.input.held('p2_jump'),
+                    axis = wg.input.axis('left', 'right'),
+                    shield = wg.input.strength('shield'),
+                    shield_held = wg.input.held('shield'),
+                    south_on_1 = wg.input.button_pressed('South', 1),
+                    south_on_2 = wg.input.button_held('South', 2),
+                    south_released = wg.input.button_released('South'),
+                    trigger = wg.input.button_strength('rightTrigger'),
                 }
             end",
         )],
@@ -974,15 +999,15 @@ fn gamepads_are_read_by_number_and_through_actions() {
     assert_eq!(simulation.eval::<f64>("seen.axis"), 0.0);
 }
 
-/// The fields of the table `name` declares in the definitions file, a line each.
+/// The fields of the table type `name` the definitions file exports, a line each.
 fn declared_fields(name: &str) -> Vec<String> {
-    let start = format!("\ndeclare {name}: {{\n");
+    let start = format!("\nexport type {name} = {{\n");
     // As checked out, which may have turned line endings into CRLF.
     let definitions = runtime::DEFINITIONS.replace("\r\n", "\n");
     let block = definitions
         .split_once(&start)
         .and_then(|(_, rest)| rest.split_once("\n}"))
-        .unwrap_or_else(|| panic!("the definitions declare `{name}`"))
+        .unwrap_or_else(|| panic!("the definitions export `{name}`"))
         .0;
     let mut fields: Vec<String> = block
         .lines()
@@ -1001,37 +1026,107 @@ fn the_definitions_declare_every_function_of_the_engine() {
         "definitions",
         &[(
             "main.luau",
-            "local tables = { graphics = graphics, input = input, audio = audio,
-                tilemap = tilemap, grid = grid, physics = physics, scene = scene, save = save,
-                exact = exact, rect = rect, window = window, ui = ui }
-            names = {}
-            for table_name, functions in tables do
+            "local wg = require('@wingine')
+            local function names_of(t)
                 local found = {}
-                for name in functions do
+                for name in t do
                     table.insert(found, name)
                 end
                 table.sort(found)
-                names[table_name] = found
+                return found
+            end
+            api = names_of(wg)
+            names = {}
+            kinds = {}
+            for name, value in wg do
+                kinds[name] = type(value)
+                if type(value) == 'table' then
+                    names[name] = names_of(value)
+                end
             end",
         )],
     );
     let mut simulation = simulation(&folder);
+    assert_eq!(
+        declared_fields("Wingine"),
+        simulation.eval::<Vec<String>>("api"),
+        "what `require('@wingine')` holds"
+    );
     let tables = [
-        "graphics", "input", "audio", "tilemap", "grid", "physics", "scene", "save", "exact",
-        "rect", "window", "ui",
+        ("graphics", "GraphicsApi"),
+        ("input", "InputApi"),
+        ("audio", "AudioApi"),
+        ("tilemap", "TilemapApi"),
+        ("grid", "GridApi"),
+        ("physics", "PhysicsApi"),
+        ("scene", "SceneApi"),
+        ("save", "SaveApi"),
+        ("exact", "ExactApi"),
+        ("rect", "RectApi"),
+        ("window", "WindowApi"),
+        ("ui", "UiApi"),
     ];
-    for table in tables {
+    for (table, declared) in tables {
         let functions: Vec<String> = simulation.eval(&format!("names.{table}"));
-        assert_eq!(declared_fields(table), functions, "the fields of `{table}`");
+        assert_eq!(
+            declared_fields(declared),
+            functions,
+            "the fields of `{table}`"
+        );
     }
     for built_in in ["spawn", "wait", "wait_until", "approach"] {
         assert_eq!(
-            simulation.eval::<String>(&format!("type({built_in})")),
+            simulation.eval::<String>(&format!("kinds.{built_in}")),
             "function"
         );
-        let declared = format!("\ndeclare function {built_in}");
-        assert!(runtime::DEFINITIONS.contains(&declared), "{built_in}");
     }
+}
+
+#[test]
+fn the_api_is_a_module_and_not_globals() {
+    let folder = game(
+        "api_module",
+        &[
+            (
+                "main.luau",
+                "local wg = require('@wingine')
+                local hud = require('./hud')
+                same = hud.wg == wg and require('@WINGINE') == wg
+                frozen = table.isfrozen(wg) and table.isfrozen(wg.exact) and table.isfrozen(wg.rect)
+                changed = pcall(function() wg.graphics = nil end)
+                globals = {}
+                for _, name in { 'graphics', 'input', 'exact', 'rect', 'approach', 'wait', 'spawn' } do
+                    if _G[name] ~= nil then
+                        table.insert(globals, name)
+                    end
+                end
+                nested = select(2, pcall(require, '@wingine/graphics'))",
+            ),
+            ("hud.luau", "return { wg = require('@wingine') }"),
+            // An alias of the same name, as a game gives its language server, isn't followed.
+            (".luaurc", r#"{ "aliases": { "wingine": "./types" } }"#),
+            ("types.luau", "error('the alias was followed')"),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    assert!(
+        simulation.eval::<bool>("same"),
+        "every script gets the same table"
+    );
+    assert!(simulation.eval::<bool>("frozen"));
+    assert!(!simulation.eval::<bool>("changed"));
+    assert_eq!(
+        simulation.eval::<Vec<String>>("globals"),
+        Vec::<String>::new(),
+        "the API isn't in the globals"
+    );
+    let nested: String = simulation.eval("nested");
+    assert!(nested.contains("@wingine/graphics"), "{nested}");
+    assert_eq!(
+        simulation.eval::<f64>("require('@wingine').approach(0, 1, 0.25)"),
+        0.25,
+        "and a chunk of its own requires it too"
+    );
 }
 
 /// What `library`, `exact` or `math`, gives for a spread of arguments to each of its functions,
@@ -1071,9 +1166,10 @@ fn exact_math_gives_the_same_bits_on_every_platform() {
     // CI checks it on Windows and Linux. `math`'s comes out differently on each, from their C
     // libraries.
     assert_eq!(
-        math_fingerprint(&mut simulation, "exact"),
+        math_fingerprint(&mut simulation, "require('@wingine').exact"),
         0x0c4f_400f_fe58_5058
     );
+    simulation.exec("exact = require('@wingine').exact");
     assert_eq!(
         simulation.eval::<(f64, f64, f64)>("exact.sin(0), exact.cos(0), exact.log(8, 2)"),
         (0.0, 1.0, 3.0)
@@ -1084,7 +1180,10 @@ fn exact_math_gives_the_same_bits_on_every_platform() {
 fn saves_last_after_the_game_ends() {
     let folder = game(
         "saves",
-        &[("main.luau", "progress = save.read('progress')")],
+        &[(
+            "main.luau",
+            "local wg = require('@wingine') progress = wg.save.read('progress')",
+        )],
     );
     let mut config = runtime::config(&folder).unwrap();
     let saves = folder.join("saves");
@@ -1098,9 +1197,14 @@ fn saves_last_after_the_game_ends() {
 
     let mut first = start();
     assert!(first.eval::<bool>("progress == nil"));
-    assert!(first.eval::<Vec<String>>("save.list()").is_empty());
+    assert!(
+        first
+            .eval::<Vec<String>>("require('@wingine').save.list()")
+            .is_empty()
+    );
     first.exec(
-        "save.write('progress', {
+        "local wg = require('@wingine')
+            wg.save.write('progress', {
             stage = 'hunt',
             coins = 12.5,
             items = { 'herb', 'tonic' },
@@ -1109,9 +1213,9 @@ fn saves_last_after_the_game_ends() {
             ['found places'] = {},
         })",
     );
-    first.exec("save.write('best', 900)");
+    first.exec("local wg = require('@wingine') wg.save.write('best', 900)");
     assert_eq!(
-        first.eval::<Vec<String>>("save.list()"),
+        first.eval::<Vec<String>>("require('@wingine').save.list()"),
         ["best", "progress"]
     );
     drop(first);
@@ -1131,11 +1235,17 @@ fn saves_last_after_the_game_ends() {
         ("hunt".into(), 12.5, "tonic".into(), "staff".into(), false)
     );
     assert!(second.eval::<bool>("next(progress['found places']) == nil"));
-    assert_eq!(second.eval::<u32>("save.read('best')"), 900);
-    second.exec("save.remove('best')");
-    second.exec("save.remove('never_saved')");
-    assert_eq!(second.eval::<Vec<String>>("save.list()"), ["progress"]);
-    assert!(second.eval::<bool>("save.read('best') == nil"));
+    assert_eq!(
+        second.eval::<u32>("require('@wingine').save.read('best')"),
+        900
+    );
+    second.exec("local wg = require('@wingine') wg.save.remove('best')");
+    second.exec("local wg = require('@wingine') wg.save.remove('never_saved')");
+    assert_eq!(
+        second.eval::<Vec<String>>("require('@wingine').save.list()"),
+        ["progress"]
+    );
+    assert!(second.eval::<bool>("require('@wingine').save.read('best') == nil"));
 }
 
 #[test]
@@ -1144,35 +1254,54 @@ fn only_plain_data_can_be_saved() {
     let mut simulation = simulation(&folder);
     for (code, message) in [
         (
-            "save.write('slot', function() end)",
+            "local wg = require('@wingine') wg.save.write('slot', function() end)",
             "save `slot`: the data is a function",
         ),
         (
-            "save.write('slot', { levels = { village = { f = print } } })",
+            "local wg = require('@wingine') wg.save.write('slot', { levels = { village = { f = print } } })",
             "`levels.village.f` is a function",
         ),
-        ("save.write('slot', nil)", "the data is nil"),
-        ("save.write('slot', 0 / 0)", "must be a finite number"),
-        ("save.write('slot', { 1, nil, 3 })", "but not 1, 2, 3"),
         (
-            "save.write('slot', { 1, a = 2 })",
+            "local wg = require('@wingine') wg.save.write('slot', nil)",
+            "the data is nil",
+        ),
+        (
+            "local wg = require('@wingine') wg.save.write('slot', 0 / 0)",
+            "must be a finite number",
+        ),
+        (
+            "local wg = require('@wingine') wg.save.write('slot', { 1, nil, 3 })",
+            "but not 1, 2, 3",
+        ),
+        (
+            "local wg = require('@wingine') wg.save.write('slot', { 1, a = 2 })",
             "both strings and numbers",
         ),
-        ("local t = {} t.t = t save.write('slot', t)", "too deep"),
         (
-            "save.write('../slot', 1)",
+            "local wg = require('@wingine') local t = {} t.t = t wg.save.write('slot', t)",
+            "too deep",
+        ),
+        (
+            "local wg = require('@wingine') wg.save.write('../slot', 1)",
             "save `../slot`: not a save's name: use only letters",
         ),
-        ("save.read('slot 2')", "use only letters"),
         (
-            "save.write('COM1', 1)",
+            "local wg = require('@wingine') wg.save.read('slot 2')",
+            "use only letters",
+        ),
+        (
+            "local wg = require('@wingine') wg.save.write('COM1', 1)",
             "save `COM1`: not a save's name: Windows keeps that name for a device",
         ),
     ] {
         let err = simulation.try_exec(code).unwrap_err().to_string();
         assert!(err.contains(message), "`{code}`: {err}");
     }
-    assert!(simulation.eval::<Vec<String>>("save.list()").is_empty());
+    assert!(
+        simulation
+            .eval::<Vec<String>>("require('@wingine').save.list()")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -1180,8 +1309,8 @@ fn simulations_keep_saves_of_their_own() {
     let folder = game("own_saves", &[("main.luau", "")]);
     let mut first = simulation(&folder);
     let mut second = simulation(&folder);
-    first.exec("save.write('slot', 1)");
-    assert!(second.eval::<bool>("save.read('slot') == nil"));
+    first.exec("local wg = require('@wingine') wg.save.write('slot', 1)");
+    assert!(second.eval::<bool>("require('@wingine').save.read('slot') == nil"));
     let saves = first.context().saves().folder().unwrap().to_owned();
     assert!(saves.join("slot.luau").is_file());
     drop(first);
@@ -1194,11 +1323,12 @@ fn sounds_load_from_the_game_folder() {
         "sounds",
         &[(
             "main.luau",
-            "local blip = audio.load('sounds/blip.wav')
+            "local wg = require('@wingine')
+            local blip = wg.audio.load('sounds/blip.wav')
             length = blip:duration()
             function update()
-                if input.key_pressed('Space') then
-                    audio.play(blip, { volume = 0.5 })
+                if wg.input.key_pressed('Space') then
+                    wg.audio.play(blip, { volume = 0.5 })
                 end
             end",
         )],
@@ -1220,7 +1350,8 @@ fn sounds_are_made_of_a_buffers_samples() {
         "made_sounds",
         &[(
             "main.luau",
-            "local function samples(count: number): buffer
+            "local wg = require('@wingine')
+                local function samples(count: number): buffer
                 local made = buffer.create(count * 4)
                 for i = 0, count - 1 do
                     buffer.writef32(made, i * 4, math.sin(i * 0.2))
@@ -1228,15 +1359,15 @@ fn sounds_are_made_of_a_buffers_samples() {
                 return made
             end
             -- Half a second of one channel, and a quarter of a second of two.
-            tone = audio.make(samples(4000), 8000)
-            wide = audio.make(samples(4000), 8000, 2)
+            tone = wg.audio.make(samples(4000), 8000)
+            wide = wg.audio.make(samples(4000), 8000, 2)
             function update()
-                if input.key_pressed('Space') then
-                    audio.play(tone, { speed = 2 })
+                if wg.input.key_pressed('Space') then
+                    wg.audio.play(tone, { speed = 2 })
                 end
             end
             function fails(samples: buffer, rate: number, channels: number?): string
-                local ok, err = pcall(audio.make, samples, rate, channels)
+                local ok, err = pcall(wg.audio.make, samples, rate, channels)
                 return if ok then 'made' else tostring(err)
             end",
         )],
@@ -1271,7 +1402,10 @@ fn sounds_are_made_of_a_buffers_samples() {
 fn voices_change_pause_and_stop_the_sounds_they_play() {
     let folder = game(
         "voices",
-        &[("main.luau", "blip = audio.load('sounds/blip.wav')")],
+        &[(
+            "main.luau",
+            "local wg = require('@wingine') blip = wg.audio.load('sounds/blip.wav')",
+        )],
     );
     let sounds = folder.join("sounds");
     fs::create_dir_all(&sounds).unwrap();
@@ -1283,18 +1417,20 @@ fn voices_change_pause_and_stop_the_sounds_they_play() {
     };
 
     simulation.exec(
-        "hum = audio.play(blip, { looping = true, fade_in = 0.1 })
-        once = audio.play(blip)",
+        "local wg = require('@wingine')
+        hum = wg.audio.play(blip, { looping = true, fade_in = 0.1 })
+        once = wg.audio.play(blip)",
     );
     simulation.run_for(0.5);
     assert!(simulation.eval::<bool>("hum:is_playing() and not once:is_playing()"));
     assert_eq!(playing(&mut simulation), 1, "the blip loops");
     simulation.exec("hum:set_volume(0.5, 0.1) hum:set_speed(2) hum:set_pan(-1, 0.2)");
 
-    simulation.exec("audio.pause_sounds() later = audio.play(blip)");
+    simulation
+        .exec("local wg = require('@wingine') wg.audio.pause_sounds() later = wg.audio.play(blip)");
     assert!(simulation.eval::<bool>("hum:is_paused() and hum:is_playing()"));
     assert!(simulation.eval::<bool>("not later:is_paused()"));
-    simulation.exec("audio.resume_sounds(0.1)");
+    simulation.exec("local wg = require('@wingine') wg.audio.resume_sounds(0.1)");
     assert!(simulation.eval::<bool>("not hum:is_paused()"));
     simulation.exec("hum:pause(0.1)");
     assert!(simulation.eval::<bool>("hum:is_paused()"));
@@ -1314,11 +1450,20 @@ fn voices_change_pause_and_stop_the_sounds_they_play() {
         ("hum:set_volume(0/0)", "volume must be a number"),
         ("hum:set_pan(math.huge)", "pan must be a number"),
         ("hum:set_pan('left')", "number"),
-        ("audio.play(blip, { looping = true, speed = -1 })", "speed"),
-        ("audio.set_volume(math.huge)", "volume must be a number"),
-        ("audio.set_sound_volume(0/0)", "volume must be a number"),
         (
-            "audio.set_music_volume(-math.huge)",
+            "local wg = require('@wingine') wg.audio.play(blip, { looping = true, speed = -1 })",
+            "speed",
+        ),
+        (
+            "local wg = require('@wingine') wg.audio.set_volume(math.huge)",
+            "volume must be a number",
+        ),
+        (
+            "local wg = require('@wingine') wg.audio.set_sound_volume(0/0)",
+            "volume must be a number",
+        ),
+        (
+            "local wg = require('@wingine') wg.audio.set_music_volume(-math.huge)",
             "volume must be a number",
         ),
     ] {
@@ -1333,7 +1478,8 @@ fn fonts_measure_and_scale() {
         "fonts",
         &[(
             "main.luau",
-            "local font = graphics.default_font()
+            "local wg = require('@wingine')
+            local font = wg.graphics.default_font()
             width, height = font:measure('Hi')
             big_width = font:scaled(2):measure('Hi')
             line_height = font:line_height()
@@ -1380,18 +1526,19 @@ fn bitmap_fonts_load_from_font_files_and_draw() {
             ),
             (
                 "main.luau",
-                "local font = graphics.load_font('ab.font.luau')
+                "local wg = require('@wingine')
+                local font = wg.graphics.load_font('ab.font.luau')
                 width, height = font:measure('ab a')
                 line_height = font:line_height()
                 big_width = font:scaled(2):measure('ab a')
-                local label = scene.load('label.scene.luau'):find('label')
+                local label = wg.scene.load('label.scene.luau'):find('label')
                 label_width, label_height = label:size()
 
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.draw_text(font, 'ab a', 1, 1, '#ffffff')
+                    wg.graphics.clear('#000000')
+                    wg.graphics.draw_text(font, 'ab a', 1, 1, '#ffffff')
                     -- What the font lacks draws as nothing, without a `?`.
-                    graphics.draw_text(font, 'zz', 1, 10, '#ffffff')
+                    wg.graphics.draw_text(font, 'zz', 1, 10, '#ffffff')
                 end",
             ),
         ],
@@ -1442,11 +1589,12 @@ fn truetype_fonts_load_at_a_size_and_scale_sharply() {
             ),
             (
                 "main.luau",
-                "local font = graphics.load_font('Hack-Regular.ttf', { size = 13 })
-                local crisp = graphics.load_font('hack.font.luau')
+                "local wg = require('@wingine')
+                local font = wg.graphics.load_font('Hack-Regular.ttf', { size = 13 })
+                local crisp = wg.graphics.load_font('hack.font.luau')
                 line_height = font:line_height()
                 scaled_line_height = font:scaled(2):line_height()
-                loaded_line_height = graphics.load_font('Hack-Regular.ttf', { size = 26 }):line_height()
+                loaded_line_height = wg.graphics.load_font('Hack-Regular.ttf', { size = 26 }):line_height()
                 width = font:measure('Hello')
                 crisp_width = crisp:measure('Hello')
                 -- Hack has no Chinese, so it draws its `?`.
@@ -1454,9 +1602,9 @@ fn truetype_fonts_load_at_a_size_and_scale_sharply() {
                 question_width = font:measure('?')
 
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.draw_text(font, 'Ωж?a', 0, 0, '#ffffff')
-                    graphics.draw_text(crisp, 'Ωж?a', 0, 20, '#ffffff')
+                    wg.graphics.clear('#000000')
+                    wg.graphics.draw_text(font, 'Ωж?a', 0, 0, '#ffffff')
+                    wg.graphics.draw_text(crisp, 'Ωж?a', 0, 20, '#ffffff')
                 end",
             ),
         ],
@@ -1521,36 +1669,39 @@ fn fonts_that_cannot_load_are_errors() {
     let mut simulation = simulation(&folder);
     for (code, problem) in [
         (
-            "graphics.load_font('Hack-Regular.ttf')",
+            "local wg = require('@wingine') wg.graphics.load_font('Hack-Regular.ttf')",
             "which needs settings",
         ),
         (
-            "graphics.load_font('ab.font.luau', { size = 3 })",
+            "local wg = require('@wingine') wg.graphics.load_font('ab.font.luau', { size = 3 })",
             "holds its own settings",
         ),
         (
-            "graphics.load_font('Hack-Regular.ttf', { size = 0 })",
+            "local wg = require('@wingine') wg.graphics.load_font('Hack-Regular.ttf', { size = 0 })",
             "must be a positive number",
         ),
         (
-            "graphics.load_font('Hack-Regular.ttf', {})",
+            "local wg = require('@wingine') wg.graphics.load_font('Hack-Regular.ttf', {})",
             "have a `size`",
         ),
         (
-            "graphics.load_font('Hack-Regular.ttf', { size = 12, smoth = false })",
+            "local wg = require('@wingine') wg.graphics.load_font('Hack-Regular.ttf', { size = 12, smoth = false })",
             "not `smoth`",
         ),
         (
-            "graphics.load_font('notes.txt', { size = 12 })",
+            "local wg = require('@wingine') wg.graphics.load_font('notes.txt', { size = 12 })",
             "isn't a TrueType or OpenType font",
         ),
-        ("graphics.load_font('no-cell.font.luau')", "has a `cell`"),
         (
-            "graphics.load_font('too-many.font.luau')",
+            "local wg = require('@wingine') wg.graphics.load_font('no-cell.font.luau')",
+            "has a `cell`",
+        ),
+        (
+            "local wg = require('@wingine') wg.graphics.load_font('too-many.font.luau')",
             "`c` would be in column 0 and row 1",
         ),
         (
-            "graphics.load_font('missing.font.luau')",
+            "local wg = require('@wingine') wg.graphics.load_font('missing.font.luau')",
             "missing.font.luau",
         ),
     ] {
@@ -1578,20 +1729,21 @@ fn sprites_load_from_sheets_and_draw() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "local sheet = graphics.load_sprite_sheet('art/sheet.png', 1, 1)
+                "local wg = require('@wingine')
+                local sheet = wg.graphics.load_sprite_sheet('art/sheet.png', 1, 1)
                 columns, rows = sheet:size()
                 local red, blue = sheet:sprite(0, 0), sheet:sprite(1, 0)
                 width, height = blue:size()
                 outside_fails = not pcall(function() sheet:sprite(2, 0) end)
                 empty_tiles_fail = not pcall(function()
-                    graphics.load_sprite_sheet('art/sheet.png', 0, 1)
+                    wg.graphics.load_sprite_sheet('art/sheet.png', 0, 1)
                 end)
 
                 function draw()
-                    graphics.clear('#000000')
+                    wg.graphics.clear('#000000')
                     -- Stretched, then at its own size, mirrored and tinted.
-                    graphics.draw_sprite(blue, 0, 0, nil, 10, 20)
-                    graphics.draw_sprite(red:flipped_x(), 12, 0, '#ffffff')
+                    wg.graphics.draw_sprite(blue, 0, 0, nil, 10, 20)
+                    wg.graphics.draw_sprite(red:flipped_x(), 12, 0, '#ffffff')
                 end",
             ),
         ],
@@ -1621,13 +1773,14 @@ fn sprites_draw_rotated_about_their_centers() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "local sheet = graphics.load_sprite_sheet('sheet.png', 1, 1)
+                "local wg = require('@wingine')
+                local sheet = wg.graphics.load_sprite_sheet('sheet.png', 1, 1)
                 local red, blue = sheet:sprite(0, 0), sheet:sprite(1, 0)
                 function draw()
-                    graphics.clear('#000000')
+                    wg.graphics.clear('#000000')
                     -- 8x2, standing up as 2x8 about its center, (4, 5).
-                    graphics.draw_sprite_rotated(blue, 0, 4, math.pi / 2, nil, 8, 2)
-                    graphics.draw_sprite_rotated(red, 12, 0, 0, '#ffffff')
+                    wg.graphics.draw_sprite_rotated(blue, 0, 4, math.pi / 2, nil, 8, 2)
+                    wg.graphics.draw_sprite_rotated(red, 12, 0, 0, '#ffffff')
                 end",
             ),
         ],
@@ -1653,11 +1806,12 @@ fn colors_can_be_made_numbers() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "hex = graphics.color('#ff804080')
-                table = graphics.color({ r = 0, g = 0, b = 1 })
+                "local wg = require('@wingine')
+                hex = wg.graphics.color('#ff804080')
+                table = wg.graphics.color({ r = 0, g = 0, b = 1 })
                 function draw()
-                    graphics.clear(0x000000ff)
-                    graphics.fill_rect(0, 0, 1, 1, table)
+                    wg.graphics.clear(0x000000ff)
+                    wg.graphics.fill_rect(0, 0, 1, 1, table)
                 end",
             ),
         ],
@@ -1677,7 +1831,8 @@ fn colors_can_be_made_numbers() {
         ("0x12345678, 1", 0x12345678),
     ];
     for (arguments, color) in faded {
-        let found = simulation.eval::<u32>(&format!("graphics.color({arguments})"));
+        let found =
+            simulation.eval::<u32>(&format!("require('@wingine').graphics.color({arguments})"));
         assert_eq!(found, color, "{arguments}: {found:08x}");
     }
     simulation.step();
@@ -1694,13 +1849,14 @@ fn animations_show_their_frames_in_turn() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "local sheet = graphics.load_sprite_sheet('sheet.png', 1, 1)
+                "local wg = require('@wingine')
+                local sheet = wg.graphics.load_sprite_sheet('sheet.png', 1, 1)
                 local red, blue = sheet:sprite(0, 0), sheet:sprite(1, 0)
-                blink = graphics.new_animation({ red, blue, red }, 0.25)
+                blink = wg.graphics.new_animation({ red, blue, red }, 0.25)
                 once = blink:once()
                 mirrored = blink:flipped_x():flipped_y()
-                no_frames_fail = not pcall(graphics.new_animation, {}, 0.25)
-                no_time_fails = not pcall(graphics.new_animation, { red }, 0)
+                no_frames_fail = not pcall(wg.graphics.new_animation, {}, 0.25)
+                no_time_fails = not pcall(wg.graphics.new_animation, { red }, 0)
                 local time = 0
 
                 function update(dt)
@@ -1708,7 +1864,7 @@ fn animations_show_their_frames_in_turn() {
                 end
 
                 function draw()
-                    graphics.draw_sprite(blink:frame(time), 0, 0)
+                    wg.graphics.draw_sprite(blink:frame(time), 0, 0)
                 end",
             ),
         ],
@@ -1745,7 +1901,7 @@ fn sprite_sheets_only_load_while_the_game_loads_or_updates() {
         "sprites_in_draw",
         &[(
             "main.luau",
-            "function draw() graphics.load_sprite_sheet('sheet.png', 1, 1) end",
+            "local wg = require('@wingine') function draw() wg.graphics.load_sprite_sheet('sheet.png', 1, 1) end",
         )],
     );
     let mut simulation = simulation(&folder);
@@ -1783,8 +1939,9 @@ fn scenes_load_and_their_nodes_are_found() {
             ("room.scene.luau", ROOM),
             (
                 "main.luau",
-                "room = scene.load('room.scene.luau')
-                again = scene.load('room.scene.luau')
+                "local wg = require('@wingine')
+                room = wg.scene.load('room.scene.luau')
+                again = wg.scene.load('room.scene.luau')
                 hand = room:find('arm/hand')",
             ),
         ],
@@ -1832,11 +1989,12 @@ fn scenes_draw_and_change() {
             ("room.scene.luau", ROOM),
             (
                 "main.luau",
-                "room = scene.load('room.scene.luau')
-                red = graphics.load_sprite_sheet('sheet.png', 1, 1):sprite(0, 0)
+                "local wg = require('@wingine')
+                room = wg.scene.load('room.scene.luau')
+                red = wg.graphics.load_sprite_sheet('sheet.png', 1, 1):sprite(0, 0)
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.draw_scene(room)
+                    wg.graphics.clear('#000000')
+                    wg.graphics.draw_scene(room)
                 end",
             ),
         ],
@@ -1893,12 +2051,13 @@ fn scenes_lay_out_on_the_canvas() {
             ),
             (
                 "main.luau",
-                "screen = scene.load('screen.scene.luau')
+                "local wg = require('@wingine')
+                screen = wg.scene.load('screen.scene.luau')
                 corner = screen:find('corner')
                 label = screen:find('label')
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.draw_scene(screen)
+                    wg.graphics.clear('#000000')
+                    wg.graphics.draw_scene(screen)
                 end",
             ),
         ],
@@ -1972,15 +2131,16 @@ fn menus_pick_among_the_nodes_shown() {
             ),
             (
                 "main.luau",
-                "screen = scene.load('screen.scene.luau')
-                list = ui.menu(screen:find('list'))
-                cells = ui.menu(screen:find('row'), { tag = 'cell', wrap = false, confirm = 'pick' })
-                input.bind('up', { 'Up' })
-                input.bind('down', { 'Down' })
-                input.bind('right', { 'Right' })
-                input.bind('confirm', { 'Z' })
-                input.bind('cancel', { 'X' })
-                input.bind('pick', { 'Space' })
+                "local wg = require('@wingine')
+                screen = wg.scene.load('screen.scene.luau')
+                list = wg.ui.menu(screen:find('list'))
+                cells = wg.ui.menu(screen:find('row'), { tag = 'cell', wrap = false, confirm = 'pick' })
+                wg.input.bind('up', { 'Up' })
+                wg.input.bind('down', { 'Down' })
+                wg.input.bind('right', { 'Right' })
+                wg.input.bind('confirm', { 'Z' })
+                wg.input.bind('cancel', { 'X' })
+                wg.input.bind('pick', { 'Space' })
                 -- What each menu said last, as `what item`.
                 said = {}
                 local function hear(name, happened, item)
@@ -2068,7 +2228,7 @@ fn menus_pick_among_the_nodes_shown() {
     assert_eq!(said(&mut simulation, "cells").as_deref(), Some("picked 2"));
 
     let err = simulation
-        .try_exec("ui.menu(screen, { colour = 'red' })")
+        .try_exec("local wg = require('@wingine') wg.ui.menu(screen, { colour = 'red' })")
         .unwrap_err()
         .to_string();
     assert!(err.contains("not `colour`"), "{err}");
@@ -2088,7 +2248,10 @@ fn scene_nodes_refuse_what_they_do_not_have() {
         "scene_errors",
         &[
             ("room.scene.luau", ROOM),
-            ("main.luau", "room = scene.load('room.scene.luau')"),
+            (
+                "main.luau",
+                "local wg = require('@wingine') room = wg.scene.load('room.scene.luau')",
+            ),
         ],
     );
     write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
@@ -2154,13 +2317,14 @@ fn clips_pose_scene_nodes() {
             ),
             (
                 "main.luau",
-                "puppet = scene.load('puppet.scene.luau')
-                clips = scene.clips('puppet.scene.luau')
+                "local wg = require('@wingine')
+                puppet = wg.scene.load('puppet.scene.luau')
+                clips = wg.scene.clips('puppet.scene.luau')
                 arm = puppet:find('arm')
                 hand = puppet:find('arm/hand')
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.draw_scene(puppet)
+                    wg.graphics.clear('#000000')
+                    wg.graphics.draw_scene(puppet)
                 end",
             ),
         ],
@@ -2215,7 +2379,7 @@ fn clips_pose_scene_nodes() {
         err.contains("node `arm` is a plain node, which has no cell"),
         "{err}"
     );
-    let err = error("scene.clips('missing.scene.luau')");
+    let err = error("local wg = require('@wingine') wg.scene.clips('missing.scene.luau')");
     assert!(err.contains("missing.scene.luau"), "{err}");
 }
 
@@ -2266,12 +2430,13 @@ fn scene_tilemaps_and_instances_work_from_luau() {
             ("people/villager.scene.luau", VILLAGER),
             (
                 "main.luau",
-                "level = scene.load('level.scene.luau')
+                "local wg = require('@wingine')
+                level = wg.scene.load('level.scene.luau')
                 map = level:find('map')
                 walls = level:find('map/walls')
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.draw_scene(level)
+                    wg.graphics.clear('#000000')
+                    wg.graphics.draw_scene(level)
                 end",
             ),
         ],
@@ -2345,13 +2510,14 @@ fn scene_nodes_are_added_and_removed_from_luau() {
             ("room.scene.luau", ROOM),
             (
                 "main.luau",
-                "room = scene.load('room.scene.luau')
-                spare = room:find('floor'):add(scene.load('room.scene.luau'), 'spare')
+                "local wg = require('@wingine')
+                room = wg.scene.load('room.scene.luau')
+                spare = room:find('floor'):add(wg.scene.load('room.scene.luau'), 'spare')
                 hand = room:find('arm/hand')
                 twin = room:add(hand, 'twin')
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.draw_scene(room)
+                    wg.graphics.clear('#000000')
+                    wg.graphics.draw_scene(room)
                 end",
             ),
         ],
@@ -2399,7 +2565,7 @@ fn scenes_only_load_while_the_game_loads_or_updates() {
             ("room.scene.luau", ROOM),
             (
                 "main.luau",
-                "function draw() scene.load('room.scene.luau') end",
+                "local wg = require('@wingine') function draw() wg.scene.load('room.scene.luau') end",
             ),
         ],
     );
@@ -2417,7 +2583,10 @@ fn scene_errors_name_the_file_and_node() {
                 "broken.scene.luau",
                 &ROOM.replace("cell = { 1, 0 }", "cell = { 1, 0 }, colour = 'red'"),
             ),
-            ("main.luau", "scene.load('broken.scene.luau')"),
+            (
+                "main.luau",
+                "local wg = require('@wingine') wg.scene.load('broken.scene.luau')",
+            ),
         ],
     );
     write_png(&folder.join("sheet.png"), 2, 1, &[RED, BLUE]);
@@ -2446,11 +2615,12 @@ fn tilemaps_hold_tiles_in_layers_and_draw_them() {
             ),
             (
                 "main.luau",
-                "local white = graphics.load_sprite_sheet('white.png', 1, 1):sprite(0, 0)
-                local tileset = tilemap.new_tileset(10, 10)
+                "local wg = require('@wingine')
+                local white = wg.graphics.load_sprite_sheet('white.png', 1, 1):sprite(0, 0)
+                local tileset = wg.tilemap.new_tileset(10, 10)
                 local grass = tileset:add({ sprite = white, tint = '#ff0000' })
                 local wall = tileset:add({ sprite = white, tint = '#0000ff', solid = true })
-                map = tilemap.new(tileset, 3, 2)
+                map = wg.tilemap.new(tileset, 3, 2)
                 ground = map:add_layer()
                 walls = map:add_layer()
                 for row = 0, 1 do
@@ -2472,8 +2642,8 @@ fn tilemaps_hold_tiles_in_layers_and_draw_them() {
 
                 only_ground = false
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.draw_tilemap(map, if only_ground then ground else nil)
+                    wg.graphics.clear('#000000')
+                    wg.graphics.draw_tilemap(map, if only_ground then ground else nil)
                 end",
             ),
         ],
@@ -2525,7 +2695,8 @@ fn grid_movers_walk_from_tile_to_tile() {
         "grid_movers",
         &[(
             "main.luau",
-            "local mover = grid.new_mover(2, 2, 0.5)
+            "local wg = require('@wingine')
+            local mover = wg.grid.new_mover(2, 2, 0.5)
             started = mover:step('right')
             column, row = mover:tile()
             mover:update(0.25)
@@ -2542,15 +2713,15 @@ fn grid_movers_walk_from_tile_to_tile() {
                 return true
             end)
             facing = mover:facing()
-            neighbor = { grid.neighbor('left', 0, 0) }
-            opposite = grid.opposite('up')
-            zero_step_time_fails = not pcall(function() grid.new_mover(0, 0, 0) end)
+            neighbor = { wg.grid.neighbor('left', 0, 0) }
+            opposite = wg.grid.opposite('up')
+            zero_step_time_fails = not pcall(function() wg.grid.new_mover(0, 0, 0) end)
             bad_frame_times_fail = not pcall(function() mover:update(0 / 0) end)
                 and not pcall(function() mover:update(-0.1) end)
 
             -- There are no tiles past the edge of the numbers.
-            past_the_edge_fails = not pcall(function() grid.neighbor('right', 2147483647, 0) end)
-            local edge = grid.new_mover(2147483647, 0, 0.5)
+            past_the_edge_fails = not pcall(function() wg.grid.neighbor('right', 2147483647, 0) end)
+            local edge = wg.grid.new_mover(2147483647, 0, 0.5)
             edge_step = edge:step('right', function() edge_asked = true return false end)
             edge_facing = edge:facing()",
         )],
@@ -2584,11 +2755,12 @@ fn tilemaps_too_big_to_hold_are_errors() {
         "huge_tilemaps",
         &[(
             "main.luau",
-            "local tileset = tilemap.new_tileset(1, 1)
-            local ok, err = pcall(function() tilemap.new(tileset, 100000, 100000) end)
+            "local wg = require('@wingine')
+            local tileset = wg.tilemap.new_tileset(1, 1)
+            local ok, err = pcall(function() wg.tilemap.new(tileset, 100000, 100000) end)
             too_big = tostring(err)
             -- One layer of this fits, but not two.
-            local map = tilemap.new(tileset, 4096, 2049)
+            local map = wg.tilemap.new(tileset, 4096, 2049)
             map:add_layer()
             ok, err = pcall(function() map:add_layer() end)
             second_layer = tostring(err)
@@ -2609,12 +2781,13 @@ fn each_image_is_loaded_once() {
         "cached_images",
         &[(
             "main.luau",
-            "graphics.load_sprite_sheet('sheet.png', 1, 1)
+            "local wg = require('@wingine')
+            wg.graphics.load_sprite_sheet('sheet.png', 1, 1)
             function update()
                 if reload then
                     reload = false
                     -- The same image, divided differently.
-                    again = graphics.load_sprite_sheet('sheet.png', 2, 1)
+                    again = wg.graphics.load_sprite_sheet('sheet.png', 2, 1)
                 end
             end",
         )],
@@ -2638,7 +2811,8 @@ fn text_layouts_reveal_their_glyphs() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "local font = graphics.default_font()
+                "local wg = require('@wingine')
+                local font = wg.graphics.default_font()
                 -- Just too narrow for the text on one line.
                 max_width = font:measure('Hi there') - 1
                 layout = font:layout('Hi there', max_width)
@@ -2649,8 +2823,8 @@ fn text_layouts_reveal_their_glyphs() {
                 shown = 0
 
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.draw_text_layout(layout, 0, 0, '#ffffff', shown)
+                    wg.graphics.clear('#000000')
+                    wg.graphics.draw_text_layout(layout, 0, 0, '#ffffff', shown)
                 end",
             ),
         ],
@@ -2683,11 +2857,12 @@ fn the_camera_stays_inside_its_bounds() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "function draw()
-                    graphics.clear('#000000')
+                "local wg = require('@wingine')
+                    function draw()
+                    wg.graphics.clear('#000000')
                     -- Centered on the world's corner, the view would show half off the world.
-                    graphics.set_camera(0, 0, { x = 0, y = 0, width = 40, height = 40 })
-                    graphics.fill_rect(0, 0, 2, 2, '#ff0000')
+                    wg.graphics.set_camera(0, 0, { x = 0, y = 0, width = 40, height = 40 })
+                    wg.graphics.fill_rect(0, 0, 2, 2, '#ff0000')
                 end",
             ),
         ],
@@ -2707,14 +2882,15 @@ fn outlines_lines_and_circles_draw_where_they_are_given() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "function draw()
-                    graphics.clear('#000000')
-                    graphics.outline_rect(0, 0, 10, 10, '#ff0000')
-                    graphics.fill_circle(5, 5, 2, '#0000ff')
-                    graphics.outline_rect(12, 0, 8, 8, '#ff0000', 2)
-                    graphics.outline_circle(16, 4, 2, '#0000ff')
-                    graphics.draw_line(0, 12.5, 20, 12.5, '#0000ff')
-                    graphics.draw_line(0, 16, 20, 16, '#ff0000', 2)
+                "local wg = require('@wingine')
+                    function draw()
+                    wg.graphics.clear('#000000')
+                    wg.graphics.outline_rect(0, 0, 10, 10, '#ff0000')
+                    wg.graphics.fill_circle(5, 5, 2, '#0000ff')
+                    wg.graphics.outline_rect(12, 0, 8, 8, '#ff0000', 2)
+                    wg.graphics.outline_circle(16, 4, 2, '#0000ff')
+                    wg.graphics.draw_line(0, 12.5, 20, 12.5, '#0000ff')
+                    wg.graphics.draw_line(0, 16, 20, 16, '#ff0000', 2)
                 end",
             ),
         ],
@@ -2751,11 +2927,12 @@ fn the_camera_zooms_about_the_middle_of_the_view() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "zoom = 2
+                "local wg = require('@wingine')
+                zoom = 2
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.set_camera(10, 10, nil, zoom)
-                    graphics.fill_rect(10, 10, 2, 2, '#ff0000')
+                    wg.graphics.clear('#000000')
+                    wg.graphics.set_camera(10, 10, nil, zoom)
+                    wg.graphics.fill_rect(10, 10, 2, 2, '#ff0000')
                 end",
             ),
         ],
@@ -2776,7 +2953,8 @@ fn the_camera_zooms_about_the_middle_of_the_view() {
     assert_eq!(image.pixel(11, 11), BLACK);
 
     for zoom in ["0", "-1", "0 / 0", "math.huge"] {
-        let code = format!("graphics.set_camera(0, 0, nil, {zoom})");
+        let code =
+            format!("local wg = require('@wingine') wg.graphics.set_camera(0, 0, nil, {zoom})");
         let err = simulation.try_exec(&code).unwrap_err().to_string();
         assert!(err.contains("zoom must be above 0"), "{zoom}: {err}");
     }
@@ -2790,13 +2968,14 @@ fn blend_modes_last_until_the_frame_ends() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "blend = 'add'
+                "local wg = require('@wingine')
+                blend = 'add'
                 function draw()
-                    graphics.clear('#ff0000')
+                    wg.graphics.clear('#ff0000')
                     if blend then
-                        graphics.set_blend(blend)
+                        wg.graphics.set_blend(blend)
                     end
-                    graphics.fill_rect(0, 0, 10, 20, '#0000ff')
+                    wg.graphics.fill_rect(0, 0, 10, 20, '#0000ff')
                 end",
             ),
         ],
@@ -2819,7 +2998,7 @@ fn blend_modes_last_until_the_frame_ends() {
     assert_eq!(image.pixel(5, 5), BLUE);
 
     let err = simulation
-        .try_exec("graphics.set_blend('alpha')")
+        .try_exec("local wg = require('@wingine') wg.graphics.set_blend('alpha')")
         .unwrap_err()
         .to_string();
     assert!(
@@ -2827,7 +3006,7 @@ fn blend_modes_last_until_the_frame_ends() {
         "{err}"
     );
     let err = simulation
-        .try_exec("graphics.set_blend('add')")
+        .try_exec("local wg = require('@wingine') wg.graphics.set_blend('add')")
         .unwrap_err()
         .to_string();
     assert!(err.contains("drawing only works in `draw`"), "{err}");
@@ -2841,14 +3020,15 @@ fn games_make_particles_advance_and_draw_them() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "sparks = graphics.new_particles({
+                "local wg = require('@wingine')
+                    sparks = wg.graphics.new_particles({
                     rate = 0, speed = 0, lifetime = 1, scales = { 4 }, colors = { '#ff0000' },
                 })
                 sparks:set_position(10, 10)
                 sparks:emit(3)
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.draw_particles(sparks)
+                    wg.graphics.clear('#000000')
+                    wg.graphics.draw_particles(sparks)
                 end",
             ),
         ],
@@ -2883,15 +3063,15 @@ fn games_make_particles_advance_and_draw_them() {
 
     for (code, expected) in [
         (
-            "graphics.new_particles({ colour = '#ff0000' })",
+            "local wg = require('@wingine') wg.graphics.new_particles({ colour = '#ff0000' })",
             "a particle emitter has no field `colour`",
         ),
         (
-            "graphics.new_particles({ lifetime = 0 })",
+            "local wg = require('@wingine') wg.graphics.new_particles({ lifetime = 0 })",
             "`lifetime` must be above 0",
         ),
         (
-            "graphics.new_particles({ blend = 'alpha' })",
+            "local wg = require('@wingine') wg.graphics.new_particles({ blend = 'alpha' })",
             r#"`blend` must be "normal", "add", "multiply" or "screen""#,
         ),
         (
@@ -2900,7 +3080,7 @@ fn games_make_particles_advance_and_draw_them() {
         ),
         ("sparks:advance(-1)", "dt must be a number of seconds"),
         (
-            "graphics.draw_particles(sparks)",
+            "local wg = require('@wingine') wg.graphics.draw_particles(sparks)",
             "drawing only works in `draw`",
         ),
     ] {
@@ -2941,17 +3121,18 @@ fn scenes_blend_their_nodes_and_advance_their_particles() {
             ("camp.scene.luau", CAMP),
             (
                 "main.luau",
-                "camp = scene.load('camp.scene.luau')
+                "local wg = require('@wingine')
+                camp = wg.scene.load('camp.scene.luau')
                 fire = camp:find('camp/fire')
                 glow = camp:find('glow')
                 function update(dt)
                     camp:advance_particles(dt)
                 end
                 function draw()
-                    graphics.clear('#00ff00')
-                    graphics.draw_scene(camp)
+                    wg.graphics.clear('#00ff00')
+                    wg.graphics.draw_scene(camp)
                     -- The scene's blend modes stay in it.
-                    graphics.fill_rect(0, 0, 1, 1, '#ff000080')
+                    wg.graphics.fill_rect(0, 0, 1, 1, '#ff000080')
                 end",
             ),
         ],
@@ -3020,7 +3201,13 @@ fn games_that_fail_to_load_are_errors() {
     let result = Simulation::new(&config, |ctx| LuauGame::load(ctx, &missing));
     assert!(matches!(result, Err(Error::ReadFile { .. })));
 
-    let failing = game("failing_main", &[("main.luau", "audio.load('nope.wav')")]);
+    let failing = game(
+        "failing_main",
+        &[(
+            "main.luau",
+            "local wg = require('@wingine') wg.audio.load('nope.wav')",
+        )],
+    );
     let result = Simulation::new(&config, |ctx| LuauGame::load(ctx, &failing));
     let err = result.err().expect("loading fails").to_string();
     assert!(err.contains("nope.wav"), "{err}");
@@ -3042,21 +3229,22 @@ fn luau_games_draw_meshes_and_billboards_in_3d_views() {
             (
                 "main.luau",
                 &format!(
-                    "{FLAT_VIEW}
-                    cube = graphics.new_cube(1)
-                    hero = graphics.load_sprite_sheet('tiles.png', 16, 16):sprite(27, 0)
+                    "local wg = require('@wingine')
+                    {FLAT_VIEW}
+                    cube = wg.graphics.new_cube(1)
+                    hero = wg.graphics.load_sprite_sheet('tiles.png', 16, 16):sprite(27, 0)
                     seen = {{}}
                     function update()
-                        table.insert(seen, graphics.frame_stats())
+                        table.insert(seen, wg.graphics.frame_stats())
                     end
                     function draw()
-                        graphics.begin_3d(view)
+                        wg.graphics.begin_3d(view)
                         -- Half the view across: the middle 10 pixels.
-                        graphics.draw_mesh(cube, vector.zero, {{ tint = '#ff0000' }})
+                        wg.graphics.draw_mesh(cube, vector.zero, {{ tint = '#ff0000' }})
                         -- A quarter of it across, nearer the camera, its bottom at the middle.
-                        graphics.draw_billboard(hero, vector.create(-0.75, 0, 1), '#00ff00', 0.5)
+                        wg.graphics.draw_billboard(hero, vector.create(-0.75, 0, 1), '#00ff00', 0.5)
                         -- Over the view, across the cube.
-                        graphics.fill_rect(0, 12, 20, 2, '#0000ff')
+                        wg.graphics.fill_rect(0, 12, 20, 2, '#0000ff')
                     end"
                 ),
             ),
@@ -3102,8 +3290,9 @@ fn luau_games_draw_meshes_and_billboards_in_3d_views() {
 fn meshes_draw_only_in_an_open_3d_view() {
     let draw = |test: &str, body: &str| {
         let main = format!(
-            "{FLAT_VIEW}
-            cube = graphics.new_cube(1)
+            "local wg = require('@wingine')
+            {FLAT_VIEW}
+            cube = wg.graphics.new_cube(1)
             function draw()
                 {body}
             end"
@@ -3112,24 +3301,30 @@ fn meshes_draw_only_in_an_open_3d_view() {
         simulation.run_frames(1);
         simulation.game().error().map(ToString::to_string)
     };
-    let without = draw("mesh_without_view", "graphics.draw_mesh(cube, vector.zero)").unwrap();
+    let without = draw(
+        "mesh_without_view",
+        "local wg = require('@wingine') wg.graphics.draw_mesh(cube, vector.zero)",
+    )
+    .unwrap();
     assert!(
         without.contains("call graphics.begin_3d first"),
         "{without}"
     );
     let after_2d = draw(
         "mesh_after_2d",
-        "graphics.begin_3d(view)
-        graphics.fill_rect(0, 0, 1, 1, '#ffffff')
-        graphics.draw_mesh(cube, vector.zero)",
+        "local wg = require('@wingine')
+        wg.graphics.begin_3d(view)
+        wg.graphics.fill_rect(0, 0, 1, 1, '#ffffff')
+        wg.graphics.draw_mesh(cube, vector.zero)",
     );
     assert!(after_2d.unwrap().contains("begin_3d"));
     let in_view = draw(
         "mesh_in_view",
-        "graphics.begin_3d(view)
-        graphics.set_camera(5, 5)
-        graphics.draw_mesh(cube, vector.zero)
-        graphics.draw_mesh(cube, vector.zero, { yaw = 1, scale = vector.create(1, 2, 1) })",
+        "local wg = require('@wingine')
+        wg.graphics.begin_3d(view)
+        wg.graphics.set_camera(5, 5)
+        wg.graphics.draw_mesh(cube, vector.zero)
+        wg.graphics.draw_mesh(cube, vector.zero, { yaw = 1, scale = vector.create(1, 2, 1) })",
     );
     assert_eq!(in_view, None);
 }
@@ -3140,13 +3335,14 @@ fn luau_games_make_meshes() {
         "making_meshes",
         &[(
             "main.luau",
-            "counts = {
-                graphics.new_cube(1):triangle_count(),
-                graphics.new_cuboid(1, 2, 3):triangle_count(),
-                graphics.new_plane(2, 2):triangle_count(),
-                graphics.new_sphere(1):triangle_count(),
-                graphics.new_sphere(1, 4, 2):triangle_count(),
-                graphics.new_mesh({
+            "local wg = require('@wingine')
+                counts = {
+                wg.graphics.new_cube(1):triangle_count(),
+                wg.graphics.new_cuboid(1, 2, 3):triangle_count(),
+                wg.graphics.new_plane(2, 2):triangle_count(),
+                wg.graphics.new_sphere(1):triangle_count(),
+                wg.graphics.new_sphere(1, 4, 2):triangle_count(),
+                wg.graphics.new_mesh({
                     vertices = {
                         { position = vector.create(0, 0, 0) },
                         { position = vector.create(1, 0, 0), u = 1, color = '#ff0000' },
@@ -3155,20 +3351,20 @@ fn luau_games_make_meshes() {
                     indices = { 1, 2, 3 },
                 }):triangle_count(),
             }
-            from_zero = pcall(graphics.new_mesh, {
+            from_zero = pcall(wg.graphics.new_mesh, {
                 vertices = { { position = vector.zero } },
                 indices = { 0, 1, 1 },
             })
-            _, too_few = pcall(graphics.new_mesh, {
+            _, too_few = pcall(wg.graphics.new_mesh, {
                 vertices = { { position = vector.zero } },
                 indices = { 1, 1 },
             })
-            _, infinite = pcall(graphics.new_cube, math.huge)
-            _, negative = pcall(graphics.new_cuboid, -1, 1, 1)
-            _, flat = pcall(graphics.new_plane, 2, 0)
-            _, no_radius = pcall(graphics.new_sphere, 0)
+            _, infinite = pcall(wg.graphics.new_cube, math.huge)
+            _, negative = pcall(wg.graphics.new_cuboid, -1, 1, 1)
+            _, flat = pcall(wg.graphics.new_plane, 2, 0)
+            _, no_radius = pcall(wg.graphics.new_sphere, 0)
             -- Far more slices and rings than a sphere needs get the most it has, not a crash.
-            most = graphics.new_sphere(1, 4000000000, 4000000000):triangle_count()",
+            most = wg.graphics.new_sphere(1, 4000000000, 4000000000):triangle_count()",
         )],
     );
     let mut simulation = simulation(&folder);
@@ -3200,13 +3396,14 @@ fn cameras_place_points_on_the_canvas_and_rays_into_the_world() {
             (
                 "main.luau",
                 &format!(
-                    "{FLAT_VIEW}
+                    "local wg = require('@wingine')
+                    {FLAT_VIEW}
                     -- The middle, and the top-right corner of the view, which a rect moves.
-                    middle = {{ graphics.project(view, vector.zero) }}
-                    corner = {{ graphics.project({{ camera = view.camera, rect = {{ x = 4, y = 6, width = 10, height = 10 }} }}, vector.create(1, 1, 0)) }}
-                    behind = {{ graphics.project(view, vector.create(0, 0, 10)) }}
-                    origin, direction = graphics.ray(view, 15, 10)
-                    _, both = pcall(graphics.project, {{ camera = {{ position = vector.one, target = vector.zero, fov = 1, height = 2 }} }}, vector.zero)"
+                    middle = {{ wg.graphics.project(view, vector.zero) }}
+                    corner = {{ wg.graphics.project({{ camera = view.camera, rect = {{ x = 4, y = 6, width = 10, height = 10 }} }}, vector.create(1, 1, 0)) }}
+                    behind = {{ wg.graphics.project(view, vector.create(0, 0, 10)) }}
+                    origin, direction = wg.graphics.ray(view, 15, 10)
+                    _, both = pcall(wg.graphics.project, {{ camera = {{ position = vector.one, target = vector.zero, fov = 1, height = 2 }} }}, vector.zero)"
                 ),
             ),
         ],
@@ -3259,13 +3456,14 @@ fn scene_lights_work_from_luau() {
             ("lamplit.scene.luau", LAMPLIT),
             (
                 "main.luau",
-                "level = scene.load('lamplit.scene.luau')
+                "local wg = require('@wingine')
+                level = wg.scene.load('lamplit.scene.luau')
                 view = level:find('view')
                 lamp = view:find('post/lamp')
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.draw_scene(level)
-                    stats = graphics.frame_stats()
+                    wg.graphics.clear('#000000')
+                    wg.graphics.draw_scene(level)
+                    stats = wg.graphics.frame_stats()
                 end",
             ),
         ],
@@ -3361,16 +3559,17 @@ fn views_take_lights_from_luau() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "wall = graphics.new_cuboid(2, 2, 0.1)
+                "local wg = require('@wingine')
+                wall = wg.graphics.new_cuboid(2, 2, 0.1)
                 lights = { { position = vector.create(-0.5, 0, 0), range = 2 } }
                 function draw()
-                    graphics.clear('#000000')
-                    ok, problem = pcall(graphics.begin_3d, {
+                    wg.graphics.clear('#000000')
+                    ok, problem = pcall(wg.graphics.begin_3d, {
                         camera = { position = vector.create(0, 0, 5), target = vector.zero, height = 2 },
                         lighting = { color = '#000000', ambient = '#000000', lights = lights },
                     })
                     if ok then
-                        graphics.draw_mesh(wall, vector.create(0, 0, -1))
+                        wg.graphics.draw_mesh(wall, vector.create(0, 0, -1))
                     end
                 end",
             ),
@@ -3450,12 +3649,13 @@ fn scene_fog_works_from_luau() {
             ("foggy.scene.luau", FOGGY),
             (
                 "main.luau",
-                "level = scene.load('foggy.scene.luau')
+                "local wg = require('@wingine')
+                level = wg.scene.load('foggy.scene.luau')
                 view = level:find('view')
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.draw_scene(level)
-                    stats = graphics.frame_stats()
+                    wg.graphics.clear('#000000')
+                    wg.graphics.draw_scene(level)
+                    stats = wg.graphics.frame_stats()
                 end",
             ),
         ],
@@ -3528,21 +3728,22 @@ fn views_take_fog_from_luau() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "wall = graphics.new_cuboid(8, 8, 0.1)
+                "local wg = require('@wingine')
+                wall = wg.graphics.new_cuboid(8, 8, 0.1)
                 fog = { color = '#ff0000', near = 5, far = 7 }
                 -- A lamp far behind the wall, past the fog.
                 lights = { { position = vector.create(0, 0, -20), range = 2 } }
                 function draw()
-                    graphics.clear('#000000')
-                    ok, problem = pcall(graphics.begin_3d, {
+                    wg.graphics.clear('#000000')
+                    ok, problem = pcall(wg.graphics.begin_3d, {
                         camera = { position = vector.create(0, 0, 5), target = vector.zero },
                         lighting = { color = '#000000', ambient = '#ffffff', lights = lights },
                         fog = fog,
                     })
                     if ok then
-                        graphics.draw_mesh(wall, vector.create(0, 0, -1))
+                        wg.graphics.draw_mesh(wall, vector.create(0, 0, -1))
                     end
-                    stats = graphics.frame_stats()
+                    stats = wg.graphics.frame_stats()
                 end",
             ),
         ],
@@ -3615,13 +3816,14 @@ fn scene_shadows_work_from_luau() {
             ("shaded.scene.luau", SHADED),
             (
                 "main.luau",
-                "level = scene.load('shaded.scene.luau')
+                "local wg = require('@wingine')
+                level = wg.scene.load('shaded.scene.luau')
                 view = level:find('view')
                 lamp, screen, wall = view:find('lamp'), view:find('screen'), view:find('wall')
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.draw_scene(level)
-                    stats = graphics.frame_stats()
+                    wg.graphics.clear('#000000')
+                    wg.graphics.draw_scene(level)
+                    stats = wg.graphics.frame_stats()
                 end",
             ),
         ],
@@ -3708,15 +3910,16 @@ fn glow_works_from_luau() {
             ("glowing.scene.luau", GLOWING),
             (
                 "main.luau",
-                "level = scene.load('glowing.scene.luau')
+                "local wg = require('@wingine')
+                level = wg.scene.load('glowing.scene.luau')
                 view = level:find('view')
                 panel, lamp = view:find('panel'), view:find('lamp')
-                cube = graphics.new_cuboid(0.8, 1.6, 0.1)
+                cube = wg.graphics.new_cuboid(0.8, 1.6, 0.1)
                 options = { tint = '#0000ff', glow = '#ffffff' }
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.draw_scene(level)
-                    graphics.draw_mesh(cube, vector.create(0.5, 0, 0), options)
+                    wg.graphics.clear('#000000')
+                    wg.graphics.draw_scene(level)
+                    wg.graphics.draw_mesh(cube, vector.create(0.5, 0, 0), options)
                 end",
             ),
         ],
@@ -3764,19 +3967,20 @@ fn views_take_shadows_from_luau() {
             ("conf.luau", SMALL_WINDOW),
             (
                 "main.luau",
-                "wall = graphics.new_cuboid(2, 2, 0.1)
-                screen = graphics.new_cuboid(0.4, 0.4, 0.02)
+                "local wg = require('@wingine')
+                wall = wg.graphics.new_cuboid(2, 2, 0.1)
+                screen = wg.graphics.new_cuboid(0.4, 0.4, 0.02)
                 lamp = { position = vector.create(0, 0, 1), range = 6, shadows = true }
                 options = nil
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.begin_3d({
+                    wg.graphics.clear('#000000')
+                    wg.graphics.begin_3d({
                         camera = { position = vector.create(0, 0, 5), target = vector.zero, height = 2 },
                         lighting = { color = '#000000', ambient = '#000000', lights = { lamp } },
                     })
-                    graphics.draw_mesh(wall, vector.create(0, 0, -1))
-                    graphics.draw_mesh(screen, vector.create(-0.5, 0, 0), options)
-                    stats = graphics.frame_stats()
+                    wg.graphics.draw_mesh(wall, vector.create(0, 0, -1))
+                    wg.graphics.draw_mesh(screen, vector.create(-0.5, 0, 0), options)
+                    stats = wg.graphics.frame_stats()
                 end",
             ),
         ],
@@ -3804,19 +4008,20 @@ fn views_take_shadows_from_luau() {
 
     // Five point lights with shadows want thirty maps of the view's twenty-four.
     simulation.exec(
-        "local draw_one = draw
+        "local wg = require('@wingine')
+        local draw_one = draw
         function draw()
-            graphics.clear('#000000')
+            wg.graphics.clear('#000000')
             local lights = {}
             for x = -2, 2 do
                 table.insert(lights, { position = vector.create(x / 4, 0, 1), range = 6, shadows = true })
             end
-            graphics.begin_3d({
+            wg.graphics.begin_3d({
                 camera = { position = vector.create(0, 0, 5), target = vector.zero, height = 2 },
                 lighting = { lights = lights },
             })
-            graphics.draw_mesh(wall, vector.create(0, 0, -1))
-            stats = graphics.frame_stats()
+            wg.graphics.draw_mesh(wall, vector.create(0, 0, -1))
+            stats = wg.graphics.frame_stats()
         end",
     );
     simulation.step();
@@ -3863,13 +4068,14 @@ fn scene_views_work_from_luau() {
             ("stage.scene.luau", STAGE),
             (
                 "main.luau",
-                "stage = scene.load('stage.scene.luau')
+                "local wg = require('@wingine')
+                stage = wg.scene.load('stage.scene.luau')
                 view = stage:find('view')
                 box = view:find('box')
                 hero = view:find('group/hero')
                 function draw()
-                    graphics.clear('#000000')
-                    graphics.draw_scene(stage)
+                    wg.graphics.clear('#000000')
+                    wg.graphics.draw_scene(stage)
                 end",
             ),
         ],
@@ -3998,25 +4204,26 @@ fn luau_games_load_and_draw_models() {
             (
                 "main.luau",
                 &format!(
-                    "{FLAT_VIEW}
-                    desk = graphics.load_model('models/table.glb')
-                    box = graphics.load_model('models/crate.glb')
+                    "local wg = require('@wingine')
+                    {FLAT_VIEW}
+                    desk = wg.graphics.load_model('models/table.glb')
+                    box = wg.graphics.load_model('models/crate.glb')
                     low, high = desk:bounds()
-                    _, missing = pcall(graphics.load_model, 'models/none.glb')
-                    local texture = graphics.load_sprite_sheet('models/crate.png', 12, 12):sprite(0, 0)
-                    _, with_sprite = pcall(graphics.draw_model, box, vector.zero, {{ sprite = texture }})
+                    _, missing = pcall(wg.graphics.load_model, 'models/none.glb')
+                    local texture = wg.graphics.load_sprite_sheet('models/crate.png', 12, 12):sprite(0, 0)
+                    _, with_sprite = pcall(wg.graphics.draw_model, box, vector.zero, {{ sprite = texture }})
                     seen = {{}}
                     function update()
-                        table.insert(seen, graphics.frame_stats())
+                        table.insert(seen, wg.graphics.frame_stats())
                         if reload then
                             reload = false
-                            again = graphics.load_model('models/crate.glb')
+                            again = wg.graphics.load_model('models/crate.glb')
                         end
                     end
                     function draw()
-                        graphics.begin_3d(view)
-                        graphics.draw_model(desk, vector.zero, {{ tint = '#ff0000' }})
-                        graphics.draw_model(box, vector.create(0, -1, -2), {{ yaw = 0.5, scale = 0.5 }})
+                        wg.graphics.begin_3d(view)
+                        wg.graphics.draw_model(desk, vector.zero, {{ tint = '#ff0000' }})
+                        wg.graphics.draw_model(box, vector.create(0, -1, -2), {{ yaw = 0.5, scale = 0.5 }})
                     end"
                 ),
             ),
@@ -4067,19 +4274,20 @@ fn rays_hit_boxes_from_luau() {
         "hitting_boxes",
         &[(
             "main.luau",
-            "local from, ahead = vector.create(0, 0, 5), vector.create(0, 0, -1)
-            low, high = graphics.new_cuboid(2, 4, 2):bounds()
+            "local wg = require('@wingine')
+            local from, ahead = vector.create(0, 0, 5), vector.create(0, 0, -1)
+            low, high = wg.graphics.new_cuboid(2, 4, 2):bounds()
             hits = {
-                graphics.hit_box(from, ahead, low, high),
+                wg.graphics.hit_box(from, ahead, low, high),
                 -- The corners either way round.
-                graphics.hit_box(from, ahead, high, low),
+                wg.graphics.hit_box(from, ahead, high, low),
                 -- From inside.
-                graphics.hit_box(vector.zero, ahead, low, high),
+                wg.graphics.hit_box(vector.zero, ahead, low, high),
                 -- Twice as far, in lengths of a direction half as long.
-                graphics.hit_box(from, ahead / 2, low, high),
+                wg.graphics.hit_box(from, ahead / 2, low, high),
             }
-            miss = graphics.hit_box(vector.create(3, 0, 5), ahead, low, high)
-            empty = { graphics.new_mesh({ vertices = {}, indices = {} }):bounds() }",
+            miss = wg.graphics.hit_box(vector.create(3, 0, 5), ahead, low, high)
+            empty = { wg.graphics.new_mesh({ vertices = {}, indices = {} }):bounds() }",
         )],
     );
     let mut simulation = simulation(&folder);
@@ -4116,10 +4324,11 @@ mod physics {
     /// The yard, loaded as `yard`, with its fence's edges and its wall in `world`, and a 2 by 2
     /// box around a node's position, `BOX`.
     fn yard(test: &str) -> Simulation<LuauGame> {
-        let main = "yard = scene.load('yard.scene.luau')
+        let main = "local wg = require('@wingine')
+            yard = wg.scene.load('yard.scene.luau')
             walker = yard:find('walker')
             BOX = { x = -1, y = -1, width = 2, height = 2 }
-            world = physics.world()
+            world = wg.physics.world()
             world:add(yard:find('fence'), { edges = true })
             world:add(yard:find('wall'))";
         let folder = game(test, &[("yard.scene.luau", YARD), ("main.luau", main)]);
@@ -4225,7 +4434,7 @@ mod physics {
     fn a_world_is_of_one_scene() {
         let mut simulation = yard("physics_one_scene");
         let err = simulation
-            .try_exec("world:add(scene.load('yard.scene.luau'):find('wall'))")
+            .try_exec("local wg = require('@wingine') world:add(wg.scene.load('yard.scene.luau'):find('wall'))")
             .unwrap_err()
             .to_string();
         assert!(err.contains("another scene"), "{err}");
@@ -4236,7 +4445,8 @@ mod physics {
         assert!(err.contains("wider and taller than 0"), "{err}");
         // Removing a node of another scene, or one with no collider, does nothing.
         simulation.exec(
-            "world:remove(scene.load('yard.scene.luau'):find('wall'))
+            "local wg = require('@wingine')
+            world:remove(wg.scene.load('yard.scene.luau'):find('wall'))
             world:remove(walker)",
         );
         let (dx, _): (f32, f32) = simulation.eval("world:move(walker, 20, 0, BOX)");
@@ -4260,9 +4470,10 @@ mod physics {
     /// `world`, in that order but for the pad, a sensor, added after the post, and `names`.
     fn lot(test: &str) -> Simulation<LuauGame> {
         let main = format!(
-            "lot = scene.load('lot.scene.luau')
+            "local wg = require('@wingine')
+            lot = wg.scene.load('lot.scene.luau')
             walker = lot:find('walker')
-            world = physics.world()
+            world = wg.physics.world()
             world:add(lot:find('fence'), {{ edges = true }})
             world:add(lot:find('wall'))
             world:add(lot:find('post'))
@@ -4331,7 +4542,10 @@ mod physics {
         assert!(near(distance, 25.0), "{distance}");
         // A world with no nodes hits nothing.
         assert_eq!(
-            hit_2d(&mut simulation, "physics.world():ray(0, 0, 1, 0)"),
+            hit_2d(
+                &mut simulation,
+                "require('@wingine').physics.world():ray(0, 0, 1, 0)"
+            ),
             None
         );
     }
@@ -4420,7 +4634,7 @@ mod physics {
         assert!(err.contains("isn't a sensor"), "{err}");
         let err = error(
             &mut simulation,
-            "world:inside(scene.load('lot.scene.luau'):find('pad'))",
+            "local wg = require('@wingine') world:inside(wg.scene.load('lot.scene.luau'):find('pad'))",
         );
         assert!(err.contains("isn't in the physics world"), "{err}");
         let err = error(
@@ -4484,12 +4698,13 @@ mod physics {
     /// `world`, whose gravity pulls down at 160, after which `setup` runs.
     fn site(test: &str, setup: &str) -> Simulation<LuauGame> {
         let main = format!(
-            "site = scene.load('site.scene.luau')
+            "local wg = require('@wingine')
+            site = wg.scene.load('site.scene.luau')
             crate = site:find('crate')
             ball = site:find('ball')
             lift = site:find('lift')
             walker = site:find('walker')
-            world = physics.world({{ gravity = 160 }})
+            world = wg.physics.world({{ gravity = 160 }})
             world:add(site:find('map'))
             function run(frames)
                 for _ = 1, frames do
@@ -4748,8 +4963,14 @@ mod physics {
             ),
             ("world:velocity(crate)", "isn't in the physics world"),
             ("world:walk(walker, 0 / 0, 0)", "finite"),
-            ("physics.world({ metre = 0 })", "more than 0"),
-            ("physics.world({ gravity = 1 / 0 })", "finite"),
+            (
+                "local wg = require('@wingine') wg.physics.world({ metre = 0 })",
+                "more than 0",
+            ),
+            (
+                "local wg = require('@wingine') wg.physics.world({ gravity = 1 / 0 })",
+                "finite",
+            ),
         ] {
             let err = error(&mut simulation, code);
             assert!(err.contains(expected), "{code}: {err}");
@@ -4791,11 +5012,12 @@ mod physics {
     /// The pen, loaded as `pen`, its view `view`, with the floor and the wall fixed and the crate
     /// dynamic in `world`, and the walker a character 0.4 across and 1 tall.
     fn pen(test: &str) -> Simulation<LuauGame> {
-        let main = "pen = scene.load('pen.scene.luau')
+        let main = "local wg = require('@wingine')
+            pen = wg.scene.load('pen.scene.luau')
             view = pen:find('view')
             walker = view:find('walker')
             crate = view:find('crate')
-            world = physics.world_3d()
+            world = wg.physics.world_3d()
             world:add(view:find('floor'))
             world:add(view:find('wall'))
             world:add(crate, { body = 'dynamic', shape = 'box' })
@@ -4977,11 +5199,14 @@ mod physics {
         };
         let err = error(&mut simulation, "world:add(pen:find('flat'))");
         assert!(err.contains("isn't in a 3D view"), "{err}");
-        let err = error(&mut simulation, "physics.world():add(walker)");
+        let err = error(
+            &mut simulation,
+            "local wg = require('@wingine') wg.physics.world():add(walker)",
+        );
         assert!(err.contains("physics.world_3d()"), "{err}");
         let err = error(
             &mut simulation,
-            "world:add(scene.load('pen.scene.luau'):find('view/wall'))",
+            "local wg = require('@wingine') world:add(wg.scene.load('pen.scene.luau'):find('view/wall'))",
         );
         assert!(err.contains("another 3D view"), "{err}");
         let err = error(
@@ -5033,10 +5258,11 @@ mod physics {
     #[test]
     #[cfg(feature = "models")]
     fn models_are_solid_where_their_triangles_are() {
-        let main = "pen = scene.load('pen.scene.luau')
+        let main = "local wg = require('@wingine')
+            pen = wg.scene.load('pen.scene.luau')
             view = pen:find('view')
             walker = view:find('walker')
-            world = physics.world_3d()
+            world = wg.physics.world_3d()
             world:add(view:find('floor'))
             world:add(walker, { character = { radius = 0.2, height = 1 } })";
         let pen = PEN.replace(
@@ -5138,7 +5364,8 @@ mod physics {
         assert_eq!(hit(&mut simulation, &through), None);
 
         // A world with no nodes hits nothing.
-        let empty = "physics.world_3d():ray(vector.zero, vector.create(0, -1, 0))";
+        let empty =
+            "require('@wingine').physics.world_3d():ray(vector.zero, vector.create(0, -1, 0))";
         assert_eq!(hit(&mut simulation, empty), None);
     }
 
@@ -5265,7 +5492,8 @@ mod physics {
         let mut simulation = pen("physics_3d_view_rays");
         // Through the middle of the canvas, which the view fills, to the camera's target.
         simulation.exec(
-            "local width, height = graphics.size()
+            "local wg = require('@wingine')
+            local width, height = wg.graphics.size()
             middle_x, middle_y = width / 2, height / 2
             origin, direction = view:ray(middle_x, middle_y)",
         );
@@ -5357,14 +5585,15 @@ mod physics {
     /// the world on the way, as numbers: what `velocity` and `is_resting` say as `walk` and
     /// `step` return, before anything is asked that follows the nodes, where nodes then are, and
     /// what rays and overlaps find.
-    const GROUNDS_GAME: &str = r#"
-        yard_scene = scene.load('grounds.scene.luau')
+    const GROUNDS_GAME: &str = r#"local wg = require("@wingine")
+        
+        yard_scene = wg.scene.load('grounds.scene.luau')
         view = yard_scene:find('view')
         walker = view:find('walker')
         pack = view:find('walker/pack')
         yard = view:find('yard')
         rooms = view:find('rooms')
-        world = physics.world_3d()
+        world = wg.physics.world_3d()
         world:add(view:find('floor'))
         world:add(view:find('wall'))
         crates = {}
@@ -5843,7 +6072,8 @@ mod physics {
     fn worlds_of_one_scene_each_follow_it_at_their_own_pace() {
         let mut simulation = grounds("physics_3d_two_worlds");
         simulation.exec(
-            "other = physics.world_3d()
+            "local wg = require('@wingine')
+            other = wg.physics.world_3d()
             other:add(view:find('yard/post'), { shape = 'box' })
             function other_under(x, z)
                 local hit = other:ray(vector.create(x, 5, z), vector.create(0, -1, 0))
@@ -5904,11 +6134,12 @@ mod physics {
     /// crates stretched into tiles 3 across, their tops at 0, turned by quarter turns, in the
     /// world.
     #[cfg(feature = "models")]
-    const COPIES_MAIN: &str = r#"
-        copies_scene = scene.load('copies.scene.luau')
+    const COPIES_MAIN: &str = r#"local wg = require("@wingine")
+        
+        copies_scene = wg.scene.load('copies.scene.luau')
         view = copies_scene:find('view')
         walker = view:find('walker')
-        world = physics.world_3d()
+        world = wg.physics.world_3d()
         QUARTER = 1.5707964
 
         function copy(template, parent, name, at, turned, stretched)
@@ -6431,15 +6662,16 @@ mod gui {
         // In a panel, whose first widget that takes focus is a field, as an editor's might be.
         let mut simulation = interface(
             "gui_tab",
-            "tabs = 0
+            "local wg = require('@wingine')
+            tabs = 0
             presses = 0
             first = ''
             second = ''
             function update()
-                if input.key_pressed('Tab') then
+                if wg.input.key_pressed('Tab') then
                     tabs += 1
                 end
-                if input.key_pressed('A') then
+                if wg.input.key_pressed('A') then
                     presses += 1
                 end
             end",
@@ -6526,8 +6758,9 @@ mod gui {
                 ("conf.luau", WINDOW),
                 (
                     "main.luau",
-                    "function update(dt: number)
-                        if input.key_pressed('G') then
+                    "local wg = require('@wingine')
+                        function update(dt: number)
+                        if wg.input.key_pressed('G') then
                             function gui(ui: Ui)
                                 ui:window('Later', function(ui)
                                     ui:label('Defined later')
@@ -6612,9 +6845,10 @@ mod gui {
                 ("conf.luau", WINDOW),
                 (
                     "main.luau",
-                    "local red = graphics.load_sprite_sheet('sheet.png', 1, 1):sprite(0, 0)
+                    "local wg = require('@wingine')
+                    local red = wg.graphics.load_sprite_sheet('sheet.png', 1, 1):sprite(0, 0)
                     function draw()
-                        graphics.clear('#000000')
+                        wg.graphics.clear('#000000')
                     end
                     function gui(ui: Ui)
                         ui:panel('left', function(ui)
@@ -6645,12 +6879,13 @@ mod gui {
                 ("conf.luau", WINDOW),
                 (
                     "main.luau",
-                    "local sheet = graphics.load_sprite_sheet('sheet.png', 1, 1)
+                    "local wg = require('@wingine')
+                    local sheet = wg.graphics.load_sprite_sheet('sheet.png', 1, 1)
                     local tiles = { { name = 'Red', sprite = sheet:sprite(0, 0) },
                         { name = 'Blue', sprite = sheet:sprite(1, 0) } }
                     chosen = 'Red'
                     function draw()
-                        graphics.clear('#000000')
+                        wg.graphics.clear('#000000')
                     end
                     function gui(ui: Ui)
                         ui:panel('left', function(ui)
@@ -6876,8 +7111,9 @@ mod reload {
             &[
                 (
                     "main.luau",
-                    "value = require('./module').value
-                    room = scene.load('room.scene.luau')",
+                    "local wg = require('@wingine')
+                    value = require('./module').value
+                    room = wg.scene.load('room.scene.luau')",
                 ),
                 ("module.luau", "return { value = 1 }"),
                 ("room.scene.luau", &titled("Old")),
@@ -6902,8 +7138,9 @@ mod reload {
             "reload_kept",
             &[(
                 "main.luau",
-                "count = 0
-                started = window.reloaded()
+                "local wg = require('@wingine')
+                count = 0
+                started = wg.window.reloaded()
                 function update() count += 1 end
                 function reloading()
                     return { count = count, name = 'kept', list = { 1, 2 } }
@@ -6925,11 +7162,18 @@ mod reload {
             (3.0, "kept".into(), 2.0, 0.0)
         );
         // Each call returns a copy of its own.
-        simulation.exec("window.reloaded().count = 99");
-        assert_eq!(simulation.eval::<f64>("window.reloaded().count"), 3.0);
+        simulation.exec("local wg = require('@wingine') wg.window.reloaded().count = 99");
+        assert_eq!(
+            simulation.eval::<f64>("require('@wingine').window.reloaded().count"),
+            3.0
+        );
 
         // A game without `reloading` keeps nothing.
-        fs::write(folder.join("main.luau"), "started = window.reloaded()").unwrap();
+        fs::write(
+            folder.join("main.luau"),
+            "local wg = require('@wingine') started = wg.window.reloaded()",
+        )
+        .unwrap();
         simulation.reload();
         simulation.reload();
         assert!(simulation.eval::<bool>("started == nil"));
@@ -6945,7 +7189,8 @@ mod reload {
         // Its own `reloading` fails, then the next game's gives what saves can't hold.
         fs::write(
             folder.join("main.luau"),
-            "started = window.reloaded()
+            "local wg = require('@wingine')
+            started = wg.window.reloaded()
             function reloading() return { act = function() end } end",
         )
         .unwrap();
@@ -6963,9 +7208,10 @@ mod reload {
             "reload_reset",
             &[(
                 "main.luau",
-                "input.bind('jump', { 'Space' })
-                audio.play(audio.load('sounds/blip.wav'))
-                audio.play_music('sounds/blip.wav')",
+                "local wg = require('@wingine')
+                wg.input.bind('jump', { 'Space' })
+                wg.audio.play(wg.audio.load('sounds/blip.wav'))
+                wg.audio.play_music('sounds/blip.wav')",
             )],
         );
         let sounds = folder.join("sounds");
@@ -6979,7 +7225,7 @@ mod reload {
 
         fs::write(
             folder.join("main.luau"),
-            "function update() jumping = input.held('jump') end",
+            "local wg = require('@wingine') function update() jumping = wg.input.held('jump') end",
         )
         .unwrap();
         simulation.reload();
@@ -7007,7 +7253,8 @@ mod reload {
 
         fs::write(
             folder.join("main.luau"),
-            "count = window.reloaded().count
+            "local wg = require('@wingine')
+            count = wg.window.reloaded().count
             function update() count += 1 end",
         )
         .unwrap();
@@ -7037,7 +7284,11 @@ mod reload {
         assert!(simulation.eval::<bool>("count == nil"));
         simulation.step();
 
-        fs::write(folder.join("main.luau"), "kept = window.reloaded()").unwrap();
+        fs::write(
+            folder.join("main.luau"),
+            "local wg = require('@wingine') kept = wg.window.reloaded()",
+        )
+        .unwrap();
         simulation.reload();
         assert!(simulation.game().error().is_none());
         assert_eq!(simulation.eval::<f64>("kept.count"), 7.0);
@@ -7058,7 +7309,7 @@ mod reload {
         simulation.reload();
         assert!(simulation.game().error().is_none());
         assert_eq!(
-            simulation.eval::<(f32, f32)>("graphics.size()"),
+            simulation.eval::<(f32, f32)>("require('@wingine').graphics.size()"),
             (20.0, 20.0)
         );
 

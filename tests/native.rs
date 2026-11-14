@@ -244,9 +244,10 @@ impl Library for Probe {
             })
             .luau(
                 "wait",
-                "local probe = ...
+                "local wg = require('@wingine')
+                local probe = ...
                 function probe.wait_marked(name)
-                    wait_until(function() return string.find(probe.log(), name, 1, true) ~= nil end)
+                    wg.wait_until(function() return string.find(probe.log(), name, 1, true) ~= nil end)
                 end
                 local lent = pcall(probe.held, 'jump')
                 function probe.lent_while_loading() return lent end",
@@ -341,11 +342,12 @@ fn the_libraries_table_is_read_only() {
 fn hooks_run_around_update_and_draw() {
     let mut simulation = probe_game(
         "hooks",
-        "function update() probe.mark('update') end
+        "local wg = require('@wingine')
+        function update() probe.mark('update') end
         function draw()
-            graphics.clear('#000000')
+            wg.graphics.clear('#000000')
             -- The hook after draw draws in canvas pixels anyway.
-            graphics.set_camera(100, 100)
+            wg.graphics.set_camera(100, 100)
             probe.mark('draw')
         end",
     );
@@ -380,14 +382,15 @@ fn a_failing_hook_stops_the_game() {
 fn functions_get_the_context_or_canvas_as_scripts_do() {
     let mut simulation = probe_game(
         "lent",
-        "input.bind('jump', { 'Space' })
+        "local wg = require('@wingine')
+        wg.input.bind('jump', { 'Space' })
         jumped = false
         function update()
             jumped = jumped or probe.held('jump')
             _, fill_in_update = pcall(probe.fill, '#ff0000')
         end
         function draw()
-            graphics.clear('#000000')
+            wg.graphics.clear('#000000')
             probe.fill('#0000ff')
             _, held_in_draw = pcall(probe.held, 'jump')
         end",
@@ -410,11 +413,12 @@ fn functions_get_the_context_or_canvas_as_scripts_do() {
 fn libraries_set_blend_modes_until_the_game_has_drawn() {
     let mut simulation = probe_game(
         "blend",
-        "function draw()
-            graphics.clear('#ff0000')
+        "local wg = require('@wingine')
+            function draw()
+            wg.graphics.clear('#ff0000')
             probe.blend(1)
             probe.fill('#0000ff')
-            graphics.fill_rect(19, 18, 1, 1, '#00ff00')
+            wg.graphics.fill_rect(19, 18, 1, 1, '#00ff00')
             _, unknown = pcall(probe.blend, 9)
             -- Left multiplying, which the hooks after the game's draw don't: multiplying by
             -- their white would leave red as it is.
@@ -438,8 +442,9 @@ fn libraries_set_blend_modes_until_the_game_has_drawn() {
 fn one_call_draws_many_sprites() {
     let mut simulation = probe_game(
         "batch",
-        "function draw()
-            graphics.clear('#000000')
+        "local wg = require('@wingine')
+            function draw()
+            wg.graphics.clear('#000000')
             probe.stamp()
         end",
     );
@@ -457,20 +462,21 @@ fn one_call_draws_many_sprites() {
 fn libraries_make_meshes_and_draw_in_3d_views() {
     let mut simulation = probe_game(
         "three_d",
-        "square = probe.square('#ffffff')
+        "local wg = require('@wingine')
+        square = probe.square('#ffffff')
         middle = probe.midpoint(vector.zero, vector.create(2, 4, 6))
         _, bad_mesh = pcall(probe.bad_mesh)
         _, not_drawing = pcall(probe.scene, square)
         mode = 'library'
         function draw()
-            graphics.clear('#000000')
+            wg.graphics.clear('#000000')
             if mode == 'library' then
                 probe.view()
                 _, bad_view = pcall(probe.bad_view)
                 -- The bad view began nothing, so the good one is still open.
                 probe.scene(square)
             elseif mode == 'script' then
-                graphics.begin_3d({
+                wg.graphics.begin_3d({
                     camera = { position = vector.create(0, 0, 5), target = vector.zero, height = 2 },
                     lighting = { color = '#000000', ambient = '#ffffff' },
                 })
@@ -585,8 +591,9 @@ fn objects_work_in_games_that_loaded_earlier_registrations() {
 fn luau_from_the_library_can_wait() {
     let mut simulation = probe_game(
         "luau",
-        "done = false
-        spawn(function()
+        "local wg = require('@wingine')
+        done = false
+        wg.spawn(function()
             probe.wait_marked('go')
             done = true
         end)",
@@ -774,11 +781,11 @@ impl Library for Twice {
     }
 }
 
-/// A library whose table would replace the engine's.
+/// A library whose table would replace one of Luau's.
 struct Impostor;
 
 impl Library for Impostor {
-    const NAME: &str = "graphics";
+    const NAME: &str = "print";
 
     fn new(_: &mut Context) -> Result<Self> {
         Ok(Self)
@@ -815,7 +822,7 @@ fn libraries_that_fail_to_load_are_errors() {
 
     runtime::link_library("impostor", wingine_native::library::<Impostor>());
     let err = load_error(&["impostor"]);
-    assert!(err.contains("its table `graphics` is taken"), "{err}");
+    assert!(err.contains("its table `print` is taken"), "{err}");
 
     // Two libraries with the same table.
     runtime::link_library("north_one", wingine_native::library::<Tracer<0>>());
@@ -922,18 +929,19 @@ fn libraries_load_from_the_games_native_folder() {
             ("conf.luau", &conf(&["particles"])),
             (
                 "main.luau",
-                "sparks = particles.new_emitter('#ffffff')
+                "local wg = require('@wingine')
+                sparks = particles.new_emitter('#ffffff')
                 sparks:burst(10, 10, 12)
                 sparks:burst_3d(vector.zero, 5)
                 gone = false
-                spawn(function()
+                wg.spawn(function()
                     particles.wait_until_gone()
                     gone = true
                 end)
                 function draw()
-                    graphics.clear('#000000')
+                    wg.graphics.clear('#000000')
                     particles.draw()
-                    graphics.begin_3d({
+                    wg.graphics.begin_3d({
                         camera = { position = vector.create(0, 1, 5), target = vector.create(0, 1, 0) },
                     })
                     particles.draw_3d()

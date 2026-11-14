@@ -1,7 +1,17 @@
 # API reference
 
-Scripts reach the engine through twelve global tables, a few built-in functions, the objects those
-hand out, and the `Ui` a game's `gui` lays its interface out with:
+Scripts reach the engine through one module, which they require: twelve tables and a few built-in
+functions, the objects those hand out, and the `Ui` a game's `gui` lays its interface out with.
+
+```lua
+local wg = require("@wingine")
+
+local GOLD = wg.graphics.color("#f2c14e")
+```
+
+None of it is a global. The examples on these pages call it `wg`, as above, and leave out the line
+that requires it. Pages are named for the module's tables, and functions for their place in it:
+`graphics.color` is `wg.graphics.color`.
 
 | Page | What it covers |
 |---|---|
@@ -22,7 +32,8 @@ hand out, and the `Ui` a game's `gui` lays its interface out with:
 | [Tests](testing.md) | What only tests have: `test`, `sim` to drive the game and run its frames, `assert_equal` and `assert_near` |
 | [`wingine-native`](native.md) | The Rust crate native libraries are written with |
 
-The engine's tables are read-only. Luau's standard library is there too, in its sandboxed form:
+The module and its tables are read-only. Luau's standard library is there too, as globals, in its
+sandboxed form:
 `math`, `string`, `table`, `coroutine`, `bit32`, `utf8`, `buffer`, `vector`, `debug`, and `os`
 with `clock`, `date`, `difftime` and `time`, but nothing that reads or writes files: games keep
 data with [`save`](save.md).
@@ -40,16 +51,19 @@ data with [`save`](save.md).
   in a tileset. The one exception is an animation's frame numbers, which count from 1, like the
   table of frames it was made from.
 - **Sizes and positions come back as two results**, not tables:
-  `local width, height = graphics.size()`.
+  `local width, height = wg.graphics.size()`.
 - **Optional arguments** are marked `?`, as Luau types are, and can be left out or `nil`.
 - **Wrong arguments are errors**, naming the argument and what was expected, rather than being
   ignored.
 
-Signatures are written as Luau types: `graphics.fill_rect(x: number, y: number, ...)`. Objects the
-engine hands out, such as `Sprite` and `Tilemap`, are userdata with methods, called with `:`, as
-`sprite:size()`. The same types, with short docs, are in the engine's definitions file,
+Signatures are written as Luau types, as a script calls them:
+`wg.graphics.fill_rect(x: number, y: number, ...)`. Objects the engine hands out, such as `Sprite`
+and `Tilemap`, are userdata with methods, called with `:`, as `sprite:size()`. The same types, with
+short docs, are in the engine's definitions file,
 [`src/runtime/wingine.d.luau`](../../src/runtime/wingine.d.luau), which luau-lsp checks scripts
-against, in [the editor](../editor.md#checking-scripts-with-luau-lsp) or another.
+against, in [the editor](../editor.md#checking-scripts-with-luau-lsp) or another, where the module
+is the type `Wingine`. Each type there can be named in a script's annotations, as
+`local camera: Camera3d`.
 
 ## When functions work
 
@@ -103,7 +117,7 @@ costs more than drawing a sprite, so code that draws a lot turns its colors into
 with [`graphics.color`](graphics.md#graphicscolor):
 
 ```lua
-local GOLD = graphics.color("#f2c14e") -- 0xf2c14eff
+local GOLD = wg.graphics.color("#f2c14e") -- 0xf2c14eff
 ```
 
 A number's alpha byte is always there, so `0xf2c14e` is not gold but `0x00f2c14e`: no red, and

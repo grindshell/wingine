@@ -16,16 +16,20 @@ fn main() {
     let folder = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("scripts-bench");
     println!("Luau, {TASKS} tasks, the median of {FRAMES} updates:");
     for (name, case, body) in [
-        ("long", "each waiting a minute", "wait(60)"),
+        (
+            "long",
+            "each waiting a minute",
+            "local wg = require('@wingine') wg.wait(60)",
+        ),
         (
             "frame",
             "each waiting for the next frame",
-            "while true do wait() end",
+            "local wg = require('@wingine') while true do wg.wait() end",
         ),
         (
             "until",
             "each waiting until something happens",
-            "wait_until(function() return happened end)",
+            "local wg = require('@wingine') wg.wait_until(function() return happened end)",
         ),
     ] {
         let game = folder.join(name);
@@ -33,9 +37,10 @@ fn main() {
         fs::write(
             game.join("main.luau"),
             format!(
-                "happened = false
+                "local wg = require('@wingine')
+                happened = false
                 for i = 1, {TASKS} do
-                    spawn(function() {body} end)
+                    wg.spawn(function() {body} end)
                 end"
             ),
         )

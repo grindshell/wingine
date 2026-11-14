@@ -1,6 +1,8 @@
 -- The quarry's tests, which `cargo run -- test examples/quarry` runs, each against a fresh game
 -- with no frames run yet. They read and change its state, the global `quarry`, as it is.
 
+local wg = require("@wingine")
+
 local function x_of(node): number
     local x = node:position()
     return x
@@ -24,7 +26,7 @@ test("the lift carries the player up to the door", function()
     -- On the lift, as it waits at the bottom before going up.
     sim.step()
     quarry.player:set_position(336, 192)
-    wait(3.5)
+    wg.wait(3.5)
     local _, y = quarry.player:position()
     assert(y < 100, "carried up")
     sim.hold("Right", 1.5)

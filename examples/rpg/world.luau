@@ -11,6 +11,7 @@
 -- `foes.luau` that the game adds while they're about. Each is a node tagged for what it is, on
 -- the cell it's about, whose props say the rest.
 
+local wg = require("@wingine")
 local characters = require("./characters")
 local foes = require("./foes")
 
@@ -19,11 +20,11 @@ local world = {}
 world.TILE = 16
 local TILE = world.TILE
 
-local sheet = graphics.load_sprite_sheet("kenney_1-bit-pack.png", TILE, TILE)
+local sheet = wg.graphics.load_sprite_sheet("kenney_1-bit-pack.png", TILE, TILE)
 
 -- The tileset again, with its people and creatures mid-stride: raised a pixel on stretched legs.
 -- The rest is unchanged, so anything else walks without a stride.
-local strides = graphics.load_sprite_sheet("strides.png", TILE, TILE)
+local strides = wg.graphics.load_sprite_sheet("strides.png", TILE, TILE)
 
 -- The sprite at `column`, `row` of the tileset.
 function world.sprite(column: number, row: number)
@@ -276,7 +277,7 @@ local function put_character(level: Level, options): characters.Character
     table.insert(level.characters, character)
     -- An empty route would loop forever without waiting.
     if character.route and #character.route > 0 then
-        spawn(world.wander, level, character)
+        wg.spawn(world.wander, level, character)
     end
     return character
 end
@@ -349,9 +350,9 @@ function world.play_music(level: Level, fade: number)
         return
     end
     if music then
-        audio.play_music(music, fade)
+        wg.audio.play_music(music, fade)
     else
-        audio.stop_music(fade)
+        wg.audio.stop_music(fade)
     end
     playing = music
 end
@@ -502,12 +503,12 @@ function world.wander(level: Level, character: characters.Character)
     while not character.removed do
         for _, move in route do
             if type(move) == "number" then
-                wait(move)
+                wg.wait(move)
             else
-                wait_until(ready)
+                wg.wait_until(ready)
                 while not character.removed and not characters.step(character, move, blocked) do
-                    wait(0.5)
-                    wait_until(ready)
+                    wg.wait(0.5)
+                    wg.wait_until(ready)
                 end
             end
             if character.removed then

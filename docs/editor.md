@@ -283,7 +283,10 @@ against the engine's API:
 Without luau-lsp, scripts are edited all the same, unchecked, and Output says how to install it.
 luau-lsp knows the engine from its definitions file,
 [`src/runtime/wingine.d.luau`](../src/runtime/wingine.d.luau), which declares every table,
-function and type scripts use, with their docs; the editor hands it to luau-lsp itself.
+function and type scripts use, with their docs, and the module `require("@wingine")` returns as the
+type `Wingine`. luau-lsp reads that module from a file, which the engine never runs,
+[`src/runtime/wingine.luau`](../src/runtime/wingine.luau): it says only that it returns a
+`Wingine`. The editor hands both to luau-lsp itself, aliasing the file as `wingine`.
 
 A game whose modules share a global table, as the RPG's do with `rpg`, names it in a `.luaurc` in
 its folder, so luau-lsp knows it, and lets `main.luau` set it:
@@ -309,6 +312,17 @@ extension, given the engine's definitions file. In VS Code's settings for the ga
     "luau-lsp.types.definitionFiles": { "@wingine": "path/to/wingine/src/runtime/wingine.d.luau" }
 }
 ```
+
+And in the game's `.luaurc`, an alias of `wingine` to the engine's `wingine.luau`, or to a copy of
+it, its path from the `.luaurc`'s folder, without `.luau`:
+
+```json
+{
+    "aliases": { "wingine": "path/to/wingine/src/runtime/wingine" }
+}
+```
+
+The engine never follows that alias: it answers `@wingine` itself.
 
 The engine calls a game's `update` and `draw`, so luau-lsp would warn they're never used; the
 editor turns that warning off, and a `.luaurc` can too, with `"FunctionUnused": false` in its

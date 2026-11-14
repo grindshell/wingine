@@ -2,6 +2,8 @@
 -- frames run yet. They read and change the game's state, the global `pong`, as it is.
 
 -- Puts the ball in play, centered on `x`, `y` and moving at `vx`, `vy`.
+
+local wg = require("@wingine")
 local function play_ball(x: number, y: number, vx: number, vy: number)
     pong.ball = { x = x, y = y, vx = vx, vy = vy }
     pong.phase = "rally"
@@ -45,12 +47,12 @@ end)
 test("missing the ball scores for the other side", function()
     -- Above the player's paddle, which waits in the middle.
     play_ball(100, 20, -200, 0)
-    wait_until(rally_over)
+    wg.wait_until(rally_over)
     assert_equal(pong.score, { left = 0, right = 1 })
     assert_equal(pong.phase, "pause")
 
     -- The next serve goes to the player, who lost the point, a second later.
-    wait(1.1)
+    wg.wait(1.1)
     assert_equal(pong.phase, "rally")
     assert(pong.ball.vx < 0, "toward the player")
 end)
@@ -58,7 +60,7 @@ end)
 test("the first to five wins", function()
     pong.score = { left = 2, right = 4 }
     play_ball(100, 20, -200, 0)
-    wait_until(rally_over)
+    wg.wait_until(rally_over)
     assert_equal(pong.phase, "over")
     assert_equal(pong.winner, "right")
 
@@ -71,11 +73,11 @@ test("the first to five wins", function()
 end)
 
 test("F11 covers the screen and stops covering it", function()
-    assert_equal(window.fullscreen(), nil)
+    assert_equal(wg.window.fullscreen(), nil)
     sim.tap("F11")
-    assert_equal(window.fullscreen(), "borderless")
+    assert_equal(wg.window.fullscreen(), "borderless")
     sim.tap("F11")
-    assert_equal(window.fullscreen(), nil)
+    assert_equal(wg.window.fullscreen(), nil)
 end)
 
 test("the court before the first serve", function()

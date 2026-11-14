@@ -7,6 +7,7 @@
 -- starts. The screen is laid out in `controls.scene.luau`: a panel of rows copied from its hidden
 -- `row`.
 
+local wg = require("@wingine")
 local look = require("./look")
 
 local controls = {}
@@ -39,10 +40,10 @@ controls.waiting = nil :: string?
 -- Whether the screen is open.
 controls.showing = false
 
-controls.scene = scene.load("controls.scene.luau")
+controls.scene = wg.scene.load("controls.scene.luau")
 local panel = controls.scene:find("menu")
 local template = panel:find("row")
-local menu = ui.menu(panel, { confirm = "interact" })
+local menu = wg.ui.menu(panel, { confirm = "interact" })
 -- The screen's rows: one for each action, then Defaults and Done.
 local rows = {}
 for i, entry in controls.ACTIONS do
@@ -66,7 +67,7 @@ end
 -- Binds every action as `controls.bound` says.
 local function apply()
     for _, entry in controls.ACTIONS do
-        input.bind(entry.action, controls.bound[entry.action])
+        wg.input.bind(entry.action, controls.bound[entry.action])
     end
 end
 
@@ -82,7 +83,7 @@ end
 -- them; or else the defaults.
 function controls.load()
     reset()
-    local ok, data = pcall(save.read, SAVE)
+    local ok, data = pcall(wg.save.read, SAVE)
     local readable = ok and type(data) == "table" and data.version == VERSION
     if not readable or type(data.bound) ~= "table" then
         return
@@ -91,7 +92,7 @@ function controls.load()
     for _, entry in controls.ACTIONS do
         local list = data.bound[entry.action]
         -- Names the engine doesn't know are an error, which a save from elsewhere could hold.
-        if type(list) ~= "table" or #list == 0 or not pcall(input.bind, entry.action, list) then
+        if type(list) ~= "table" or #list == 0 or not pcall(wg.input.bind, entry.action, list) then
             reset()
             return
         end
@@ -102,7 +103,7 @@ function controls.load()
 end
 
 local function store()
-    save.write(SAVE, { version = VERSION, bound = controls.bound })
+    wg.save.write(SAVE, { version = VERSION, bound = controls.bound })
 end
 
 -- Gives `action` `control` first, in place of the control it had first, which takes `control`'s
@@ -157,7 +158,7 @@ end
 function controls.update()
     local waiting = controls.waiting
     if waiting then
-        local pressed = input.pressed_controls()[1]
+        local pressed = wg.input.pressed_controls()[1]
         if pressed == STOP then
             controls.waiting = nil
         elseif pressed then
@@ -175,7 +176,7 @@ function controls.update()
             controls.waiting = entry.action
         elseif row == #controls.ACTIONS + 1 then
             reset()
-            save.remove(SAVE)
+            wg.save.remove(SAVE)
         else
             controls.showing = false
         end
@@ -201,7 +202,7 @@ function controls.draw()
             keys:set_color(if highlighted then look.TEXT else look.DIM)
         end
     end
-    graphics.draw_scene(controls.scene)
+    wg.graphics.draw_scene(controls.scene)
 end
 
 return controls

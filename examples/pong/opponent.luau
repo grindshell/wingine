@@ -2,6 +2,8 @@
 -- task from the start.
 
 -- Seconds between looks at the ball. The longer, the easier the opponent is to beat.
+
+local wg = require("@wingine")
 local REACTION = 0.12
 -- How far from the paddle's middle it meets the ball, to send it back at an angle.
 local SPIN = 6
@@ -33,7 +35,7 @@ function opponent.play(pong, width: number, height: number)
         else
             pong.aim = height / 2
         end
-        wait(REACTION)
+        wg.wait(REACTION)
     end
 end
 

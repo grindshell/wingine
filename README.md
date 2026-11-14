@@ -287,7 +287,7 @@ plays the game. Its Script screen checks Luau against the engine's API with
 
 A Luau game is a folder with a `main.luau` script and, optionally, a `conf.luau` of settings. The
 script's top level runs once; then each frame the engine calls its global `update(dt)` and
-`draw()`.
+`draw()`. The engine's API is a module the script requires, `require("@wingine")`.
 
 ```lua
 -- conf.luau
@@ -296,23 +296,24 @@ return { title = "Hello", resolution = { width = 320, height = 180 } }
 
 ```lua
 -- main.luau
+local wg = require("@wingine")
 local x = 152
 
-input.bind("left", { "Left", "A" })
-input.bind("right", { "Right", "D" })
+wg.input.bind("left", { "Left", "A" })
+wg.input.bind("right", { "Right", "D" })
 
 function update(dt: number)
-    if input.held("left") then
+    if wg.input.held("left") then
         x -= 80 * dt
     end
-    if input.held("right") then
+    if wg.input.held("right") then
         x += 80 * dt
     end
 end
 
 function draw()
-    graphics.clear("#1d232b")
-    graphics.fill_rect(x, 82, 16, 16, "#e06c4a")
+    wg.graphics.clear("#1d232b")
+    wg.graphics.fill_rect(x, 82, 16, 16, "#e06c4a")
 end
 ```
 

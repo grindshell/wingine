@@ -29,8 +29,10 @@ A game is a folder with a `main.luau` script in it. Make a folder called `hello`
 save this in it as `main.luau`:
 
 ```lua
+local wg = require("@wingine")
+
 function draw()
-    graphics.draw_text(graphics.default_font(), "Hello world", 16, 16, "#ffffff")
+    wg.graphics.draw_text(wg.graphics.default_font(), "Hello world", 16, 16, "#ffffff")
 end
 ```
 
@@ -51,8 +53,9 @@ cargo run -- --watch ../hello
 ```
 
 The engine calls the global function `draw` every frame, after clearing the canvas to black.
-`graphics.draw_text` draws text in a font, here the engine's built-in pixel font, with its
-top-left corner at `x`, `y` in pixels, in a color written as a hex string.
+`require("@wingine")` is the engine's API, which a script names `wg`, and its `graphics.draw_text`
+draws text in a font, here the engine's built-in pixel font, with its top-left corner at `x`, `y`
+in pixels, in a color written as a hex string.
 
 ## Make it bigger
 
@@ -80,40 +83,41 @@ window's title is "Hello". A window of another shape has black bars around the c
 Replace `main.luau` with this:
 
 ```lua
-local font = graphics.default_font()
+local wg = require("@wingine")
+local font = wg.graphics.default_font()
 local MESSAGE = "Hello world"
 -- Canvas pixels a second.
 local SPEED = 80
 
 -- Start in the middle of the canvas.
-local canvas_width, canvas_height = graphics.size()
+local canvas_width, canvas_height = wg.graphics.size()
 local text_width, text_height = font:measure(MESSAGE)
 local x = (canvas_width - text_width) / 2
 local y = (canvas_height - text_height) / 2
 
-input.bind("left", { "Left", "A" })
-input.bind("right", { "Right", "D" })
-input.bind("up", { "Up", "W" })
-input.bind("down", { "Down", "S" })
+wg.input.bind("left", { "Left", "A" })
+wg.input.bind("right", { "Right", "D" })
+wg.input.bind("up", { "Up", "W" })
+wg.input.bind("down", { "Down", "S" })
 
 function update(dt: number)
-    if input.held("left") then
+    if wg.input.held("left") then
         x -= SPEED * dt
     end
-    if input.held("right") then
+    if wg.input.held("right") then
         x += SPEED * dt
     end
-    if input.held("up") then
+    if wg.input.held("up") then
         y -= SPEED * dt
     end
-    if input.held("down") then
+    if wg.input.held("down") then
         y += SPEED * dt
     end
 end
 
 function draw()
-    graphics.clear("#1d232b")
-    graphics.draw_text(font, MESSAGE, x, y, "#f2c14e")
+    wg.graphics.clear("#1d232b")
+    wg.graphics.draw_text(font, MESSAGE, x, y, "#f2c14e")
 end
 ```
 

@@ -6,6 +6,7 @@
 -- screen until `battle.close`, so the game can fade away from it. The player's hit points, items
 -- and coins are in `rpg`, and change as the battle goes. Their stats include their gear's.
 
+local wg = require("@wingine")
 local dialogue = require("./dialogue")
 local foes = require("./foes")
 local items = require("./items")
@@ -62,8 +63,8 @@ local HURT = "#e8c040"
 local CRITICAL = "#d04a3a"
 local HERO = "#f2d3ab"
 
-local font = graphics.default_font()
-local hit = audio.load("sounds/bump.wav")
+local font = wg.graphics.default_font()
+local hit = wg.audio.load("sounds/bump.wav")
 local hero = world.sprite(27, 0)
 
 -- A number from 0 up to 1, at random: how hard hits land, whether they miss, and which move a
@@ -186,8 +187,8 @@ local function act(user: Fighter, target: Fighter, move: foes.Move)
         end
         target.hp = math.max(target.hp - damage(move.power, user, target), 0)
         target.blink = BLINK_SECONDS
-        audio.play(hit)
-        wait_until(settled)
+        wg.audio.play(hit)
+        wg.wait_until(settled)
     elseif move.effect == "guard" then
         user.guarding = true
         say("You brace yourself for the next blow.")
@@ -209,7 +210,7 @@ local function use_item(state: State, name: string)
     items.take(name)
     say(`You used a {items.kind(name).name}.`)
     player.hp += healed
-    wait_until(settled)
+    wg.wait_until(settled)
     say(`You recovered {healed} HP.`)
 end
 
@@ -270,8 +271,8 @@ end
 
 local function faint(fighter: Fighter)
     fighter.fainted = 0
-    audio.play(hit, { speed = 0.5 })
-    wait(FAINT_SECONDS)
+    wg.audio.play(hit, { speed = 0.5 })
+    wg.wait(FAINT_SECONDS)
 end
 
 local function win(state: State): string
@@ -330,10 +331,10 @@ local function turn(state: State): string?
 end
 
 local function run(state: State): string
-    wait(FLASH_SECONDS)
+    wg.wait(FLASH_SECONDS)
     state.phase = "fight"
     state.time = 0
-    wait(INTRO_SECONDS)
+    wg.wait(INTRO_SECONDS)
     say(state.foe_kind.intro)
     local outcome = nil
     while not outcome do
@@ -377,7 +378,7 @@ function battle.update(dt: number)
     end
     state.time += dt
     for _, fighter in { state.player, state.foe } do
-        fighter.shown_hp = approach(fighter.shown_hp, fighter.hp, fighter.max_hp * DRAIN_RATE * dt)
+        fighter.shown_hp = wg.approach(fighter.shown_hp, fighter.hp, fighter.max_hp * DRAIN_RATE * dt)
         fighter.blink = math.max(fighter.blink - dt, 0)
         if fighter.fainted then
             fighter.fainted += dt
@@ -388,25 +389,25 @@ end
 -- A fighter's name and hit points, in a panel. The player's shows the numbers too.
 local function draw_panel(fighter: Fighter, name: string, at, numbers: boolean)
     look.panel(at.x, at.y, at.width, PANEL_HEIGHT)
-    graphics.draw_text(font, name, at.x + 6, at.y + 4, look.TEXT)
+    wg.graphics.draw_text(font, name, at.x + 6, at.y + 4, look.TEXT)
     if numbers then
         local text = `{math.ceil(fighter.shown_hp)}/{fighter.max_hp}`
         local width = font:measure(text)
-        graphics.draw_text(font, text, at.x + at.width - 6 - width, at.y + 4, look.TEXT)
+        wg.graphics.draw_text(font, text, at.x + at.width - 6 - width, at.y + 4, look.TEXT)
     end
-    graphics.draw_text(font, "HP", at.x + 6, at.y + 16, look.TEXT)
+    wg.graphics.draw_text(font, "HP", at.x + 6, at.y + 16, look.TEXT)
     local bar_x, bar_y, bar_width = at.x + 22, at.y + 19, at.width - 28
     local share = fighter.shown_hp / fighter.max_hp
     local color = if share > 0.5 then HEALTHY elseif share > 0.2 then HURT else CRITICAL
-    graphics.fill_rect(bar_x, bar_y, bar_width, 4, BAR_EMPTY)
-    graphics.fill_rect(bar_x, bar_y, math.ceil(bar_width * share), 4, color)
+    wg.graphics.fill_rect(bar_x, bar_y, bar_width, 4, BAR_EMPTY)
+    wg.graphics.fill_rect(bar_x, bar_y, math.ceil(bar_width * share), 4, color)
 end
 
 -- A shadow for a fighter to stand on, centered on `x`.
 local function platform(x: number, y: number)
-    graphics.fill_rect(x - 20, y - 4, 40, 10, PLATFORM)
-    graphics.fill_rect(x - 28, y - 2, 56, 6, PLATFORM)
-    graphics.fill_rect(x - 32, y, 64, 2, PLATFORM)
+    wg.graphics.fill_rect(x - 20, y - 4, 40, 10, PLATFORM)
+    wg.graphics.fill_rect(x - 28, y - 2, 56, 6, PLATFORM)
+    wg.graphics.fill_rect(x - 32, y, 64, 2, PLATFORM)
 end
 
 -- A fighter, blinking after a hit, and sinking out of sight as it faints.
@@ -422,7 +423,7 @@ local function draw_fighter(fighter: Fighter, sprite, x: number, y: number, tint
     end
     if alpha > 0 then
         local color = `{tint}{string.format("%02x", math.floor(alpha * 255))}`
-        graphics.draw_sprite(sprite, x, math.round(y), color, SIZE, SIZE)
+        wg.graphics.draw_sprite(sprite, x, math.round(y), color, SIZE, SIZE)
     end
 end
 
@@ -434,13 +435,13 @@ function battle.draw()
     end
     if state.phase == "flash" then
         if state.time % FLASH_PERIOD < FLASH_PERIOD / 2 then
-            graphics.fill_rect(0, 0, WIDTH, HEIGHT, FLASH)
+            wg.graphics.fill_rect(0, 0, WIDTH, HEIGHT, FLASH)
         end
         return
     end
 
-    graphics.clear(SKY)
-    graphics.fill_rect(0, HORIZON, WIDTH, HEIGHT - HORIZON, GROUND)
+    wg.graphics.clear(SKY)
+    wg.graphics.fill_rect(0, HORIZON, WIDTH, HEIGHT - HORIZON, GROUND)
     -- The foe slides in from the right, and the player from the left.
     local intro = 1 - math.min(state.time / INTRO_SECONDS, 1)
     local foe_x = math.round(FOE_X + intro * (WIDTH - FOE_X))

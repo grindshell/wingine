@@ -16,12 +16,13 @@ tasks, apart from `audio.load` and `audio.make`, which work any time. Without a 
 without a window, audio is silent, but sounds still start, play and finish on time.
 
 ```lua
-local jump = audio.load("sounds/jump.wav")
-audio.play_music("sounds/theme.ogg", 1)
+local wg = require("@wingine")
+local jump = wg.audio.load("sounds/jump.wav")
+wg.audio.play_music("sounds/theme.ogg", 1)
 
 function update(dt: number)
-    if input.pressed("jump") then
-        audio.play(jump, { volume = 0.8 })
+    if wg.input.pressed("jump") then
+        wg.audio.play(jump, { volume = 0.8 })
     end
 end
 ```
@@ -31,7 +32,7 @@ end
 ### `audio.load`
 
 ```lua
-audio.load(path: string): Sound
+wg.audio.load(path: string): Sound
 ```
 
 Loads the sound effect at `path`, relative to the game's folder, decoding all of it into memory.
@@ -40,7 +41,7 @@ Load each sound once, when the game loads, rather than each time it plays.
 ### `audio.make`
 
 ```lua
-audio.make(samples: buffer, rate: number, channels: number?): Sound
+wg.audio.make(samples: buffer, rate: number, channels: number?): Sound
 ```
 
 Makes a sound effect of samples the game works out, rather than a file's: a shot, a step, a tone,
@@ -58,7 +59,7 @@ for i = 0, count - 1 do
     local fade = 1 - i / count
     buffer.writef32(samples, i * 4, (math.random() * 2 - 1) * fade * fade)
 end
-local hiss = audio.make(samples, RATE)
+local hiss = wg.audio.make(samples, RATE)
 ```
 
 Make each sound once, not each time it plays: working out samples in Luau takes a millisecond or
@@ -72,7 +73,7 @@ samples for each channel; if a sample isn't a number; if `rate` isn't a whole nu
 ### `audio.play`
 
 ```lua
-audio.play(sound: Sound, settings: PlaySettings?): Voice
+wg.audio.play(sound: Sound, settings: PlaySettings?): Voice
 ```
 
 Plays `sound`, and returns its [voice](#voice), which a game keeps if it will change or stop the
@@ -88,10 +89,10 @@ sound as it plays, and otherwise ignores. `settings` is a table with any of thes
 
 ```lua
 -- Higher as the combo grows, and from where the hit happened.
-audio.play(hit, { speed = 1 + combo * 0.05, pan = (x / canvas_width) * 2 - 1 })
+wg.audio.play(hit, { speed = 1 + combo * 0.05, pan = (x / canvas_width) * 2 - 1 })
 
 -- A hum for as long as the engine runs.
-local hum = audio.play(engine, { looping = true, fade_in = 0.5 })
+local hum = wg.audio.play(engine, { looping = true, fade_in = 0.5 })
 ```
 
 A volume, speed or pan that isn't a number, or a speed that isn't above 0, is an error. If too
@@ -101,7 +102,7 @@ warning rather than stopping the game; its voice has finished already.
 ### `audio.stop_sounds`
 
 ```lua
-audio.stop_sounds(fade: number?)
+wg.audio.stop_sounds(fade: number?)
 ```
 
 Stops every sound effect playing, fading them out over `fade` seconds (by default, 0: at once).
@@ -110,7 +111,7 @@ Music carries on.
 ### `audio.pause_sounds`
 
 ```lua
-audio.pause_sounds(fade: number?)
+wg.audio.pause_sounds(fade: number?)
 ```
 
 Pauses every sound effect playing, fading them out over `fade` seconds (by default, 0: at once),
@@ -120,19 +121,19 @@ Music carries on.
 ### `audio.resume_sounds`
 
 ```lua
-audio.resume_sounds(fade: number?)
+wg.audio.resume_sounds(fade: number?)
 ```
 
 Resumes every sound effect paused, by `audio.pause_sounds` or by its voice, fading them in over
 `fade` seconds (by default, 0: at once).
 
 ```lua
-if input.pressed("pause") then
+if wg.input.pressed("pause") then
     paused = not paused
     if paused then
-        audio.pause_sounds()
+        wg.audio.pause_sounds()
     else
-        audio.resume_sounds()
+        wg.audio.resume_sounds()
     end
 end
 ```
@@ -140,7 +141,7 @@ end
 ### `audio.sounds_playing`
 
 ```lua
-audio.sounds_playing(): number
+wg.audio.sounds_playing(): number
 ```
 
 Returns how many sound effects are playing, paused ones too.
@@ -165,20 +166,21 @@ Each method that changes the sound takes a `fade`: the seconds it takes to get t
 at once.
 
 ```lua
-local steps = audio.load("sounds/steps.wav")
+local wg = require("@wingine")
+local steps = wg.audio.load("sounds/steps.wav")
 local walking: Voice? = nil
 
 function update(dt: number)
-    local moving = input.held("left") or input.held("right")
+    local moving = wg.input.held("left") or wg.input.held("right")
     if moving and not walking then
-        walking = audio.play(steps, { looping = true })
+        walking = wg.audio.play(steps, { looping = true })
     elseif not moving and walking then
         walking:stop(0.1)
         walking = nil
     end
     if walking then
         -- Quicker steps while running.
-        walking:set_speed(if input.held("run") then 1.5 else 1, 0.2)
+        walking:set_speed(if wg.input.held("run") then 1.5 else 1, 0.2)
     end
 end
 ```
@@ -257,7 +259,7 @@ Returns whether the sound is paused.
 ### `audio.play_music`
 
 ```lua
-audio.play_music(path: string, fade: number?)
+wg.audio.play_music(path: string, fade: number?)
 ```
 
 Starts looping the music file at `path`, relative to the game's folder, streaming it from disk as
@@ -267,7 +269,7 @@ default, 0: it switches at once). A file that can't be read is an error.
 ### `audio.stop_music`
 
 ```lua
-audio.stop_music(fade: number?)
+wg.audio.stop_music(fade: number?)
 ```
 
 Stops the music, fading it out over `fade` seconds (by default, 0: at once).
@@ -275,7 +277,7 @@ Stops the music, fading it out over `fade` seconds (by default, 0: at once).
 ### `audio.music_playing`
 
 ```lua
-audio.music_playing(): boolean
+wg.audio.music_playing(): boolean
 ```
 
 Returns whether music is playing.
@@ -285,7 +287,7 @@ Returns whether music is playing.
 ### `audio.set_volume`
 
 ```lua
-audio.set_volume(volume: number)
+wg.audio.set_volume(volume: number)
 ```
 
 Sets the volume of everything: sound effects and music.
@@ -293,7 +295,7 @@ Sets the volume of everything: sound effects and music.
 ### `audio.set_sound_volume`
 
 ```lua
-audio.set_sound_volume(volume: number)
+wg.audio.set_sound_volume(volume: number)
 ```
 
 Sets the volume of sound effects, apart from music, such as from an options menu.
@@ -301,7 +303,7 @@ Sets the volume of sound effects, apart from music, such as from an options menu
 ### `audio.set_music_volume`
 
 ```lua
-audio.set_music_volume(volume: number)
+wg.audio.set_music_volume(volume: number)
 ```
 
 Sets the volume of music, apart from sound effects.

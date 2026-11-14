@@ -17,6 +17,7 @@
 -- game reloads whenever its files change, carrying the match on, so changing how the computer
 -- plays in `opponent.luau` changes it mid-rally.
 
+local wg = require("@wingine")
 local opponent = require("./opponent")
 local conf = require("./conf")
 
@@ -119,7 +120,7 @@ local function hits(ball: Ball, paddle: Paddle, side: Side): boolean
     local toward = ball.vx * direction(side) > 0
     local ball_box = { x = left, y = ball.y - BALL_SIZE / 2, width = BALL_SIZE, height = BALL_SIZE }
     local paddle_box = { x = paddle.x, y = paddle.y, width = PADDLE_WIDTH, height = PADDLE_HEIGHT }
-    return toward and in_front and rect.overlaps(ball_box, paddle_box)
+    return toward and in_front and wg.rect.overlaps(ball_box, paddle_box)
 end
 
 -- Sends `ball` back from the paddle on `side`: faster, and steeper the further from the
@@ -129,8 +130,8 @@ local function bounce_off(ball: Ball, paddle: Paddle, side: Side)
     local offset = math.clamp((ball.y - paddle_center(paddle)) / reach, -1, 1)
     local angle = offset * MAX_BOUNCE_ANGLE
     local new_speed = math.min(speed(ball) * SPEEDUP, MAX_SPEED)
-    ball.vx = direction(opposite(side)) * exact.cos(angle) * new_speed
-    ball.vy = exact.sin(angle) * new_speed
+    ball.vx = direction(opposite(side)) * wg.exact.cos(angle) * new_speed
+    ball.vy = wg.exact.sin(angle) * new_speed
     -- In front of the paddle, so it doesn't hit again.
     ball.x = if side == "left"
         then paddle.x + PADDLE_WIDTH + BALL_SIZE / 2
@@ -142,20 +143,20 @@ local function panned(x: number)
     return { pan = (math.clamp(x / WIDTH, 0, 1) * 2 - 1) * STEREO_WIDTH }
 end
 
-input.bind("up", { "W", "Up", "DPadUp", "LeftStickUp" })
-input.bind("down", { "S", "Down", "DPadDown", "LeftStickDown" })
-input.bind("serve", { "Space", "Enter", "South", "Start" })
-input.bind("fullscreen", { "F11" })
+wg.input.bind("up", { "W", "Up", "DPadUp", "LeftStickUp" })
+wg.input.bind("down", { "S", "Down", "DPadDown", "LeftStickDown" })
+wg.input.bind("serve", { "Space", "Enter", "South", "Start" })
+wg.input.bind("fullscreen", { "F11" })
 
 local sounds = {
-    hit = audio.load("sounds/blip.wav"),
-    wall = audio.load("sounds/bump.wav"),
-    point = audio.load("sounds/chime.wav"),
+    hit = wg.audio.load("sounds/blip.wav"),
+    wall = wg.audio.load("sounds/bump.wav"),
+    point = wg.audio.load("sounds/chime.wav"),
 }
-audio.set_music_volume(MUSIC_VOLUME)
-audio.play_music("sounds/music.ogg", 1)
+wg.audio.set_music_volume(MUSIC_VOLUME)
+wg.audio.play_music("sounds/music.ogg", 1)
 
-local font = graphics.default_font()
+local font = wg.graphics.default_font()
 local headline_font = font:scaled(2)
 local score_font = font:scaled(3)
 
@@ -197,14 +198,14 @@ function reloading()
     return pong
 end
 
-local kept = window.reloaded()
+local kept = wg.window.reloaded()
 if kept then
     for key, value in kept do
         pong[key] = value
     end
 end
 
-spawn(opponent.play, pong, WIDTH, HEIGHT)
+wg.spawn(opponent.play, pong, WIDTH, HEIGHT)
 
 -- Puts the ball in play from the middle of the field, toward `pong.serve_toward`.
 local function serve()
@@ -214,8 +215,8 @@ local function serve()
     pong.ball = {
         x = WIDTH / 2,
         y = HEIGHT / 2,
-        vx = away * exact.cos(angle) * SERVE_SPEED,
-        vy = exact.sin(angle) * SERVE_SPEED,
+        vx = away * wg.exact.cos(angle) * SERVE_SPEED,
+        vy = wg.exact.sin(angle) * SERVE_SPEED,
     }
     pong.phase = "rally"
     pong.winner = nil
@@ -223,7 +224,7 @@ end
 
 -- Scores a point for `scorer`. The next serve goes to the side that lost it.
 local function point(scorer: Side)
-    audio.play(sounds.point, panned(pong.ball.x))
+    wg.audio.play(sounds.point, panned(pong.ball.x))
     pong.score[scorer] += 1
     pong.ball = resting_ball()
     pong.serve_toward = opposite(scorer)
@@ -239,8 +240,8 @@ end
 -- Moves the player's paddle with the keys or a gamepad, or to the cursor once the mouse moves.
 local function move_player(dt: number)
     -- -1 up and 1 down, and with a stick, anywhere between.
-    local heading = input.axis("up", "down")
-    local x, y = input.mouse_position()
+    local heading = wg.input.axis("up", "down")
+    local x, y = wg.input.mouse_position()
     local last = pong.last_mouse
     if heading ~= 0 then
         pong.mouse_control = false
@@ -274,7 +275,7 @@ local function advance_ball(dt: number): Side?
         ball.y += ball.vy * step
         if (ball.y - half < 0 and ball.vy < 0) or (ball.y + half > HEIGHT and ball.vy > 0) then
             ball.vy = -ball.vy
-            audio.play(sounds.wall, panned(ball.x))
+            wg.audio.play(sounds.wall, panned(ball.x))
         end
         for _, side in SIDES do
             local paddle = pong[side]
@@ -284,7 +285,7 @@ local function advance_ball(dt: number): Side?
                 local settings = panned(paddle.x)
                 -- Higher as the rally speeds up.
                 settings.speed = math.sqrt(speed(ball) / SERVE_SPEED)
-                audio.play(sounds.hit, settings)
+                wg.audio.play(sounds.hit, settings)
             end
         end
         if ball.x + half < 0 then
@@ -298,17 +299,17 @@ local function advance_ball(dt: number): Side?
 end
 
 function update(dt: number)
-    if input.pressed("fullscreen") and window.fullscreen() then
-        window.set_fullscreen(nil)
-    elseif input.pressed("fullscreen") then
-        window.set_fullscreen("borderless")
+    if wg.input.pressed("fullscreen") and wg.window.fullscreen() then
+        wg.window.set_fullscreen(nil)
+    elseif wg.input.pressed("fullscreen") then
+        wg.window.set_fullscreen("borderless")
     end
     pong.time += dt
     pong.shake = math.max(pong.shake - dt, 0)
     move_opponent(dt)
     move_player(dt)
 
-    local serving = input.pressed("serve") or input.mouse_pressed("left")
+    local serving = wg.input.pressed("serve") or wg.input.mouse_pressed("left")
     if pong.phase == "ready" and serving then
         serve()
     elseif pong.phase == "over" and serving then
@@ -342,32 +343,32 @@ end
 -- Draws `text` centered on `x`, with its top at `y`.
 local function draw_centered(text_font, text: string, x: number, y: number, color)
     local width = text_font:measure(text)
-    graphics.draw_text(text_font, text, x - width / 2, y, color)
+    wg.graphics.draw_text(text_font, text, x - width / 2, y, color)
 end
 
 function draw()
-    graphics.clear(BACKGROUND)
+    wg.graphics.clear(BACKGROUND)
     -- Hits shake the field, but not the score and messages drawn over it.
     local strength = SHAKE_PIXELS * pong.shake / SHAKE_SECONDS
-    graphics.set_camera(
+    wg.graphics.set_camera(
         WIDTH / 2 + math.sin(pong.time * 97) * strength,
         HEIGHT / 2 + math.cos(pong.time * 61) * strength
     )
     for i = 0, math.ceil(HEIGHT / DASH_SPACING) - 1 do
         local y = i * DASH_SPACING + (DASH_SPACING - DASH_LENGTH) / 2
-        graphics.fill_rect(WIDTH / 2 - 1, y, 2, DASH_LENGTH, LINE)
+        wg.graphics.fill_rect(WIDTH / 2 - 1, y, 2, DASH_LENGTH, LINE)
     end
     for _, side in SIDES do
         local paddle = pong[side]
-        graphics.fill_rect(paddle.x, paddle.y, PADDLE_WIDTH, PADDLE_HEIGHT, PADDLE)
+        wg.graphics.fill_rect(paddle.x, paddle.y, PADDLE_WIDTH, PADDLE_HEIGHT, PADDLE)
     end
     -- Between matches, the message takes the ball's place.
     if pong.phase == "rally" or pong.phase == "pause" then
         local half = BALL_SIZE / 2
-        graphics.fill_rect(pong.ball.x - half, pong.ball.y - half, BALL_SIZE, BALL_SIZE, BALL)
+        wg.graphics.fill_rect(pong.ball.x - half, pong.ball.y - half, BALL_SIZE, BALL_SIZE, BALL)
     end
 
-    graphics.set_camera(nil)
+    wg.graphics.set_camera(nil)
     draw_centered(score_font, tostring(pong.score.left), WIDTH / 4, 8, SCORE)
     draw_centered(score_font, tostring(pong.score.right), WIDTH * 0.75, 8, SCORE)
     local headline, prompt = message()
@@ -377,7 +378,7 @@ function draw()
         local width = math.max(headline_width, prompt_width) + MESSAGE_PADDING * 2
         local height = headline_height + prompt_height + MESSAGE_PADDING * 2
         local x, y = math.round((WIDTH - width) / 2), math.round((HEIGHT - height) / 2)
-        graphics.fill_rect(x, y, width, height, PANEL)
+        wg.graphics.fill_rect(x, y, width, height, PANEL)
         local top = y + MESSAGE_PADDING
         draw_centered(headline_font, headline, WIDTH / 2, top, TEXT)
         draw_centered(font, prompt, WIDTH / 2, top + headline_height, TEXT)

@@ -3,6 +3,7 @@
 -- for each bullet system tried. Bullets move, turn and are checked against the player's place
 -- as they are in the game, so the plot shows what the game could afford.
 
+local wg = require("@wingine")
 local art = require("./art")
 local field = require("./field")
 local patterns = require("./patterns")
@@ -72,7 +73,7 @@ end
 -- How long the frame before took in milliseconds, as though it had one update: frames that run
 -- two updates, or none, shouldn't count double or nothing.
 function stress.frame_time(): number
-    local stats = graphics.frame_stats()
+    local stats = wg.graphics.frame_stats()
     local updates = math.max(shmup.last_frame_updates, 1)
     return (stats.update / updates + stats.draw + stats.render) * 1000
 end
@@ -139,7 +140,7 @@ function stress.draw_plot(x: number, y: number, width: number, height: number, c
     local most_bullets, most_time = stress.scale()
     local budget_y = y + height - stress.BUDGET / most_time * height
     for dash = 0, width - 1, 4 do
-        graphics.fill_rect(x + dash, budget_y, 2, 1, line)
+        wg.graphics.fill_rect(x + dash, budget_y, 2, 1, line)
     end
     for name, curve in shmup.stress.curves do
         local color = colors[name]
@@ -147,7 +148,7 @@ function stress.draw_plot(x: number, y: number, width: number, height: number, c
             local average = entry.total / entry.frames
             local px = x + (bin + 0.5) * BIN / most_bullets * width
             local py = y + height - math.min(average / most_time, 1) * height
-            graphics.fill_rect(px - 1, py - 1, 2, 2, color)
+            wg.graphics.fill_rect(px - 1, py - 1, 2, 2, color)
         end
     end
 end

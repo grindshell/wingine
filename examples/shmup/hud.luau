@@ -3,21 +3,22 @@
 -- nodes in from the game's state, shows the ones the game's mode needs and draws it, in canvas
 -- pixels, so the mouse can point at the menu's items.
 
+local wg = require("@wingine")
 local boss = require("./boss")
 local stress = require("./stress")
 
 local hud = {}
 
-local TEXT = graphics.color("#f4f0e8")
-local DIM = graphics.color("#8a92b8")
-local PLOT_LINE = graphics.color("#ff4048")
+local TEXT = wg.graphics.color("#f4f0e8")
+local DIM = wg.graphics.color("#8a92b8")
+local PLOT_LINE = wg.graphics.color("#ff4048")
 -- The stress test's colors for each bullet system.
 hud.SYSTEM_COLORS = {
-    Luau = graphics.color("#f2c14e"),
-    native = graphics.color("#4de0e0"),
+    Luau = wg.graphics.color("#f2c14e"),
+    native = wg.graphics.color("#4de0e0"),
 }
 
-hud.scene = scene.load("hud.scene.luau")
+hud.scene = wg.scene.load("hud.scene.luau")
 
 -- The node at `path` from the scene's top, found the first time it's asked for.
 local found = {}
@@ -37,7 +38,7 @@ local item_names = {}
 for i, item in hud.items do
     item_names[i] = item:find("label"):text()
 end
-hud.menu = ui.menu(node("field/title/menu"))
+hud.menu = wg.ui.menu(node("field/title/menu"))
 
 -- `n` with commas between groups of three digits, such as "1,234,567".
 function hud.number(n: number): string
@@ -58,7 +59,7 @@ end
 -- How long the frame before took to update, draw and render, in milliseconds. The rows stack
 -- under the play's, or with the stress test's hidden, first.
 local function timings()
-    local frame = graphics.frame_stats()
+    local frame = wg.graphics.frame_stats()
     row("stats/bullets", hud.number(shmup.bullets.count()))
     row("stats/system", shmup.system, hud.SYSTEM_COLORS[shmup.system])
     row("stats/update", string.format("%.2f ms", frame.update * 1000))
@@ -177,7 +178,7 @@ function hud.draw()
         node("field/banner/headline"):set_text(headline)
         node("field/banner/detail"):set_text(detail or "")
     end
-    graphics.draw_scene(hud.scene)
+    wg.graphics.draw_scene(hud.scene)
     if shmup.mode == "stress" then
         local plot = node("panel/rows/stress/plot"):bounds()
         stress.draw_plot(plot.x, plot.y, plot.width, plot.height, hud.SYSTEM_COLORS, PLOT_LINE)

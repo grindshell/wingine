@@ -29,17 +29,19 @@
 -- (<https://kenney.nl/assets/prototype-kit>, CC0). The game's state is in the global table
 -- `course`, where tests can see it.
 
-local level = scene.load("course.scene.luau")
+local wg = require("@wingine")
+
+local level = wg.scene.load("course.scene.luau")
 local view = level:find("view") :: SceneNode
 local player = view:find("player") :: SceneNode
 local shadow = view:find("shadow") :: SceneNode
 local fall = view:find("fall") :: SceneNode
 
-input.bind("left", { "Left", "A", "DPadLeft", "LeftStickLeft" })
-input.bind("right", { "Right", "D", "DPadRight", "LeftStickRight" })
-input.bind("up", { "Up", "W", "DPadUp", "LeftStickUp" })
-input.bind("down", { "Down", "S", "DPadDown", "LeftStickDown" })
-input.bind("jump", { "Space", "South" })
+wg.input.bind("left", { "Left", "A", "DPadLeft", "LeftStickLeft" })
+wg.input.bind("right", { "Right", "D", "DPadRight", "LeftStickRight" })
+wg.input.bind("up", { "Up", "W", "DPadUp", "LeftStickUp" })
+wg.input.bind("down", { "Down", "S", "DPadDown", "LeftStickDown" })
+wg.input.bind("jump", { "Space", "South" })
 
 -- Units a second the player walks, and how fast it rises as it jumps.
 local SPEED = 2.5
@@ -69,7 +71,7 @@ local FARTHEST = 2
 local WADDLE = 0.15
 local WADDLE_SPEED = 14
 
-local world = physics.world_3d()
+local world = wg.physics.world_3d()
 for _, node in view:tagged("solid") do
     world:add(node)
 end
@@ -130,21 +132,21 @@ end
 -- Brings the camera nearer as the mouse wheel turns away from the player, and takes it farther as
 -- it turns toward them.
 local function zoom()
-    local _, turned = input.wheel()
+    local _, turned = wg.input.wheel()
     course.zoom = math.clamp(course.zoom * ZOOM_STEP ^ turned, NEAREST, FARTHEST)
 end
 
 -- Walks the player by the keys held, as fast diagonally as straight, falling unless it's on the
 -- ground, and jumping off it.
 local function walk(dt: number)
-    local across = input.axis("left", "right")
-    local along = input.axis("up", "down")
+    local across = wg.input.axis("left", "right")
+    local along = wg.input.axis("up", "down")
     local length = math.sqrt(across * across + along * along)
     if length > 1 then
         across /= length
         along /= length
     end
-    if course.grounded and input.pressed("jump") then
+    if course.grounded and wg.input.pressed("jump") then
         course.rising = JUMP
     end
     course.rising -= GRAVITY * dt
@@ -157,7 +159,7 @@ local function walk(dt: number)
     end
     if across ~= 0 or along ~= 0 then
         -- Facing the way it walks, from facing `+z`, toward the camera.
-        course.facing = exact.atan2(across, along)
+        course.facing = wg.exact.atan2(across, along)
         course.walk_time += dt
     else
         course.walk_time = 0
@@ -235,27 +237,27 @@ function update(dt: number)
     cast_shadow()
 end
 
-local font = graphics.default_font()
+local font = wg.graphics.default_font()
 -- The sky is the color the view's fog fades the course to, so the two meet.
 local fog = view:fog()
-local sky = if fog then fog.color else graphics.color("#a8c8e8")
+local sky = if fog then fog.color else wg.graphics.color("#a8c8e8")
 
 function draw()
-    graphics.clear(sky)
+    wg.graphics.clear(sky)
     view:set_camera(course.camera())
-    graphics.draw_scene(level)
+    wg.graphics.draw_scene(level)
 
     -- The HUD, over the view.
-    local width = graphics.size()
-    graphics.fill_rect(0, 0, width, 14, "#00000080")
-    graphics.draw_text(font, `Coins: {course.found}/{#coins}`, 4, 3, "#ffffff")
+    local width = wg.graphics.size()
+    wg.graphics.fill_rect(0, 0, width, 14, "#00000080")
+    wg.graphics.draw_text(font, `Coins: {course.found}/{#coins}`, 4, 3, "#ffffff")
     local hint = "Arrows walk, Space jumps"
-    graphics.draw_text(font, hint, width - font:measure(hint) - 4, 3, "#ffffff")
+    wg.graphics.draw_text(font, hint, width - font:measure(hint) - 4, 3, "#ffffff")
     if course.done then
         local message = "Every coin found!"
         local x, y = view:project(course.feet() + vector.create(0, 1, 0))
         if x and y then
-            graphics.draw_text(font, message, x - font:measure(message) / 2, y - 10, "#ffd870")
+            wg.graphics.draw_text(font, message, x - font:measure(message) / 2, y - 10, "#ffd870")
         end
     end
 end

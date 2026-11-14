@@ -32,14 +32,16 @@
 -- (<https://kenney.nl/assets/1-bit-pack>, CC0). Its sprites are white on transparent, so the scene
 -- tints them. The game's state is in the global table `garden`, where tests can see it.
 
-local garden_scene = scene.load("garden.scene.luau")
+local wg = require("@wingine")
 
-input.bind("left", { "Left", "A" })
-input.bind("right", { "Right", "D" })
-input.bind("up", { "Up", "W" })
-input.bind("down", { "Down", "S" })
-input.bind("tend", { "Space", "Enter", "E" })
-input.bind("debug", { "F1" })
+local garden_scene = wg.scene.load("garden.scene.luau")
+
+wg.input.bind("left", { "Left", "A" })
+wg.input.bind("right", { "Right", "D" })
+wg.input.bind("up", { "Up", "W" })
+wg.input.bind("down", { "Down", "S" })
+wg.input.bind("tend", { "Space", "Enter", "E" })
+wg.input.bind("debug", { "F1" })
 
 -- How far either side of the middle of its feet the player bumps into things.
 local FOOT = 4
@@ -63,7 +65,7 @@ local flock = garden_scene:find("flock")
 -- ground. The notes' areas are sensors, which find the player, in the world too.
 local solids = garden_scene:tagged("solid")
 local notes = garden_scene:tagged("note")
-local world = physics.world()
+local world = wg.physics.world()
 for _, solid in solids do
     world:add(solid)
 end
@@ -100,27 +102,27 @@ garden = {
 
 -- The colors of F1's view: what's solid, the notes' areas, the player's feet, and the turning
 -- nodes.
-local DEBUG_SOLID = graphics.color("#ff5a4ad0")
-local DEBUG_NOTE = graphics.color("#f2c14ed0")
-local DEBUG_FEET = graphics.color("#5ad2ff")
-local DEBUG_TURNING = graphics.color("#ffffff90")
+local DEBUG_SOLID = wg.graphics.color("#ff5a4ad0")
+local DEBUG_NOTE = wg.graphics.color("#f2c14ed0")
+local DEBUG_FEET = wg.graphics.color("#5ad2ff")
+local DEBUG_TURNING = wg.graphics.color("#ffffff90")
 -- Where a seed would land: green with room for a flower, red without.
-local DEBUG_ROOM = graphics.color("#7ad27a")
-local DEBUG_NO_ROOM = graphics.color("#ff5a4a")
+local DEBUG_ROOM = wg.graphics.color("#7ad27a")
+local DEBUG_NO_ROOM = wg.graphics.color("#ff5a4a")
 
 -- Walks the player by the keys held, sliding along whatever it bumps into.
 local function walk(dt: number)
     local dx, dy = 0, 0
-    if input.held("left") then
+    if wg.input.held("left") then
         dx -= 1
     end
-    if input.held("right") then
+    if wg.input.held("right") then
         dx += 1
     end
-    if input.held("up") then
+    if wg.input.held("up") then
         dy -= 1
     end
-    if input.held("down") then
+    if wg.input.held("down") then
         dy += 1
     end
     if dx == 0 and dy == 0 then
@@ -193,7 +195,7 @@ local function tend()
         return
     end
     garden.planted += 1
-    local flower = garden.flowers:add(scene.load("flower.scene.luau"), `planted_{garden.planted}`)
+    local flower = garden.flowers:add(wg.scene.load("flower.scene.luau"), `planted_{garden.planted}`)
     flower:set_position(seed_x, seed_y)
 end
 
@@ -211,10 +213,10 @@ function update(dt: number)
     spin(flock, FLOCK_SPEED, dt)
     walk(dt)
     show_note()
-    if input.pressed("tend") then
+    if wg.input.pressed("tend") then
         tend()
     end
-    if input.pressed("debug") then
+    if wg.input.pressed("debug") then
         garden.debug = not garden.debug
     end
 end
@@ -223,7 +225,7 @@ end
 local function outline(node, color: number)
     local bounds = node:bounds()
     if bounds then
-        graphics.outline_rect(bounds.x, bounds.y, bounds.width, bounds.height, color)
+        wg.graphics.outline_rect(bounds.x, bounds.y, bounds.width, bounds.height, color)
     end
 end
 
@@ -236,29 +238,29 @@ local function draw_debug()
         outline(area, DEBUG_NOTE)
     end
     local x, y = player:position()
-    graphics.outline_rect(x + FEET.x, y + FEET.y, FEET.width, FEET.height, DEBUG_FEET)
+    wg.graphics.outline_rect(x + FEET.x, y + FEET.y, FEET.width, FEET.height, DEBUG_FEET)
     local seed_x, seed_y, room = seed_landing()
     local seed_color = if room then DEBUG_ROOM else DEBUG_NO_ROOM
-    graphics.draw_line(x, y, seed_x, seed_y, seed_color)
-    graphics.outline_circle(seed_x, seed_y, ROOM, seed_color)
+    wg.graphics.draw_line(x, y, seed_x, seed_y, seed_color)
+    wg.graphics.outline_circle(seed_x, seed_y, ROOM, seed_color)
     for _, node in { sails, flock } do
         local cx, cy = node:world_position()
-        graphics.fill_circle(cx, cy, 2, DEBUG_TURNING)
+        wg.graphics.fill_circle(cx, cy, 2, DEBUG_TURNING)
         local reach = 0
         for _, child in node:children() do
             local child_x, child_y = child:world_position()
-            graphics.draw_line(cx, cy, child_x, child_y, DEBUG_TURNING)
+            wg.graphics.draw_line(cx, cy, child_x, child_y, DEBUG_TURNING)
             reach = math.max(reach, math.sqrt((child_x - cx) ^ 2 + (child_y - cy) ^ 2))
         end
         if reach > 0 then
-            graphics.outline_circle(cx, cy, reach, DEBUG_TURNING)
+            wg.graphics.outline_circle(cx, cy, reach, DEBUG_TURNING)
         end
     end
 end
 
 function draw()
-    graphics.clear("#000000")
-    graphics.draw_scene(garden.scene)
+    wg.graphics.clear("#000000")
+    wg.graphics.draw_scene(garden.scene)
     if garden.debug then
         draw_debug()
     end

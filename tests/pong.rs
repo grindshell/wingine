@@ -356,8 +356,11 @@ fn the_court_fits_a_screen_of_another_shape_and_stretches_to_fill_it() {
     );
     assert!(is_color(image.pixel(512, 672), BAR), "the bar below");
 
-    simulation.exec("window.set_scaling('stretch')");
-    assert_eq!(simulation.eval::<String>("window.scaling()"), "stretch");
+    simulation.exec("local wg = require('@wingine') wg.window.set_scaling('stretch')");
+    assert_eq!(
+        simulation.eval::<String>("require('@wingine').window.scaling()"),
+        "stretch"
+    );
     let image = simulation.screenshot().unwrap();
     for [x, y] in [[300, 1], [1, 1], [1022, 766]] {
         assert!(

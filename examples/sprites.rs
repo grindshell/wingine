@@ -36,9 +36,11 @@ const GLYPHS_PER_BLIP: usize = 3;
 const BUMP_SECONDS: f32 = 0.3;
 /// Lets scripts make the scene's functions wait, in Luau.
 const SCRIPT_API: &str = "
+local wg = require('@wingine')
+
 function say(text: string)
     show_text(text)
-    wait_until(function() return not text_open() end)
+    wg.wait_until(function() return not text_open() end)
 end
 ";
 const TILE: u32 = 16;

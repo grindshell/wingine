@@ -240,7 +240,8 @@ own right.
   renders wrongly with a shared one. Frames render only for screenshots unless asked. `Image`
   compares frames (`compare`, `diff`), as screenshot tests and games' tests do.
 - `src/lua.rs`: `Scripts`, a sandboxed Luau VM with tasks (`wait`, `wait_until`, `spawn`), and
-  the conversions and userdata of engine types. `wait` tells the scheduler its seconds before it
+  the conversions and userdata of engine types. Its built-ins are the start of the API module
+  (`Scripts::api`), which its own `require` answers when a game gives it no other. `wait` tells the scheduler its seconds before it
   yields, and the scheduler counts them down in `f64`, as `wait` once did in Luau, resuming the
   task only once they've passed; Luau tests' runner does the same. `exact` holds `libm`'s math,
   the same bits on every platform, for what must replay; `math`'s are builtins about five times
@@ -257,10 +258,14 @@ own right.
 ### Luau runtime
 
 - `src/runtime/`: games written entirely in Luau, from a folder with `main.luau` and an optional
-  `conf.luau`. `LuauGame` runs one; its API is the global tables `graphics`, `input`, `audio`,
-  `tilemap`, `grid`, `physics`, `scene`, `ui`, `save` and `window`, a file each. The module docs
-  are the reference for script authors, and `wingine.d.luau` declares the API's types for
-  luau-lsp; `tests/runtime.rs` checks it declares exactly what the tables hold.
+  `conf.luau`. `LuauGame` runs one; its API is a module, `require("@wingine")`, not globals:
+  `Scripts::api`'s built-ins, and the tables `graphics`, `input`, `audio`, `tilemap`, `grid`,
+  `physics`, `scene`, `ui`, `save` and `window`, a file each, frozen as the first script loads.
+  Requirers answer `@wingine` first (`lua::ApiModule`, through `to_alias_override`), so a game's
+  `.luaurc` alias of it, for luau-lsp, is never followed. The module docs are the reference for
+  script authors, and `wingine.d.luau` declares the API's types for luau-lsp, every one exported,
+  the module as `Wingine`, which `wingine.luau` returns for luau-lsp to read through that alias;
+  `tests/runtime.rs` checks it declares exactly what the module and its tables hold.
 - `Textures` caches images, fonts and models by path, so each is read once.
 - `ui.menu` and `audio.play` hand out userdata holding the `Lent`, so they're documented with
   their tables. A game's `gui(ui)` gets egui's `Ui` borrowed through `Lua::scope`, so a `Ui` kept
@@ -330,7 +335,9 @@ own right.
 ### Examples
 
 In `examples/`. Each Luau game keeps its state in one global table named for it, which its
-`.luaurc` names for luau-lsp. Scene files in the examples are in the canonical layout, which each
+`.luaurc` names for luau-lsp; `examples/.luaurc` aliases `wingine` for all of them. Scripts
+require the API as `local wg = require("@wingine")`. Scene files in the examples are in the
+canonical layout, which each
 game's tests check: after editing one, write it again with `SceneFile::write`.
 
 - `rpg/`: a top-down RPG: maps are scenes over `world.tileset.luau`, conversations and events in
@@ -416,7 +423,8 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
 - Luau resolves a global's fields named in a chunk when it loads, if the global exists then, so a
   chunk that changes a field and reads it back sees the old value. Games create their global table
   after requiring their modules, and tests read state back in a chunk of its own
-  (`Simulation::eval`).
+  (`Simulation::eval`). The API being a module costs a script a lookup or two where a global's
+  field cost none, some 2.7 nanoseconds each, which no game measured has shown.
 - Native libraries reach the engine only through the ABI, getting the same lent services scripts
   do. Hooks run in the order libraries are listed. Drawing many sprites goes through one
   `draw_sprites` call, since each call from Luau into a library costs far more than a sprite.

@@ -14,12 +14,12 @@ Everything in `save` works any time.
 ```lua
 local SAVE = "progress"
 
-local saved = save.read(SAVE)
+local saved = wg.save.read(SAVE)
 local progress = saved or { level = 1, coins = 0, unlocked = {} }
 
 -- After finishing a level.
 progress.level += 1
-save.write(SAVE, progress)
+wg.save.write(SAVE, progress)
 ```
 
 ## Where saves are kept
@@ -47,7 +47,7 @@ saves instead, with its `saves` command.
 ### `save.write`
 
 ```lua
-save.write(name: string, data: any)
+wg.save.write(name: string, data: any)
 ```
 
 Writes `data` to the save `name`, replacing any save of that name. The save is written in full to
@@ -59,8 +59,8 @@ engine object, a number that isn't finite, a table with both numbers and strings
 list with a gap, such as `{ 1, nil, 3 }`. Nothing is written then.
 
 ```lua
-save.write("progress", { level = 3, player = { name = "Pat", items = { "key", "lamp" } } })
-save.write("best_time", 92.4)
+wg.save.write("progress", { level = 3, player = { name = "Pat", items = { "key", "lamp" } } })
+wg.save.write("best_time", 92.4)
 ```
 
 A table is saved for its contents: a table with a metatable is saved as a plain one, and two
@@ -69,7 +69,7 @@ references to one table are saved as two tables. Numbers read back exactly as th
 ### `save.read`
 
 ```lua
-save.read(name: string): any
+wg.save.read(name: string): any
 ```
 
 Returns the data in the save `name`, as it was written, or `nil` if there's no such save. A save
@@ -81,7 +81,7 @@ apart:
 ```lua
 local VERSION = 2
 
-local saved = save.read("progress")
+local saved = wg.save.read("progress")
 if saved and saved.version ~= VERSION then
     saved = nil -- Saved by an older version of the game.
 end
@@ -90,7 +90,7 @@ end
 ### `save.remove`
 
 ```lua
-save.remove(name: string)
+wg.save.remove(name: string)
 ```
 
 Removes the save `name`, if there is one.
@@ -98,7 +98,7 @@ Removes the save `name`, if there is one.
 ### `save.list`
 
 ```lua
-save.list(): { string }
+wg.save.list(): { string }
 ```
 
 Returns the names of the game's saves, in order, as for a menu of save slots.

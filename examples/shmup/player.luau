@@ -1,5 +1,6 @@
 -- The player: moving, focusing, shooting and bombing, and being hit or grazing bullets.
 
+local wg = require("@wingine")
 local art = require("./art")
 local enemies = require("./enemies")
 local field = require("./field")
@@ -42,8 +43,8 @@ player.GRAZE_POINTS = 100
 -- Seconds between blinks while the player can't be hit.
 local BLINK = 0.1
 
-local TINT = graphics.color("#ffe6a8")
-local FLASH = graphics.color("#ffffff")
+local TINT = wg.graphics.color("#ffe6a8")
+local FLASH = wg.graphics.color("#ffffff")
 
 export type Player = {
     x: number,
@@ -127,19 +128,19 @@ function player.update(dt: number)
     end
 
     local dx, dy = 0, 0
-    if input.held("left") then
+    if wg.input.held("left") then
         dx -= 1
     end
-    if input.held("right") then
+    if wg.input.held("right") then
         dx += 1
     end
-    if input.held("up") then
+    if wg.input.held("up") then
         dy -= 1
     end
-    if input.held("down") then
+    if wg.input.held("down") then
         dy += 1
     end
-    p.focused = input.held("focus")
+    p.focused = wg.input.held("focus")
     local speed = if p.focused then player.FOCUS_SPEED else player.SPEED
     if dx ~= 0 and dy ~= 0 then
         speed /= math.sqrt(2)
@@ -148,12 +149,12 @@ function player.update(dt: number)
     p.y = math.clamp(p.y + dy * speed * dt, MARGIN, field.HEIGHT - MARGIN)
 
     p.reload -= dt
-    p.shooting = input.held("shoot")
+    p.shooting = wg.input.held("shoot")
     if p.shooting and p.reload <= 0 then
         fire(p)
         p.reload = SHOT_INTERVAL
     end
-    if input.pressed("bomb") then
+    if wg.input.pressed("bomb") then
         player.bomb()
     end
     -- A bomb keeps clearing bullets while it lasts.
@@ -216,7 +217,7 @@ end
 
 function player.draw()
     for _, shot in shmup.shots do
-        graphics.draw_sprite(art.shot, shot.x - 8, shot.y - 8)
+        wg.graphics.draw_sprite(art.shot, shot.x - 8, shot.y - 8)
     end
     local p = shmup.player
     if p.dead > 0 or p.lives < 0 then
@@ -227,9 +228,9 @@ function player.draw()
         return
     end
     local tint = if p.bombing > 0 then FLASH else TINT
-    graphics.draw_sprite(art.player, p.x - 8, p.y - 8, tint)
+    wg.graphics.draw_sprite(art.player, p.x - 8, p.y - 8, tint)
     if p.focused then
-        graphics.draw_sprite(art.hitbox, p.x - 4, p.y - 4)
+        wg.graphics.draw_sprite(art.hitbox, p.x - 4, p.y - 4)
     end
 end
 

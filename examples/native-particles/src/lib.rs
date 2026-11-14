@@ -6,14 +6,15 @@
 //! its `native` folder, then:
 //!
 //! ```lua
+//! local wg = require("@wingine")
 //! local sparks = particles.new_emitter("#f2c14e")
 //! sparks:burst(160, 90, 24)
 //! sparks:burst_3d(vector.create(0, 0.5, 0), 16)
 //!
 //! function draw()
-//!     graphics.clear("#000000")
+//!     wg.graphics.clear("#000000")
 //!     particles.draw()
-//!     graphics.begin_3d(view)
+//!     wg.graphics.begin_3d(view)
 //!     particles.draw_3d()
 //! end
 //! ```
@@ -197,8 +198,9 @@ impl Library for Particles {
             .luau(
                 "wait",
                 "local particles = ...
+                local wg = require('@wingine')
                 function particles.wait_until_gone()
-                    wait_until(function() return particles.count() == 0 end)
+                    wg.wait_until(function() return particles.count() == 0 end)
                 end",
             );
         registry

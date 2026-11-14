@@ -14,7 +14,7 @@ a text field. A game that takes a step for each press and each repeat walks whil
 
 ```lua
 for direction, key in { left = "H", down = "J", up = "K", right = "L" } do
-    if input.key_pressed(key) or input.key_repeated(key) then
+    if wg.input.key_pressed(key) or wg.input.key_repeated(key) then
         player.step(direction)
     end
 end
@@ -29,11 +29,13 @@ them, and ask about the actions. Then the controls live in one place, an action 
 keys and buttons, and native libraries can read the same actions.
 
 ```lua
-input.bind("jump", { "Space", "W", "Up", "South" })
-input.bind("confirm", { "Enter", "Space", "E", "South", "Start" })
+local wg = require("@wingine")
+
+wg.input.bind("jump", { "Space", "W", "Up", "South" })
+wg.input.bind("confirm", { "Enter", "Space", "E", "South", "Start" })
 
 function update(dt: number)
-    if input.pressed("jump") then
+    if wg.input.pressed("jump") then
         player.jump()
     end
 end
@@ -44,19 +46,21 @@ and two actions make an **axis**, which a stick moves through every value betwee
 in whole steps:
 
 ```lua
-input.bind("left", { "A", "Left", "DPadLeft", "LeftStickLeft" })
-input.bind("right", { "D", "Right", "DPadRight", "LeftStickRight" })
+local wg = require("@wingine")
+
+wg.input.bind("left", { "A", "Left", "DPadLeft", "LeftStickLeft" })
+wg.input.bind("right", { "D", "Right", "DPadRight", "LeftStickRight" })
 
 function update(dt: number)
     -- -1 all the way left, 1 all the way right, and with the stick, anywhere between.
-    player.x += input.axis("left", "right") * WALK_SPEED * dt
+    player.x += wg.input.axis("left", "right") * WALK_SPEED * dt
 end
 ```
 
 ### `input.bind`
 
 ```lua
-input.bind(action: string, controls: { Control }, gamepad: number?)
+wg.input.bind(action: string, controls: { Control }, gamepad: number?)
 ```
 
 Binds `action` to `controls`, [keys](#key-names), [gamepad buttons](#button-names) and
@@ -66,21 +70,21 @@ held, pressed or released when any of its controls is.
 A mouse button is named with `Mouse` before it, since `"Left"` and `"Right"` are the arrow keys:
 
 ```lua
-input.bind("fire", { "LeftControl", "MouseLeft", "RightTrigger" })
+wg.input.bind("fire", { "LeftControl", "MouseLeft", "RightTrigger" })
 ```
 
 Without `gamepad`, the buttons are any gamepad's. With it, only that gamepad's buttons count, as
 when each player has a gamepad of their own, while the keys are the same either way:
 
 ```lua
-input.bind("p1_jump", { "W", "South" }, 1)
-input.bind("p2_jump", { "Up", "South" }, 2)
+wg.input.bind("p1_jump", { "W", "South" }, 1)
+wg.input.bind("p2_jump", { "Up", "South" }, 2)
 ```
 
 ### `input.held`
 
 ```lua
-input.held(action: string): boolean
+wg.input.held(action: string): boolean
 ```
 
 Returns whether anything bound to `action` is down. An action with nothing bound is never held.
@@ -88,7 +92,7 @@ Returns whether anything bound to `action` is down. An action with nothing bound
 ### `input.pressed`
 
 ```lua
-input.pressed(action: string): boolean
+wg.input.pressed(action: string): boolean
 ```
 
 Returns whether anything bound to `action` was pressed for this update.
@@ -96,7 +100,7 @@ Returns whether anything bound to `action` was pressed for this update.
 ### `input.released`
 
 ```lua
-input.released(action: string): boolean
+wg.input.released(action: string): boolean
 ```
 
 Returns whether anything bound to `action` was released for this update.
@@ -104,7 +108,7 @@ Returns whether anything bound to `action` was released for this update.
 ### `input.repeated`
 
 ```lua
-input.repeated(action: string): boolean
+wg.input.repeated(action: string): boolean
 ```
 
 Returns whether a key bound to `action` [repeated](#inputkey_repeated) for this update. Its
@@ -113,7 +117,7 @@ gamepad buttons don't repeat.
 ### `input.strength`
 
 ```lua
-input.strength(action: string): number
+wg.input.strength(action: string): number
 ```
 
 Returns how far `action` is pushed, from 0 to 1: 1 while one of its keys or mouse buttons is down,
@@ -123,7 +127,7 @@ be anywhere between; other buttons are 0 or 1. An action with nothing bound is 0
 ### `input.axis`
 
 ```lua
-input.axis(negative: string, positive: string): number
+wg.input.axis(negative: string, positive: string): number
 ```
 
 Returns how far `positive` is pushed less how far `negative` is, from -1 to 1. Bound to keys, it's
@@ -132,7 +136,7 @@ Returns how far `positive` is pushed less how far `negative` is, from -1 to 1. B
 ### `input.bindings`
 
 ```lua
-input.bindings(action: string): ({ Control }, number?)
+wg.input.bindings(action: string): ({ Control }, number?)
 ```
 
 Returns what `action` is bound to, named as `input.bind` takes them, in the order they were
@@ -142,14 +146,15 @@ player's choice. Like the rest of `input`, it doesn't work in `draw`, so find th
 `update`:
 
 ```lua
+local wg = require("@wingine")
 local prompt = ""
 
 function update(dt: number)
-    prompt = `{input.bindings("interact")[1]}: Talk`
+    prompt = `{wg.input.bindings("interact")[1]}: Talk`
 end
 
 function draw()
-    graphics.draw_text(font, prompt, 4, 4, "#ffffff")
+    wg.graphics.draw_text(font, prompt, 4, 4, "#ffffff")
 end
 ```
 
@@ -161,27 +166,29 @@ it. [`input.pressed_controls`](#inputpressed_controls) says what they pressed, a
 change:
 
 ```lua
-input.bind("jump", { "Space", "South" })
+local wg = require("@wingine")
+
+wg.input.bind("jump", { "Space", "South" })
 -- What the player chose before, by action.
-local chosen = save.read("controls") or {}
+local chosen = wg.save.read("controls") or {}
 for action, controls in chosen do
-    input.bind(action, controls)
+    wg.input.bind(action, controls)
 end
 
 -- The action waiting for its new key, if one is: the menu picking one sets it.
 local waiting: string? = nil
 
 function update(dt: number)
-    local pressed = input.pressed_controls()[1]
+    local pressed = wg.input.pressed_controls()[1]
     if waiting and pressed == "Escape" then
         waiting = nil
     elseif waiting and pressed then
         -- The new key goes first, in place of the one it had first.
-        local controls = input.bindings(waiting)
+        local controls = wg.input.bindings(waiting)
         controls[1] = pressed
-        input.bind(waiting, controls)
+        wg.input.bind(waiting, controls)
         chosen[waiting] = controls
-        save.write("controls", chosen)
+        wg.save.write("controls", chosen)
         waiting = nil
     end
 end
@@ -196,7 +203,7 @@ so no two actions share one.
 ### `input.pressed_controls`
 
 ```lua
-input.pressed_controls(): { Control }
+wg.input.pressed_controls(): { Control }
 ```
 
 Returns the keys, mouse buttons and gamepad buttons pressed for this update, in the order they
@@ -225,7 +232,7 @@ not by one the [interface](gui.md) takes.
 ### `input.key_held`
 
 ```lua
-input.key_held(key: Key): boolean
+wg.input.key_held(key: Key): boolean
 ```
 
 Returns whether `key` is down.
@@ -233,7 +240,7 @@ Returns whether `key` is down.
 ### `input.key_pressed`
 
 ```lua
-input.key_pressed(key: Key): boolean
+wg.input.key_pressed(key: Key): boolean
 ```
 
 Returns whether `key` was pressed for this update.
@@ -241,7 +248,7 @@ Returns whether `key` was pressed for this update.
 ### `input.key_released`
 
 ```lua
-input.key_released(key: Key): boolean
+wg.input.key_released(key: Key): boolean
 ```
 
 Returns whether `key` was released for this update.
@@ -249,7 +256,7 @@ Returns whether `key` was released for this update.
 ### `input.key_repeated`
 
 ```lua
-input.key_repeated(key: Key): boolean
+wg.input.key_repeated(key: Key): boolean
 ```
 
 Returns whether the system repeated `key` for this update, as it does while the key is held. The
@@ -276,7 +283,7 @@ and on a French AZERTY keyboard, `"W"` is the key labelled Z. Names can be writt
 Shift, Control and Alt each have a key on either side, so to accept both, bind an action to both:
 
 ```lua
-input.bind("focus", { "LeftShift", "RightShift" })
+wg.input.bind("focus", { "LeftShift", "RightShift" })
 ```
 
 An unknown name, such as `"Shift"`, is an error.
@@ -289,8 +296,10 @@ Shift. So a game whose commands are characters reads what's typed rather than wh
 pressed:
 
 ```lua
+local wg = require("@wingine")
+
 function update(dt: number)
-    for _, character in utf8.codes(input.text()) do
+    for _, character in utf8.codes(wg.input.text()) do
         local command = COMMANDS[utf8.char(character)]
         if command then
             command()
@@ -304,7 +313,7 @@ A key held down types again each time it [repeats](#inputkey_repeated).
 ### `input.text`
 
 ```lua
-input.text(): string
+wg.input.text(): string
 ```
 
 Returns what was typed for this update, in order, as the player's layout made it, with what dead
@@ -320,7 +329,7 @@ otherwise each types on its own.
 ### `input.set_input_method`
 
 ```lua
-input.set_input_method(area: Rect?)
+wg.input.set_input_method(area: Rect?)
 ```
 
 Takes the system's input method while `area` is given, and with `nil`, lets it go. Players of
@@ -330,7 +339,7 @@ pixels, `{ x = ..., y = ..., width = ..., height = ... }`, around where the text
 only while the game asks for text, such as a name:
 
 ```lua
-input.set_input_method({ x = 40, y = 80, width = 160, height = 12 })
+wg.input.set_input_method({ x = 40, y = 80, width = 160, height = 12 })
 ```
 
 While the method composes, the keys the player types reach it rather than the game, so they're not
@@ -341,7 +350,7 @@ them.
 ### `input.composition`
 
 ```lua
-input.composition(): string
+wg.input.composition(): string
 ```
 
 Returns what the input method is composing, for the game to show where the text goes, or `""`
@@ -360,21 +369,21 @@ there are only simulated gamepads.
 ### `input.gamepads`
 
 ```lua
-input.gamepads(): { number }
+wg.input.gamepads(): { number }
 ```
 
 Returns the numbers of the gamepads connected now, in order.
 
 ```lua
-for _, gamepad in input.gamepads() do
-    print(gamepad, input.gamepad_name(gamepad))
+for _, gamepad in wg.input.gamepads() do
+    print(gamepad, wg.input.gamepad_name(gamepad))
 end
 ```
 
 ### `input.gamepad_name`
 
 ```lua
-input.gamepad_name(gamepad: number): string?
+wg.input.gamepad_name(gamepad: number): string?
 ```
 
 Returns the name its driver gives gamepad `gamepad`, such as `"Xbox Controller"`, or `nil` if no
@@ -383,7 +392,7 @@ gamepad has had that number.
 ### `input.button_held`
 
 ```lua
-input.button_held(button: GamepadButton, gamepad: number?): boolean
+wg.input.button_held(button: GamepadButton, gamepad: number?): boolean
 ```
 
 Returns whether `button` is down on `gamepad`, or without `gamepad`, on any gamepad.
@@ -391,7 +400,7 @@ Returns whether `button` is down on `gamepad`, or without `gamepad`, on any game
 ### `input.button_pressed`
 
 ```lua
-input.button_pressed(button: GamepadButton, gamepad: number?): boolean
+wg.input.button_pressed(button: GamepadButton, gamepad: number?): boolean
 ```
 
 Returns whether `button` was pressed for this update on `gamepad`, or on any gamepad.
@@ -399,7 +408,7 @@ Returns whether `button` was pressed for this update on `gamepad`, or on any gam
 ### `input.button_released`
 
 ```lua
-input.button_released(button: GamepadButton, gamepad: number?): boolean
+wg.input.button_released(button: GamepadButton, gamepad: number?): boolean
 ```
 
 Returns whether `button` was released for this update on `gamepad`, or on any gamepad.
@@ -407,7 +416,7 @@ Returns whether `button` was released for this update on `gamepad`, or on any ga
 ### `input.button_strength`
 
 ```lua
-input.button_strength(button: GamepadButton, gamepad: number?): number
+wg.input.button_strength(button: GamepadButton, gamepad: number?): number
 ```
 
 Returns how far `button` is pushed on `gamepad`, from 0 to 1, or without `gamepad`, the furthest it
@@ -447,7 +456,7 @@ its directions grow evenly from 0 to 1, keeping the angle it's pushed at.
 ### `input.mouse_position`
 
 ```lua
-input.mouse_position(): (number?, number?)
+wg.input.mouse_position(): (number?, number?)
 ```
 
 Returns the cursor's position in canvas pixels, or `nil, nil` when the cursor is outside the
@@ -455,7 +464,7 @@ window, or the mouse is [captured](#capturing-the-mouse). With a fixed [`resolut
 the scaling, and over the black bars it's outside the canvas: below 0, or past the canvas's size.
 
 ```lua
-local x, y = input.mouse_position()
+local x, y = wg.input.mouse_position()
 if x then
     hovered = button_at(x, y)
 end
@@ -467,7 +476,7 @@ camera's offset and divide by its zoom (1 if not given). The engine rounds the o
 pixels at whole zooms and their reciprocals, such as 0.5, and leaves it as it is at others:
 
 ```lua
-local canvas_width, canvas_height = graphics.size()
+local canvas_width, canvas_height = wg.graphics.size()
 local on_grid = zoom % 1 == 0 or (1 / zoom) % 1 == 0
 local offset_x = camera_x * zoom - canvas_width / 2
 local offset_y = camera_y * zoom - canvas_height / 2
@@ -483,7 +492,7 @@ With bounds, use the center the bounds held the camera to.
 ### `input.mouse_held`
 
 ```lua
-input.mouse_held(button: MouseButton): boolean
+wg.input.mouse_held(button: MouseButton): boolean
 ```
 
 Returns whether `button` is down: `"left"`, `"right"`, `"middle"`, `"back"` or `"forward"`.
@@ -491,7 +500,7 @@ Returns whether `button` is down: `"left"`, `"right"`, `"middle"`, `"back"` or `
 ### `input.mouse_pressed`
 
 ```lua
-input.mouse_pressed(button: MouseButton): boolean
+wg.input.mouse_pressed(button: MouseButton): boolean
 ```
 
 Returns whether `button` was pressed for this update.
@@ -499,7 +508,7 @@ Returns whether `button` was pressed for this update.
 ### `input.mouse_released`
 
 ```lua
-input.mouse_released(button: MouseButton): boolean
+wg.input.mouse_released(button: MouseButton): boolean
 ```
 
 Returns whether `button` was released for this update.
@@ -510,7 +519,7 @@ window no longer hears about them.
 ### `input.wheel`
 
 ```lua
-input.wheel(): (number, number)
+wg.input.wheel(): (number, number)
 ```
 
 Returns how far the mouse wheel turned for this update, in notches, as `x, y`: `y` is positive
@@ -520,7 +529,7 @@ update, as presses are. A touchpad scrolls by fractions of a notch, one for ever
 scrolls. Turns over the [interface](gui.md) are its own, as its clicks are.
 
 ```lua
-local _, turned = input.wheel()
+local _, turned = wg.input.wheel()
 -- Nearer for each notch turned away, and farther for each turned toward.
 zoom = math.clamp(zoom * 0.85 ^ turned, 0.4, 2)
 ```
@@ -533,17 +542,18 @@ held in the window, and the game reads how far the mouse moved.
 
 ```lua
 -- Radians the view turns for each unit the mouse moves.
+local wg = require("@wingine")
 local SENSITIVITY = 0.0025
 
-input.bind("release", { "Escape" })
+wg.input.bind("release", { "Escape" })
 
 function update(dt: number)
-    if input.pressed("release") then
-        input.set_mouse_captured(false)
-    elseif input.mouse_pressed("left") and not input.mouse_captured() then
-        input.set_mouse_captured(true)
+    if wg.input.pressed("release") then
+        wg.input.set_mouse_captured(false)
+    elseif wg.input.mouse_pressed("left") and not wg.input.mouse_captured() then
+        wg.input.set_mouse_captured(true)
     end
-    local x, y = input.mouse_motion()
+    local x, y = wg.input.mouse_motion()
     yaw -= x * SENSITIVITY
     pitch = math.clamp(pitch - y * SENSITIVITY, -1.5, 1.5)
 end
@@ -552,7 +562,7 @@ end
 ### `input.set_mouse_captured`
 
 ```lua
-input.set_mouse_captured(captured: boolean)
+wg.input.set_mouse_captured(captured: boolean)
 ```
 
 Captures the mouse, or with `false`, releases it. While it's captured:
@@ -584,7 +594,7 @@ In [tests](testing.md) and scripted runs, capturing the mouse is only noted.
 ### `input.mouse_captured`
 
 ```lua
-input.mouse_captured(): boolean
+wg.input.mouse_captured(): boolean
 ```
 
 Returns whether the mouse is captured: as the game last set it, unless the window couldn't capture
@@ -593,7 +603,7 @@ it or has lost focus since. A game shows "Click to play" while it isn't.
 ### `input.mouse_motion`
 
 ```lua
-input.mouse_motion(): (number, number)
+wg.input.mouse_motion(): (number, number)
 ```
 
 Returns how far the mouse moved for this update while it's captured, as `x, y`: `x` is positive

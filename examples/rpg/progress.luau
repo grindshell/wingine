@@ -3,6 +3,7 @@
 -- game saves after every event, such as a conversation, a battle or a trip between maps, and
 -- Continue on the title screen picks up from there.
 
+local wg = require("@wingine")
 local world = require("./world")
 
 local progress = {}
@@ -32,7 +33,7 @@ export type Data = {
 -- The saved progress, if there is any that this version of the game reads. A save that can't be
 -- read is left for a new game to replace.
 function progress.load(): Data?
-    local ok, data = pcall(save.read, SAVE)
+    local ok, data = pcall(wg.save.read, SAVE)
     if not ok then
         print(`The saved game can't be read: {data}`)
         return nil
@@ -72,7 +73,7 @@ function progress.save()
         facing = rpg.player.mover:facing(),
         levels = levels,
     }
-    save.write(SAVE, data)
+    wg.save.write(SAVE, data)
 end
 
 -- Puts back the progress in `data`: the player's state, and each level they'd been to, built from

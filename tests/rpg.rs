@@ -212,7 +212,7 @@ fn the_game_opens_on_its_title() {
     assert_eq!(level(&mut simulation), "village");
     assert_eq!(player_tile(&mut simulation), START);
     assert!(
-        simulation.eval::<bool>("save.read('progress') == nil"),
+        simulation.eval::<bool>("require('@wingine').save.read('progress') == nil"),
         "nothing to save yet"
     );
 }
@@ -301,7 +301,7 @@ fn continuing_picks_up_where_the_game_saved() {
 
 /// What `action` is bound to.
 fn bindings(simulation: &mut Simulation<LuauGame>, action: &str) -> Vec<String> {
-    simulation.eval(&format!("(input.bindings('{action}'))"))
+    simulation.eval(&format!("(require('@wingine').input.bindings('{action}'))"))
 }
 
 /// Picks the controls screen's row `row`, counting from 1, by the keys the actions are bound to.
@@ -386,7 +386,7 @@ fn the_controls_screen_rebinds_actions_and_keeps_them() {
         ["Space", "Enter", "E"]
     );
     assert_eq!(bindings(&mut simulation, "up"), ["Up", "W"]);
-    assert!(simulation.eval::<bool>("save.read('controls') == nil"));
+    assert!(simulation.eval::<bool>("require('@wingine').save.read('controls') == nil"));
 }
 
 #[test]
@@ -406,7 +406,10 @@ fn a_new_game_over_a_saved_one_asks_first() {
     choose(&mut simulation, 2);
     simulation.step();
     assert!(title_choices(&mut simulation).is_some(), "backed out");
-    assert_eq!(simulation.eval::<u32>("save.read('progress').coins"), 10);
+    assert_eq!(
+        simulation.eval::<u32>("require('@wingine').save.read('progress').coins"),
+        10
+    );
 
     pick(&mut simulation, "New Game");
     choose(&mut simulation, 1);
@@ -415,7 +418,7 @@ fn a_new_game_over_a_saved_one_asks_first() {
     assert_eq!(level(&mut simulation), "village");
     assert_eq!(simulation.eval::<u32>("rpg.coins"), 0);
     assert_eq!(
-        simulation.eval::<u32>("save.read('progress').coins"),
+        simulation.eval::<u32>("require('@wingine').save.read('progress').coins"),
         0,
         "the new game replaced the saved one"
     );
@@ -425,7 +428,7 @@ fn a_new_game_over_a_saved_one_asks_first() {
 fn the_game_saves_after_every_event() {
     let mut simulation = simulation();
     let saved = |simulation: &mut Simulation<LuauGame>| -> Option<String> {
-        simulation.eval("(save.read('progress') or {}).quest")
+        simulation.eval("(require('@wingine').save.read('progress') or {}).quest")
     };
     simulation.tap(Key::Up);
     run_for(&mut simulation, 0.5);
@@ -1318,7 +1321,8 @@ fn questions_are_laid_out_by_the_dialogue_scene_and_answered_by_mouse_too() {
 
     let mut simulation = simulation();
     simulation.exec(
-        "spawn(function()
+        "local wg = require('@wingine')
+            wg.spawn(function()
             rpg.answer = rpg.dialogue.ask('Which way?', { 'Left', 'Right', 'Neither' })
         end)",
     );

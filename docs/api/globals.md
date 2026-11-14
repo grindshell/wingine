@@ -1,7 +1,9 @@
 # Built-ins
 
-The functions a game defines for the engine to call, and the functions the engine adds to every
-script's globals. See [Project structure](../project-structure.md#mainluau) for how a game runs.
+The functions a game defines for the engine to call, the engine's built-in functions, and Luau's
+`print` and `require`. The game's functions and Luau's are globals; the engine's are in the module
+`require("@wingine")` returns, with the rest of its API, and the examples call them through it, as
+`wg.spawn`. See [Project structure](../project-structure.md#mainluau) for how a game runs.
 
 ## The game's functions
 
@@ -85,7 +87,7 @@ of a script, they raise an error, since those must run to the end.
 ### `spawn`
 
 ```lua
-spawn(f: (...any) -> (), ...: any)
+wg.spawn(f: (...any) -> (), ...: any)
 ```
 
 Starts `f(...)` as a task, running it right away until it first waits or finishes, then returns.
@@ -98,14 +100,14 @@ other task, carries on.
 local function patrol(guard)
     while true do
         guard.x += 16
-        wait(1)
+        wg.wait(1)
         guard.x -= 16
-        wait(1)
+        wg.wait(1)
     end
 end
 
-spawn(patrol, guards[1])
-spawn(patrol, guards[2])
+wg.spawn(patrol, guards[1])
+wg.spawn(patrol, guards[2])
 ```
 
 A task can't be stopped from outside. To stop one, have it check a flag and return.
@@ -113,7 +115,7 @@ A task can't be stopped from outside. To stop one, have it check a flag and retu
 ### `wait`
 
 ```lua
-wait(seconds: number?)
+wg.wait(seconds: number?)
 ```
 
 Pauses the task for `seconds` of game time, then carries on. Without `seconds`, it waits for the
@@ -124,7 +126,7 @@ again until it's up, so thousands of tasks can wait at once for next to nothing.
 ### `wait_until`
 
 ```lua
-wait_until(condition: () -> boolean)
+wg.wait_until(condition: () -> boolean)
 ```
 
 Pauses the task until `condition()` returns true, checking once each update. If it's true already,
@@ -136,14 +138,14 @@ local function show(text: string)
     message = text
     -- A press lasts the whole update, so without this, the press that dismissed the message
     -- before would dismiss this one too.
-    wait()
-    wait_until(function()
-        return input.pressed("confirm")
+    wg.wait()
+    wg.wait_until(function()
+        return wg.input.pressed("confirm")
     end)
     message = nil
 end
 
-spawn(function()
+wg.spawn(function()
     show("The door is locked.")
     show("Maybe there's a key somewhere.")
 end)
@@ -182,10 +184,21 @@ local util = require("../util") -- util.luau, in the folder above
 A script runs once, the first time it's required; requiring it again returns the same value.
 `main.luau` can require `conf.luau` to read the game's settings.
 
+`require("@wingine")` is the engine's API, the one module that isn't a file, and every script that
+requires it gets the same table:
+
+```lua
+local wg = require("@wingine")
+```
+
+The engine answers `@wingine` before it looks at any `.luaurc`, so an alias of that name in one,
+which a game gives its language server (see [the editor](../editor.md#checking-scripts-with-luau-lsp)),
+is never followed.
+
 ### `approach`
 
 ```lua
-approach(value: number, target: number, step: number): number
+wg.approach(value: number, target: number, step: number): number
 ```
 
 Returns `value` moved toward `target` by `step`, 0 or more, but no further than `target`, so a
@@ -193,8 +206,8 @@ speed eases toward another a frame at a time and settles on it exactly:
 
 ```lua
 -- Speeds up toward a run, and slows to a stop on letting go.
-local target = if input.held("right") then RUN_SPEED else 0
-player.vx = approach(player.vx, target, ACCELERATION * dt)
+local target = if wg.input.held("right") then RUN_SPEED else 0
+player.vx = wg.approach(player.vx, target, ACCELERATION * dt)
 ```
 
 It's written in Luau, so calling it costs what calling a script's own function does. Functions of
@@ -217,6 +230,7 @@ differ from Lua 5.x come up often in games:
 different platforms. Games whose state must play out the same everywhere, such as to replay
 inputs, use [`exact`](exact.md)'s instead.
 
+The engine adds no globals but `print` and `require`, and a game's native libraries' tables.
 Globals a script defines are seen by every script loaded after it, but see
 [Globals and the sandbox](../project-structure.md#globals-and-the-sandbox) before keeping the
 game's state in a global table.

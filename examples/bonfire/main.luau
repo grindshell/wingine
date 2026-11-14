@@ -18,7 +18,9 @@
 -- (<https://kenney.nl/assets/1-bit-pack>, CC0); `bonfire.png` was drawn for the example. The
 -- game's state is in the global table `bonfire`, where tests can see it.
 
-input.bind("fire", { "Space" })
+local wg = require("@wingine")
+
+wg.input.bind("fire", { "Space" })
 
 -- Where the meadow starts: clicks above it send fireworks up.
 local GROUND = 136
@@ -27,7 +29,7 @@ local CLIMB = 150
 -- How many flames are alive while the fire burns as it does, for its glow.
 local FULL_FIRE = 30
 -- The color of the fire's glow, at full strength.
-local GLOW = graphics.color("#ff9a50")
+local GLOW = wg.graphics.color("#ff9a50")
 -- Fireworks' colors, one after another.
 local COLORS = { "#ff6080", "#60c0ff", "#ffd040", "#80ff90" }
 
@@ -65,7 +67,7 @@ type Rocket = {
 
 bonfire = {}
 
-local level = scene.load("bonfire.scene.luau")
+local level = wg.scene.load("bonfire.scene.luau")
 bonfire.scene = level
 bonfire.flames = level:find("camp/flames")
 bonfire.sparks = level:find("camp/sparks")
@@ -81,11 +83,11 @@ bonfire.launched = 0
 local function launch(x: number, y: number)
     bonfire.launched += 1
     local color = COLORS[(bonfire.launched - 1) % #COLORS + 1]
-    local trail = graphics.new_particles(TRAIL)
+    local trail = wg.graphics.new_particles(TRAIL)
     trail:set_position(x, GROUND + 8)
     table.insert(bonfire.rockets, {
         trail = trail,
-        burst = graphics.new_particles(burst_settings(color)),
+        burst = wg.graphics.new_particles(burst_settings(color)),
         x = x,
         y = GROUND + 8,
         top = y,
@@ -116,13 +118,13 @@ local function fly(dt: number)
 end
 
 function update(dt: number)
-    if input.pressed("fire") then
+    if wg.input.pressed("fire") then
         bonfire.lit = not bonfire.lit
         bonfire.flames:set_emitting(bonfire.lit)
         bonfire.sparks:set_emitting(bonfire.lit)
     end
-    if input.mouse_pressed("left") then
-        local x, y = input.mouse_position()
+    if wg.input.mouse_pressed("left") then
+        local x, y = wg.input.mouse_position()
         if x and y and y >= 0 and y < GROUND then
             launch(x, y)
         end
@@ -130,14 +132,14 @@ function update(dt: number)
     bonfire.scene:advance_particles(dt)
     fly(dt)
     local burning = math.min(bonfire.flames:particle_count() / FULL_FIRE, 1)
-    bonfire.glow:set_tint(graphics.color(GLOW, burning))
+    bonfire.glow:set_tint(wg.graphics.color(GLOW, burning))
 end
 
 function draw()
-    graphics.clear("#000000")
-    graphics.draw_scene(bonfire.scene)
+    wg.graphics.clear("#000000")
+    wg.graphics.draw_scene(bonfire.scene)
     for _, rocket in bonfire.rockets do
-        graphics.draw_particles(rocket.trail)
-        graphics.draw_particles(rocket.burst)
+        wg.graphics.draw_particles(rocket.trail)
+        wg.graphics.draw_particles(rocket.burst)
     end
 end

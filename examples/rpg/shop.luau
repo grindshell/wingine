@@ -1,12 +1,13 @@
 -- Shops, where the player buys items and gear for coins, and sells what they carry for half
 -- what it cost. `shop.visit` runs a visit as part of a task, through menus in the dialogue box.
 
+local wg = require("@wingine")
 local dialogue = require("./dialogue")
 local items = require("./items")
 
 local shop = {}
 
-local sale = audio.load("sounds/chime.wav")
+local sale = wg.audio.load("sounds/chime.wav")
 
 -- A menu of the items `names`, each with `detail` beside it, for the shopkeeper `keeper` to ask
 -- about. It ends with "Back".
@@ -37,7 +38,7 @@ local function buy(stock: { string }, keeper: string)
             if yes == 1 then
                 rpg.coins -= item.price
                 items.give(name)
-                audio.play(sale, { speed = 2 })
+                wg.audio.play(sale, { speed = 2 })
                 dialogue.say("Thank you kindly!", keeper)
                 if item.slot then
                     local offer = `Equip the {item.name} now?`
@@ -77,7 +78,7 @@ local function sell(keeper: string)
             if yes == 1 then
                 items.take(name)
                 rpg.coins += price
-                audio.play(sale, { speed = 2 })
+                wg.audio.play(sale, { speed = 2 })
                 dialogue.say("Pleasure doing business.", keeper)
             end
         end
