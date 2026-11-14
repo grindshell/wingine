@@ -787,6 +787,9 @@ impl Inspector {
                         egui::WidgetInfo::selected(egui::Role::CheckBox, true, cast, "casts shadow")
                     });
                     ui.end_row();
+                    over.label(ui, "glow", &["glow"]);
+                    color(ui, &mut mesh.glow);
+                    ui.end_row();
                 });
                 if self.picking_cell
                     && let Some(sprite) = &mut mesh.sprite
@@ -809,6 +812,9 @@ impl Inspector {
                         let cast = model.casts_shadow;
                         egui::WidgetInfo::selected(egui::Role::CheckBox, true, cast, "casts shadow")
                     });
+                    ui.end_row();
+                    over.label(ui, "glow", &["glow"]);
+                    color(ui, &mut model.glow);
                     ui.end_row();
                 });
             }),
@@ -870,6 +876,9 @@ impl Inspector {
                     ui.end_row();
                     over.label(ui, "tint", &["tint"]);
                     color(ui, &mut billboard.tint);
+                    ui.end_row();
+                    over.label(ui, "glow", &["glow"]);
+                    color(ui, &mut billboard.glow);
                     ui.end_row();
                 });
                 if self.picking_cell
@@ -1403,7 +1412,7 @@ fn tidy(key: &str, value: &Value) -> Value {
         }
         Value::List(items) => Value::List(items.iter().map(|item| tidy(key, item)).collect()),
         Value::String(hex)
-            if matches!(key, "tint" | "color" | "colors")
+            if matches!(key, "tint" | "color" | "colors" | "glow")
                 && hex.len() == 9
                 && hex.ends_with("ff") =>
         {

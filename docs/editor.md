@@ -204,8 +204,9 @@ and its scale along each axis, with no rotation or anchor; a view's camera (wher
 which way is up, perspective with a field of view or orthographic with a height, and how near and
 far it sees) and lighting, and **fog**, a checkbox that gives it fog, and then the fog's color
 and how far off it begins and is whole; a mesh's shape, its size, and a sprite of the scene's sheets to show;
-a model's file; for both, a tint, and **casts shadow**, whether it shades what's behind it from
-lights with shadows; a billboard's sprite, size and tint; and a light's color, range and energy,
+a model's file; for both, a tint, **casts shadow**, whether it shades what's behind it from
+lights with shadows, and **glow**, how much of its own colors it shows whatever lights it; a
+billboard's sprite, size, tint and glow; and a light's color, range and energy,
 with a checkbox that gives it a cone, making it a spot light, and then half the cone's angle, in
 degrees, and its edge, and **shadows**, whether the view's meshes and models in its way shade
 what's behind them. While the Animation panel shows a clip, **♦** keys a node's `z`, `yaw`,

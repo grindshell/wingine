@@ -2024,6 +2024,25 @@ impl mlua::UserData for SceneNode {
                 Some(())
             })
         });
+        methods.add_method("glow", |_, node, ()| {
+            node.read_kind("glow", |kind| match kind {
+                Kind::Mesh(MeshNode { glow, .. })
+                | Kind::Model(ModelNode { glow, .. })
+                | Kind::Billboard(BillboardNode { glow, .. }) => Some(packed_color(*glow)),
+                _ => None,
+            })
+        });
+        methods.add_method("set_glow", |_, node, glow: Color| {
+            node.write_kind("glow", |kind| {
+                match kind {
+                    Kind::Mesh(MeshNode { glow: g, .. })
+                    | Kind::Model(ModelNode { glow: g, .. })
+                    | Kind::Billboard(BillboardNode { glow: g, .. }) => *g = glow,
+                    _ => return None,
+                }
+                Some(())
+            })
+        });
         methods.add_method("casts_shadow", |_, node, ()| {
             node.read_kind("shadow", |kind| match kind {
                 Kind::Mesh(MeshNode { casts_shadow, .. })

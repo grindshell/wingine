@@ -192,7 +192,7 @@ See [`node:light`](scene.md#nodelight) and [`node:set_light`](scene.md#nodeset_l
 
 How [`graphics.draw_mesh`](graphics.md#graphicsdraw_mesh) places and colors a mesh, and
 [`graphics.draw_model`](graphics.md#graphicsdraw_model) a model: a table with any of `yaw`,
-`pitch`, `roll`, `scale`, `sprite` (for a mesh), `tint` and `casts_shadow`.
+`pitch`, `roll`, `scale`, `sprite` (for a mesh), `tint`, `casts_shadow` and `glow`.
 
 ### `MeshData`
 

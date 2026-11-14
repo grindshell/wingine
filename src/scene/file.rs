@@ -613,6 +613,8 @@ pub struct MeshDef {
     pub tint: Color,
     /// Whether it shades what's behind it from lights with shadows.
     pub casts_shadow: bool,
+    /// How much of its own colors it shows whatever lights it: black, none, by default.
+    pub glow: Color,
 }
 
 /// A built-in shape, centered on its node's origin: see [`MeshData`].
@@ -659,6 +661,9 @@ pub struct ModelDef {
     pub tint: Color,
     /// Whether it shades what's behind it from lights with shadows.
     pub casts_shadow: bool,
+    /// How much of its own colors it shows whatever lights it: black, none, by default. What its
+    /// file's parts give off is theirs besides.
+    pub glow: Color,
 }
 
 /// A sprite standing upright in a 3D view with the middle of its bottom edge at the node's origin,
@@ -671,6 +676,8 @@ pub struct BillboardDef {
     /// Its width and height in world units. A negative width mirrors it.
     pub size: [f32; 2],
     pub tint: Color,
+    /// How much of its own colors it shows whatever lights it: black, none, by default.
+    pub glow: Color,
 }
 
 /// A light at its node's place in a 3D view, lighting what's within its range: see [`Light`].
@@ -1884,6 +1891,7 @@ fn read_kind(
                 sprite,
                 tint: optional_color(fields, "tint")?,
                 casts_shadow: optional_boolean(fields, "casts_shadow", true)?,
+                glow: glow(fields)?,
             })
         }
         "model" => {
@@ -1894,6 +1902,7 @@ fn read_kind(
                 model: string(model, "model")?,
                 tint: optional_color(fields, "tint")?,
                 casts_shadow: optional_boolean(fields, "casts_shadow", true)?,
+                glow: glow(fields)?,
             })
         }
         "billboard" => {
@@ -1908,6 +1917,7 @@ fn read_kind(
                 cell,
                 size,
                 tint: optional_color(fields, "tint")?,
+                glow: glow(fields)?,
             })
         }
         "light" => {
@@ -2430,6 +2440,14 @@ fn read_stretch(fields: &mut Fields) -> Result<[f32; 2], String> {
 }
 
 /// The color in `field`, or white without one.
+/// A mesh's, model's or billboard's `glow`: black, none, unless it says.
+fn glow(fields: &mut Fields) -> Result<Color, String> {
+    match fields.take("glow") {
+        Some(value) => color(value, "glow"),
+        None => Ok(Color::BLACK),
+    }
+}
+
 fn optional_color(fields: &mut Fields, field: &str) -> Result<Color, String> {
     match fields.take(field) {
         Some(value) => color(value, field),
@@ -2799,11 +2817,13 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
             }
             set("tint", hex(mesh.tint));
             set("casts_shadow", Value::Bool(mesh.casts_shadow));
+            set("glow", hex(mesh.glow));
         }
         KindDef::Model(model) => {
             set("model", string(&model.model));
             set("tint", hex(model.tint));
             set("casts_shadow", Value::Bool(model.casts_shadow));
+            set("glow", hex(model.glow));
         }
         KindDef::Billboard(billboard) => {
             set("sheet", string(&billboard.sheet));
@@ -2811,6 +2831,7 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
             set("width", number(billboard.size[0]));
             set("height", number(billboard.size[1]));
             set("tint", hex(billboard.tint));
+            set("glow", hex(billboard.glow));
         }
         KindDef::Light(light) => {
             set("color", hex(light.color));
@@ -3710,7 +3731,7 @@ mod tests {
                         },
                     },
                     { name = "barrel", kind = "model", model = "models/barrel.glb", x = -2, scale_z = 2 },
-                    { name = "hero", kind = "billboard", sheet = "tiles", cell = { 27, 0 }, width = -1, height = 1.5, tags = { "hero" } },
+                    { name = "hero", kind = "billboard", sheet = "tiles", cell = { 27, 0 }, width = -1, height = 1.5, glow = "#ffcc88", tags = { "hero" } },
                     { name = "prop", kind = "instance", scene = "prop.scene.luau", pitch = 0.25 },
                 },
             },
@@ -3765,6 +3786,7 @@ mod tests {
                 sprite: None,
                 tint: Color::rgb8(0x40, 0x40, 0x40),
                 casts_shadow: false,
+                glow: Color::BLACK,
             })
         );
         assert_eq!(floor.placement3, Some(Placement3::default()));
@@ -3791,6 +3813,7 @@ mod tests {
                 }),
                 tint: Color::WHITE,
                 casts_shadow: true,
+                glow: Color::BLACK,
             })
         );
         assert_eq!(crate_.y, 0.5);
@@ -3803,6 +3826,7 @@ mod tests {
                 model: "models/barrel.glb".into(),
                 tint: Color::WHITE,
                 casts_shadow: true,
+                glow: Color::BLACK,
             })
         );
         assert_eq!(barrel.placement3.unwrap().scale_z, 2.0);
@@ -3813,6 +3837,7 @@ mod tests {
                 cell: [27, 0],
                 size: [-1.0, 1.5],
                 tint: Color::WHITE,
+                glow: Color::rgb8(0xff, 0xcc, 0x88),
             })
         );
         assert!(matches!(prop.kind, KindDef::Instance(_)));

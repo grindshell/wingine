@@ -30,6 +30,17 @@ type RotatedSpriteArgs = (
     Option<f32>,
 );
 
+/// `graphics.draw_billboard`'s arguments: a sprite, where it stands, and optionally its tint, its
+/// size and its glow.
+type BillboardArgs = (
+    UserDataRef<Sprite>,
+    Vector,
+    Option<Color>,
+    Option<f32>,
+    Option<f32>,
+    Option<Color>,
+);
+
 /// The arguments of `graphics.outline_rect` and `graphics.draw_line`: four numbers, the color,
 /// and optionally the thickness.
 type ShapeArgs = (f32, f32, f32, f32, Color, Option<f32>);
@@ -481,6 +492,7 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
                 lent.canvas(|canvas| {
                     let mut view = canvas.open_view()?;
                     view.set_casts_shadow(options.casts_shadow);
+                    view.set_glow(options.glow);
                     view.draw_mesh(&mesh, transform, sprite, options.tint);
                     Some(())
                 })?
@@ -501,6 +513,7 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
                 lent.canvas(|canvas| {
                     let mut view = canvas.open_view()?;
                     view.set_casts_shadow(options.casts_shadow);
+                    view.set_glow(options.glow);
                     view.draw_model(&model, transform, options.tint);
                     Some(())
                 })?
@@ -511,14 +524,7 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
     graphics.set("draw_billboard", {
         let lent = lent.clone();
         lua.create_function(
-            move |_,
-                  (sprite, position, tint, width, height): (
-                UserDataRef<Sprite>,
-                Vector,
-                Option<Color>,
-                Option<f32>,
-                Option<f32>,
-            )| {
+            move |_, (sprite, position, tint, width, height, glow): BillboardArgs| {
                 let aspect = sprite.width() / sprite.height();
                 let size = match (width, height) {
                     (Some(width), Some(height)) => [width, height],
@@ -529,6 +535,7 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
                 let tint = tint.unwrap_or(Color::WHITE);
                 lent.canvas(|canvas| {
                     let mut view = canvas.open_view()?;
+                    view.set_glow(glow.unwrap_or(Color::BLACK));
                     view.draw_billboard(&sprite, vector3(position), size, tint);
                     Some(())
                 })?
@@ -662,6 +669,7 @@ struct MeshOptions {
     sprite: Option<UserDataRef<Sprite>>,
     tint: Color,
     casts_shadow: bool,
+    glow: Color,
 }
 
 impl MeshOptions {
@@ -675,6 +683,7 @@ impl MeshOptions {
                 sprite: None,
                 tint: Color::WHITE,
                 casts_shadow: true,
+                glow: Color::BLACK,
             });
         };
         let angle = |name: &str| -> mlua::Result<f32> {
@@ -700,6 +709,9 @@ impl MeshOptions {
                 .get::<Option<Color>>("tint")?
                 .unwrap_or(Color::WHITE),
             casts_shadow: options.get::<Option<bool>>("casts_shadow")?.unwrap_or(true),
+            glow: options
+                .get::<Option<Color>>("glow")?
+                .unwrap_or(Color::BLACK),
         })
     }
 

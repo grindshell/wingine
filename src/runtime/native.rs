@@ -1482,8 +1482,10 @@ mod host {
         let Some(mut view) = canvas.open_view() else {
             return no_view("draw_meshes");
         };
-        // Whatever the script drew last in the view, a library's meshes cast shadows.
+        // Whatever the script drew last in the view, a library's meshes cast shadows, and
+        // don't glow: the ABI has no glow.
         view.set_casts_shadow(true);
+        view.set_glow(Color::BLACK);
         for draw in draws {
             view.draw_mesh(mesh, affine3(draw.transform), sprite, color(draw.tint));
         }
@@ -1502,6 +1504,7 @@ mod host {
         let Some(mut view) = canvas.open_view() else {
             return no_view("draw_billboards");
         };
+        view.set_glow(Color::BLACK);
         for draw in draws {
             let size = [draw.size.width, draw.size.height];
             view.draw_billboard(sprite, vec3(draw.position), size, color(draw.tint));

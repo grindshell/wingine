@@ -685,9 +685,14 @@ impl MeshRenderer {
                 },
             ],
         });
+        // A mesh's texture, then the texture its emission is multiplied by.
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("mesh"),
-            bind_group_layouts: &[Some(&views_layout), Some(texture_layout)],
+            bind_group_layouts: &[
+                Some(&views_layout),
+                Some(texture_layout),
+                Some(texture_layout),
+            ],
             immediate_size: 0,
         });
         let vertex_attributes = wgpu::vertex_attr_array![
@@ -706,6 +711,8 @@ impl MeshRenderer {
             10 => Float32x3,
             11 => Float32x4,
             12 => Unorm8x4,
+            13 => Unorm8x4,
+            14 => Unorm8x4,
         ];
         let buffers = [
             Some(wgpu::VertexBufferLayout {
@@ -1121,6 +1128,8 @@ impl MeshRenderer {
             }
             let texture = draw.texture.as_ref().unwrap_or(white);
             pass.set_bind_group(1, texture.bind_group(), &[]);
+            let emission = draw.emission_texture.as_ref().unwrap_or(white);
+            pass.set_bind_group(2, emission.bind_group(), &[]);
             let mesh = draw.mesh.as_ref().unwrap_or(&self.billboard);
             pass.set_vertex_buffer(0, mesh.vertex_buffer().slice(..));
             pass.set_index_buffer(mesh.index_buffer().slice(..), wgpu::IndexFormat::Uint32);

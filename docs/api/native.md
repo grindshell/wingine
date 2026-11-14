@@ -570,8 +570,8 @@ engine's default sun and ambient light; `Lighting::UNLIT` shows every surface as
 `Lighting` has no `lights`, and a `View3d` no `fog`: a library can't add lights at places to a
 view yet, or fog. What it draws in a
 view a script began is lit by that view's lights, as the rest of the view is, and shaded from
-those with `shadows`. Its meshes always cast shadows from them: a
-[`MeshDraw`](#meshdraw) has no `casts_shadow`.
+those with `shadows`. Its meshes always cast shadows from them, and never glow: a
+[`MeshDraw`](#meshdraw) has no `casts_shadow` and no `glow`, nor a billboard's draw a `glow`.
 
 A camera's `projection` is `Projection::PERSPECTIVE`, which uses `fov_y`, the angle the view takes
 in from its bottom edge to its top in radians, or `Projection::ORTHOGRAPHIC`, which uses `height`,

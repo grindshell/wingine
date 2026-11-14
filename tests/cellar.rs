@@ -80,6 +80,11 @@ fn the_cellar_starts_dark_with_the_hero_at_the_start() {
     // Each candle holds a flame, a light that's out until it's lit.
     assert_eq!(stats.lights, 0);
     assert!(!simulation.eval::<bool>("cellar.candles[1].flame:is_visible()"));
+    // Nor does it glow.
+    assert_eq!(
+        simulation.eval::<u32>("cellar.candles[1].node:glow()"),
+        0x000000ff
+    );
 }
 
 #[test]
@@ -186,6 +191,19 @@ fn standing_on_every_candle_lights_them_all() {
         end)()",
     );
     assert!((0.8..=1.0).contains(&energy), "{energy}");
+    // And it glows warm, its red the most.
+    let glow: u32 = simulation.eval(
+        "(function()
+            for _, candle in cellar.candles do
+                if candle.lit then
+                    return candle.node:glow()
+                end
+            end
+            return 0
+        end)()",
+    );
+    let [red, green, blue, _] = glow.to_be_bytes();
+    assert!(red > 190 && red > green && green > blue, "{glow:#x}");
     walk(&mut simulation, &[down, right, right, up, up, up, up]);
     assert_eq!(simulation.eval::<u32>("cellar.lit"), 2);
     // Standing on a lit candle again lights nothing more.

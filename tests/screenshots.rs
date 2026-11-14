@@ -16,7 +16,7 @@ use wingine::{
     Context,
     graphics::{
         Align, Blend, Camera, Camera3d, Canvas, Color, Fog, Font, Light, Lighting, Mesh, MeshData,
-        MeshVertex, Model, Resolution, Scaling, SpriteSheet, Texture, View3d,
+        MeshVertex, Model, ModelPart, Resolution, Scaling, SpriteSheet, Texture, View3d,
     },
     headless::{Comparison, Headless, Image},
     math::{Affine, Affine3, Rect},
@@ -2004,6 +2004,94 @@ fn fog_over_distance() {
     }
 
     assert_screenshot(&headless.adapter_name(), "fog_over_distance", frame);
+}
+
+/// In a view with no light at all: a cube that glows white shows its own color, one that glows
+/// grey a little of it, a model's part that gives off a color shows it while its other part is
+/// black, and a billboard that glows shows its sprite. Then the same in fog, where what glows
+/// fades as anything does.
+#[test]
+fn glow_shows_in_the_dark() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let ground = ctx.create_mesh(&MeshData::plane([8.0, 8.0])).unwrap();
+    let cube = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let sheet = SpriteSheet::new(ctx.load_texture(TILESET).unwrap(), 16, 16);
+    let sprite = sheet.sprite(27, 0);
+    let part = |mesh: &Mesh, x: f32, emission: Color| ModelPart {
+        mesh: mesh.clone(),
+        sprite: None,
+        transform: Affine3::from_translation([x, 0.0, 0.0]),
+        double_sided: false,
+        emission,
+        emission_sprite: None,
+    };
+    let sign = Model::new(vec![
+        part(&cube, -0.55, Color::rgb8(0xff, 0x90, 0x20)),
+        part(&cube, 0.55, Color::BLACK),
+    ]);
+    let camera = Camera3d::perspective([0.0, 3.0, 5.0], [0.0, 0.5, 0.0], 0.8);
+    let dark = dark_view(camera, [128.0, 96.0]);
+    let red = Color::rgb8(0xd0, 0x60, 0x40);
+    let [lit, half] = [Color::WHITE, Color::rgb8(0x80, 0x80, 0x80)];
+    let [left, right] = [[-2.0, 0.5, 1.0], [2.0, 0.5, 1.0]];
+    let [sign_lit, sign_dark] = [[-0.55, 0.5, -2.0], [0.55, 0.5, -2.0]];
+    let mut render = |view: View3d| {
+        headless
+            .render(128, 96, |canvas| {
+                canvas.clear(Color::BLACK);
+                let mut view = canvas.begin_3d(view);
+                view.draw_mesh(&ground, Affine3::IDENTITY, None, Color::WHITE);
+                view.set_glow(lit);
+                view.draw_mesh(&cube, Affine3::from_translation(left), None, red);
+                view.set_glow(half);
+                view.draw_mesh(&cube, Affine3::from_translation(right), None, red);
+                view.set_glow(Color::BLACK);
+                let place = Affine3::from_translation([0.0, 0.0, -2.0]);
+                view.draw_model(&sign, place, Color::WHITE);
+                view.set_glow(lit);
+                view.draw_billboard(&sprite, [0.0, 0.0, 1.5], [1.0, 1.0], Color::WHITE);
+            })
+            .unwrap()
+    };
+    let frame = render(dark);
+    let pixel = |image: &Image, point: [f32; 3]| {
+        let [x, y] = dark.project(point).expect("it's in view");
+        image.pixel(x as u32, y as u32)
+    };
+    let near = |[r, g, b, _]: [u8; 4], color: Color| {
+        let [er, eg, eb] = [color.r, color.g, color.b].map(|c| (c * 255.0).round() as u8);
+        [r.abs_diff(er), g.abs_diff(eg), b.abs_diff(eb)]
+            .iter()
+            .all(|&d| d <= CHANNEL_TOLERANCE)
+    };
+
+    // Nothing lights the ground, which doesn't glow.
+    assert_eq!(pixel(&frame, [1.0, 0.0, 2.0]), [0, 0, 0, 255]);
+    // The cube glowing white shows its own color, as full light would.
+    let shown = pixel(&frame, left);
+    assert!(near(shown, red), "{shown:?}");
+    // The one glowing grey shows less of it, and some.
+    let dimmer = pixel(&frame, right);
+    assert!(dimmer[0] > 40 && dimmer[0] < shown[0], "{dimmer:?}");
+    // The model's part that gives off orange shows it; its other part is black.
+    let given = pixel(&frame, sign_lit);
+    assert!(near(given, Color::rgb8(0xff, 0x90, 0x20)), "{given:?}");
+    assert_eq!(pixel(&frame, sign_dark), [0, 0, 0, 255]);
+
+    // In fog that's whole short of them, they're all the fog's color.
+    let gray = Color::rgb8(0x30, 0x30, 0x40);
+    let foggy = View3d {
+        fog: Some(Fog::new(gray, 0.5, 3.0)),
+        ..dark
+    };
+    let fogged = render(foggy);
+    for point in [left, right, sign_lit] {
+        let shown = pixel(&fogged, point);
+        assert!(near(shown, gray), "{shown:?} at {point:?}");
+    }
+
+    assert_screenshot(&headless.adapter_name(), "glow_shows_in_the_dark", frame);
 }
 
 /// A view with no sun and no ambient light, so what a light doesn't reach is black.

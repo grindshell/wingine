@@ -8,8 +8,8 @@ systems, and don't build more 3D features unless asked.
 ## Scope
 
 Wingine has what its examples need: tilemaps and batched sprites in blend modes, meshes and glTF
-models in 3D views picked by boxes, lit by a sun and by lights at places that cast shadows, and
-fading into fog,
+models in 3D views picked by boxes, lit by a sun and by lights at places that cast shadows,
+glowing, and fading into fog,
 sprite animation, particles, a camera, keyboard, mouse and gamepad input bound to
 actions, grid movement, physics with Rapier (bodies and characters, in 2D and in 3D views),
 text in the built-in font, bitmap fonts and TrueType fonts, audio, saves, Luau scripting with
@@ -129,6 +129,15 @@ own right.
   shading itself. Whether a mesh casts is each draw's (`MeshDraw::casts_shadow`, part of its
   kind, as `Canvas3d::set_casts_shadow` had it when it was drawn); billboards never do. In
   scenes it's a mesh or model node's `casts_shadow`, and a light node's `shadows`.
+- Glow: a model's parts give off their file's emission (`ModelPart::emission`, times its
+  `emission_sprite`), and what's drawn shows `Canvas3d::set_glow` of its own colors, both added
+  to what light shows of a pixel in `mesh.wgsl`, unshaded, before fog, and capped at white with
+  it. Each rides its draw's `Instance` (112 bytes), so glow never splits a draw call; an
+  emission texture is part of a draw's kind, bound as the mesh pipeline's group 2 (white for
+  none). `model_file` reads `emissiveFactor`, `KHR_materials_emissive_strength` and an emission
+  texture on the base color's coordinates. In scenes it's a mesh, model or billboard node's
+  `glow`, written only if it isn't black. Native libraries' draws never glow: `native.rs` sets
+  it black before them.
 - Fog (`Fog`, a `View3d`'s `fog`): `mesh.wgsl` mixes what a pixel shows, lit and shaded, with the
   fog's color by its distance from the camera, in a straight line from `near` to `far`, in linear
   light; from where the camera is (`View3d::distance`), or ahead of an orthographic one. A view

@@ -181,13 +181,15 @@
 //!   `size = { width, height, depth }`, `"plane"`, facing up, with `size = { width, depth }`, or
 //!   `"sphere"` with a `radius`, sizes 1 and the radius a half by default; optionally a sprite,
 //!   `sheet` and `cell`, a `tint`, and `casts_shadow`, whether it shades what's behind it from
-//!   lights with `shadows` (`true`).
+//!   lights with `shadows` (`true`); and a `glow` (`"#000000"`), how much of its own colors it
+//!   shows whatever lights it, white as full light would show them.
 //! - `model`, in a view: the model file `model`, its path relative to the game's folder, a
-//!   `tint`, and `casts_shadow`, as a mesh's.
+//!   `tint`, `casts_shadow` and `glow`, as a mesh's. Its parts give off their file's emission
+//!   besides.
 //! - `billboard`, in a view: a sprite, `sheet` and `cell`, standing upright with the middle of its
 //!   bottom edge at the node's origin, facing the camera across the ground, `width` by `height`
-//!   world units (1 by default; a negative width mirrors it), and a `tint`. It moves with its node,
-//!   but doesn't turn or stretch.
+//!   world units (1 by default; a negative width mirrors it), a `tint`, and a `glow`, as a
+//!   mesh's. It moves with its node, but doesn't turn or stretch.
 //! - `light`, in a view: a light at the node's origin ([`Light`](crate::graphics::Light)), of a
 //!   `color` (white), reaching `range` world units (5), its light falling off in a straight line
 //!   to nothing there, and `energy` times its color (1). With a `cone`, half an angle in radians
@@ -759,6 +761,8 @@ pub struct MeshNode {
     pub tint: Color,
     /// Whether it shades what's behind it from lights with shadows.
     pub casts_shadow: bool,
+    /// How much of its own colors it shows whatever lights it.
+    pub glow: Color,
 }
 
 /// What a model node shows.
@@ -768,6 +772,8 @@ pub struct ModelNode {
     pub tint: Color,
     /// Whether it shades what's behind it from lights with shadows.
     pub casts_shadow: bool,
+    /// How much of its own colors it shows whatever lights it, besides what its parts give off.
+    pub glow: Color,
 }
 
 /// What a billboard node shows: a sprite standing upright, the middle of its bottom edge at the
@@ -780,6 +786,8 @@ pub struct BillboardNode {
     /// Its width and height in world units. A negative width mirrors it.
     pub size: [f32; 2],
     pub tint: Color,
+    /// How much of its own colors it shows whatever lights it.
+    pub glow: Color,
 }
 
 /// What a sprite node shows.
@@ -2776,18 +2784,23 @@ impl Scene {
         match &node.kind {
             Kind::Mesh(mesh) => {
                 world.set_casts_shadow(mesh.casts_shadow);
+                world.set_glow(mesh.glow);
                 world.draw_mesh(&mesh.mesh, transform, mesh.sprite.as_ref(), mesh.tint);
             }
             Kind::Model(model) => {
                 world.set_casts_shadow(model.casts_shadow);
+                world.set_glow(model.glow);
                 world.draw_model(&model.model, transform, model.tint);
             }
-            Kind::Billboard(billboard) => world.draw_billboard(
-                &billboard.sprite,
-                transform.translation,
-                billboard.size,
-                billboard.tint,
-            ),
+            Kind::Billboard(billboard) => {
+                world.set_glow(billboard.glow);
+                world.draw_billboard(
+                    &billboard.sprite,
+                    transform.translation,
+                    billboard.size,
+                    billboard.tint,
+                );
+            }
             // A spot light shines the way its node's front faces.
             Kind::Light(light) => {
                 world.add_light(light.light(transform.translation, transform.z_axis));
@@ -3412,12 +3425,14 @@ impl Build<'_> {
                     sheet,
                     tint: mesh.tint,
                     casts_shadow: mesh.casts_shadow,
+                    glow: mesh.glow,
                 })
             }
             KindDef::Model(model) => Kind::Model(ModelNode {
                 model: self.model(&model.model)?,
                 tint: model.tint,
                 casts_shadow: model.casts_shadow,
+                glow: model.glow,
             }),
             KindDef::Billboard(billboard) => {
                 let (sprite, sheet) = self.sprite(&billboard.sheet, billboard.cell, node)?;
@@ -3426,6 +3441,7 @@ impl Build<'_> {
                     sheet: Some(sheet),
                     size: billboard.size,
                     tint: billboard.tint,
+                    glow: billboard.glow,
                 })
             }
             KindDef::Light(light) => Kind::Light(*light),

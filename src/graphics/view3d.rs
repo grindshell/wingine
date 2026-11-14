@@ -447,17 +447,28 @@ impl Canvas3d<'_> {
         sprite: Option<&Sprite>,
         tint: Color,
     ) {
-        self.draw_sides(mesh, transform, sprite, tint, false);
+        let colors = Colors {
+            tint,
+            emission: Color::BLACK,
+            emission_sprite: None,
+        };
+        self.draw_sides(mesh, transform, sprite, colors, false);
     }
 
     /// Draws each part of `model` as [`draw_mesh`](Self::draw_mesh) would, placed in the model,
     /// and the model placed by `transform`, all multiplied by `tint`: a draw call for each part.
-    /// Double-sided parts show from behind too.
+    /// Double-sided parts show from behind too, and each part gives off its
+    /// [`emission`](ModelPart::emission).
     pub fn draw_model(&mut self, model: &Model, transform: Affine3, tint: Color) {
         for part in model.parts() {
             let placed = transform * part.transform;
             let sprite = part.sprite.as_ref();
-            self.draw_sides(&part.mesh, placed, sprite, tint, part.double_sided);
+            let colors = Colors {
+                tint,
+                emission: part.emission,
+                emission_sprite: part.emission_sprite.as_ref(),
+            };
+            self.draw_sides(&part.mesh, placed, sprite, colors, part.double_sided);
         }
     }
 
@@ -467,13 +478,22 @@ impl Canvas3d<'_> {
         mesh: &Mesh,
         transform: Affine3,
         sprite: Option<&Sprite>,
-        tint: Color,
+        colors: Colors,
         double_sided: bool,
     ) {
         if mesh.index_count() > 0 {
             let normal = transform.normal_matrix();
-            self.push(Some(mesh), transform, normal, sprite, tint, double_sided);
+            self.push(Some(mesh), transform, normal, sprite, colors, double_sided);
         }
+    }
+
+    /// How much of their own colors the meshes, models and billboards drawn in the view from now
+    /// on show whatever lights them, each channel from black, nothing, as a view begins, to
+    /// white, as full light would show them. It adds to the light that falls on them, which
+    /// stops at white, and isn't shaded: they glow, though they light nothing round them.
+    pub fn set_glow(&mut self, glow: Color) {
+        let segment = self.canvas.segments.last_mut().expect("begin_3d adds one");
+        segment.glow = glow;
     }
 
     /// Whether the meshes and models drawn in the view from now on cast shadows from its
@@ -520,7 +540,12 @@ impl Canvas3d<'_> {
         };
         // Whichever way the quad faces, its normal points up, as the ground's do.
         let normal = [[0.0; 3], [0.0; 3], [0.0, 1.0, 0.0]];
-        self.push(None, transform, normal, Some(sprite), tint, false);
+        let colors = Colors {
+            tint,
+            emission: Color::BLACK,
+            emission_sprite: None,
+        };
+        self.push(None, transform, normal, Some(sprite), colors, false);
     }
 
     /// Lights the view with `light`, as well as by its [`Lighting`]: everything drawn in it,
@@ -541,14 +566,15 @@ impl Canvas3d<'_> {
     }
 
     /// Records `mesh`, or the billboard quad for `None`, placed by `transform`, with `normal`
-    /// moving its normals, showing from behind too if `double_sided`.
+    /// moving its normals, colored by `colors` and glowing as the view now says, showing from
+    /// behind too if `double_sided`.
     fn push(
         &mut self,
         mesh: Option<&Mesh>,
         transform: Affine3,
         normal: [[f32; 3]; 3],
         sprite: Option<&Sprite>,
-        tint: Color,
+        colors: Colors,
         double_sided: bool,
     ) {
         let determinant = transform.determinant();
@@ -569,11 +595,16 @@ impl Canvas3d<'_> {
             ],
             normal,
             uv: [u0, v0, u1, v1],
-            tint: tint.to_rgba8(),
+            tint: colors.tint.to_rgba8(),
+            emission: colors.emission.to_rgba8(),
+            glow: segment.glow.to_rgba8(),
         });
         canvas.mesh_draws.push(MeshDraw {
             mesh: mesh.cloned(),
             texture: sprite.map(|sprite| sprite.texture().clone()),
+            emission_texture: colors
+                .emission_sprite
+                .map(|sprite| sprite.texture().clone()),
             mirrored: determinant < 0.0,
             double_sided,
             casts_shadow,
@@ -598,9 +629,19 @@ pub(crate) struct Segment3d {
     pub lights: Range<u32>,
     /// Whether the meshes drawn in it now cast shadows.
     pub casting: bool,
+    /// How much of their own colors what's drawn in it now shows whatever lights it.
+    pub glow: Color,
     /// The ways its billboards' right and front point ([`Camera3d::billboard_axes`]), the same
     /// for all of them.
     pub billboard_axes: ([f32; 3], [f32; 3]),
+}
+
+/// What a mesh drawn is colored by besides the view's light: its tint, and what it gives off.
+#[derive(Clone, Copy)]
+struct Colors<'a> {
+    tint: Color,
+    emission: Color,
+    emission_sprite: Option<&'a Sprite>,
 }
 
 /// A mesh recorded in a 3D view. Its transform and colors are its [`Instance`].
@@ -609,6 +650,8 @@ pub(crate) struct MeshDraw {
     pub mesh: Option<Mesh>,
     /// `None` draws with a plain white texture.
     pub texture: Option<Texture>,
+    /// What its emission is multiplied by: `None` for a plain white texture.
+    pub emission_texture: Option<Texture>,
     /// Whether its transform mirrors it, which turns its triangles' winding round.
     pub mirrored: bool,
     /// Whether its triangles show from behind too.
@@ -618,12 +661,13 @@ pub(crate) struct MeshDraw {
 }
 
 impl MeshDraw {
-    /// What it's drawn as: draws of the same kind, the same mesh showing the same texture drawn
+    /// What it's drawn as: draws of the same kind, the same mesh showing the same textures drawn
     /// the same way round, are drawn in one draw call, as instances of one mesh.
     fn kind(&self) -> DrawKind {
         DrawKind {
             mesh: self.mesh.as_ref().map_or(0, Mesh::id),
             texture: self.texture.as_ref().map_or(0, Texture::id),
+            emission_texture: self.emission_texture.as_ref().map_or(0, Texture::id),
             mirrored: self.mirrored,
             double_sided: self.double_sided,
             casts_shadow: self.casts_shadow,
@@ -631,12 +675,13 @@ impl MeshDraw {
     }
 }
 
-/// The kind of a [`MeshDraw`]: its mesh's and texture's IDs, 0 for none, which way round it's
+/// The kind of a [`MeshDraw`]: its mesh's and textures' IDs, 0 for none, which way round it's
 /// drawn, and whether it casts shadows.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct DrawKind {
     mesh: usize,
     texture: usize,
+    emission_texture: usize,
     mirrored: bool,
     double_sided: bool,
     casts_shadow: bool,
@@ -746,7 +791,7 @@ impl MeshOrder {
     }
 }
 
-/// How a mesh drawn is placed and colored, as the GPU reads it: 104 bytes.
+/// How a mesh drawn is placed and colored, as the GPU reads it: 112 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub(crate) struct Instance {
@@ -758,6 +803,10 @@ pub(crate) struct Instance {
     pub uv: [f32; 4],
     /// sRGB RGBA.
     pub tint: [u8; 4],
+    /// What it gives off, sRGB RGB and nothing.
+    pub emission: [u8; 4],
+    /// How much of its own colors it shows whatever lights it, sRGB RGB and nothing.
+    pub glow: [u8; 4],
 }
 
 #[cfg(test)]
@@ -1053,6 +1102,7 @@ mod tests {
         let draw = |mirrored, double_sided| MeshDraw {
             mesh: None,
             texture: None,
+            emission_texture: None,
             mirrored,
             double_sided,
             casts_shadow: false,

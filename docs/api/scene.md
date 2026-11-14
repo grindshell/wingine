@@ -29,7 +29,8 @@ the files.
   [`set_orientation`](#nodeset_orientation), [`scale_3d`](#nodescale_3d),
   [`set_scale_3d`](#nodeset_scale_3d), [`world_position_3d`](#nodeworld_position_3d),
   [`bounds_3d`](#nodebounds_3d), [`light`](#nodelight), [`set_light`](#nodeset_light),
-  [`casts_shadow`](#nodecasts_shadow), [`set_casts_shadow`](#nodeset_casts_shadow)
+  [`casts_shadow`](#nodecasts_shadow), [`set_casts_shadow`](#nodeset_casts_shadow),
+  [`glow`](#nodeglow), [`set_glow`](#nodeset_glow)
 - [3D views](#3d-views): [`camera`](#nodecamera), [`set_camera`](#nodeset_camera),
   [`lighting`](#nodelighting), [`set_lighting`](#nodeset_lighting), [`fog`](#nodefog),
   [`set_fog`](#nodeset_fog), [`pick`](#nodepick),
@@ -637,6 +638,32 @@ node:set_casts_shadow(casts: boolean)
 
 Changes whether a mesh or model node shades what's behind it from lights with `shadows`. An error
 for a node of another kind.
+
+### `node:glow`
+
+```lua
+node:glow(): number
+```
+
+Returns how much of its own colors a mesh, model or billboard node shows whatever lights it, as a
+number, `0x000000ff` for none: its file's `glow` unless [`set_glow`](#nodeset_glow) has changed
+it. An error for a node of another kind.
+
+### `node:set_glow`
+
+```lua
+node:set_glow(glow: Color)
+```
+
+Changes how much of its own colors a mesh, model or billboard node shows whatever lights it:
+white as full light would show them, black for none. A model's parts give off what their file's
+materials emit besides. See [glow](graphics.md#graphicsbegin_3d). An error for a node of another
+kind.
+
+```lua
+-- A candle's flame glows while it burns.
+flame:set_glow(if candle.lit then "#ffffff" else "#000000")
+```
 
 ## 3D views
 

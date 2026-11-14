@@ -569,15 +569,18 @@ The world is right-handed with `y` up, as glTF's is. The kinds of node in it:
 - **`mesh`**: a built-in shape, `shape`, centered on its origin: `"cuboid"`, `size = { width,
   height, depth }`; `"plane"`, flat and facing up, `size = { width, depth }`; or `"sphere"`, of a
   `radius`. Sizes are 1, and a sphere's radius a half, if left out. Optionally a sprite, `sheet`
-  and `cell`, shown on each face; a `tint`; and `casts_shadow`, whether it shades what's behind it
-  from lights with `shadows` (`true`).
+  and `cell`, shown on each face; a `tint`; `casts_shadow`, whether it shades what's behind it
+  from lights with `shadows` (`true`); and `glow` (`"#000000"`), how much of its own colors it
+  shows whatever lights it, white as full light would show them (see
+  [glow](api/graphics.md#graphicsbegin_3d)).
 - **`model`**: the parts of a model file, `model`, a `.glb` or `.gltf` file's path from the
   game's folder, as [`graphics.load_model`](api/graphics.md#graphicsload_model) loads it, a
-  `tint`, and `casts_shadow`, as a mesh's.
+  `tint`, `casts_shadow` and `glow`, as a mesh's. Its parts give off what their file's
+  materials emit besides.
 - **`billboard`**: a sprite, `sheet` and `cell`, standing upright with the middle of its bottom
   edge at the node's origin, turned to face the camera across the ground, `width` by `height`
-  world units (1 by default; a negative width mirrors it), and a `tint`. It moves with its node,
-  but doesn't turn or stretch.
+  world units (1 by default; a negative width mirrors it), a `tint`, and a `glow`, as a mesh's.
+  It moves with its node, but doesn't turn or stretch.
 - **`light`**: a light at the node's origin, of a `color` (white), reaching `range` world units
   (5), above 0, its light falling off in a straight line to nothing there, and giving `energy`
   times its color (1), 0 or more. With a `cone`, half the cone's angle in radians, above 0 and up

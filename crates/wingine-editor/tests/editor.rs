@@ -843,6 +843,12 @@ fn views_and_their_nodes_are_added_and_inspected() {
         node(&simulation, "view3d/mesh").kind,
         KindDef::Mesh(MeshDef { shape: Shape::Cuboid([_, height, _]), .. }) if height == 3.0
     ));
+    // It can glow, and doesn't to begin with.
+    assert!(simulation.gui_rect("glow").is_some());
+    assert!(matches!(
+        node(&simulation, "view3d/mesh").kind,
+        KindDef::Mesh(MeshDef { glow, .. }) if glow == Color::BLACK
+    ));
 
     // The view's camera.
     select(&mut simulation, "view3d");

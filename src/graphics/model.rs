@@ -1,6 +1,6 @@
 use std::{fmt, path::PathBuf, sync::Arc};
 
-use super::{Mesh, Sprite};
+use super::{Color, Mesh, Sprite};
 use crate::math::{Affine3, Bounds3};
 
 /// Meshes placed together, each showing a sprite or none, as a model file holds them: loaded with
@@ -20,8 +20,8 @@ struct ModelInner {
     files: Vec<PathBuf>,
 }
 
-/// A mesh of a [`Model`]: where it is in the model, the sprite it shows, if any, and whether
-/// both its sides show.
+/// A mesh of a [`Model`]: where it is in the model, the sprite it shows, if any, whether both its
+/// sides show, and what it glows with.
 #[derive(Clone, Debug)]
 pub struct ModelPart {
     pub mesh: Mesh,
@@ -31,6 +31,12 @@ pub struct ModelPart {
     /// Whether its triangles show from behind too, lit as though they faced the other way, as a
     /// model file's double-sided materials ask, rather than only from the side they face.
     pub double_sided: bool,
+    /// The color it gives off, whatever lights it, added to what light shows of it: a model
+    /// file's emission. Black, as most parts' is, gives off nothing.
+    pub emission: Color,
+    /// A sprite its emission is multiplied by, on the same texture coordinates as `sprite`, if
+    /// it has one.
+    pub emission_sprite: Option<Sprite>,
 }
 
 impl Model {

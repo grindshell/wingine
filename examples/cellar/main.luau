@@ -5,8 +5,9 @@
 -- The candles and the hero are sprites standing among them, billboards that turn to face the
 -- camera, which follows the hero from above and behind. Each candle holds a `flame`, a light
 -- that's out until the candle is lit, and then lights the cellar around it, the walls and the
--- props shading what's behind them. Walk with the arrow keys or WASD, and point at a prop with
--- the mouse to name it.
+-- props shading what's behind them, while the candle glows, showing its own colors as bright as
+-- they are however little light falls on it. Walk with the arrow keys or WASD, and point at a
+-- prop with the mouse to name it.
 --
 -- A tile is a world unit, with columns along `x` and rows along `z`, so up the map is away from
 -- the camera, and each node of the view stands on the tile its position is in.
@@ -167,9 +168,11 @@ function draw()
     view:set_camera(cellar.view().camera)
     for i, candle in cellar.candles do
         if candle.lit then
-            -- Flickering, each candle in its own time.
+            -- Flickering, each candle in its own time, and glowing as it burns.
             local glow = 0.9 + 0.1 * math.sin(cellar.time * 9 + i * 2)
-            candle.node:set_tint(graphics.color({ r = glow, g = glow * 0.85, b = glow * 0.45 }))
+            local color = graphics.color({ r = glow, g = glow * 0.85, b = glow * 0.45 })
+            candle.node:set_tint(color)
+            candle.node:set_glow(color)
             candle.flame:set_light({ energy = glow })
         end
     end

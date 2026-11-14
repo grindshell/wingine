@@ -47,7 +47,7 @@ egui-winit = { version = "0.37.0", optional = true, default-features = false }
 gilrs = "0.11.2"
 # Without its `import` feature, which would bring a JPEG decoder: the engine reads buffers and
 # PNG textures itself.
-gltf = { version = "1.4.1", optional = true, default-features = false, features = ["KHR_texture_transform", "names", "utils"] }
+gltf = { version = "1.4.1", optional = true, default-features = false, features = ["KHR_materials_emissive_strength", "KHR_texture_transform", "names", "utils"] }
 image ={ version = "0.25.10", default-features = false, features = ["png"] }
 # Only the formats the engine documents: WAV (PCM) and OGG Vorbis.
 kira = { version = "0.12.6", default-features = false, features = ["cpal", "ogg", "vorbis", "wav", "pcm"] }

@@ -48,6 +48,11 @@ var shadow_sampler: sampler_comparison;
 var mesh_texture: texture_2d<f32>;
 @group(1) @binding(1)
 var mesh_sampler: sampler;
+// What the mesh's emission is multiplied by, on the same texture coordinates: white for none.
+@group(2) @binding(0)
+var emission_texture: texture_2d<f32>;
+@group(2) @binding(1)
+var emission_sampler: sampler;
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -70,6 +75,10 @@ struct InstanceIn {
     @location(11) uv_bounds: vec4<f32>,
     // sRGB, from bytes.
     @location(12) tint: vec4<f32>,
+    // What it gives off whatever lights it, sRGB, from bytes.
+    @location(13) emission: vec4<f32>,
+    // How much of its own colors it shows whatever lights it, sRGB, from bytes.
+    @location(14) glow: vec4<f32>,
 }
 
 struct VertexOut {
@@ -77,6 +86,9 @@ struct VertexOut {
     @location(0) uv: vec2<f32>,
     // Linear.
     @location(1) color: vec4<f32>,
+    // Linear, both: what it gives off, and how much of its own colors it shows, whatever lights it.
+    @location(4) emission: vec3<f32>,
+    @location(5) glow: vec3<f32>,
     // In the world, of length 1 at each corner, or 0 for none, so how long the mesh's normals are,
     // and how the transform stretches them, doesn't sway how they blend between corners. Blending
     // shortens them.
@@ -105,6 +117,8 @@ fn vs_main(vertex: VertexIn, instance: InstanceIn) -> VertexOut {
         srgb_to_linear(vertex.color.rgb) * srgb_to_linear(instance.tint.rgb),
         vertex.color.a * instance.tint.a,
     );
+    out.emission = srgb_to_linear(instance.emission.rgb);
+    out.glow = srgb_to_linear(instance.glow.rgb);
     let normal = instance.normal_x * n.x + instance.normal_y * n.y + instance.normal_z * n.z;
     let length_squared = dot(normal, normal);
     out.normal = select(vec3<f32>(0.0), normal * inverseSqrt(length_squared), length_squared > 0.0);
@@ -160,6 +174,8 @@ fn lit(index: u32, world: vec3<f32>, normal: vec3<f32>, toward: vec3<f32>) -> f3
 @fragment
 fn fs_main(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
     let color = textureSample(mesh_texture, mesh_sampler, in.uv) * in.color;
+    // Sampled before anything can make what follows differ from pixel to pixel, as sampling must.
+    let emitted = in.emission * textureSample(emission_texture, emission_sampler, in.uv).rgb;
     if color.a < 0.5 {
         discard;
     }
@@ -207,7 +223,12 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @locatio
         }
         light += color_inner.rgb * level;
     }
-    var shown = color.rgb * min(light, vec3<f32>(1.0));
+    // What it gives off, and how much of its own colors it shows, whatever lights it: added to
+    // what light shows of it, unshaded, and as bright as white at most, as light is.
+    var shown = min(
+        color.rgb * min(light, vec3<f32>(1.0)) + emitted + color.rgb * in.glow,
+        vec3<f32>(1.0),
+    );
     if view.fog_color.a > 0.5 {
         // It fades to the fog's color with how far it is from the camera, in a straight line
         // from where the fog begins to where there's nothing else: from where the camera is,

@@ -502,6 +502,7 @@ impl Writer {
                 if !mesh.casts_shadow {
                     self.field("casts_shadow", "false");
                 }
+                self.glow(mesh.glow);
             }
             KindDef::Model(model) => {
                 self.field("model", &quoted(&model.model));
@@ -509,6 +510,7 @@ impl Writer {
                 if !model.casts_shadow {
                     self.field("casts_shadow", "false");
                 }
+                self.glow(model.glow);
             }
             KindDef::Billboard(billboard) => {
                 self.field("sheet", &quoted(&billboard.sheet));
@@ -522,6 +524,7 @@ impl Writer {
                     self.number_field("height", height)?;
                 }
                 self.color("tint", billboard.tint);
+                self.glow(billboard.glow);
             }
             KindDef::Light(light) => {
                 let default = LightDef::default();
@@ -797,6 +800,13 @@ impl Writer {
     fn color(&mut self, key: &str, color: Color) {
         if color.to_rgba8() != Color::WHITE.to_rgba8() {
             self.any_color(key, color);
+        }
+    }
+
+    /// A mesh's, model's or billboard's `glow`, unless it's black, none.
+    fn glow(&mut self, glow: Color) {
+        if glow.to_rgba8() != Color::BLACK.to_rgba8() {
+            self.any_color("glow", glow);
         }
     }
 
@@ -1491,6 +1501,7 @@ mod tests {
                     x = -2,
                     model = "models/barrel.glb",
                     tint = "#c0a080",
+                    glow = "#808080",
                 },
                 {
                     name = "hero",
@@ -1499,6 +1510,7 @@ mod tests {
                     cell = { 27, 0 },
                     width = -1,
                     height = 1.5,
+                    glow = "#ffcc88",
                     tags = { "hero" },
                 },
             },

@@ -1176,6 +1176,22 @@ A light none of whose reach is nearer the camera than the fog's `far` lights not
 shows. It isn't one of the view's 32 lights, takes no shadow maps, and isn't counted as left
 out.
 
+Meshes, models and billboards can glow: show a color whatever lights them, or doesn't, such as a
+window lit from inside, a screen, or a candle's flame. A model's parts give off what their
+file's materials emit ([`load_model`](#graphicsload_model)); and anything drawn with a `glow`
+([`draw_mesh`](#graphicsdraw_mesh), [`draw_model`](#graphicsdraw_model),
+[`draw_billboard`](#graphicsdraw_billboard)) shows that much of its own colors, as if lit: white
+as full light would show them, grey half as much, black, as by default, none. Either adds to the
+light that falls on it, and what's shown stops at white, as light does, so nothing is brighter.
+Glow isn't light: it lights nothing round it and casts nothing, it isn't shaded, and none of it
+counts toward the view's 32 lights. It fades into fog as anything does.
+
+```lua
+-- A sign that reads in the dark, and the lamp over it, which lights what's under it.
+graphics.draw_model(sign, vector.create(0, 3, -4), { glow = "#ffffff" })
+graphics.draw_mesh(bulb, lamp, { casts_shadow = false, glow = "#ffffff" })
+```
+
 ### `graphics.draw_mesh`
 
 ```lua
@@ -1195,6 +1211,7 @@ colors it:
 | `sprite` | The sprite it shows. A mesh's corners show points of the sprite from 0 to 1 across it, so each side of a [cube](#graphicsnew_cube) shows the whole sprite. By default, none: the mesh is white. |
 | `tint` | A color its colors are multiplied by. By default, white. |
 | `casts_shadow` | Whether it shades what's behind it from [lights with `shadows`](#graphicsbegin_3d). By default, `true`. |
+| `glow` | How much of its own colors it shows whatever lights it, a [`Color`](README.md#color): white, as full light would show them, black, as by default, none. See [glow](#graphicsbegin_3d). |
 
 The mesh is scaled, rolled, pitched and turned, in that order, about its origin, then moved to
 `position`. Pixels of the sprite less than half opaque aren't drawn, so what's behind shows through
@@ -1219,8 +1236,10 @@ graphics.draw_model(model: Model, position: vector, options: MeshOptions?)
 Draws each part of a [model](#models) in the 3D view begun last, as
 [`draw_mesh`](#graphicsdraw_mesh) would, each placed where the model file puts it, and the whole
 model placed by `position` and `options` as a mesh is. Its parts show their own sprites, so
-`options.sprite` is an error, `options.tint` multiplies all their colors, and
-`options.casts_shadow` is whether all of them cast shadows. Each part is a draw call of its own.
+`options.sprite` is an error, `options.tint` multiplies all their colors,
+`options.casts_shadow` is whether all of them cast shadows, and `options.glow` how much of their
+own colors all of them show whatever lights them. Parts whose file's materials emit give that off
+besides, whatever `options` say. Each part is a draw call of its own.
 
 ```lua
 local barrel = graphics.load_model("models/barrel.glb")
@@ -1232,7 +1251,7 @@ graphics.draw_model(barrel, vector.create(column + 0.5, 0, row + 0.5), { yaw = 0
 ### `graphics.draw_billboard`
 
 ```lua
-graphics.draw_billboard(sprite: Sprite, position: vector, tint: Color?, width: number?, height: number?)
+graphics.draw_billboard(sprite: Sprite, position: vector, tint: Color?, width: number?, height: number?, glow: Color?)
 ```
 
 Draws `sprite` standing upright in the 3D view begun last, with the middle of its bottom edge at
@@ -1245,8 +1264,9 @@ A billboard is lit as the ground is, whichever way it faces, so it matches what 
 [light at a place](#graphicsbegin_3d) gives it its whole level wherever the light is from it,
 since a billboard has no side to turn away. Meshes shade it from lights with `shadows`, but it
 casts no shadow itself. It hides what's behind it as meshes do, its pixels less than half opaque
-left out, and its colors are multiplied by `tint`, white by default. Drawing one when no view is
-open is an error.
+left out, and its colors are multiplied by `tint`, white by default. It shows `glow` of its own
+colors whatever lights it, black, none, by default, as a mesh's [`glow`](#graphicsbegin_3d)
+does. Drawing one when no view is open is an error.
 
 ```lua
 -- The player, a tile tall, facing the way they last walked.
@@ -1470,10 +1490,18 @@ too, lit as though it faced that way; the rest show only from the side their tri
 meshes do. In Blender, a material is double-sided unless its Backface Culling is on. Parts that
 share a mesh in the file share it on the GPU.
 
+A material's emission is what its parts [glow](#graphicsbegin_3d) with, whatever lights them: its
+emissive color, times its emission texture, if it has one, which must be a PNG on the same
+texture coordinates as its base color's, times its `KHR_materials_emissive_strength`. In
+Blender, that's the Principled BSDF's Emission Color, its texture, and its Strength. Nothing is
+brighter than white, so a strength over 1 makes a dim emission reach white and no further. A
+part of a model that glows, such as a window's pane, is a material of its own.
+
 What it leaves out: skins and morph targets (parts are drawn as modelled), animations, cameras,
 lights and the rest of materials. A file whose meshes are points or lines, one with a JPEG texture,
-and one that needs an extension, such as Draco or meshopt compression, are errors, saying what to
-export differently.
+one whose emission texture is on other coordinates than its base color's, and one that needs an
+extension the engine doesn't read, such as Draco or meshopt compression, are errors, saying what
+to export differently.
 
 From Blender, export glTF 2.0 as a `.glb`, with the scene's units in metres, so a metre is a world
 unit, and its axes converted, as they are by default, so Blender's up is `+y`. Put each model's

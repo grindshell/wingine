@@ -20,7 +20,7 @@ use crate::{
 };
 #[cfg(feature = "models")]
 use crate::{
-    graphics::{Model, ModelPart, Sprite, model_file},
+    graphics::{Color, Model, ModelPart, Sprite, model_file},
     math::Rect,
 };
 
@@ -385,11 +385,19 @@ impl Context {
         let parts = data
             .parts
             .iter()
-            .map(|part| ModelPart {
-                mesh: meshes[part.mesh].clone(),
-                sprite: part.texture.map(|texture| sprites[texture].clone()),
-                transform: part.transform,
-                double_sided: part.double_sided,
+            .map(|part| {
+                // Nothing is brighter than white, so a strength over 1 reaches it and no further.
+                let [r, g, b] = part.emission.map(|c| c.clamp(0.0, 1.0));
+                ModelPart {
+                    mesh: meshes[part.mesh].clone(),
+                    sprite: part.texture.map(|texture| sprites[texture].clone()),
+                    transform: part.transform,
+                    double_sided: part.double_sided,
+                    emission: Color::from_linear([r, g, b, 1.0]),
+                    emission_sprite: part
+                        .emission_texture
+                        .map(|texture| sprites[texture].clone()),
+                }
             })
             .collect();
         Ok(Model::read_from(parts, data.files))
@@ -420,5 +428,32 @@ mod tests {
             limit + 1
         );
         assert!(err.to_string().ends_with(&message), "{err}");
+    }
+
+    #[cfg(feature = "models")]
+    #[test]
+    fn models_give_off_their_emission_no_brighter_than_white() {
+        let mut headless = Headless::new().expect("a GPU adapter is available");
+        let ctx = headless.context();
+        let folder = TemporaryFolder::new();
+        std::fs::create_dir(folder.path()).unwrap();
+        let positions: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let bytes: &[u8] = bytemuck::cast_slice(&positions);
+        std::fs::write(folder.path().join("tri.bin"), bytes).unwrap();
+        // A quarter and a half, four times as strong: past white in red, and so white.
+        let json = r#"{"asset":{"version":"2.0"},"extensionsUsed":["KHR_materials_emissive_strength"],
+            "buffers":[{"byteLength":36,"uri":"tri.bin"}],
+            "bufferViews":[{"buffer":0,"byteLength":36}],
+            "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}],
+            "materials":[{"emissiveFactor":[0.25,0.125,0],"extensions":{"KHR_materials_emissive_strength":{"emissiveStrength":4}}}],
+            "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],
+            "nodes":[{"mesh":0}]}"#;
+        let path = folder.path().join("tri.gltf");
+        std::fs::write(&path, json).unwrap();
+        let model = ctx.load_model(&path).unwrap();
+        let part = &model.parts()[0];
+        // Linear 0.5 is sRGB 0.735.
+        assert_eq!(part.emission.to_rgba8(), [255, 188, 0, 255]);
+        assert!(part.emission_sprite.is_none());
     }
 }

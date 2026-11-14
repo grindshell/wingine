@@ -3,9 +3,10 @@
 //! The engine draws what a model's meshes look like, not how they move: it reads the default
 //! scene's nodes and their meshes' triangles, with their positions, normals, texture coordinates
 //! and vertex colors, and each material's base color, PNG texture (how it wraps, and its
-//! `KHR_texture_transform`) and whether it's double-sided. Skins, morph targets, animations,
-//! cameras, lights and the rest of materials are left out, and files that require an extension
-//! are refused.
+//! `KHR_texture_transform`), emission (its factor, its PNG texture on the base color's
+//! coordinates, and `KHR_materials_emissive_strength`) and whether it's double-sided. Skins,
+//! morph targets, animations, cameras, lights and the rest of materials are left out, and files
+//! that require an extension the engine doesn't read are refused.
 
 use std::{
     borrow::Cow,
@@ -28,6 +29,9 @@ use crate::math::{Affine3, cross3, normalize3, sub3};
 
 /// How deeply a file's nodes may nest, so a deep chain of them is an error, not a stack overflow.
 const MAX_DEPTH: u32 = 256;
+
+/// The extensions the engine reads, which a file may require.
+const READ_EXTENSIONS: [&str; 2] = ["KHR_materials_emissive_strength", "KHR_texture_transform"];
 
 /// What a model file holds that the engine draws.
 #[derive(Debug, Default)]
@@ -70,6 +74,11 @@ pub(crate) struct PartData {
     pub transform: Affine3,
     /// Whether its material is double-sided, showing its triangles from behind too.
     pub double_sided: bool,
+    /// What its material emits, linear: its emissive factor times its strength.
+    pub emission: [f32; 3],
+    /// Which of its textures its emission is multiplied by, if any, on the same texture
+    /// coordinates as the one it shows.
+    pub emission_texture: Option<usize>,
 }
 
 /// Reads a model file's `bytes`, `.gltf` or `.glb`, finding the files it names in `folder`.
@@ -80,7 +89,10 @@ pub(crate) fn read(bytes: &[u8], folder: &Path) -> Result<ModelData, String> {
         document: unchecked,
         mut blob,
     } = ::gltf::Gltf::from_slice_without_validation(bytes).map_err(|err| err.to_string())?;
-    let required: Vec<&str> = unchecked.extensions_required().collect();
+    let required: Vec<&str> = unchecked
+        .extensions_required()
+        .filter(|name| !READ_EXTENSIONS.contains(name))
+        .collect();
     if !required.is_empty() {
         return Err(format!(
             "it needs {}, which the engine doesn't read: export it without",
@@ -195,12 +207,20 @@ impl Reader<'_> {
                     )
                 })?;
                 let material = primitive.material();
-                let texture = self.texture(&material, mesh_index)?;
+                let opaque = material.alpha_mode() == AlphaMode::Opaque;
+                let base = material.pbr_metallic_roughness().base_color_texture();
+                let texture = self.texture(base.as_ref(), opaque, mesh_index)?;
+                // An emission's alpha is nothing, so it's read as an opaque material's texture is.
+                let emitted = material.emissive_texture();
+                let emission_texture = self.texture(emitted.as_ref(), true, mesh_index)?;
+                let strength = material.emissive_strength().unwrap_or(1.0);
                 self.data.parts.push(PartData {
                     mesh: mesh_index,
                     texture,
                     transform,
                     double_sided: material.double_sided(),
+                    emission: material.emissive_factor().map(|c| c * strength),
+                    emission_texture,
                 });
             }
         }
@@ -227,18 +247,19 @@ impl Reader<'_> {
         Ok(index)
     }
 
-    /// The index in `data.textures` of `material`'s base color texture, if it has one, as the
-    /// mesh `mesh` of `data.meshes` shows it, decoding it if it hasn't been.
+    /// The index in `data.textures` of the texture `info` names, if it names one, as the mesh
+    /// `mesh` of `data.meshes` shows it, its alpha ignored if `opaque`, decoding it if it hasn't
+    /// been.
     fn texture(
         &mut self,
-        material: &::gltf::Material,
+        info: Option<&texture::Info>,
+        opaque: bool,
         mesh: usize,
     ) -> Result<Option<usize>, String> {
-        let Some(info) = material.pbr_metallic_roughness().base_color_texture() else {
+        let Some(info) = info else {
             return Ok(None);
         };
         let image = info.texture().source();
-        let opaque = material.alpha_mode() == AlphaMode::Opaque;
         // How it wraps matters only along the axes where the mesh's coordinates leave the texture,
         // and clamping keeps the edges of those that don't from picking up the far side's texels.
         let sampler = info.texture().sampler();
@@ -319,6 +340,28 @@ fn mesh_data(primitive: &::gltf::Primitive, buffers: &[Vec<u8>]) -> Result<MeshD
             .and_then(|transform| transform.tex_coord());
         picked.unwrap_or(info.tex_coord())
     });
+    // Its emission's texture is shown on the same coordinates, the only ones read.
+    if let Some(emitted) = material.emissive_texture() {
+        let own = emitted.texture_transform();
+        let own_set = own
+            .as_ref()
+            .and_then(|transform| transform.tex_coord())
+            .unwrap_or(emitted.tex_coord());
+        let same_transform = match (&transform, &own) {
+            (None, None) => true,
+            (Some(a), Some(b)) => {
+                a.offset() == b.offset() && a.rotation() == b.rotation() && a.scale() == b.scale()
+            }
+            _ => false,
+        };
+        if own_set != set || !same_transform {
+            return Err(
+                "its emission's texture is on other texture coordinates than its base \
+                 color's, which the engine doesn't read: export both on the same"
+                    .to_owned(),
+            );
+        }
+    }
     check_accessors(primitive, set, buffers)?;
 
     let reader = primitive.reader(|buffer| buffers.get(buffer.index()).map(Vec::as_slice));
@@ -917,6 +960,60 @@ mod tests {
                 .iter()
                 .all(|texture| texture.wrap == [Wrap::Clamp; 2])
         );
+    }
+
+    #[test]
+    fn emission_is_read_from_materials_with_its_strength() {
+        let mut buffer = Buffer::new();
+        let (positions, indices) = triangle(&mut buffer);
+        let primitive = |material: usize| {
+            format!(
+                r#"{{"attributes":{{"POSITION":{positions}}},"indices":{indices},"material":{material}}}"#
+            )
+        };
+        let json = buffer.gltf(&format!(
+            r#""materials":[
+                {{"emissiveFactor":[1,0.5,0]}},
+                {{"emissiveFactor":[0.25,0.5,0],"extensions":{{"KHR_materials_emissive_strength":{{"emissiveStrength":4}}}}}},
+                {{}}
+            ],
+            "meshes":[{{"primitives":[{},{},{}]}}],
+            "nodes":[{{"mesh":0}}]"#,
+            primitive(0),
+            primitive(1),
+            primitive(2)
+        ));
+        // The extension is one the engine reads, so a file may require it.
+        let json = json.replace(
+            r#""asset""#,
+            r#""extensionsUsed":["KHR_materials_emissive_strength"],"extensionsRequired":["KHR_materials_emissive_strength"],"asset""#,
+        );
+        let model = read_str(&json).unwrap();
+        let emission: Vec<_> = model.parts.iter().map(|part| part.emission).collect();
+        assert_eq!(emission, [[1.0, 0.5, 0.0], [1.0, 2.0, 0.0], [0.0; 3]]);
+        assert!(
+            model
+                .parts
+                .iter()
+                .all(|part| part.emission_texture.is_none())
+        );
+    }
+
+    #[test]
+    fn emission_textures_are_read_on_the_base_colors_coordinates() {
+        // The same image as the base color's, opaque both ways, is the same texture.
+        let emitted = r#","emissiveTexture":{"index":0},"emissiveFactor":[1,1,1]"#;
+        let json = textured(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0], None, emitted);
+        let model = read_str(&json).unwrap();
+        assert_eq!(model.parts[0].texture, Some(0));
+        assert_eq!(model.parts[0].emission_texture, Some(0));
+        assert_eq!(model.textures.len(), 1);
+
+        // Other coordinates aren't read.
+        let elsewhere = r#","emissiveTexture":{"index":0,"texCoord":1}"#;
+        let json = textured(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0], None, elsewhere);
+        let err = read_str(&json).unwrap_err();
+        assert!(err.contains("other texture coordinates"), "{err}");
     }
 
     /// A triangle showing a texture with its coordinates `uvs`, sampled by `sampler`'s JSON if

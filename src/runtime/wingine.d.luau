@@ -277,6 +277,9 @@ type MeshOptions = {
     tint: Color?,
     --- Whether it shades what's behind it from lights with `shadows`. By default, `true`.
     casts_shadow: boolean?,
+    --- How much of its own colors it shows whatever lights it, as full light would show them at
+    --- white. By default, black: none. A model's parts give off their file's emission besides.
+    glow: Color?,
 }
 
 --- A corner of a mesh's triangles, for `graphics.new_mesh`.
@@ -819,6 +822,12 @@ declare extern type SceneNode with
     function set_cell(self, column: number, row: number): ()
     --- Changes the color the colors of a sprite, mesh, model or billboard are multiplied by.
     function set_tint(self, tint: Color): ()
+    --- Returns how much of its own colors a mesh, model or billboard shows whatever lights it, as
+    --- a number.
+    function glow(self): number
+    --- Changes how much of its own colors a mesh, model or billboard shows whatever lights it:
+    --- black for none, white for as full light would show them.
+    function set_glow(self, glow: Color): ()
     --- Returns whether a mesh or model shades what's behind it from lights with `shadows`.
     function casts_shadow(self): boolean
     --- Changes whether a mesh or model shades what's behind it from lights with `shadows`.
@@ -1113,8 +1122,9 @@ declare graphics: {
     draw_model: (model: Model, position: vector, options: MeshOptions?) -> (),
     --- Draws `sprite` standing upright in the 3D view begun last, facing the camera, with the
     --- middle of its bottom edge at `position`: `height` world units tall (1 by default), and
-    --- `width` wide (by default, as its shape makes it). A negative `width` mirrors it.
-    draw_billboard: (sprite: Sprite, position: vector, tint: Color?, width: number?, height: number?) -> (),
+    --- `width` wide (by default, as its shape makes it). A negative `width` mirrors it. It shows
+    --- `glow` of its own colors whatever lights it, by default black: none.
+    draw_billboard: (sprite: Sprite, position: vector, tint: Color?, width: number?, height: number?, glow: Color?) -> (),
     --- Returns where `point` shows on the canvas through `view`, or nothing if it's nearer than
     --- the camera's near plane, such as behind it, or beyond its far plane.
     project: (view: View3d, point: vector) -> (number?, number?),

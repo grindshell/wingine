@@ -3627,6 +3627,82 @@ fn scene_shadows_work_from_luau() {
     }
 }
 
+/// A dark view with a mesh that glows red, and room for meshes and billboards drawn after it.
+const GLOWING: &str = r##"return {
+    format = 4,
+    children = {
+        {
+            name = "view", kind = "view3d", width = 0, height = 0, stretch = { 1, 1 },
+            camera = { position = { 0, 0, 5 }, target = { 0, 0, 0 }, height = 2 },
+            lighting = { color = "#000000", ambient = "#000000" },
+            children = {
+                {
+                    name = "panel", kind = "mesh", shape = "cuboid", x = -0.5, size = { 0.8, 1.6, 0.1 },
+                    tint = "#ff0000", glow = "#ffffff",
+                },
+                { name = "lamp", kind = "light", z = 1, energy = 0 },
+            },
+        },
+    },
+}"##;
+
+#[test]
+fn glow_works_from_luau() {
+    let folder = game(
+        "glow",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            ("glowing.scene.luau", GLOWING),
+            (
+                "main.luau",
+                "level = scene.load('glowing.scene.luau')
+                view = level:find('view')
+                panel, lamp = view:find('panel'), view:find('lamp')
+                cube = graphics.new_cuboid(0.8, 1.6, 0.1)
+                options = { tint = '#0000ff', glow = '#ffffff' }
+                function draw()
+                    graphics.clear('#000000')
+                    graphics.draw_scene(level)
+                    graphics.draw_mesh(cube, vector.create(0.5, 0, 0), options)
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    assert_eq!(simulation.game().error().map(ToString::to_string), None);
+    // The panel, left, and the cube drawn after the scene, right, in a view lit by nothing.
+    let shown = |simulation: &mut Simulation<LuauGame>| {
+        simulation.step();
+        let image = simulation.screenshot().unwrap();
+        let [width, height] = [image.width(), image.height()];
+        let at = |x: u32| image.pixel(x, height / 2);
+        (at(width / 4), at(width * 3 / 4))
+    };
+    let (panel, cube) = shown(&mut simulation);
+    assert_eq!(panel, [255, 0, 0, 255]);
+    assert_eq!(cube, [0, 0, 255, 255]);
+    assert_eq!(simulation.eval::<u32>("panel:glow()"), 0xffffffff);
+
+    // Glowing grey, a little; not glowing, nothing.
+    simulation.exec("panel:set_glow('#808080')");
+    simulation.exec("options.glow = nil");
+    let (panel, cube) = shown(&mut simulation);
+    assert!(panel[0] > 40 && panel[0] < 255, "{panel:?}");
+    assert_eq!(cube, BLACK);
+    simulation.exec("panel:set_glow('#000000')");
+    let (panel, _) = shown(&mut simulation);
+    assert_eq!(panel, BLACK);
+    assert_eq!(simulation.eval::<u32>("panel:glow()"), 0x000000ff);
+
+    for code in ["lamp:glow()", "lamp:set_glow('#ffffff')"] {
+        let err: String = simulation.eval(&format!(
+            "tostring(select(2, pcall(function() {code} end)))"
+        ));
+        assert!(err.contains("which has no glow"), "{code}: {err}");
+    }
+}
+
 #[test]
 fn views_take_shadows_from_luau() {
     let folder = game(
