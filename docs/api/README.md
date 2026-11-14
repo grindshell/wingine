@@ -65,7 +65,7 @@ time raises an error saying when it works.
   `graphics.draw_billboard`.
 - **The keyboard, mouse, gamepads and sound** work while the game loads (the top level of
   `main.luau` and the modules it requires), in `update` and the tasks it resumes, and in `gui`:
-  everything in `input`, everything in `audio` but `audio.load`, and the methods of the
+  everything in `input`, everything in `audio` but `audio.load` and `audio.make`, and the methods of the
   [voices](audio.md#voice) it plays. So do
   `graphics.load_sprite_sheet`, `graphics.load_font`, `graphics.load_model`, the functions that
   make meshes
@@ -77,7 +77,7 @@ time raises an error saying when it works.
 - **Everything else** works any time: `graphics.size`, `graphics.color`,
   `graphics.default_font`, `graphics.frame_stats`, `graphics.new_animation`,
   `graphics.new_particles`,
-  `graphics.hit_box`, `audio.load`,
+  `graphics.hit_box`, `audio.load`, `audio.make`,
   `tilemap`, `grid`, `physics`, `save`, `ui.menu`, `window.reloaded`, and the methods of every
   object, scene nodes,
   physics worlds and menus included, but `menu:update` and voices'.

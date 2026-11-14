@@ -43,6 +43,10 @@ pub enum Error {
         path: PathBuf,
         source: kira::sound::FromFileError,
     },
+    /// Samples can't be a sound: there are none, they aren't numbers, or their rate or channels
+    /// aren't ones a sound has.
+    #[error("invalid sound: {0}")]
+    Sound(String),
     #[error("failed to play audio: {0}")]
     PlayAudio(String),
     #[error("failed to read {}: {source}", .path.display())]

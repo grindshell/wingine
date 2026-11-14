@@ -320,9 +320,14 @@
 //!   `input.button_released(button, gamepad)` and `input.button_strength(button, gamepad)` do
 //!   the same for a gamepad's button, or without `gamepad`, any gamepad's.
 //!
-//! `audio`, while the game loads and in `update`. `audio.load` works anywhere.
+//! `audio`, while the game loads and in `update`. `audio.load` and `audio.make` work anywhere.
 //!
 //! - `audio.load(path)` loads a sound effect from a WAV or OGG Vorbis file.
+//! - `audio.make(samples, rate, channels)` makes a sound effect of the samples in a `buffer`,
+//!   each a 32-bit float from -1 to 1 as `buffer.writef32` writes one, `rate` of them a second
+//!   for each of its `channels`: 1, by default, or 2, a sample for the left then one for the
+//!   right. No samples, one that isn't a number, a buffer that isn't whole samples for each
+//!   channel, a rate that isn't a whole number from 1 to 192,000, or other channels are errors.
 //! - `audio.play(sound, settings)` plays a sound, with optional settings, and returns its `Voice`,
 //!   by which the game changes it as it plays. A sound plays once, or with `looping`, until its
 //!   voice stops it.

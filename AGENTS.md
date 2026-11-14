@@ -165,7 +165,9 @@ own right.
   label.
 - `src/audio.rs`: `Audio`, `Sound` and `Voice`. kira's state catches up only when its mixer
   renders, so `Audio` keeps what the game asked of each voice (`Playing`), and a voice is over as
-  soon as it's stopped. Headless, and without a sound device, audio plays to a silent mixer
+  soon as it's stopped. A `Sound` is a file's, or made of samples a game works out
+  (`Sound::from_samples`, Luau's `audio.make`, which takes a `buffer` of 32-bit floats),
+  checked to be numbers, since one NaN would fill the mix. Headless, and without a sound device, audio plays to a silent mixer
   advanced by game time, so tests can check what's playing.
 - `src/input.rs` and `gamepads.rs`: `Input`, keys, mouse, gamepads and actions. A system's repeat
   of a held key is a repeat, not a press. `text` is what keys typed; input methods are off unless a

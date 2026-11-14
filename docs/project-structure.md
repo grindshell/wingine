@@ -104,10 +104,10 @@ another time raises an error saying so:
 | Drawing: `graphics.clear`, `graphics.draw_*`, `graphics.fill_*`, `graphics.outline_*`, `graphics.set_camera` | | | | ✓ |
 | Loading sprite sheets: `graphics.load_sprite_sheet` | ✓ | ✓ | ✓ | |
 | The keyboard, mouse and gamepads: `input` | ✓ | ✓ | ✓ | |
-| Playing sound and music: `audio` (apart from `audio.load`), and voices' methods | ✓ | ✓ | ✓ | |
+| Playing sound and music: `audio` (apart from `audio.load` and `audio.make`), and voices' methods | ✓ | ✓ | ✓ | |
 | Quitting: `window.quit` | ✓ | ✓ | ✓ | |
 | `graphics.size` | ✓ | ✓ | ✓ | ✓ |
-| Everything else: `audio.load`, `tilemap`, `grid`, `save`, `window.reloaded`, fonts, animations, `graphics.color`, `graphics.frame_stats` | ✓ | ✓ | ✓ | ✓ |
+| Everything else: `audio.load`, `audio.make`, `tilemap`, `grid`, `save`, `window.reloaded`, fonts, animations, `graphics.color`, `graphics.frame_stats` | ✓ | ✓ | ✓ | ✓ |
 
 So read input and change the game's state in `update`, and only draw in `draw`. By the time `gui`
 runs, the frame's updates have seen its key presses, so `input.pressed` is false there.

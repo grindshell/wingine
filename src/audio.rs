@@ -9,7 +9,8 @@
 //! and panning, at once or gradually), pauses and resumes it, or stops it, which is how a sound
 //! that loops, such as a hum or footsteps, ends.
 //!
-//! Files can be WAV or OGG Vorbis. Volumes are linear: 1 plays a sound as recorded, 0.5 at half
+//! Files can be WAV or OGG Vorbis, and a sound can be made of samples instead
+//! ([`Sound::from_samples`]), for games that work their sounds out. Volumes are linear: 1 plays a sound as recorded, 0.5 at half
 //! the amplitude, and 0 is silent.
 //!
 //! Without a sound device, and always when running headless, audio is silent. The mixer still
@@ -27,14 +28,14 @@ use kira::sound::{
     streaming::{StreamingSoundData, StreamingSoundHandle},
 };
 use kira::{
-    AudioManager, AudioManagerSettings, Decibels, Tween,
+    AudioManager, AudioManagerSettings, Decibels, Frame, Tween,
     backend::{
         cpal::CpalBackend,
         mock::{MockBackend, MockBackendSettings},
     },
     sound::{
         PlaybackState,
-        static_sound::{StaticSoundData, StaticSoundHandle},
+        static_sound::{StaticSoundData, StaticSoundHandle, StaticSoundSettings},
     },
     track::{MainTrackHandle, TrackBuilder, TrackHandle},
 };
@@ -507,6 +508,61 @@ impl Sound {
         Ok(Self { data })
     }
 
+    /// Makes a sound of `samples`, as a game works them out rather than records them: each from
+    /// -1 to 1, `rate` of them a second for each of its `channels`, which are 1, heard from both
+    /// speakers alike, or 2, a sample for the left then one for the right.
+    ///
+    /// Samples past -1 and 1 clip as they're heard. It's an error if there are no samples, or not
+    /// one for each channel, if one isn't a number, which would fill the mix with NaNs, if `rate`
+    /// isn't from 1 to [`Sound::MAX_RATE`], or if `channels` isn't 1 or 2.
+    pub fn from_samples(samples: &[f32], rate: u32, channels: u32) -> Result<Self> {
+        let problem = if !(1..=Self::MAX_RATE).contains(&rate) {
+            Some(format!(
+                "its rate must be from 1 to {}, not {rate}",
+                Self::MAX_RATE
+            ))
+        } else if !(1..=2).contains(&channels) {
+            Some(format!("it has 1 channel or 2, not {channels}"))
+        } else if samples.is_empty() {
+            Some("it has no samples".to_owned())
+        } else if !samples.len().is_multiple_of(channels as usize) {
+            Some(format!(
+                "its {} samples aren't one for each of 2 channels",
+                samples.len()
+            ))
+        } else {
+            samples
+                .iter()
+                .position(|sample| !sample.is_finite())
+                .map(|at| format!("sample {at} must be a number, not {}", samples[at]))
+        };
+        if let Some(problem) = problem {
+            return Err(Error::Sound(problem));
+        }
+        let frames = if channels == 1 {
+            samples
+                .iter()
+                .map(|&sample| Frame::from_mono(sample))
+                .collect()
+        } else {
+            samples
+                .chunks_exact(2)
+                .map(|pair| Frame::new(pair[0], pair[1]))
+                .collect()
+        };
+        Ok(Self {
+            data: StaticSoundData {
+                sample_rate: rate,
+                frames,
+                settings: StaticSoundSettings::default(),
+                slice: None,
+            },
+        })
+    }
+
+    /// The most samples a second a made sound can have.
+    pub const MAX_RATE: u32 = 192_000;
+
     /// How long the sound lasts at its normal speed, in seconds.
     pub fn duration(&self) -> f32 {
         self.data.duration().as_secs_f32()
@@ -574,6 +630,40 @@ mod tests {
     fn loads_wav_and_ogg() {
         assert!((sound("chime.wav").duration() - 0.44).abs() < 0.01);
         assert!((sound("music.ogg").duration() - 8.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn sounds_are_made_of_samples() {
+        // A second of one channel, and half a second of two at the same rate.
+        let samples: Vec<f32> = (0..8000).map(|i| (i as f32 * 0.3).sin()).collect();
+        let mono = Sound::from_samples(&samples, 8000, 1).unwrap();
+        assert!((mono.duration() - 1.0).abs() < 1e-6);
+        assert_eq!(mono.data.frames[5], Frame::from_mono(samples[5]));
+        let stereo = Sound::from_samples(&samples, 8000, 2).unwrap();
+        assert!((stereo.duration() - 0.5).abs() < 1e-6);
+        assert_eq!(stereo.data.frames[5], Frame::new(samples[10], samples[11]));
+
+        let mut audio = Audio::silent();
+        audio.play(&stereo);
+        run(&mut audio, 0.3);
+        assert_eq!(audio.sounds_playing(), 1);
+        run(&mut audio, 0.3);
+        assert_eq!(audio.sounds_playing(), 0);
+    }
+
+    #[test]
+    fn samples_that_cant_be_a_sound_say_why() {
+        let problem = |samples: &[f32], rate, channels| {
+            Sound::from_samples(samples, rate, channels)
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(problem(&[], 8000, 1).contains("no samples"));
+        assert!(problem(&[0.0; 3], 8000, 2).contains("each of 2 channels"));
+        assert!(problem(&[0.0, f32::NAN], 8000, 1).contains("sample 1 must be a number"));
+        assert!(problem(&[0.0], 0, 1).contains("rate"));
+        assert!(problem(&[0.0], Sound::MAX_RATE + 1, 1).contains("rate"));
+        assert!(problem(&[0.0], 8000, 3).contains("1 channel or 2"));
     }
 
     #[test]

@@ -613,7 +613,8 @@ declare extern type TextLayout with
     function line_count(self): number
 end
 
---- A sound effect, decoded into memory, from `audio.load`.
+--- A sound effect in memory: decoded from a file by `audio.load`, or made of samples by
+--- `audio.make`.
 declare extern type Sound with
     --- Returns how long the sound lasts at its normal speed, in seconds.
     function duration(self): number
@@ -1240,6 +1241,9 @@ declare input: {
 declare audio: {
     --- Loads the sound effect at `path`, decoding all of it into memory.
     load: (path: string) -> Sound,
+    --- Makes a sound effect of the samples in a buffer, 32-bit floats from -1 to 1, `rate` of them
+    --- a second for each of its `channels`: 1, by default, or 2, left then right.
+    make: (samples: buffer, rate: number, channels: number?) -> Sound,
     --- Plays `sound`, once or looping, and returns its voice, by which it's changed as it plays.
     play: (sound: Sound, settings: PlaySettings?) -> Voice,
     --- Stops every sound effect playing, fading them out over `fade` seconds.

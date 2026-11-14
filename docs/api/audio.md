@@ -1,6 +1,7 @@
 # `audio`
 
-Sound effects and music. Files can be WAV or OGG Vorbis.
+Sound effects and music. Files can be WAV or OGG Vorbis, and a sound effect can be
+[made of samples](#audiomake) instead.
 
 Sound effects are loaded into memory once, start at once, and can overlap, even with themselves.
 Each plays once, or loops, as a [voice](#voice), by which the game changes, pauses or stops it as
@@ -11,7 +12,7 @@ volume.
 Volumes are linear: 1 plays a sound as recorded, 0.5 at half its amplitude, and 0 is silent.
 
 Everything in `audio`, and voices' methods, work while the game loads and in `update` and its
-tasks, apart from `audio.load`, which works any time. Without a sound device, and when a game runs
+tasks, apart from `audio.load` and `audio.make`, which work any time. Without a sound device, and when a game runs
 without a window, audio is silent, but sounds still start, play and finish on time.
 
 ```lua
@@ -35,6 +36,38 @@ audio.load(path: string): Sound
 
 Loads the sound effect at `path`, relative to the game's folder, decoding all of it into memory.
 Load each sound once, when the game loads, rather than each time it plays.
+
+### `audio.make`
+
+```lua
+audio.make(samples: buffer, rate: number, channels: number?): Sound
+```
+
+Makes a sound effect of samples the game works out, rather than a file's: a shot, a step, a tone,
+different every run if the game likes. `samples` is a `buffer` of 32-bit floats, as
+`buffer.writef32` writes them, each from -1 to 1; `rate` is how many of them play a second, for
+each of the sound's `channels`. A sound of 1 channel, the default, is heard from both speakers
+alike; one of 2 has a sample for the left, then one for the right, and so on.
+
+```lua
+-- A tenth of a second of noise, dying away.
+local RATE = 22050
+local count = RATE // 10
+local samples = buffer.create(count * 4)
+for i = 0, count - 1 do
+    local fade = 1 - i / count
+    buffer.writef32(samples, i * 4, (math.random() * 2 - 1) * fade * fade)
+end
+local hiss = audio.make(samples, RATE)
+```
+
+Make each sound once, not each time it plays: working out samples in Luau takes a millisecond or
+so for each second of a simple sound, in a script that's `--!native`. A sound made is as one
+loaded, and plays at any `speed`, so one made sound can be many pitches.
+
+Samples past -1 and 1 clip as they're heard. It's an error if the buffer is empty, or isn't whole
+samples for each channel; if a sample isn't a number; if `rate` isn't a whole number from 1 to
+192,000; or if `channels` isn't 1 or 2.
 
 ### `audio.play`
 

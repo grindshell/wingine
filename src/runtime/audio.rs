@@ -17,6 +17,14 @@ pub(super) fn module(lua: &Lua, lent: &Lent, folder: &Path) -> mlua::Result<Tabl
             Sound::load(root.join(path)).map_err(mlua::Error::external)
         })?,
     )?;
+    audio.set(
+        "make",
+        lua.create_function(
+            |_, (samples, rate, channels): (mlua::Buffer, f64, Option<f64>)| {
+                make(&samples.to_vec(), rate, channels.unwrap_or(1.0)).map_err(mlua::Error::runtime)
+            },
+        )?,
+    )?;
     audio.set("play", {
         let lent = lent.clone();
         lua.create_function(
@@ -61,6 +69,40 @@ pub(super) fn module(lua: &Lua, lent: &Lent, folder: &Path) -> mlua::Result<Tabl
     )?;
     audio.set_readonly(true);
     Ok(audio)
+}
+
+/// A sound of the samples in a buffer's `bytes`, each a 32-bit float as `buffer.writef32` writes
+/// one, at `rate` a second for each of its `channels`; or what's wrong with them.
+fn make(bytes: &[u8], rate: f64, channels: f64) -> Result<Sound, String> {
+    if !bytes.len().is_multiple_of(4) {
+        return Err(format!(
+            "a sound's samples are 4 bytes each, which a buffer of {} isn't",
+            bytes.len()
+        ));
+    }
+    // A rate or a number of channels that isn't whole, or is past what a sound has, is none it
+    // has: 0 is refused for both.
+    let whole = |number: f64| {
+        if number.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(&number) {
+            number as u32
+        } else {
+            0
+        }
+    };
+    if whole(rate) == 0 {
+        return Err(format!(
+            "a sound's rate must be a whole number from 1 to {}, not {rate}",
+            Sound::MAX_RATE
+        ));
+    }
+    if whole(channels) == 0 {
+        return Err(format!("a sound has 1 channel or 2, not {channels}"));
+    }
+    let samples: Vec<f32> = bytes
+        .chunks_exact(4)
+        .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        .collect();
+    Sound::from_samples(&samples, whole(rate), whole(channels)).map_err(|err| err.to_string())
 }
 
 /// A function setting a volume with `set`, which fails for a volume that isn't a number.

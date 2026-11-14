@@ -1215,6 +1215,59 @@ fn sounds_load_from_the_game_folder() {
 }
 
 #[test]
+fn sounds_are_made_of_a_buffers_samples() {
+    let folder = game(
+        "made_sounds",
+        &[(
+            "main.luau",
+            "local function samples(count: number): buffer
+                local made = buffer.create(count * 4)
+                for i = 0, count - 1 do
+                    buffer.writef32(made, i * 4, math.sin(i * 0.2))
+                end
+                return made
+            end
+            -- Half a second of one channel, and a quarter of a second of two.
+            tone = audio.make(samples(4000), 8000)
+            wide = audio.make(samples(4000), 8000, 2)
+            function update()
+                if input.key_pressed('Space') then
+                    audio.play(tone, { speed = 2 })
+                end
+            end
+            function fails(samples: buffer, rate: number, channels: number?): string
+                local ok, err = pcall(audio.make, samples, rate, channels)
+                return if ok then 'made' else tostring(err)
+            end",
+        )],
+    );
+    let mut simulation = simulation(&folder);
+    assert!(simulation.eval::<bool>("math.abs(tone:duration() - 0.5) < 1e-6"));
+    assert!(simulation.eval::<bool>("math.abs(wide:duration() - 0.25) < 1e-6"));
+    simulation.tap(Key::Space);
+    assert_eq!(simulation.context().audio().sounds_playing(), 1);
+    // At twice its speed, its half second is over in a quarter.
+    simulation.run_for(0.4);
+    assert_eq!(simulation.context().audio().sounds_playing(), 0);
+
+    let mut fails = |call: &str, problem: &str| {
+        let err: String = simulation.eval(&format!("fails({call})"));
+        assert!(err.contains(problem), "{call}: {err}");
+    };
+    fails("buffer.create(0), 8000", "no samples");
+    fails("buffer.create(6), 8000", "4 bytes each");
+    fails("buffer.create(12), 8000, 2", "each of 2 channels");
+    fails("buffer.create(4), 0", "rate");
+    fails("buffer.create(4), 8000.5", "rate");
+    fails("buffer.create(4), 1e9", "rate");
+    fails("buffer.create(4), 8000, 3", "1 channel or 2");
+    fails(
+        "(function() local b = buffer.create(8) buffer.writef32(b, 4, 0/0) return b end)(), 8000",
+        "sample 1 must be a number",
+    );
+}
+
+#[test]
 fn voices_change_pause_and_stop_the_sounds_they_play() {
     let folder = game(
         "voices",
