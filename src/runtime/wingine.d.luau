@@ -491,6 +491,21 @@ export type PanelOptions = {
     resizable: boolean?,
 }
 
+--- A field of many lines of text, for `ui:text_edit`.
+export type TextEditOptions = {
+    --- Which text it holds, when a field in one place holds one text then another: its cursor,
+    --- selection and undo history are kept by it. By default, where the field is.
+    id: string?,
+    --- What tests and screen readers find it by. Nothing shows it.
+    label: string?,
+    --- Shown greyed out while it's empty.
+    hint: string?,
+    --- How many lines tall it is at least. It grows with its text. By default, 4.
+    rows: number?,
+    --- Whether its text is in the monospace font. By default, false.
+    monospace: boolean?,
+}
+
 --- How `ui.menu` finds its items and takes input. The actions are named as `input.bind` binds
 --- them, and one that isn't bound does nothing.
 export type MenuOptions = {
@@ -1059,6 +1074,9 @@ declare extern type Ui with
     --- A text field, showing `hint` while empty: returns its text after any typing, and whether
     --- Enter was pressed in it.
     function text_input(self, text: string, hint: string?): (string, boolean)
+    --- A field of many lines of text, as wide as there's room for: returns its text after any
+    --- typing, and whether that changed it.
+    function text_edit(self, text: string, options: TextEditOptions?): (string, boolean)
     --- A bar filled `fraction` of the way, from 0 to 1, with `text` on it.
     function progress(self, fraction: number, text: string?): ()
     --- Shows `sprite`, its colors multiplied by `tint`, at `width` by `height` points, or its own

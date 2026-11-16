@@ -381,6 +381,57 @@ fn add_widgets(methods: &mut Methods<'_, '_>) {
         },
     );
     methods.add(
+        "text_edit",
+        |_, ui, (mut text, options): (String, Option<Table>)| {
+            let mut id = None;
+            let mut label = None;
+            let mut hint = String::new();
+            let mut rows = None;
+            let mut monospace = false;
+            if let Some(options) = &options {
+                check_options(
+                    options,
+                    "text edit",
+                    &["id", "label", "hint", "rows", "monospace"],
+                )?;
+                id = options.get::<Option<String>>("id")?;
+                label = options.get::<Option<String>>("label")?;
+                hint = options.get::<Option<String>>("hint")?.unwrap_or_default();
+                rows = options.get::<Option<usize>>("rows")?;
+                monospace = options.get::<Option<bool>>("monospace")?.unwrap_or(false);
+            }
+            // As wide as there's room for, as a page is, rather than egui's few hundred points.
+            let mut field = egui::TextEdit::multiline(&mut text)
+                .desired_width(f32::INFINITY)
+                .hint_text(hint.clone());
+            // egui keeps a field's cursor, selection and undo history by its id, which is where
+            // it is unless it's given one: so a field that shows one text then another, in the
+            // same place, would undo the second into the first.
+            if let Some(id) = id {
+                field = field.id_salt(id);
+            }
+            if let Some(rows) = rows {
+                field = field.desired_rows(rows);
+            }
+            if monospace {
+                field = field.font(egui::TextStyle::Monospace);
+            }
+            let response = ui.add(field);
+            let changed = response.changed();
+            // Named by its label, which nothing shows on screen, as tests and screen readers
+            // find it.
+            if let Some(label) = label {
+                response.widget_info(|| {
+                    let mut info =
+                        egui::WidgetInfo::text_edit(response.enabled(), &text, &text, &hint);
+                    info.label = Some(label.clone());
+                    info
+                });
+            }
+            Ok((text, changed))
+        },
+    );
+    methods.add(
         "progress",
         |_, ui, (fraction, text): (f32, Option<String>)| {
             let mut bar = egui::ProgressBar::new(fraction);

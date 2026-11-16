@@ -411,7 +411,9 @@
 //!   `ui:radio(current, value, text)`, `ui:combo(text, current, choices)`,
 //!   `ui:slider(text, value, min, max, step)`, `ui:drag(text, value, speed, min, max)` and
 //!   `ui:text_input(text, hint)` (which also returns whether Enter was pressed) return their
-//!   values; `ui:progress(fraction, text)` and `ui:sprite(sprite, tint, width, height)` show them.
+//!   values, and `ui:text_edit(text, { id, label, hint, rows, monospace })`, a field of many
+//!   lines as wide as there's room for, its text and whether typing changed it;
+//!   `ui:progress(fraction, text)` and `ui:sprite(sprite, tint, width, height)` show them.
 //! - `ui:separator()` and `ui:space(amount)`.
 //!
 //! A `Ui` works only until the function it was passed to returns, and inside a container's

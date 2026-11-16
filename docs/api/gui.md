@@ -253,6 +253,48 @@ if entered then
 end
 ```
 
+### `ui:text_edit`
+
+```lua
+ui:text_edit(text: string, options: TextEditOptions?): (string, boolean)
+```
+
+A field of many lines of text, in which Enter starts a new line, as for notes or a document.
+Returns its text after any typing, and whether that changed it, as for saving it only then:
+
+```lua
+local changed
+notes, changed = ui:text_edit(notes, { label = "Notes", hint = "Write here", rows = 12 })
+if changed then
+    wg.save.write("notes", { text = notes })
+end
+```
+
+It's as wide as there's room for, and grows taller with its text, so one that may outgrow the
+window goes in a [`ui:scroll`](#uiscroll). The field has what egui's fields have: a cursor moved
+by the arrow keys and the mouse, selections, the clipboard, and undo. `options` is a table with
+any of:
+
+| Option | What it does | Default |
+|---|---|---|
+| `id` | Which text it holds: see below. | Where the field is |
+| `label` | What [tests](testing.md#the-interface) and screen readers find it by. Nothing shows it. | None |
+| `hint` | Text shown greyed out while it's empty. | None |
+| `rows` | How many lines tall it is at least. | 4 |
+| `monospace` | Whether its text is in the monospace font, as for code. | `false` |
+
+A field keeps its cursor, its selection and its undo history from frame to frame by where it is in
+the interface. So a field that holds one text and then another, as an editor's does when another
+file is opened, would undo the second text back into the first. Give such a field an `id` that
+changes with the text it holds, and each text keeps its own:
+
+```lua
+file.text = ui:text_edit(file.text, { id = file.name })
+```
+
+The whole text goes to the field and comes back every frame, so a long one costs more than a
+short one whether or not it changes.
+
 ### `ui:progress`
 
 ```lua

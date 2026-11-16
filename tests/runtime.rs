@@ -7185,6 +7185,120 @@ mod gui {
     }
 
     #[test]
+    fn a_text_edit_holds_lines_of_text_and_says_when_typing_changed_it() {
+        let mut simulation = interface(
+            "gui_text_edit",
+            "notes = 'one'
+            changes = 0",
+            "ui:panel({ side = 'left', size = 300 }, function(ui)
+                local changed
+                notes, changed = ui:text_edit(notes, {
+                    label = 'Notes',
+                    hint = 'Write here',
+                    rows = 6,
+                    monospace = true,
+                })
+                if changed then
+                    changes += 1
+                end
+            end)",
+        );
+        // As wide as its panel, and as tall as its rows, which its one line doesn't fill.
+        let notes = simulation.gui_rect("Notes").unwrap();
+        assert!(notes.w > 250.0, "{notes:?}");
+        assert!(notes.h > 60.0, "{notes:?}");
+        assert_eq!(simulation.eval::<u32>("changes"), 0);
+
+        // A click below its text puts the cursor at the text's end, and Enter starts a line.
+        simulation.click_gui("Notes");
+        simulation.type_text("!");
+        simulation.step();
+        assert_eq!(simulation.eval::<String>("notes"), "one!");
+        simulation.tap(Key::Enter);
+        simulation.step();
+        simulation.type_text("two");
+        simulation.step();
+        assert_eq!(simulation.eval::<String>("notes"), "one!\ntwo");
+
+        // It says it changed in the frames typing changed it, and in no others.
+        let changes = simulation.eval::<u32>("changes");
+        assert!((1..=3).contains(&changes), "{changes}");
+        simulation.run_frames(10);
+        assert_eq!(simulation.eval::<u32>("changes"), changes);
+        assert_eq!(simulation.eval::<String>("notes"), "one!\ntwo");
+    }
+
+    #[test]
+    fn a_text_edit_given_an_id_keeps_each_texts_undo_history_apart() {
+        let mut simulation = interface(
+            "gui_text_edit_id",
+            "files = { a = 'first', b = 'second' }
+            open = 'a'
+            by_id = true",
+            "ui:panel({ side = 'left', size = 300 }, function(ui)
+                if ui:button('Other') then
+                    open = if open == 'a' then 'b' else 'a'
+                end
+                local id = if by_id then open else nil
+                files[open] = ui:text_edit(files[open], { id = id, label = 'File' })
+            end)",
+        );
+        let undo = |simulation: &mut Simulation<LuauGame>| {
+            simulation.click_gui("File");
+            simulation.key_down(Key::LeftControl);
+            simulation.tap(Key::Z);
+            simulation.key_up(Key::LeftControl);
+            simulation.run_frames(2);
+        };
+        simulation.click_gui("File");
+        simulation.type_text("!");
+        simulation.step();
+        assert_eq!(simulation.eval::<String>("files.a"), "first!");
+
+        // In the other file there's nothing to undo, and the first is as it was left.
+        simulation.click_gui("Other");
+        simulation.step();
+        undo(&mut simulation);
+        assert_eq!(simulation.eval::<String>("files.b"), "second");
+        assert_eq!(simulation.eval::<String>("files.a"), "first!");
+
+        // Without ids, the field is one field, and undoes the second text into the first.
+        simulation.exec("by_id = false");
+        simulation.click_gui("Other");
+        simulation.step();
+        simulation.click_gui("File");
+        simulation.type_text("?");
+        simulation.step();
+        simulation.click_gui("Other");
+        simulation.step();
+        undo(&mut simulation);
+        assert_ne!(simulation.eval::<String>("files.b"), "second");
+    }
+
+    #[test]
+    fn a_text_edit_refuses_an_option_it_doesnt_know() {
+        let folder = game(
+            "gui_text_edit_option",
+            &[
+                ("conf.luau", WINDOW),
+                (
+                    "main.luau",
+                    "function gui(ui: Ui)
+                        ui:text_edit('', { lines = 3 })
+                    end",
+                ),
+            ],
+        );
+        let mut simulation = simulation(&folder);
+        simulation.run_frames(2);
+        let error = simulation.game().error().expect("the game stopped");
+        assert!(
+            error.to_string().contains("a text edit's options are"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn a_gui_defined_while_playing_is_laid_out() {
         let folder = game(
             "gui_later",
