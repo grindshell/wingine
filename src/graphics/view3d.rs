@@ -6,9 +6,17 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 
 use super::{
-    Camera3d, Canvas, Color, Mesh, Model, Projection, Ray, Sprite, Texture, camera3d::Mat4,
+    Blend, Camera3d, Canvas, Color, Mesh, Model, Projection, Ray, Sprite, Texture,
+    camera3d::{Basis, Mat4},
 };
-use crate::math::{Affine3, Bounds3, Rect, add3, dot3, normalize3, scale3, sub3};
+use crate::{
+    math::{Affine3, Bounds3, Rect, add3, cross3, dot3, normalize3, scale3, sub3},
+    particles::{Look, Particles3d},
+};
+
+/// What moves a billboard's normals: nothing across or up it, and up for its front, so its
+/// normals point up whichever way it faces, as the ground's do; which the shader knows it by.
+const BILLBOARD_NORMAL: [[f32; 3]; 3] = [[0.0; 3], [0.0; 3], [0.0, 1.0, 0.0]];
 
 /// What a 3D view shows, where on the canvas, and how it's lit: see [`Canvas::begin_3d`].
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -553,7 +561,17 @@ impl Canvas3d<'_> {
     ) {
         if mesh.index_count() > 0 {
             let normal = transform.normal_matrix();
-            self.push(Some(mesh), transform, normal, sprite, colors, double_sided);
+            let segment = self.canvas.segments.last().expect("begin_3d adds one");
+            let how = How::of(segment);
+            self.push(
+                Some(mesh),
+                transform,
+                normal,
+                sprite,
+                colors,
+                double_sided,
+                how,
+            );
         }
     }
 
@@ -609,13 +627,136 @@ impl Canvas3d<'_> {
             translation: position,
         };
         // Whichever way the quad faces, its normal points up, as the ground's do.
-        let normal = [[0.0; 3], [0.0; 3], [0.0, 1.0, 0.0]];
         let colors = Colors {
             tint,
             emission: Color::BLACK,
             emission_sprite: None,
         };
-        self.push(None, transform, normal, Some(sprite), colors, false);
+        let how = How::of(segment);
+        self.push(
+            None,
+            transform,
+            BILLBOARD_NORMAL,
+            Some(sprite),
+            colors,
+            false,
+            how,
+        );
+    }
+
+    /// Draws the particles of `particles`, oldest first, as its settings'
+    /// [`look`](crate::particles::ParticleSettings3d::look) has them, placed by `placed` if
+    /// they're attached, sized by their scale and colored by their color at their age.
+    ///
+    /// Unless they draw opaque ([`is_opaque`](crate::particles::ParticleSettings3d::is_opaque)),
+    /// they're drawn after the view's other meshes, blended as their settings say: hidden by what's
+    /// in front of them, but hiding nothing, those blended normally the farthest from the camera
+    /// first. They cast no shadows, and fade into the view's fog as everything does.
+    pub fn draw_particles(&mut self, particles: &Particles3d, placed: Affine3) {
+        let settings = particles.settings();
+        let common = &settings.common;
+        let blend = (!settings.is_opaque()).then_some(common.blend);
+        let placed = if common.attached {
+            placed
+        } else {
+            Affine3::IDENTITY
+        };
+        let segment = self.canvas.segments.last().expect("begin_3d adds one");
+        let view = segment.view;
+        let Basis { right, up, forward } = view.camera.basis();
+        let toward_camera = scale3(forward, -1.0);
+        let perspective = matches!(view.camera.projection, Projection::Perspective { .. });
+        let sprite = particles.sprite();
+        // A sprite as tall as its shape makes it at its width.
+        let tall = sprite.map_or(1.0, |sprite| sprite.height() / sprite.width());
+        let mesh = particles.mesh().filter(|_| settings.look == Look::Mesh);
+        let look = match (settings.look, mesh) {
+            (Look::Mesh, None) => Look::Billboard,
+            (look, _) => look,
+        };
+        let glow = if settings.lit {
+            settings.glow
+        } else {
+            Color::BLACK
+        };
+        for particle in particles.live() {
+            let life = particle.age / particle.lifetime;
+            let scale = settings.scale_at(life);
+            let color = settings.color_at(life);
+            if scale <= 0.0 || color.a <= 0.0 {
+                continue;
+            }
+            let position = placed.apply(particle.position);
+            let (transform, normal) = match look {
+                Look::Billboard => {
+                    // Facing the camera, turned by its angle about the way the camera looks.
+                    let (sin, cos) = particle.angle.sin_cos();
+                    let across = add3(scale3(right, cos), scale3(up, sin));
+                    let upward = sub3(scale3(up, cos), scale3(right, sin));
+                    let height = scale * tall;
+                    let transform = Affine3 {
+                        x_axis: scale3(across, scale),
+                        y_axis: scale3(upward, height),
+                        z_axis: toward_camera,
+                        translation: sub3(position, scale3(upward, height / 2.0)),
+                    };
+                    (transform, BILLBOARD_NORMAL)
+                }
+                Look::Streak => {
+                    // From where it is back the way it came, turned about that way to face the
+                    // camera as squarely as it can.
+                    let velocity = placed.apply_vector(particle.velocity);
+                    let speed = dot3(velocity, velocity).sqrt();
+                    let along = normalize3(velocity).unwrap_or(up);
+                    let facing = if perspective {
+                        normalize3(sub3(view.camera.position, position)).unwrap_or(toward_camera)
+                    } else {
+                        toward_camera
+                    };
+                    let across = normalize3(cross3(along, facing)).unwrap_or(right);
+                    let length = scale * tall + settings.streak * speed;
+                    let transform = Affine3 {
+                        x_axis: scale3(across, scale),
+                        y_axis: scale3(along, length),
+                        z_axis: cross3(across, along),
+                        translation: sub3(position, scale3(along, length)),
+                    };
+                    (transform, BILLBOARD_NORMAL)
+                }
+                Look::Mesh => {
+                    let turned = placed * turned_about(particle.axis, particle.angle);
+                    let transform = Affine3 {
+                        x_axis: scale3(turned.x_axis, scale),
+                        y_axis: scale3(turned.y_axis, scale),
+                        z_axis: scale3(turned.z_axis, scale),
+                        translation: position,
+                    };
+                    (transform, transform.normal_matrix())
+                }
+            };
+            // Unlit, a particle shows its colors whatever lights it: as what it gives off, times
+            // its sprite's colors, its tint keeping only how opaque it is.
+            let colors = if settings.lit {
+                Colors {
+                    tint: color,
+                    emission: Color::BLACK,
+                    emission_sprite: None,
+                }
+            } else {
+                Colors {
+                    tint: Color::rgba(0.0, 0.0, 0.0, color.a),
+                    emission: Color::rgb(color.r, color.g, color.b),
+                    emission_sprite: sprite,
+                }
+            };
+            let how = How {
+                glow,
+                casts_shadow: false,
+                blend,
+                depth: view.distance(position),
+            };
+            self.push(mesh, transform, normal, sprite, colors, false, how);
+        }
     }
 
     /// Lights the view with `light`, as well as by its [`Lighting`]: everything drawn in it,
@@ -636,8 +777,9 @@ impl Canvas3d<'_> {
     }
 
     /// Records `mesh`, or the billboard quad for `None`, placed by `transform`, with `normal`
-    /// moving its normals, colored by `colors` and glowing as the view now says, showing from
-    /// behind too if `double_sided`.
+    /// moving its normals, colored by `colors`, showing from behind too if `double_sided`, and
+    /// glowing, casting shadows and blending as `how` says.
+    #[expect(clippy::too_many_arguments)]
     fn push(
         &mut self,
         mesh: Option<&Mesh>,
@@ -646,6 +788,7 @@ impl Canvas3d<'_> {
         sprite: Option<&Sprite>,
         colors: Colors,
         double_sided: bool,
+        how: How,
     ) {
         let determinant = transform.determinant();
         if !determinant.is_finite() {
@@ -655,7 +798,7 @@ impl Canvas3d<'_> {
         let canvas = &mut *self.canvas;
         let segment = canvas.segments.last_mut().expect("begin_3d adds a segment");
         segment.draws.end += 1;
-        let casts_shadow = segment.casting && mesh.is_some();
+        let casts_shadow = how.casts_shadow && mesh.is_some();
         canvas.instances.push(Instance {
             model: [
                 transform.x_axis,
@@ -667,7 +810,7 @@ impl Canvas3d<'_> {
             uv: [u0, v0, u1, v1],
             tint: colors.tint.to_rgba8(),
             emission: colors.emission.to_rgba8(),
-            glow: segment.glow.to_rgba8(),
+            glow: how.glow.to_rgba8(),
         });
         canvas.mesh_draws.push(MeshDraw {
             mesh: mesh.cloned(),
@@ -678,6 +821,8 @@ impl Canvas3d<'_> {
             mirrored: determinant < 0.0,
             double_sided,
             casts_shadow,
+            blend: how.blend,
+            depth: how.depth,
         });
     }
 
@@ -714,6 +859,55 @@ struct Colors<'a> {
     emission_sprite: Option<&'a Sprite>,
 }
 
+/// How a mesh drawn shows besides its colors: how much of them it shows whatever lights it,
+/// whether it casts shadows, how it blends, `None` for opaque, and how far it is from the camera,
+/// which blended draws are ordered by.
+#[derive(Clone, Copy)]
+struct How {
+    glow: Color,
+    casts_shadow: bool,
+    blend: Option<Blend>,
+    depth: f32,
+}
+
+impl How {
+    /// As `segment` now has what's drawn in it: opaque, glowing and casting as it says.
+    fn of(segment: &Segment3d) -> Self {
+        Self {
+            glow: segment.glow,
+            casts_shadow: segment.casting,
+            blend: None,
+            depth: 0.0,
+        }
+    }
+}
+
+/// Turning by `angle` radians about `axis`, of length 1, counter-clockwise seen from its end.
+fn turned_about(axis: [f32; 3], angle: f32) -> Affine3 {
+    let (sin, cos) = angle.sin_cos();
+    let [x, y, z] = axis;
+    let rest = 1.0 - cos;
+    // Rodrigues' rotation, by its columns.
+    Affine3 {
+        x_axis: [
+            cos + x * x * rest,
+            y * x * rest + z * sin,
+            z * x * rest - y * sin,
+        ],
+        y_axis: [
+            x * y * rest - z * sin,
+            cos + y * y * rest,
+            z * y * rest + x * sin,
+        ],
+        z_axis: [
+            x * z * rest + y * sin,
+            y * z * rest - x * sin,
+            cos + z * z * rest,
+        ],
+        translation: [0.0; 3],
+    }
+}
+
 /// A mesh recorded in a 3D view. Its transform and colors are its [`Instance`].
 pub(crate) struct MeshDraw {
     /// `None` for a billboard, which draws the renderer's quad.
@@ -728,11 +922,16 @@ pub(crate) struct MeshDraw {
     pub double_sided: bool,
     /// Whether it shades what's behind it from lights with shadows.
     pub casts_shadow: bool,
+    /// How it blends with what's behind it, `None` for opaque: only particles blend.
+    pub blend: Option<Blend>,
+    /// How far it is from the camera, as [`View3d::distance`] says, for a blended draw.
+    pub depth: f32,
 }
 
 impl MeshDraw {
     /// What it's drawn as: draws of the same kind, the same mesh showing the same textures drawn
-    /// the same way round, are drawn in one draw call, as instances of one mesh.
+    /// the same way round and blended the same way, are drawn in one draw call, as instances of
+    /// one mesh.
     fn kind(&self) -> DrawKind {
         DrawKind {
             mesh: self.mesh.as_ref().map_or(0, Mesh::id),
@@ -741,12 +940,13 @@ impl MeshDraw {
             mirrored: self.mirrored,
             double_sided: self.double_sided,
             casts_shadow: self.casts_shadow,
+            blend: self.blend,
         }
     }
 }
 
 /// The kind of a [`MeshDraw`]: its mesh's and textures' IDs, 0 for none, which way round it's
-/// drawn, and whether it casts shadows.
+/// drawn, whether it casts shadows, and how it blends.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct DrawKind {
     mesh: usize,
@@ -755,13 +955,17 @@ struct DrawKind {
     mirrored: bool,
     double_sided: bool,
     casts_shadow: bool,
+    blend: Option<Blend>,
 }
 
 /// The order a 3D view's meshes draw in: draws of a kind together, so each kind is one draw call,
 /// the kinds in the order each was first drawn, and each kind's in the order they were drawn, so
-/// the order is the same every frame. Nothing in a view blends, and each view has a depth buffer,
-/// so the order shows only in which of two surfaces at the same depth is in front. Kept from frame
-/// to frame for what it allocates.
+/// the order is the same every frame. Opaque draws have a depth buffer to sort them, so their
+/// order shows only in which of two surfaces at the same depth is in front. Blended ones, which
+/// only particles are, come after every opaque one: those that add, multiply or screen by kind,
+/// since their order doesn't change what they make, and then those blended normally, the
+/// farthest from the camera first, each run of a kind among them a draw call. Kept from frame to
+/// frame for what it allocates.
 #[derive(Default)]
 pub(crate) struct MeshOrder {
     /// Whether the draws draw in the order they were drawn, each kind's together already.
@@ -777,6 +981,10 @@ pub(crate) struct MeshOrder {
 impl MeshOrder {
     /// Works out the order `draws` draw in.
     pub fn arrange(&mut self, draws: &[MeshDraw]) {
+        if draws.iter().any(|draw| draw.blend.is_some()) {
+            self.arrange_blended(draws);
+            return;
+        }
         self.kinds.clear();
         self.kind_of.clear();
         self.ends.clear();
@@ -832,6 +1040,77 @@ impl MeshOrder {
         }
     }
 
+    /// Works out the order `draws` draw in, some of them blended: the opaque ones by kind, then
+    /// those whose order doesn't matter by kind, then those blended normally far to near.
+    fn arrange_blended(&mut self, draws: &[MeshDraw]) {
+        self.kinds.clear();
+        self.kind_of.clear();
+        self.ends.clear();
+        self.order.clear();
+        self.in_order = false;
+        let indices = 0..draws.len() as u32;
+        let opaque = indices
+            .clone()
+            .filter(|&i| draws[i as usize].blend.is_none());
+        self.group(draws, opaque);
+        let unordered = indices.clone().filter(|&i| {
+            matches!(
+                draws[i as usize].blend,
+                Some(Blend::Add | Blend::Multiply | Blend::Screen)
+            )
+        });
+        self.group(draws, unordered);
+        let mut ordered: Vec<u32> = indices
+            .filter(|&i| draws[i as usize].blend == Some(Blend::Normal))
+            .collect();
+        // Far to near; drawn first first among those as far, for the same order every frame.
+        ordered.sort_by(|&a, &b| {
+            let [a_depth, b_depth] = [a, b].map(|i| draws[i as usize].depth);
+            b_depth.total_cmp(&a_depth).then(a.cmp(&b))
+        });
+        let mut last = None;
+        for i in ordered {
+            let kind = draws[i as usize].kind();
+            if last.is_some_and(|last| last != kind) {
+                self.ends.push(self.order.len() as u32);
+            }
+            last = Some(kind);
+            self.order.push(i);
+        }
+        if last.is_some() {
+            self.ends.push(self.order.len() as u32);
+        }
+    }
+
+    /// Adds the draws `indices` of `draws` to the order, those of a kind together, each kind's
+    /// in the order they're given, the kinds in the order each first comes.
+    fn group(&mut self, draws: &[MeshDraw], indices: impl Iterator<Item = u32> + Clone) {
+        let mut kinds: Vec<DrawKind> = Vec::new();
+        let mut kind_of = Vec::new();
+        for i in indices.clone() {
+            let kind = draws[i as usize].kind();
+            let index = match kinds.iter().position(|&known| known == kind) {
+                Some(index) => index,
+                None => {
+                    kinds.push(kind);
+                    kinds.len() - 1
+                }
+            };
+            kind_of.push(index);
+        }
+        for kind in 0..kinds.len() {
+            let before = self.order.len();
+            for (i, &of) in indices.clone().zip(&kind_of) {
+                if of == kind {
+                    self.order.push(i);
+                }
+            }
+            if self.order.len() > before {
+                self.ends.push(self.order.len() as u32);
+            }
+        }
+    }
+
     /// Which of the draws draws `position`th.
     pub fn draw_at(&self, position: u32) -> u32 {
         if self.in_order {
@@ -846,8 +1125,14 @@ impl MeshOrder {
         &self.order
     }
 
-    /// How many kinds of draw `draws` are, and so how many draw calls they take.
+    /// How many kinds of draw `draws` are, and so how many draw calls they take; or with draws
+    /// blended normally among them, how many runs of a kind they draw in.
     pub fn kind_count(draws: &[MeshDraw]) -> usize {
+        if draws.iter().any(|draw| draw.blend == Some(Blend::Normal)) {
+            let mut order = Self::default();
+            order.arrange(draws);
+            return order.ends.len();
+        }
         let mut kinds = HashSet::new();
         let mut last = None;
         for draw in draws {
@@ -1267,6 +1552,8 @@ mod tests {
             mirrored,
             double_sided,
             casts_shadow: false,
+            blend: None,
+            depth: 0.0,
         };
         let [a, b, c] = [(false, false), (true, false), (false, true)];
         let draws = [a, b, a, a, c, b].map(|(mirrored, sided)| draw(mirrored, sided));
@@ -1290,5 +1577,39 @@ mod tests {
         order.arrange(&[]);
         assert!(order.in_order && order.ends.is_empty());
         assert_eq!(MeshOrder::kind_count(&[]), 0);
+    }
+
+    #[test]
+    fn blended_draws_come_after_opaque_ones_and_those_blended_normally_far_to_near() {
+        let draw = |blend, depth, mirrored| MeshDraw {
+            mesh: None,
+            texture: None,
+            emission_texture: None,
+            mirrored,
+            double_sided: false,
+            casts_shadow: false,
+            blend,
+            depth,
+        };
+        let normal = Some(Blend::Normal);
+        let added = Some(Blend::Add);
+        let draws = [
+            draw(normal, 2.0, false),
+            draw(None, 0.0, false),
+            draw(added, 9.0, false),
+            draw(normal, 5.0, true),
+            draw(None, 0.0, true),
+            draw(normal, 8.0, false),
+            draw(added, 1.0, false),
+            draw(None, 0.0, false),
+        ];
+        let mut order = MeshOrder::default();
+        order.arrange(&draws);
+        let drawn: Vec<u32> = (0..8).map(|i| order.draw_at(i)).collect();
+        // Opaque by kind, then added by kind, then normal far to near: 8, then 5 of another
+        // kind, then 2 of the first again.
+        assert_eq!(drawn, [1, 7, 4, 2, 6, 5, 3, 0]);
+        assert_eq!(order.ends, [2, 3, 5, 6, 7, 8]);
+        assert_eq!(MeshOrder::kind_count(&draws), 6);
     }
 }

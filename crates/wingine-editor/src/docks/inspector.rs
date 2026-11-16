@@ -17,10 +17,10 @@ use wingine::{
     graphics::{Align, Blend, Camera3d, Color, Fog, Projection},
     gui::egui,
     math::Bounds3,
-    particles::ParticleSettings,
+    particles::{Look, ParticleSettings},
     scene::{
         CellDef, KindDef, NodeDef, PanelFill, PanelLookDef, Placement3, Props, Shape, SheetDef,
-        Stack, StackDirection, Value,
+        Stack, StackDirection, Value, ViewParticlesDef,
     },
 };
 
@@ -459,6 +459,8 @@ impl Inspector {
             theme::kind_icon(node.kind.name()),
             node.kind.name()
         );
+        // Particles in a 3D view fly in it, with fields of their own.
+        let in_3d = node.placement3.is_some();
         match &mut node.kind {
             KindDef::Node => {}
             KindDef::Sprite(sprite) => section(ui, &title, |ui| {
@@ -710,46 +712,7 @@ impl Inspector {
             }),
             KindDef::Mesh(mesh) => section(ui, &title, |ui| {
                 grid(ui, "mesh", |ui| {
-                    over.label(ui, "shape", &["shape"]);
-                    egui::ComboBox::from_id_salt("shape")
-                        .selected_text(mesh.shape.name())
-                        .show_ui(ui, |ui| {
-                            for shape in [
-                                Shape::Cuboid([1.0; 3]),
-                                Shape::Plane([1.0; 2]),
-                                Shape::Sphere(0.5),
-                            ] {
-                                let chosen = mesh.shape.name() == shape.name();
-                                if ui.selectable_label(chosen, shape.name()).clicked() && !chosen {
-                                    mesh.shape = shape;
-                                }
-                            }
-                        });
-                    ui.end_row();
-                    match &mut mesh.shape {
-                        Shape::Cuboid(size) => {
-                            over.label(ui, "size", &["size"]);
-                            triple(ui, "size", size, 0.05);
-                        }
-                        Shape::Plane(size) => {
-                            over.label(ui, "size", &["size"]);
-                            ui.horizontal(|ui| {
-                                number(ui, "size x", &mut size[0], 0.05);
-                                number(ui, "size z", &mut size[1], 0.05);
-                            });
-                        }
-                        Shape::Sphere(radius) => {
-                            over.label(ui, "radius", &["radius"]);
-                            number(ui, "radius", radius, 0.05);
-                        }
-                    }
-                    ui.end_row();
-                    // Sizes are above 0.
-                    match &mut mesh.shape {
-                        Shape::Cuboid(size) => size.iter_mut().for_each(at_least_a_little),
-                        Shape::Plane(size) => size.iter_mut().for_each(at_least_a_little),
-                        Shape::Sphere(radius) => at_least_a_little(radius),
-                    }
+                    shape_fields(ui, &mut mesh.shape, over);
                     over.label(ui, "sprite", &["sheet", "cell"]);
                     ui.horizontal(|ui| {
                         let mut shows = mesh.sprite.is_some();
@@ -1048,13 +1011,22 @@ impl Inspector {
                         *side = side.max(0.0);
                     }
                     ui.end_row();
-                    over.label(ui, "stretch", &["stretch"]);
-                    pair(ui, &mut particles.stretch, 0.01);
-                    ui.end_row();
-                    over.label(ui, "pivot", &["pivot"]);
-                    pair(ui, &mut particles.pivot, 1.0);
-                    ui.end_row();
-                    particle_fields(ui, &mut particles.settings, over);
+                    if in_3d {
+                        // A box about its origin, in a view.
+                        over.label(ui, "depth", &["depth"]);
+                        number(ui, "depth", &mut particles.view.depth, 0.05);
+                        particles.view.depth = particles.view.depth.max(0.0);
+                        ui.end_row();
+                    } else {
+                        over.label(ui, "stretch", &["stretch"]);
+                        pair(ui, &mut particles.stretch, 0.01);
+                        ui.end_row();
+                        over.label(ui, "pivot", &["pivot"]);
+                        pair(ui, &mut particles.pivot, 1.0);
+                        ui.end_row();
+                    }
+                    let view = in_3d.then_some(&mut particles.view);
+                    particle_fields(ui, &mut particles.settings, over, view);
                 });
                 if self.picking_cell
                     && let Some(sprite) = &mut particles.sprite
@@ -1067,8 +1039,106 @@ impl Inspector {
     }
 }
 
-/// The settings of particles, in a grid's rows, kept to values they can have.
-fn particle_fields(ui: &mut egui::Ui, settings: &mut ParticleSettings, over: &mut Marks) {
+/// A mesh's shape and its size or radius, in a grid's rows, kept above 0.
+fn shape_fields(ui: &mut egui::Ui, shape: &mut Shape, over: &mut Marks) {
+    over.label(ui, "shape", &["shape"]);
+    egui::ComboBox::from_id_salt("shape")
+        .selected_text(shape.name())
+        .show_ui(ui, |ui| {
+            for option in [
+                Shape::Cuboid([1.0; 3]),
+                Shape::Plane([1.0; 2]),
+                Shape::Sphere(0.5),
+            ] {
+                let chosen = shape.name() == option.name();
+                if ui.selectable_label(chosen, option.name()).clicked() && !chosen {
+                    *shape = option;
+                }
+            }
+        });
+    ui.end_row();
+    match shape {
+        Shape::Cuboid(size) => {
+            over.label(ui, "size", &["size"]);
+            triple(ui, "size", size, 0.05);
+        }
+        Shape::Plane(size) => {
+            over.label(ui, "size", &["size"]);
+            ui.horizontal(|ui| {
+                number(ui, "size x", &mut size[0], 0.05);
+                number(ui, "size z", &mut size[1], 0.05);
+            });
+        }
+        Shape::Sphere(radius) => {
+            over.label(ui, "radius", &["radius"]);
+            number(ui, "radius", radius, 0.05);
+        }
+    }
+    ui.end_row();
+    // Sizes are above 0.
+    match shape {
+        Shape::Cuboid(size) => size.iter_mut().for_each(at_least_a_little),
+        Shape::Plane(size) => size.iter_mut().for_each(at_least_a_little),
+        Shape::Sphere(radius) => at_least_a_little(radius),
+    }
+}
+
+/// What only particles in a 3D view have, in a grid's rows, kept to values they can have.
+fn view_particle_fields(ui: &mut egui::Ui, view: &mut ViewParticlesDef, over: &mut Marks) {
+    over.label(ui, "look", &["look"]);
+    egui::ComboBox::from_id_salt("look")
+        .selected_text(view.look.name())
+        .show_ui(ui, |ui| {
+            for look in Look::ALL {
+                ui.selectable_value(&mut view.look, look, look.name());
+            }
+        });
+    ui.end_row();
+    if view.look == Look::Streak {
+        over.label(ui, "streak", &["streak"]);
+        number(ui, "streak", &mut view.streak, 0.005);
+        view.streak = view.streak.max(0.0);
+        ui.end_row();
+    }
+    if view.look == Look::Mesh {
+        shape_fields(ui, &mut view.shape, over);
+    }
+    over.label(ui, "lit", &["lit"]);
+    let lit = ui.checkbox(&mut view.lit, "by the view's light");
+    lit.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, view.lit, "lit"));
+    ui.end_row();
+    if view.lit {
+        over.label(ui, "glow", &["glow"]);
+        color(ui, &mut view.glow);
+        ui.end_row();
+    }
+    over.label(ui, "bounce", &["bounce"]);
+    ui.horizontal(|ui| {
+        let mut bounces = view.bounce.is_some();
+        if ui.checkbox(&mut bounces, "").changed() {
+            view.bounce = bounces.then_some(0.3);
+        }
+        match &mut view.bounce {
+            Some(kept) => {
+                number(ui, "bounce", kept, 0.05);
+                *kept = kept.max(0.0);
+            }
+            None => {
+                ui.weak("passes through");
+            }
+        }
+    });
+    ui.end_row();
+}
+
+/// The settings of particles, in a grid's rows, kept to values they can have; and with `view`,
+/// those of particles in a 3D view, which fly along their node's `+z` and have a third gravity.
+fn particle_fields(
+    ui: &mut egui::Ui,
+    settings: &mut ParticleSettings,
+    over: &mut Marks,
+    mut view: Option<&mut ViewParticlesDef>,
+) {
     over.label(ui, "emitting", &["emitting"]);
     let emitting = ui.checkbox(&mut settings.emitting, "");
     emitting.widget_info(|| {
@@ -1111,9 +1181,11 @@ fn particle_fields(ui: &mut egui::Ui, settings: &mut ParticleSettings, over: &mu
     range(ui, "speed", &mut settings.speed, 0.5);
     settings.speed[1] = settings.speed[1].max(settings.speed[0]);
     ui.end_row();
-    over.label(ui, "direction", &["direction"]);
-    degrees(ui, "direction", &mut settings.direction);
-    ui.end_row();
+    if view.is_none() {
+        over.label(ui, "direction", &["direction"]);
+        degrees(ui, "direction", &mut settings.direction);
+        ui.end_row();
+    }
     over.label(ui, "spread", &["spread"]);
     degrees(ui, "spread", &mut settings.spread);
     settings.spread = settings.spread.clamp(0.0, std::f32::consts::TAU);
@@ -1122,6 +1194,9 @@ fn particle_fields(ui: &mut egui::Ui, settings: &mut ParticleSettings, over: &mu
     ui.horizontal(|ui| {
         number(ui, "gravity x", &mut settings.gravity[0], 1.0);
         number(ui, "gravity y", &mut settings.gravity[1], 1.0);
+        if let Some(view) = view.as_deref_mut() {
+            number(ui, "gravity z", &mut view.gravity_z, 1.0);
+        }
     });
     ui.end_row();
     over.label(ui, "drag", &["drag"]);
@@ -1167,6 +1242,9 @@ fn particle_fields(ui: &mut egui::Ui, settings: &mut ParticleSettings, over: &mu
         egui::WidgetInfo::selected(egui::Role::CheckBox, true, settings.attached, "attached")
     });
     ui.end_row();
+    if let Some(view) = view {
+        view_particle_fields(ui, view, over);
+    }
 }
 
 /// Fields for a range's least and most, named `name least` and `name most`.

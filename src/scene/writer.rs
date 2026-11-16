@@ -12,7 +12,7 @@ use super::{
     clip::{Clip, Interpolation, Keys, Track},
     file::{
         self, FORMAT, KindDef, LightDef, NodeDef, PanelLookDef, Placement3, SceneFile, Shape,
-        SheetDef, Stack, StackDirection, TileDef, TilesetFile, Value,
+        SheetDef, Stack, StackDirection, TileDef, TilesetFile, Value, ViewParticlesDef,
     },
 };
 use crate::{
@@ -583,14 +583,19 @@ impl Writer {
                     let [column, row] = sprite.cell;
                     self.field("cell", &format!("{{ {column}, {row} }}"));
                 }
-                for (key, length) in ["width", "height"].into_iter().zip(particles.size) {
+                let view = &particles.view;
+                let sizes = ["width", "height", "depth"]
+                    .into_iter()
+                    .zip(particles.size.into_iter().chain([view.depth]));
+                for (key, length) in sizes {
                     if length != 0.0 {
                         self.number_field(key, length)?;
                     }
                 }
                 self.stretch(particles.stretch)?;
                 self.pivot(particles.pivot)?;
-                self.particle_settings(&particles.settings)?;
+                self.particle_settings(&particles.settings, view.gravity_z)?;
+                self.view_particles(view)?;
             }
         }
         Ok(())
@@ -603,9 +608,45 @@ impl Writer {
         }
     }
 
+    /// What only particles in a 3D view have, leaving out what's at its defaults: how they look,
+    /// then how they're lit, then whether they bounce.
+    fn view_particles(&mut self, view: &ViewParticlesDef) -> Result<(), String> {
+        let default = ViewParticlesDef::default();
+        if view.look != default.look {
+            self.field("look", &quoted(view.look.name()));
+        }
+        if view.streak != default.streak {
+            self.number_field("streak", view.streak)?;
+        }
+        if view.shape != default.shape {
+            self.field("shape", &quoted(view.shape.name()));
+            match view.shape {
+                Shape::Cuboid(size) if size != [1.0; 3] => self.triple_field("size", size)?,
+                Shape::Plane(size) if size != [1.0; 2] => self.pair_field("size", size)?,
+                Shape::Sphere(radius) if radius != 0.5 => {
+                    self.number_field("radius", radius)?;
+                }
+                _ => {}
+            }
+        }
+        if view.lit {
+            self.field("lit", "true");
+        }
+        self.glow(view.glow);
+        if let Some(bounce) = view.bounce {
+            self.number_field("bounce", bounce)?;
+        }
+        Ok(())
+    }
+
     /// Particles' settings, leaving out those at their defaults: how many it sends out, how
-    /// they move, then how they look.
-    fn particle_settings(&mut self, settings: &ParticleSettings) -> Result<(), String> {
+    /// they move, then how they look. `gravity_z` is a third number of their gravity, a 3D
+    /// view's, written if it isn't 0.
+    fn particle_settings(
+        &mut self,
+        settings: &ParticleSettings,
+        gravity_z: f32,
+    ) -> Result<(), String> {
         let default = ParticleSettings::default();
         if !settings.emitting {
             self.field("emitting", "false");
@@ -636,7 +677,10 @@ impl Writer {
                 self.number_field(key, value)?;
             }
         }
-        if settings.gravity != default.gravity {
+        if gravity_z != 0.0 {
+            let [x, y] = settings.gravity;
+            self.triple_field("gravity", [x, y, gravity_z])?;
+        } else if settings.gravity != default.gravity {
             self.pair_field("gravity", settings.gravity)?;
         }
         if settings.drag != default.drag {

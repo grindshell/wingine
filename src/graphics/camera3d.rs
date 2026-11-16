@@ -180,7 +180,7 @@ impl Camera3d {
         self.basis().forward
     }
 
-    fn basis(&self) -> Basis {
+    pub(crate) fn basis(&self) -> Basis {
         let forward = normalize3(sub3(self.target, self.position)).unwrap_or([0.0, 0.0, -1.0]);
         // Looking along `up`, up the view is toward `-z` looking down, or `+z` looking up.
         let fallback = if forward[1] > 0.0 {
@@ -231,10 +231,10 @@ impl Camera3d {
 }
 
 /// A camera's directions in the world, each of length 1.
-struct Basis {
-    right: [f32; 3],
-    up: [f32; 3],
-    forward: [f32; 3],
+pub(crate) struct Basis {
+    pub right: [f32; 3],
+    pub up: [f32; 3],
+    pub forward: [f32; 3],
 }
 
 /// How many times wider than tall a view of `size` is, or 1 for a view with no size.

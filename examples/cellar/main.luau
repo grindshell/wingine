@@ -8,8 +8,10 @@
 -- props shading what's behind them, while the candle glows, showing its own colors as bright as
 -- they are however little light falls on it. Four flames take every shadow map a view has, so
 -- the fifth, in the gap between two walls, casts none: it keeps to a box round the gap, its
--- `bounds`, and lights nothing through the walls either side. Walk with the arrow keys or WASD,
--- and point at a prop with the mouse to name it.
+-- `bounds`, and lights nothing through the walls either side. A lit candle smokes: each holds a
+-- `smoke`, particles in the view rising from its wick, lit by the flames and fading as they rise,
+-- which start as it's lit. Walk with the arrow keys or WASD, and point at a prop with the mouse to
+-- name it.
 --
 -- A tile is a world unit, with columns along `x` and rows along `z`, so up the map is away from
 -- the camera, and each node of the view stands on the tile its position is in.
@@ -44,7 +46,14 @@ for _, direction in DIRECTIONS do
 end
 
 type Prop = { node: SceneNode, kind: string, column: number, row: number }
-type Candle = { node: SceneNode, flame: SceneNode, column: number, row: number, lit: boolean }
+type Candle = {
+    node: SceneNode,
+    flame: SceneNode,
+    smoke: SceneNode,
+    column: number,
+    row: number,
+    lit: boolean,
+}
 
 -- The column and row of the tile a node of the view stands on.
 local function tile_of(node: SceneNode): (number, number)
@@ -65,7 +74,16 @@ for _, node in view:tagged("candle") do
     -- Its light, which the scene has lit, so the editor shows what it lights.
     local flame = node:find("flame") :: SceneNode
     flame:set_visible(false)
-    table.insert(candles, { node = node, flame = flame, column = column, row = row, lit = false })
+    -- And its smoke, which rises once it's lit.
+    local smoke = node:find("smoke") :: SceneNode
+    table.insert(candles, {
+        node = node,
+        flame = flame,
+        smoke = smoke,
+        column = column,
+        row = row,
+        lit = false,
+    })
 end
 
 local props: { Prop } = {}
@@ -141,6 +159,8 @@ end
 function update(dt: number)
     cellar.time += dt
     view:set_camera(cellar.view().camera)
+    -- The candles' smoke rises.
+    view:advance_particles(dt)
     cellar.pointed = cellar.pointed_prop()
     local mover = cellar.mover
     mover:update(dt)
@@ -152,6 +172,7 @@ function update(dt: number)
         if not candle.lit and candle.column == column and candle.row == row then
             candle.lit = true
             candle.flame:set_visible(true)
+            candle.smoke:set_emitting(true)
             cellar.lit += 1
             cellar.done = cellar.lit == #cellar.candles
         end

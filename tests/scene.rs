@@ -902,7 +902,7 @@ const HALL: &str = r##"return {
 
 fn particles_of(scene: &Scene, id: wingine::scene::NodeId) -> &wingine::particles::Particles {
     match scene.node(id).kind() {
-        Kind::Particles(node) => &node.particles,
+        Kind::Particles(node) => node.particles.flat().expect("a 2D emitter"),
         kind => panic!("{} isn't particles", kind.name()),
     }
 }

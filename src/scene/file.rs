@@ -23,7 +23,7 @@ use crate::{
         parse_hex, unpacked_color,
     },
     math::{Affine3, Bounds3},
-    particles::ParticleSettings,
+    particles::{Look, ParticleSettings, ParticleSettings3d},
 };
 
 /// The version of the scene, tileset and font formats this engine writes, their `format`. It reads
@@ -351,9 +351,9 @@ pub(crate) fn is_3d_kind(kind: &str) -> bool {
 }
 
 /// Whether nodes of the kind named `kind` may be placed in 3D: those only views hold, and plain
-/// nodes and instances, which views hold too.
+/// nodes, instances and particles, which views hold too.
 pub(super) fn can_be_3d(kind: &str) -> bool {
-    is_3d_kind(kind) || matches!(kind, "node" | "instance")
+    is_3d_kind(kind) || matches!(kind, "node" | "instance" | "particles")
 }
 
 /// A sprite from one of the scene's sheets.
@@ -559,6 +559,8 @@ pub struct ParticlesDef {
     pub stretch: [f32; 2],
     /// As a sprite's.
     pub pivot: [f32; 2],
+    /// What only an emitter in a 3D view has, which it reads `settings` with.
+    pub view: ViewParticlesDef,
 }
 
 impl ParticlesDef {
@@ -570,6 +572,65 @@ impl ParticlesDef {
             size: [0.0, 0.0],
             stretch: [0.0, 0.0],
             pivot: [0.0, 0.0],
+            view: ViewParticlesDef::default(),
+        }
+    }
+
+    /// Its settings as an emitter in a 3D view has them: see [`ParticleSettings3d`].
+    pub fn settings_3d(&self) -> ParticleSettings3d {
+        self.view.settings(&self.settings)
+    }
+}
+
+/// What only a particles node in a 3D view has. Its particles fly along its `+z`, its `spread`
+/// is a cone's half angle about that, and its `width`, `height` and `depth` are the box they
+/// start in, about its origin. See [`ParticleSettings3d`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct ViewParticlesDef {
+    /// The depth of the box particles start in, along `z`.
+    pub depth: f32,
+    /// How much faster particles fly each second along `z`: `gravity`'s third number, its first
+    /// two being the settings'.
+    pub gravity_z: f32,
+    pub look: Look,
+    /// A streak's length, for each world unit a second it flies.
+    pub streak: f32,
+    /// What a particle is when it looks like a mesh, as a mesh node's `shape`.
+    pub shape: Shape,
+    pub lit: bool,
+    pub glow: Color,
+    pub bounce: Option<f32>,
+}
+
+impl Default for ViewParticlesDef {
+    fn default() -> Self {
+        let settings = ParticleSettings3d::default();
+        Self {
+            depth: 0.0,
+            gravity_z: 0.0,
+            look: settings.look,
+            streak: settings.streak,
+            shape: Shape::Cuboid([1.0; 3]),
+            lit: settings.lit,
+            glow: settings.glow,
+            bounce: settings.bounce,
+        }
+    }
+}
+
+impl ViewParticlesDef {
+    /// The settings of an emitter in a 3D view with these and `common`, whose gravity's first
+    /// two numbers are its own.
+    pub fn settings(&self, common: &ParticleSettings) -> ParticleSettings3d {
+        let [x, y] = common.gravity;
+        ParticleSettings3d {
+            common: common.clone(),
+            gravity: [x, y, self.gravity_z],
+            look: self.look,
+            streak: self.streak,
+            lit: self.lit,
+            glow: self.glow,
+            bounce: self.bounce,
         }
     }
 }
@@ -2034,15 +2095,25 @@ fn read_kind(
                 None => Ok(0.0),
             };
             let size = [number("width")?, number("height")?];
-            if size.iter().any(|&side| side < 0.0) {
-                return Err("a particles node's `width` and `height` can't be less than 0".into());
+            let depth = number("depth")?;
+            if size.iter().chain([&depth]).any(|&side| side < 0.0) {
+                return Err(
+                    "a particles node's `width`, `height` and `depth` can't be less than 0".into(),
+                );
+            }
+            let mut base = ParticleSettings::default();
+            let mut view = read_view_particles(fields, &ViewParticlesDef::default(), &mut base)?;
+            view.depth = depth;
+            if fields.has("shape") {
+                view.shape = read_shape(fields)?;
             }
             KindDef::Particles(ParticlesDef {
                 sprite,
                 size,
                 stretch: read_stretch(fields)?,
                 pivot: read_pivot(fields)?,
-                settings: read_particle_settings(fields, &ParticleSettings::default())?,
+                settings: read_particle_settings(fields, &base)?,
+                view,
             })
         }
         other => {
@@ -2130,6 +2201,97 @@ fn read_particle_settings(
     }
 }
 
+/// What only an emitter in a 3D view has, among `fields`, with those that aren't there as `base`
+/// has them: its `look`, `streak`, `lit`, `glow` and `bounce`, and `gravity`, whose first two
+/// numbers go to `common`, and whose third, if it has one, is the view's.
+fn read_view_particles(
+    fields: &mut Fields,
+    base: &ViewParticlesDef,
+    common: &mut ParticleSettings,
+) -> Result<ViewParticlesDef, String> {
+    let mut view = base.clone();
+    if let Some(gravity) = fields.take("gravity") {
+        let numbers = list(gravity, "gravity")?;
+        let numbers: Vec<f32> = numbers
+            .into_iter()
+            .map(|value| finite(value, "gravity"))
+            .collect::<Result<_, _>>()?;
+        match numbers[..] {
+            [x, y] => common.gravity = [x, y],
+            [x, y, z] => {
+                common.gravity = [x, y];
+                view.gravity_z = z;
+            }
+            _ => {
+                return Err(
+                    "`gravity` must be two numbers, { x, y }, or in a 3D view three, { x, y, z }"
+                        .into(),
+                );
+            }
+        }
+    }
+    if let Some(look) = fields.take("look") {
+        let name = string(look, "look")?;
+        view.look = Look::from_name(&name).ok_or_else(|| {
+            format!(r#"`look` must be "billboard", "streak" or "mesh", not "{name}""#)
+        })?;
+    }
+    if let Some(streak) = fields.take("streak") {
+        view.streak = finite(streak, "streak")?;
+        if view.streak < 0.0 {
+            return Err(format!("`streak` must be 0 or more, not {}", view.streak));
+        }
+    }
+    if let Some(lit) = fields.take("lit") {
+        view.lit = boolean(lit, "lit")?;
+    }
+    if fields.has("glow") {
+        view.glow = optional_color(fields, "glow")?;
+    }
+    if let Some(bounce) = fields.take("bounce") {
+        view.bounce = match bounce {
+            Value::Bool(false) => None,
+            value => {
+                let bounce = finite(value, "bounce")?;
+                if bounce < 0.0 {
+                    return Err(format!("`bounce` must be 0 or more, not {bounce}"));
+                }
+                Some(bounce)
+            }
+        };
+    }
+    Ok(view)
+}
+
+/// A mesh's `shape`, and its `size` or `radius`, among `fields`.
+fn read_shape(fields: &mut Fields) -> Result<Shape, String> {
+    let shape = fields
+        .take("shape")
+        .ok_or(r#"a mesh has a `shape`: "cuboid", "plane" or "sphere""#)?;
+    Ok(match string(shape, "shape")?.as_str() {
+        "cuboid" => Shape::Cuboid(match fields.take("size") {
+            Some(size) => positive_triple(size, "size")?,
+            None => [1.0; 3],
+        }),
+        "plane" => Shape::Plane(match fields.take("size") {
+            Some(size) => {
+                let [width, depth] = pair(size, "size")?;
+                [positive(width, "size")?, positive(depth, "size")?]
+            }
+            None => [1.0; 2],
+        }),
+        "sphere" => Shape::Sphere(match fields.take("radius") {
+            Some(radius) => positive(finite(radius, "radius")?, "radius")?,
+            None => 0.5,
+        }),
+        other => {
+            return Err(format!(
+                r#"`shape` must be "cuboid", "plane" or "sphere", not "{other}""#
+            ));
+        }
+    })
+}
+
 /// A range, `{ least, most }`, or a number, which is both.
 fn range(value: Value, field: &str) -> Result<[f32; 2], String> {
     match value {
@@ -2157,6 +2319,65 @@ pub(crate) fn particle_settings(
     let settings = read_particle_settings(&mut fields, base)?;
     fields.finish("a particle emitter")?;
     Ok(settings)
+}
+
+/// A 3D emitter's settings as `base` has them, with the fields `change` sets, as a particles node
+/// in a view holds them: [`particle_settings`]'s, and a view's own.
+pub(crate) fn particle_settings_3d(
+    change: Value,
+    base: &ParticleSettings3d,
+) -> Result<ParticleSettings3d, String> {
+    let mut fields = Fields::new(change, "a particle emitter's settings")?;
+    let mut common = base.common.clone();
+    let [x, y, z] = base.gravity;
+    common.gravity = [x, y];
+    let view = ViewParticlesDef {
+        gravity_z: z,
+        look: base.look,
+        streak: base.streak,
+        lit: base.lit,
+        glow: base.glow,
+        bounce: base.bounce,
+        ..ViewParticlesDef::default()
+    };
+    let view = read_view_particles(&mut fields, &view, &mut common)?;
+    let common = read_particle_settings(&mut fields, &common)?;
+    fields.finish("a particle emitter")?;
+    let settings = view.settings(&common);
+    match settings.problem() {
+        Some(problem) => Err(problem),
+        None => Ok(settings),
+    }
+}
+
+/// Whether `settings`, a script's for an emitter it's making, are a 3D emitter's: they say how
+/// its particles `look`, or give `gravity` three numbers.
+pub(crate) fn is_3d_settings(settings: &Value) -> bool {
+    let Value::Map(fields) = settings else {
+        return false;
+    };
+    fields.contains_key("look")
+        || matches!(fields.get("gravity"), Some(Value::List(numbers)) if numbers.len() == 3)
+}
+
+/// A 3D emitter's settings as a particles node in a view holds them, with every field, for
+/// scripts to read.
+pub(crate) fn particle_settings_3d_value(settings: &ParticleSettings3d) -> Value {
+    let mut fields = BTreeMap::new();
+    particle_fields(&settings.common, &mut |key: &str, value| {
+        fields.insert(key.to_owned(), value);
+    });
+    fields.remove("direction");
+    let number = |n: f32| Value::Number(n.into());
+    let gravity = settings.gravity.map(number).to_vec();
+    fields.insert("gravity".into(), Value::List(gravity));
+    fields.insert("look".into(), Value::String(settings.look.name().into()));
+    fields.insert("streak".into(), number(settings.streak));
+    fields.insert("lit".into(), Value::Bool(settings.lit));
+    fields.insert("glow".into(), hex_value(settings.glow));
+    let bounce = settings.bounce.map_or(Value::Bool(false), number);
+    fields.insert("bounce".into(), bounce);
+    Value::Map(fields)
 }
 
 /// Particles' settings as a scene file holds them, with every field, for scripts to read.
@@ -3382,7 +3603,10 @@ mod tests {
             ("colors = {}", "`colors` must have at least one color"),
             ("limit = 0", "`limit` must be at least 1"),
             ("blend = 'alpha'", r#"`blend` must be "normal", "add""#),
-            ("width = -1", "`width` and `height` can't be less than 0"),
+            (
+                "width = -1",
+                "`width`, `height` and `depth` can't be less than 0",
+            ),
             (
                 "cell = { 0, 0 }",
                 "a particles node with a sprite has a `sheet`",
@@ -3415,6 +3639,82 @@ mod tests {
             particle_settings(Value::Map(all), &ParticleSettings::default()),
             Ok(base)
         );
+    }
+
+    #[test]
+    fn reads_particles_of_a_3d_view_and_writes_them_back() {
+        let scene = parse(
+            "return { format = 4, children = { { name = 'view', kind = 'view3d',
+                width = 64, height = 64,
+                camera = { position = { 0, 1, 5 }, target = { 0, 0, 0 } },
+                children = {
+                    { name = 'sparks', kind = 'particles', z = 1, width = 0.5, depth = 0.25,
+                      gravity = { 0, -6, 1 }, look = 'streak', streak = 0.03, glow = '#ffffff',
+                      blend = 'add', bounce = 0.4 },
+                    { name = 'chips', kind = 'particles', look = 'mesh', shape = 'sphere',
+                      radius = 0.2, lit = true },
+                },
+            } } }",
+        )
+        .unwrap();
+        let children = &scene.children[0].children;
+        let KindDef::Particles(sparks) = &children[0].kind else {
+            panic!("sparks are particles");
+        };
+        assert_eq!(sparks.size, [0.5, 0.0]);
+        assert_eq!(sparks.settings.gravity, [0.0, -6.0]);
+        let settings = sparks.settings_3d();
+        assert_eq!(settings.gravity, [0.0, -6.0, 1.0]);
+        assert_eq!(settings.look, Look::Streak);
+        assert_eq!(settings.streak, 0.03);
+        assert_eq!(settings.bounce, Some(0.4));
+        assert_eq!(settings.glow, Color::WHITE);
+        assert_eq!(sparks.view.depth, 0.25);
+        let KindDef::Particles(chips) = &children[1].kind else {
+            panic!("chips are particles");
+        };
+        assert_eq!(chips.view.shape, Shape::Sphere(0.2));
+        assert!(chips.view.lit);
+        // Written back and read again, the same.
+        let again = parse(&scene.to_luau().unwrap()).unwrap();
+        assert_eq!(again, scene);
+
+        let wrong = [
+            (
+                "look = 'smoke'",
+                r#"`look` must be "billboard", "streak" or "mesh""#,
+            ),
+            ("streak = -1", "`streak` must be 0 or more, not -1"),
+            ("bounce = -1", "`bounce` must be 0 or more, not -1"),
+            ("gravity = { 1 }", "`gravity` must be two numbers"),
+        ];
+        for (fields, expected) in wrong {
+            let source = format!(
+                "return {{ format = 4, children = {{ {{ name = 'p', kind = 'particles', {fields} }} }} }}"
+            );
+            let err = parse(&source).unwrap_err().to_string();
+            assert!(err.contains(expected), "{source}\n{err}");
+        }
+
+        // A script's settings for one, and every field it reads back.
+        let mut change = BTreeMap::new();
+        change.insert("look".to_owned(), Value::String("streak".into()));
+        let gravity = [0.0, -9.8, 0.0].map(Value::Number).to_vec();
+        change.insert("gravity".to_owned(), Value::List(gravity));
+        assert!(is_3d_settings(&Value::Map(change.clone())));
+        let made =
+            particle_settings_3d(Value::Map(change), &ParticleSettings3d::default()).unwrap();
+        assert_eq!((made.look, made.gravity), (Look::Streak, [0.0, -9.8, 0.0]));
+        let Value::Map(all) = particle_settings_3d_value(&made) else {
+            panic!("settings are a table");
+        };
+        assert_eq!(
+            particle_settings_3d(Value::Map(all), &ParticleSettings3d::default()),
+            Ok(made)
+        );
+        let mut flat = BTreeMap::new();
+        flat.insert("rate".to_owned(), Value::Number(5.0));
+        assert!(!is_3d_settings(&Value::Map(flat)));
     }
 
     #[test]

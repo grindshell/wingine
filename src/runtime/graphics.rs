@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use mlua::{ErrorContext, Lua, Table, UserDataRef, Vector};
+use mlua::{ErrorContext, IntoLua, Lua, Table, UserDataRef, Vector};
 
 use super::{Lent, Textures};
 use crate::{
@@ -13,8 +13,8 @@ use crate::{
     },
     lua::{SceneNode, check_layer, packed_color, vector3},
     math::{Affine3, Bounds3, Rect},
-    particles::{ParticleSettings, Particles, seed_for},
-    scene::{particle_settings, plain},
+    particles::{ParticleSettings, ParticleSettings3d, Particles, Particles3d, seed_for},
+    scene::{is_3d_settings, particle_settings, particle_settings_3d, plain},
     tilemap::Tilemap,
 };
 
@@ -311,28 +311,91 @@ pub(super) fn module(
         // Each emitter a game makes is seeded by how many it made before, so a game plays the
         // same every time, unless the settings give a seed.
         let made = std::cell::Cell::new(0u32);
+        // Settings that say how particles `look`, or give `gravity` three numbers, make an
+        // emitter for a 3D view, whose second argument may be a sprite or a mesh.
         lua.create_function(
-            move |_, (settings, sprite): (Option<Table>, Option<UserDataRef<Sprite>>)| {
-                let settings = match settings {
-                    Some(table) => {
-                        let value = plain(mlua::Value::Table(table), "the settings")
-                            .map_err(mlua::Error::runtime)?;
-                        particle_settings(value, &ParticleSettings::default())
-                            .map_err(mlua::Error::runtime)?
-                    }
-                    None => ParticleSettings::default(),
-                };
+            move |lua, (settings, shown): (Option<Table>, mlua::Value)| {
                 let seed = seed_for(&format!("emitter {}", made.get()));
                 made.set(made.get().wrapping_add(1));
-                let sprite = sprite.map(|sprite| Sprite::clone(&sprite));
-                Particles::try_new(settings, sprite, seed).map_err(mlua::Error::runtime)
+                let value = match settings {
+                    Some(table) => Some(
+                        plain(mlua::Value::Table(table), "the settings")
+                            .map_err(mlua::Error::runtime)?,
+                    ),
+                    None => None,
+                };
+                let sprite = match &shown {
+                    mlua::Value::UserData(data) if data.is::<Sprite>() => {
+                        let sprite = data.borrow::<Sprite>()?;
+                        Some(Sprite::clone(&sprite))
+                    }
+                    _ => None,
+                };
+                let mesh = match &shown {
+                    mlua::Value::UserData(data) if data.is::<Mesh>() => {
+                        let mesh = data.borrow::<Mesh>()?;
+                        Some(Mesh::clone(&mesh))
+                    }
+                    _ => None,
+                };
+                let deep = value.as_ref().is_some_and(is_3d_settings);
+                let wrong = !shown.is_nil() && sprite.is_none() && (mesh.is_none() || !deep);
+                if wrong {
+                    let message = if deep {
+                        "new_particles takes a sprite or a mesh after its settings"
+                    } else {
+                        "new_particles takes a sprite after its settings"
+                    };
+                    return Err(mlua::Error::runtime(message));
+                }
+                if deep {
+                    let settings = particle_settings_3d(
+                        value.expect("3D settings are some"),
+                        &ParticleSettings3d::default(),
+                    )
+                    .map_err(mlua::Error::runtime)?;
+                    let mut particles = Particles3d::try_new(settings, sprite, seed)
+                        .map_err(mlua::Error::runtime)?;
+                    particles.set_mesh(mesh);
+                    return particles.into_lua(lua);
+                }
+                let settings = match value {
+                    Some(value) => particle_settings(value, &ParticleSettings::default())
+                        .map_err(mlua::Error::runtime)?,
+                    None => ParticleSettings::default(),
+                };
+                let particles =
+                    Particles::try_new(settings, sprite, seed).map_err(mlua::Error::runtime)?;
+                particles.into_lua(lua)
             },
         )?
     })?;
     graphics.set("draw_particles", {
         let lent = lent.clone();
-        lua.create_function(move |_, particles: UserDataRef<Particles>| {
-            lent.canvas(|canvas| canvas.draw_particles(&particles))
+        lua.create_function(move |_, particles: mlua::AnyUserData| {
+            if let Ok(particles) = particles.borrow::<Particles>() {
+                return lent.canvas(|canvas| {
+                    if canvas.open_view().is_some() {
+                        Err(mlua::Error::runtime(
+                            "these particles are 2D, and can't be drawn in a 3D view: draw them \
+                             after it",
+                        ))
+                    } else {
+                        canvas.draw_particles(&particles);
+                        Ok(())
+                    }
+                })?;
+            }
+            let particles = particles.borrow::<Particles3d>()?;
+            lent.canvas(|canvas| match canvas.open_view() {
+                Some(mut view) => {
+                    view.draw_particles(&particles, particles.origin());
+                    Ok(())
+                }
+                None => Err(mlua::Error::runtime(
+                    "these particles are 3D, drawn in a 3D view: draw them after begin_3d",
+                )),
+            })?
         })?
     })?;
     graphics.set("set_blend", {

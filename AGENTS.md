@@ -104,9 +104,13 @@ own right.
 - 3D (`camera3d.rs`, `mesh.rs`, `view3d.rs`, `model.rs`, `model_file.rs`): `Canvas::begin_3d`
   records a `View3d` and starts the next batch of quads empty, so 2D never joins across a view;
   `Renderer::render` draws each view in a pass of its own with a depth buffer. Right-handed, `y`
-  up, as glTF. Texels under half opaque are discarded and nothing blends, so billboards need no
+  up, as glTF. Texels under half opaque are discarded and no mesh blends, so billboards need no
   sorting, and a view's draws of the same mesh and texture are one instanced draw wherever they
-  were drawn, each kind in the order it was first drawn (`MeshOrder`). `model_file::read` reads
+  were drawn, each kind in the order it was first drawn (`MeshOrder`). Only particles blend: a
+  draw's `blend`, part of its kind, puts it after every opaque draw, drawn by a pipeline of its
+  mode that tests depth and doesn't write it, through `mesh.wgsl`'s `fs_blended`, whose
+  `fades_to` constant fogs what adds or screens to black and what multiplies to white; those
+  blended normally sort far to near by `MeshDraw::depth`, each run of a kind a draw call. `model_file::read` reads
   glTF without a GPU into `ModelData`. Picking is by boxes (`Bounds3`, `Ray::hit_box`), not
   triangles. Luau's points are native `vector`s; `draw_mesh` and `draw_billboard` add to the view
   begun last only while nothing else has been drawn since (`Canvas::open_view`).
@@ -194,6 +198,13 @@ own right.
   path, a game's count of emitters), and starting particles uses `libm`, so a hash pinned in its
   tests checks Windows and Linux agree. `Canvas::draw_particles` draws them, culling each, taking
   `sin_cos` only for turned ones. Attached particles are in the emitter's coordinates.
+  `particles/view.rs`'s `Particles3d` is the same in a 3D view, sharing the 2D one's steps,
+  generator and colors and scales over a life, and nothing of the 2D one changes for it: it sends
+  particles along its origin's `+z` within a cone, evenly over a sphere's cap, and with `bounce`
+  sends them back off the plane each started on. `Canvas3d::draw_particles` pushes an instance
+  for each, a billboard facing the camera, a streak along its velocity or a mesh turned about
+  its own axis; an unlit one's colors ride its emission, its tint keeping only its alpha, so no
+  shader knows it's a particle.
 - `src/menu.rs`: `Menu`, a selection that holds no items: each `update` takes them as they are.
   Directions go by where items are, so lists, rows and ragged grids move as they look.
 - `src/physics.rs`, `physics/world2d.rs` and `physics/world3d.rs`: `World` and `World3d`, by
@@ -324,6 +335,9 @@ own right.
   `advance_particles`, which lays emitters out in one walk down through the nodes holding them.
   Particle settings are read by the file reader for files and for Luau alike
   (`file::particle_settings`, through `plain`), so both take the same fields with the same errors.
+  A particles node in a view holds an `Emitter::View`, a `Particles3d` placed by
+  `transform_3d`; its file's fields only a view's emitter has are a `ViewParticlesDef`, whose
+  `gravity_z` is a third number of the node's `gravity`, and `check_3d` refuses them outside one.
 - Scripts hold nodes as `lua::SceneNode`, an `Rc<RefCell<Scene>>` and a `NodeId`.
 
 ### Editor
@@ -364,9 +378,10 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
   the game's seed may feed `math.random`.
 - `pong/`: Pong in Luau, with Luau tests and an icon; its match hash is pinned in `tests/pong.rs`.
 - `garden/`, `orchard/`, `cellar/`, `course/`, `quarry/`, `bonfire/`, `lettering/`: a scene with
-  2D physics seen from above, a rigged character, a 2.5D cellar, a 3D course with physics, a level
-  seen from the side with 2D bodies (both with their run's hash pinned), a night of particles and
-  blend modes with fireworks, and a type specimen of the engine's fonts.
+  2D physics seen from above, a rigged character, a 2.5D cellar whose candles smoke in 3D, a 3D
+  course with physics, a level seen from the side with 2D bodies (both with their run's hash
+  pinned), a night of particles and blend modes with fireworks, and a type specimen of the
+  engine's fonts.
 - `sprites.rs`, `shapes.rs`, `meshes.rs`, `gui.rs`: examples in Rust; `native-particles/` a native
   library that `tests/native.rs` builds.
 - Assets: art drawn for the examples is under the project's licenses; Kenney's packs are CC0 and

@@ -10,6 +10,16 @@
 //! Each emitter has a random number generator of its own, seeded by its settings' `seed`, or by
 //! the seed it's made with. Starting particles takes its sines from `libm`, so an emitter given
 //! the same steps gives the same particles to the bit on every platform.
+//!
+//! [`Particles3d`] is the same in a 3D view: its particles fly in three dimensions, along its
+//! origin's `+z`, and are drawn by
+//! [`Canvas3d::draw_particles`](crate::graphics::Canvas3d::draw_particles) among the view's
+//! meshes, as billboards, streaks or meshes, blended or not. It shares the 2D emitter's timing,
+//! generator and colors and sizes over a life, and nothing of the 2D one changes for it.
+
+mod view;
+
+pub use view::{Look, ParticleSettings3d, Particles3d};
 
 use crate::{
     graphics::{Blend, Color, Sprite},
@@ -22,6 +32,18 @@ pub const STEP: f32 = 1.0 / 60.0;
 
 /// The most steps one advance takes, a minute's: a longer one takes longer steps.
 const MAX_STEPS: u32 = 3600;
+
+/// How many steps of at most [`STEP`] an advance of `dt` seconds takes, and how long each is:
+/// none for a `dt` that isn't above 0, or isn't finite.
+fn steps(dt: f32) -> Option<(u32, f32)> {
+    if !(dt > 0.0 && dt.is_finite()) {
+        return None;
+    }
+    // Not `ceil`, a call into the math library; a hair over a whole number of steps, from
+    // rounding, isn't another step. The cast saturates.
+    let steps = ((dt / STEP - 1e-3) as u32).saturating_add(1).min(MAX_STEPS);
+    Some((steps, dt / steps as f32))
+}
 
 /// What an emitter sends out, how often, and how its particles move and look as they age.
 ///
@@ -165,23 +187,33 @@ impl ParticleSettings {
 
     /// The color of a particle `life` of the way through its life, from 0 to 1.
     pub(crate) fn color_at(&self, life: f32) -> Color {
-        let (i, f) = along(self.colors.len(), life);
-        let a = self.colors[i];
-        let Some(b) = self.colors.get(i + 1) else {
-            return a;
-        };
-        let mix = |a: f32, b: f32| a + (b - a) * f;
-        Color::rgba(mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b), mix(a.a, b.a))
+        color_at(&self.colors, life)
     }
 
     /// The scale of a particle `life` of the way through its life, from 0 to 1.
     pub(crate) fn scale_at(&self, life: f32) -> f32 {
-        let (i, f) = along(self.scales.len(), life);
-        let a = self.scales[i];
-        match self.scales.get(i + 1) {
-            Some(b) => a + (b - a) * f,
-            None => a,
-        }
+        scale_at(&self.scales, life)
+    }
+}
+
+/// Of `colors`, spread evenly over a life, the color `life` of the way through it, from 0 to 1.
+fn color_at(colors: &[Color], life: f32) -> Color {
+    let (i, f) = along(colors.len(), life);
+    let a = colors[i];
+    let Some(b) = colors.get(i + 1) else {
+        return a;
+    };
+    let mix = |a: f32, b: f32| a + (b - a) * f;
+    Color::rgba(mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b), mix(a.a, b.a))
+}
+
+/// Of `scales`, spread evenly over a life, the scale `life` of the way through it, from 0 to 1.
+fn scale_at(scales: &[f32], life: f32) -> f32 {
+    let (i, f) = along(scales.len(), life);
+    let a = scales[i];
+    match scales.get(i + 1) {
+        Some(b) => a + (b - a) * f,
+        None => a,
     }
 }
 
@@ -364,13 +396,9 @@ impl Particles {
                 self.advance(warmup);
             }
         }
-        if !(dt > 0.0 && dt.is_finite()) {
+        let Some((steps, part)) = steps(dt) else {
             return;
-        }
-        // Not `ceil`, a call into the math library; a hair over a whole number of steps, from
-        // rounding, isn't another step. The cast saturates.
-        let steps = ((dt / STEP - 1e-3) as u32).saturating_add(1).min(MAX_STEPS);
-        let part = dt / steps as f32;
+        };
         let end = self.origin.translation;
         let start = self.last.unwrap_or(end);
         let at = |t: f32| [0, 1].map(|i| start[i] + (end[i] - start[i]) * t);

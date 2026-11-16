@@ -88,7 +88,10 @@ The **Inspector** shows the selected node's fields, as scene files name them:
   wrap, alignment, pivot, color and blend mode; an area's size, stretch and pivot; a particles
   node's sprite, or squares, the rectangle particles start in, and every one of its
   [settings](api/graphics.md#particle-settings), its angles in degrees, and its colors and scales
-  over a particle's life as lists, **+** adding one and **−** taking the last away; a stack's width
+  over a particle's life as lists, **+** adding one and **−** taking the last away, and in a 3D
+  view, the box's depth in place of its stretch and pivot, a third number of its gravity, and
+  what only [particles in a view](api/graphics.md#particles-in-a-3d-view) have, its look, a
+  streak's length or a mesh's shape, whether it's lit and its glow, and its bounce; a stack's width
   and height, each its own or **fits** what it holds, its stretch, direction, gap, padding and
   pivot, and a panel's too, with its look: a fill's color and border, or a sprite's sheet, cell,
   slice and tint; a tilemap's tileset and size, which resizes its layers, and a tile layer's blend

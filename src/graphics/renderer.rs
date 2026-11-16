@@ -156,6 +156,9 @@ struct MeshRenderer {
     /// For meshes showing only the side their triangles face, then for double-sided ones, each
     /// as they are, then mirrored, whose triangles wind the other way.
     pipelines: [[wgpu::RenderPipeline; 2]; 2],
+    /// For blended draws, in each of [`Blend::ALL`]: showing both sides, tested against the
+    /// view's depth and not writing it.
+    blended: [wgpu::RenderPipeline; 4],
     views_layout: wgpu::BindGroupLayout,
     /// Each view's [`ViewUniform`], `view_stride` bytes apart.
     views_buffer: wgpu::Buffer,
@@ -745,9 +748,27 @@ impl MeshRenderer {
                 attributes: &instance_attributes,
             }),
         ];
-        let pipeline = |front_face, cull_mode| {
+        // Opaque meshes write the depth they're at; blended ones are only hidden by it, so what's
+        // behind a blended one still shows through it, and blend premultiplied colors from
+        // `fs_blended`.
+        let pipeline = |front_face, cull_mode, blend: Option<Blend>| {
+            // What a blended pixel fades to in fog: see `fades_to` in `mesh.wgsl`.
+            let fades_to = match blend {
+                Some(Blend::Add | Blend::Screen) => 1.0,
+                Some(Blend::Multiply) => 2.0,
+                _ => 0.0,
+            };
+            let constants = [("fades_to", fades_to)];
+            let fragment_options = wgpu::PipelineCompilationOptions {
+                constants: if blend.is_some() { &constants } else { &[] },
+                ..Default::default()
+            };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("mesh"),
+                label: Some(if blend.is_some() {
+                    "blended mesh"
+                } else {
+                    "mesh"
+                }),
                 layout: Some(&layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
@@ -762,7 +783,7 @@ impl MeshRenderer {
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(true),
+                    depth_write_enabled: Some(blend.is_none()),
                     depth_compare: Some(wgpu::CompareFunction::Less),
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
@@ -770,11 +791,15 @@ impl MeshRenderer {
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
+                    entry_point: Some(if blend.is_some() {
+                        "fs_blended"
+                    } else {
+                        "fs_main"
+                    }),
+                    compilation_options: fragment_options,
                     targets: &[Some(wgpu::ColorTargetState {
                         format: target_format,
-                        blend: None,
+                        blend: blend.map(Blend::state),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -785,8 +810,10 @@ impl MeshRenderer {
         // Mirrored meshes' triangles face the other way round their corners, which also tells
         // the shader which side of a double-sided mesh shows.
         let pipelines = [Some(wgpu::Face::Back), None].map(|cull_mode| {
-            [wgpu::FrontFace::Ccw, wgpu::FrontFace::Cw].map(|front| pipeline(front, cull_mode))
+            [wgpu::FrontFace::Ccw, wgpu::FrontFace::Cw]
+                .map(|front| pipeline(front, cull_mode, None))
         });
+        let blended = Blend::ALL.map(|blend| pipeline(wgpu::FrontFace::Ccw, None, Some(blend)));
 
         let shadow_shader = device.create_shader_module(wgpu::include_wgsl!("shadow.wgsl"));
         let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -876,6 +903,7 @@ impl MeshRenderer {
         );
         Self {
             pipelines,
+            blended,
             views_layout,
             views_buffer,
             views_bind_group,
@@ -1139,10 +1167,18 @@ impl MeshRenderer {
         let mut pipeline = None;
         for run in &self.runs[self.view_runs[index].clone()] {
             let draw = &canvas.mesh_draws[run.draw as usize];
-            let wanted = (draw.double_sided, draw.mirrored);
+            let wanted = (draw.double_sided, draw.mirrored, draw.blend);
             if pipeline != Some(wanted) {
-                let [sides, winding] = [draw.double_sided, draw.mirrored].map(usize::from);
-                pass.set_pipeline(&self.pipelines[sides][winding]);
+                match draw.blend {
+                    Some(blend) => {
+                        let index = Blend::ALL.iter().position(|&b| b == blend).unwrap_or(0);
+                        pass.set_pipeline(&self.blended[index]);
+                    }
+                    None => {
+                        let [sides, winding] = [draw.double_sided, draw.mirrored].map(usize::from);
+                        pass.set_pipeline(&self.pipelines[sides][winding]);
+                    }
+                }
                 pipeline = Some(wanted);
             }
             let texture = draw.texture.as_ref().unwrap_or(white);

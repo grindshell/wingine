@@ -335,6 +335,33 @@ path, so emitters alike look different, and a scene plays the same every time. A
 [`examples/bonfire`](../examples/bonfire) is a night made of them: stars, smoke, flames, sparks and
 fireflies.
 
+A particles node may be in a [3D view](#3d-views) too, placed in 3D as its other nodes are. Its
+particles fly along its `+z`, from a box `width` by `height` by `depth` about its origin, and are
+drawn among the view's meshes, as [particles in a 3D view](api/graphics.md#particles-in-a-3d-view)
+are: its `spread` is a cone's half angle, its `gravity` three numbers, and it has a `look`,
+`streak`, `lit`, `glow` and `bounce`, and for a `look` of `"mesh"`, a `shape`, `size` and `radius`
+as a mesh node has. Those fields, outside a view, are an error. Moving the node and calling
+[`node:emit`](api/scene.md#nodeemit) sends a burst out from wherever it is then, so one emitter
+serves every place something happens. [`examples/cellar`](../examples/cellar)'s candles smoke.
+
+```lua
+{
+    name = "sparks",
+    kind = "particles",
+    emitting = false,
+    lifetime = { 0.12, 0.3 },
+    speed = { 4, 10 },
+    spread = 1.1,
+    gravity = { 0, -6, 0 },
+    drag = 4,
+    scales = { 0.022, 0 },
+    colors = { "#fff0c0", "#ff8a3000" },
+    blend = "add",
+    look = "streak",
+    streak = 0.025,
+},
+```
+
 ## Tilemaps
 
 A `tilemap` node is a grid of `columns` by `rows` tiles, with its top-left corner at the node's
@@ -593,6 +620,7 @@ The world is right-handed with `y` up, as glTF's is. The kinds of node in it:
   the other every way, it lights only within that box, faces and all, which is in the
   coordinates its node's `x`, `y` and `z` are in. It moves and turns with its node, but doesn't
   stretch; its box moves, turns and stretches with its node's parent.
+- **`particles`**: an emitter whose particles fly in the view: see [Particles](#particles).
 - **`node`** and **`instance`**: a place, and a scene file placed here, as in the 2D scene. A
   prop can be a scene of its own, of meshes or models, placed into levels by instances and changed
   by overrides.
@@ -603,8 +631,8 @@ Nodes in a view are placed in 3D, by `x`, `y` and `z`; `yaw`, `pitch` and `roll`
 about its origin, as [`graphics.draw_mesh`](api/graphics.md#graphicsdraw_mesh) places a mesh, and
 its children with it. They have no `rotation` or `anchor`, which are the 2D scene's.
 
-Only views hold meshes, models, billboards and lights, and views hold only them, plain nodes and
-instances: a sprite in a view, or a mesh outside one, is an error naming the node. That's checked
+Only views hold meshes, models, billboards and lights, and views hold only them, particles, plain
+nodes and instances: a sprite in a view, or a mesh outside one, is an error naming the node. That's checked
 once instances have placed their scenes, so a prop's own file can hold a model at its top, and be
 placed in a view. Plain nodes there are placed in 3D too, at the defaults if their file doesn't
 say.

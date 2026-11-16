@@ -153,6 +153,13 @@
 //!   area's, `width` by `height` (0 by 0, a point, by default) with a `stretch`. With a `sheet` and
 //!   a `cell`, each particle shows that sprite; without, a white square. Its particles draw where
 //!   it is among the scene's nodes. Its randomness starts from its path, unless it has a `seed`.
+//!   In a view, it's a [`Particles3d`]: placed in 3D, sending particles along its `+z` from a box
+//!   `width` by `height` by `depth` about its origin, its `gravity` of three numbers and its
+//!   `spread` a cone's half angle, with the fields of
+//!   [`ParticleSettings3d`](crate::particles::ParticleSettings3d) only a view's have, `look`,
+//!   `streak`, `lit`, `glow` and `bounce`, and a mesh's `shape`, `size` and `radius` for a `look`
+//!   of `"mesh"` ([`ViewParticlesDef`]); those, outside a view, are an error. Its particles draw
+//!   among the view's meshes.
 //! - `tilemap`: a grid of `columns` by `rows` tiles from the tileset file `tileset`, with its
 //!   top-left corner at the node's origin. Its layers are its children of the kind `tile_layer`,
 //!   which draw in order with its other children, so a node can draw between two layers, such
@@ -210,11 +217,11 @@
 //! turned by `yaw`, `pitch` and `roll`, radians about `y`, `x` and `z`, and stretched by `scale_x`,
 //! `scale_y` and `scale_z`, composed as `graphics.draw_mesh`'s options are: stretched, rolled,
 //! pitched, turned, then moved. They have no `rotation` or `anchor` ([`NodeDef::placement3`]).
-//! Plain nodes and instances can be in views too, so a prop can be a scene file of its own, whose
-//! nodes an instance places in a view: a file reads nodes as placed in 3D if they're of the kinds
-//! only views hold, inside a view or a node placed in 3D, or have fields only those nodes have.
-//! Once instances have placed their scenes, a mesh, model, billboard or light anywhere but in a
-//! view is an error, as is a node of another kind in one, naming the node.
+//! Plain nodes, instances and particles can be in views too, so a prop can be a scene file of its
+//! own, whose nodes an instance places in a view: a file reads nodes as placed in 3D if they're of
+//! the kinds only views hold, inside a view or a node placed in 3D, or have fields only those
+//! nodes have. Once instances have placed their scenes, a mesh, model, billboard or light anywhere
+//! but in a view is an error, as is a node of another kind in one, naming the node.
 //!
 //! What a sprite, rect, text or area shows has its top-left corner at the node's origin, unless
 //! it has a `pivot`: the point of it, from its top-left corner, `{ x, y }`, that's at the origin
@@ -442,8 +449,12 @@ pub use file::{
     KindDef, LightDef, MeshDef, ModelDef, NodeDef, PanelDef, PanelFill, PanelLookDef, ParticlesDef,
     Placement3, Props, RectDef, SceneFile, Shape, SheetDef, SpriteDef, Stack, StackDirection,
     TextDef, TileDef, TileLayerDef, TilemapDef, TilesetFile, Value, VectorFontDef, View3dDef,
+    ViewParticlesDef,
 };
-pub(crate) use file::{evaluate_any, particle_settings, particle_settings_value, plain};
+pub(crate) use file::{
+    evaluate_any, is_3d_settings, particle_settings, particle_settings_3d,
+    particle_settings_3d_value, particle_settings_value, plain,
+};
 pub(crate) use writer::write_value;
 
 use crate::{
@@ -454,7 +465,7 @@ use crate::{
     },
     lua::check_tilemap_size,
     math::{Affine, Affine3, Bounds3, Rect, add3, scale3},
-    particles::{ParticleSettings, Particles, seed_for},
+    particles::{Look, ParticleSettings, Particles, Particles3d, seed_for},
     save,
     tilemap::{Tile, TileId, Tilemap, Tileset},
 };
@@ -695,15 +706,18 @@ pub enum Kind {
     Particles(ParticlesNode),
 }
 
-/// An emitter of particles, sending them out from a rectangle laid out as an area's.
+/// An emitter of particles, sending them out from a rectangle laid out as an area's; or in a 3D
+/// view, from a box about its origin, along its `+z`.
 #[derive(Clone, Debug)]
 pub struct ParticlesNode {
-    pub particles: Particles,
+    pub particles: Emitter,
     /// The sheet its particles' sprite is from, whose cells they show with
     /// [`ParticlesNode::set_cell`] and clips.
     pub sheet: Option<SpriteSheet>,
-    /// The rectangle particles start in.
+    /// The rectangle particles start in; in a view, the box's width and height.
     pub size: [f32; 2],
+    /// In a view, the depth of the box particles start in.
+    pub depth: f32,
     /// As a rect's.
     pub stretch: [f32; 2],
     /// As a sprite's.
@@ -717,6 +731,110 @@ impl ParticlesNode {
         let sprite = cell_of(self.sheet.as_ref(), cell)?;
         self.particles.set_sprite(Some(sprite));
         Ok(())
+    }
+}
+
+/// A particles node's emitter: a 2D one, or one in a 3D view.
+#[derive(Clone, Debug)]
+pub enum Emitter {
+    /// Each boxed, being large, so a node of another kind isn't as large as one of these.
+    Flat(Box<Particles>),
+    View(Box<Particles3d>),
+}
+
+impl Emitter {
+    /// How many particles are alive.
+    pub fn count(&self) -> usize {
+        match self {
+            Self::Flat(particles) => particles.count(),
+            Self::View(particles) => particles.count(),
+        }
+    }
+
+    /// Ends every particle's life at once.
+    pub fn clear(&mut self) {
+        match self {
+            Self::Flat(particles) => particles.clear(),
+            Self::View(particles) => particles.clear(),
+        }
+    }
+
+    /// Starts over, with no particles and its randomness from `seed`.
+    fn restart(&mut self, seed: u32) {
+        match self {
+            Self::Flat(particles) => particles.restart(seed),
+            Self::View(particles) => particles.restart(seed),
+        }
+    }
+
+    pub fn is_emitting(&self) -> bool {
+        match self {
+            Self::Flat(particles) => particles.is_emitting(),
+            Self::View(particles) => particles.is_emitting(),
+        }
+    }
+
+    pub fn set_emitting(&mut self, emitting: bool) {
+        match self {
+            Self::Flat(particles) => particles.set_emitting(emitting),
+            Self::View(particles) => particles.set_emitting(emitting),
+        }
+    }
+
+    pub fn sprite(&self) -> Option<&Sprite> {
+        match self {
+            Self::Flat(particles) => particles.sprite(),
+            Self::View(particles) => particles.sprite(),
+        }
+    }
+
+    pub fn set_sprite(&mut self, sprite: Option<Sprite>) {
+        match self {
+            Self::Flat(particles) => particles.set_sprite(sprite),
+            Self::View(particles) => particles.set_sprite(sprite),
+        }
+    }
+
+    /// The longest a particle lives, in seconds.
+    pub fn longest_life(&self) -> f32 {
+        match self {
+            Self::Flat(particles) => particles.longest_life(),
+            Self::View(particles) => particles.longest_life(),
+        }
+    }
+
+    /// Whether it sends out particles as `other` does: both 2D, or both in a view, with the same
+    /// settings.
+    pub fn sends_out_as(&self, other: &Emitter) -> bool {
+        match (self, other) {
+            (Self::Flat(a), Self::Flat(b)) => a.settings() == b.settings(),
+            (Self::View(a), Self::View(b)) => a.settings() == b.settings(),
+            _ => false,
+        }
+    }
+
+    /// The common settings of either: a 3D emitter's are its `common`.
+    pub fn common_settings(&self) -> &ParticleSettings {
+        match self {
+            Self::Flat(particles) => particles.settings(),
+            Self::View(particles) => &particles.settings().common,
+        }
+    }
+
+    /// The 2D emitter, if it's one.
+    pub fn flat(&self) -> Option<&Particles> {
+        match self {
+            Self::Flat(particles) => Some(&**particles),
+            Self::View(_) => None,
+        }
+    }
+
+    /// The 3D emitter, if it's one.
+    pub fn view(&self) -> Option<&Particles3d> {
+        match self {
+            Self::Flat(_) => None,
+            Self::View(particles) => Some(&**particles),
+        }
     }
 }
 
@@ -904,7 +1022,7 @@ impl Kind {
             Self::Rect(rect) => Some(rect.blend),
             Self::Text(text) => Some(text.blend),
             Self::TileLayer(layer) => Some(layer.blend),
-            Self::Particles(particles) => Some(particles.particles.settings().blend),
+            Self::Particles(particles) => Some(particles.particles.common_settings().blend),
             _ => None,
         }
     }
@@ -917,15 +1035,24 @@ impl Kind {
             Self::Rect(rect) => rect.blend = blend,
             Self::Text(text) => text.blend = blend,
             Self::TileLayer(layer) => layer.blend = blend,
-            Self::Particles(node) => {
-                let settings = ParticleSettings {
-                    blend,
-                    ..node.particles.settings().clone()
-                };
-                node.particles
-                    .set_settings(settings)
-                    .expect("only the blend mode changed");
-            }
+            Self::Particles(node) => match &mut node.particles {
+                Emitter::Flat(particles) => {
+                    let settings = ParticleSettings {
+                        blend,
+                        ..particles.settings().clone()
+                    };
+                    particles
+                        .set_settings(settings)
+                        .expect("only the blend mode changed");
+                }
+                Emitter::View(particles) => {
+                    let mut settings = particles.settings().clone();
+                    settings.common.blend = blend;
+                    particles
+                        .set_settings(settings)
+                        .expect("only the blend mode changed");
+                }
+            },
             _ => return None,
         }
         Some(())
@@ -1566,7 +1693,7 @@ impl Scene {
                 };
                 Kind::TileLayer(fill_layer(map, layer).map_err(|err| build.error(&path, &err))?)
             }
-            kind => build.kind(kind, &path)?,
+            kind => build.kind(kind, &path, in_3d)?,
         };
         let mut node = Node::new(def.name.clone(), kind);
         node.position = [def.x, def.y];
@@ -2526,11 +2653,26 @@ impl Scene {
     /// Particles advance whether their nodes are visible or not. Scenes keep no time of their
     /// own, so particles move only when a game advances them.
     pub fn advance_particles(&mut self, id: NodeId, dt: f32) {
-        let emitters: Vec<NodeId> = self
-            .descendants(id)
-            .into_iter()
-            .filter(|&node| matches!(self.node(node).kind, Kind::Particles(_)))
-            .collect();
+        let mut emitters: Vec<NodeId> = Vec::new();
+        for node in self.descendants(id) {
+            let Kind::Particles(particles) = &self.node(node).kind else {
+                continue;
+            };
+            if let Emitter::Flat(_) = particles.particles {
+                emitters.push(node);
+                continue;
+            }
+            // In a 3D view: from where it is in the view's world.
+            let at = self.transform_3d(node).unwrap_or(Affine3::IDENTITY);
+            if let Some(Kind::Particles(particles)) =
+                self.get_mut_unrevised(node).map(|node| &mut node.kind)
+                && let Emitter::View(emitter) = &mut particles.particles
+            {
+                let [width, height] = particles.size;
+                emitter.set_origin(at, [width, height, particles.depth]);
+                emitter.advance(dt);
+            }
+        }
         if emitters.is_empty() {
             return;
         }
@@ -2555,7 +2697,9 @@ impl Scene {
             else {
                 continue;
             };
-            let particles = &mut particles.particles;
+            let Emitter::Flat(particles) = &mut particles.particles else {
+                continue;
+            };
             particles.set_origin(at.transform, at.rect.unwrap_or_default());
             particles.advance(dt);
         }
@@ -2596,25 +2740,34 @@ impl Scene {
         }
     }
 
-    /// The particles of `id`, if it's a particles node, sending them out from where it's laid
-    /// out now.
-    fn placed_particles(&mut self, id: NodeId) -> Option<&mut Particles> {
-        if !matches!(self.get(id)?.kind, Kind::Particles(_)) {
+    /// Sends `count` particles out at once from `id`, a particles node, where it's laid out now,
+    /// or in a 3D view, where it's placed in the view's world now, as [`Particles::emit`] does.
+    /// `None` if it isn't a particles node.
+    pub fn emit(&mut self, id: NodeId, count: u32) -> Option<()> {
+        let Kind::Particles(node) = &self.get(id)?.kind else {
             return None;
+        };
+        if let Emitter::View(_) = node.particles {
+            let at = self.transform_3d(id).unwrap_or(Affine3::IDENTITY);
+            let Kind::Particles(node) = &mut self.get_mut_unrevised(id)?.kind else {
+                return None;
+            };
+            let [width, height] = node.size;
+            let depth = node.depth;
+            if let Emitter::View(particles) = &mut node.particles {
+                particles.set_origin(at, [width, height, depth]);
+                particles.emit(count);
+            }
+            return Some(());
         }
         let placed = self.placed(id);
         let Kind::Particles(node) = &mut self.get_mut_unrevised(id)?.kind else {
             return None;
         };
-        let area = placed.rect.unwrap_or_default();
-        node.particles.set_origin(placed.transform, area);
-        Some(&mut node.particles)
-    }
-
-    /// Sends `count` particles out at once from `id`, a particles node, where it's laid out now,
-    /// as [`Particles::emit`] does. `None` if it isn't a particles node.
-    pub fn emit(&mut self, id: NodeId, count: u32) -> Option<()> {
-        self.placed_particles(id)?.emit(count);
+        if let Emitter::Flat(particles) = &mut node.particles {
+            particles.set_origin(placed.transform, placed.rect.unwrap_or_default());
+            particles.emit(count);
+        }
         Some(())
     }
 
@@ -2691,7 +2844,9 @@ impl Scene {
             match &node.kind {
                 Kind::Particles(particles) => {
                     // Particles fly out of their rectangle, so each is culled on its own.
-                    canvas.draw_particles_from(&particles.particles, transform);
+                    if let Emitter::Flat(particles) = &particles.particles {
+                        canvas.draw_particles_from(particles, transform);
+                    }
                 }
                 Kind::Sprite(sprite) => {
                     if transform.bounds(rect).overlaps(&visible) {
@@ -2804,6 +2959,10 @@ impl Scene {
                     billboard.tint,
                 );
             }
+            Kind::Particles(ParticlesNode {
+                particles: Emitter::View(particles),
+                ..
+            }) => world.draw_particles(particles, transform),
             // A spot light shines the way its node's front faces, and a light's box is in its
             // parent's coordinates. A box placed with no room in it lights nothing.
             Kind::Light(light) => {
@@ -2867,8 +3026,8 @@ fn check_3d(def: &NodeDef, in_3d: bool) -> Result<(), String> {
     if in_3d {
         if !file::can_be_3d(kind) {
             return Err(format!(
-                "{} can't be in a 3D view, which holds only mesh, model, billboard, light and \
-                 plain nodes, and instances of scenes of them",
+                "{} can't be in a 3D view, which holds only mesh, model, billboard, light, \
+                 particles and plain nodes, and instances of scenes of them",
                 a_node_of(kind)
             ));
         }
@@ -2884,6 +3043,14 @@ fn check_3d(def: &NodeDef, in_3d: bool) -> Result<(), String> {
             "{} is only in a 3D view: put it inside a view3d node",
             a_node_of(kind)
         ));
+    } else if let KindDef::Particles(particles) = &def.kind
+        && particles.view != ViewParticlesDef::default()
+    {
+        return Err(
+            "a particles node's `depth`, `look`, `streak`, `shape`, `lit`, `glow`, \
+                    `bounce` and `gravity` of three numbers are only in a 3D view"
+                .into(),
+        );
     } else if def.placement3.is_some() {
         return Err(
             "only nodes in 3D views are placed in 3D, with `z`, `yaw`, `pitch`, `roll` \
@@ -3353,8 +3520,8 @@ impl Build<'_> {
         Ok(font)
     }
 
-    /// What the node at `node` shows, as `def` describes it.
-    fn kind(&mut self, def: &KindDef, node: &str) -> Result<Kind> {
+    /// What the node at `node` shows, as `def` describes it, placed in 3D if `in_3d`.
+    fn kind(&mut self, def: &KindDef, node: &str, in_3d: bool) -> Result<Kind> {
         let kind = match def {
             KindDef::Node | KindDef::Instance(_) => Kind::Node,
             KindDef::Sprite(sprite) => {
@@ -3480,12 +3647,25 @@ impl Build<'_> {
                 };
                 // Seeded by the node's path, so emitters alike differ, but each plays the same
                 // every time.
-                let particles = Particles::try_new(def.settings.clone(), sprite, seed_for(node))
-                    .map_err(|err| self.error(node, &err))?;
+                let particles = if in_3d {
+                    let mut particles =
+                        Particles3d::try_new(def.settings_3d(), sprite, seed_for(node))
+                            .map_err(|err| self.error(node, &err))?;
+                    if def.view.look == Look::Mesh {
+                        particles.set_mesh(Some(self.mesh(&def.view.shape)?));
+                    }
+                    Emitter::View(Box::new(particles))
+                } else {
+                    let particles =
+                        Particles::try_new(def.settings.clone(), sprite, seed_for(node))
+                            .map_err(|err| self.error(node, &err))?;
+                    Emitter::Flat(Box::new(particles))
+                };
                 Kind::Particles(ParticlesNode {
                     particles,
                     sheet,
                     size: def.size,
+                    depth: def.view.depth,
                     stretch: def.stretch,
                     pivot: def.pivot,
                 })

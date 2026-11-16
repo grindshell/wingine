@@ -20,7 +20,7 @@ use wingine::{
     },
     headless::{Comparison, Headless, Image},
     math::{Affine, Affine3, Bounds3, Rect},
-    particles::{ParticleSettings, Particles},
+    particles::{Look, ParticleSettings, ParticleSettings3d, Particles, Particles3d},
     scene::{Assets, Scene, SceneFile, Shape, TilesetFile},
     tilemap::{Tile, Tilemap, Tileset},
 };
@@ -2645,6 +2645,120 @@ fn gui_textures_blend_as_egui_does() {
         (180..=196).contains(&r) && g == 0 && b == 0,
         "{r}, {g}, {b}"
     );
+}
+
+/// Particles in a 3D view, each kind of look at once: a shower of streaks added over a dark wall,
+/// a wall standing in front of part of it hiding those behind it; a puff of billboards, blended
+/// normally and fading as they age, in front of the streaks and showing them through it; and lit
+/// cubes, opaque, tumbling where the view's light falls on them. The view's fog fades the
+/// farthest of everything.
+#[test]
+fn particles_in_a_view() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let cube = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let common = |settings: ParticleSettings| ParticleSettings {
+        rate: 0.0,
+        emitting: false,
+        ..settings
+    };
+    // Straight out of the wall, at z = -1, toward the camera.
+    let toward = Affine3::from_translation([0.4, 0.4, -0.95]);
+    let mut sparks = Particles3d::new(
+        ParticleSettings3d {
+            common: common(ParticleSettings {
+                lifetime: [2.0, 2.0],
+                speed: [1.5, 3.0],
+                spread: 1.0,
+                scales: vec![0.05],
+                colors: vec![Color::rgb8(0xff, 0xc0, 0x50)],
+                blend: Blend::Add,
+                ..ParticleSettings::default()
+            }),
+            gravity: [0.0, -4.0, 0.0],
+            look: Look::Streak,
+            streak: 0.08,
+            ..ParticleSettings3d::default()
+        },
+        None,
+        1,
+    );
+    sparks.set_origin(toward, [0.0; 3]);
+    sparks.emit(40);
+    let mut puff = Particles3d::new(
+        ParticleSettings3d {
+            common: common(ParticleSettings {
+                lifetime: [0.6, 1.2],
+                speed: [0.2, 0.6],
+                scales: vec![0.3, 0.6],
+                colors: vec![
+                    Color::rgba8(0xc0, 0xc0, 0xc8, 0xd0),
+                    Color::rgba8(0xc0, 0xc0, 0xc8, 0),
+                ],
+                ..ParticleSettings::default()
+            }),
+            ..ParticleSettings3d::default()
+        },
+        None,
+        2,
+    );
+    puff.set_origin(Affine3::from_translation([0.0, 0.4, 0.2]), [0.3; 3]);
+    puff.emit(12);
+    let mut chips = Particles3d::new(
+        ParticleSettings3d {
+            common: common(ParticleSettings {
+                lifetime: [5.0, 5.0],
+                speed: [0.3, 0.8],
+                spin: [2.0, 6.0],
+                scales: vec![0.12],
+                colors: vec![Color::rgb8(0xb0, 0x80, 0x50)],
+                ..ParticleSettings::default()
+            }),
+            look: Look::Mesh,
+            lit: true,
+            ..ParticleSettings3d::default()
+        },
+        None,
+        3,
+    );
+    chips.set_mesh(Some(cube.clone()));
+    chips.set_origin(Affine3::from_translation([0.0, -0.6, 0.5]), [0.6, 0.2, 0.2]);
+    chips.emit(10);
+    for particles in [&mut sparks, &mut puff, &mut chips] {
+        for _ in 0..12 {
+            particles.advance(wingine::particles::STEP);
+        }
+    }
+    let draw = |canvas: &mut Canvas| {
+        canvas.clear(Color::rgb8(0x08, 0x08, 0x0c));
+        let camera = Camera3d::perspective([0.0, 0.3, 3.0], [0.0, 0.0, -0.5], 0.9);
+        let view = View3d {
+            lighting: Lighting {
+                direction: [-0.4, -1.0, -0.5],
+                color: Color::rgb8(0xa0, 0xa0, 0xa0),
+                ambient: Color::rgb8(0x30, 0x30, 0x38),
+            },
+            fog: Some(Fog {
+                color: Color::rgb8(0x08, 0x08, 0x0c),
+                near: 3.0,
+                far: 6.0,
+            }),
+            ..View3d::new(camera, Rect::new(0.0, 0.0, 96.0, 64.0))
+        };
+        let mut view = canvas.begin_3d(view);
+        let wall =
+            Affine3::from_translation([0.0, 0.0, -1.5]) * Affine3::from_scale([4.0, 3.0, 1.0]);
+        view.draw_mesh(&cube, wall, None, Color::rgb8(0x40, 0x40, 0x48));
+        // Standing in front of the shower's right, hiding what's behind it.
+        let post =
+            Affine3::from_translation([0.6, 0.0, -0.4]) * Affine3::from_scale([0.2, 2.0, 0.2]);
+        view.draw_mesh(&cube, post, None, Color::rgb8(0x60, 0x50, 0x40));
+        view.draw_particles(&sparks, Affine3::IDENTITY);
+        view.draw_particles(&puff, Affine3::IDENTITY);
+        view.draw_particles(&chips, Affine3::IDENTITY);
+    };
+    let frame = headless.render(96, 64, draw).unwrap();
+    assert_screenshot(&headless.adapter_name(), "particles_in_a_view", frame);
 }
 
 fn headless() -> Headless {

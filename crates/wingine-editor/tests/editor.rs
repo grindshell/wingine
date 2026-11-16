@@ -1039,7 +1039,8 @@ fn a_preview_built_again_keeps_its_particles_going() {
         let wingine::scene::Kind::Particles(node) = scene.node(id).kind() else {
             panic!("sparks are particles");
         };
-        let positions: Vec<[f32; 2]> = node.particles.positions().collect();
+        let particles = node.particles.flat().expect("2D sparks");
+        let positions: Vec<[f32; 2]> = particles.positions().collect();
         (id, positions)
     };
     let (id, before) = sparks(&simulation);

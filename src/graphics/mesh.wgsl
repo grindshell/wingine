@@ -182,6 +182,47 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @locatio
     if color.a < 0.5 {
         discard;
     }
+    let shown = shade(in, front_facing, color.rgb, emitted);
+    return vec4<f32>(mix(shown, view.fog_color.rgb, fog_amount(in.world.xyz)), 1.0);
+}
+
+// What a blended pixel fades to in fog, set as its pipeline is made: 0 the fog's color, for one
+// blended normally, which covers what's behind it; 1 black, for one that adds or screens, which
+// then adds nothing; 2 white, for one that multiplies, which then darkens nothing.
+override fades_to: u32 = 0u;
+
+// A blended mesh's pixel, which only particles are: shaded as an opaque one is, whatever its
+// alpha, and given as a premultiplied color, as blending wants.
+@fragment
+fn fs_blended(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    let color = textureSample(mesh_texture, mesh_sampler, in.uv) * in.color;
+    let emitted = in.emission * textureSample(emission_texture, emission_sampler, in.uv).rgb;
+    let shown = shade(in, front_facing, color.rgb, emitted);
+    var toward = view.fog_color.rgb;
+    if fades_to == 1u {
+        toward = vec3<f32>(0.0);
+    } else if fades_to == 2u {
+        toward = vec3<f32>(1.0);
+    }
+    let fogged = mix(shown, toward, fog_amount(in.world.xyz));
+    return vec4<f32>(fogged * color.a, color.a);
+}
+
+// How much of what's at `world` the view's fog hides, from 0 to 1: none nearer than where it
+// begins, all at where it's whole, and in a straight line between, from where the camera is, or
+// for an orthographic camera, which is nowhere, by how far ahead of it. None without fog.
+fn fog_amount(world: vec3<f32>) -> f32 {
+    if view.fog_color.a < 0.5 {
+        return 0.0;
+    }
+    let away = world - view.eye.xyz;
+    let distance = select(length(away), dot(away, view.eye_forward.xyz), view.eye_forward.w > 0.5);
+    return clamp((distance - view.fog.x) * view.fog.y, 0.0, 1.0);
+}
+
+// What a pixel of `color`, giving off `emitted`, shows before fog: lit by the view's sun,
+// ambient light and lights, and glowing.
+fn shade(in: VertexOut, front_facing: bool, color: vec3<f32>, emitted: vec3<f32>) -> vec3<f32> {
     // Only double-sided meshes show their backs, which are lit as though they faced the other way.
     var normal = select(-in.normal, in.normal, front_facing);
     var facing = 0.0;
@@ -237,22 +278,8 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @locatio
     }
     // What it gives off, and how much of its own colors it shows, whatever lights it: added to
     // what light shows of it, unshaded, and as bright as white at most, as light is.
-    var shown = min(
-        color.rgb * min(light, vec3<f32>(1.0)) + emitted + color.rgb * in.glow,
+    return min(
+        color * min(light, vec3<f32>(1.0)) + emitted + color * in.glow,
         vec3<f32>(1.0),
     );
-    if view.fog_color.a > 0.5 {
-        // It fades to the fog's color with how far it is from the camera, in a straight line
-        // from where the fog begins to where there's nothing else: from where the camera is,
-        // or for an orthographic camera, which is nowhere, by how far ahead of it.
-        let away = in.world.xyz - view.eye.xyz;
-        let distance = select(
-            length(away),
-            dot(away, view.eye_forward.xyz),
-            view.eye_forward.w > 0.5,
-        );
-        let amount = clamp((distance - view.fog.x) * view.fog.y, 0.0, 1.0);
-        shown = mix(shown, view.fog_color.rgb, amount);
-    }
-    return vec4<f32>(shown, 1.0);
 }

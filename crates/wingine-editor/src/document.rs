@@ -676,12 +676,11 @@ fn carry_particles(scene: &mut Scene, mut old: Option<Scene>) {
         let Kind::Particles(node) = scene.node(id).kind() else {
             continue;
         };
-        let settings = node.particles.settings();
         let path = scene.path(id);
         let carried = old.as_mut().and_then(|old| {
             let at = old.find(old.root(), &path)?;
             match old.get(at)?.kind() {
-                Kind::Particles(was) if was.particles.settings() == settings => {
+                Kind::Particles(was) if was.particles.sends_out_as(&node.particles) => {
                     Some(was.particles.clone())
                 }
                 _ => None,

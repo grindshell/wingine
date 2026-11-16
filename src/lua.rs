@@ -98,6 +98,12 @@
 //!   `particles:set_position(x, y)`, `particles:set_rotation(angle)`, `particles:settings()`
 //!   (every setting, colors as hex strings with alpha), `particles:set_settings(settings)` (those
 //!   given, keeping the rest) and `particles:set_sprite(sprite)` (or `nil` for squares).
+//! - [`Particles3d`] are userdata too, an emitter for a 3D view, from `graphics.new_particles`
+//!   with settings that say how its particles `look` or give `gravity` three numbers
+//!   (`crate::scene::particle_settings_3d`), and a sprite or a mesh. They have a 2D emitter's
+//!   methods but `position()`, a vector, `set_position(vector)`, and
+//!   `set_orientation(yaw, pitch, roll)` in place of `set_rotation`, and `set_mesh(mesh)`.
+//!   `graphics.draw_particles` draws one in the view begun last.
 //! - 3D positions and directions are Luau vectors, `vector.create(x, y, z)`. A [`Camera3d`] is a
 //!   table `{ position, target, up, fov, height, near, far }`: `position` and `target` are
 //!   vectors, and the rest optional, `fov` (radians, for perspective, 0.8 by default) and
@@ -293,12 +299,12 @@ use crate::{
     grid::{Direction, GridMover},
     input::{Control, GamepadButton, Key, MouseButton},
     math::{Affine, Affine3, Bounds3, Rect},
-    particles::Particles,
+    particles::{Particles, Particles3d},
     scene::{
-        AreaNode, BillboardNode, Clip, Kind, LightDef, MeshNode, ModelNode, Node, NodeId,
+        AreaNode, BillboardNode, Clip, Emitter, Kind, LightDef, MeshNode, ModelNode, Node, NodeId,
         PanelFill, PanelLook, PanelNode, ParticlesNode, Placement3, Props, RectNode, Scene,
         SpriteNode, TextNode, TilemapNode, Value, View3dNode, a_node_of, particle_settings,
-        particle_settings_value, plain,
+        particle_settings_3d, particle_settings_3d_value, particle_settings_value, plain,
     },
     tilemap::{Tile, TileId, Tilemap, Tileset},
 };
@@ -1784,6 +1790,88 @@ impl mlua::UserData for Particles {
     }
 }
 
+/// An emitter in a 3D view, from `graphics.new_particles`: as a 2D one, placed and turned in 3D.
+impl mlua::UserData for Particles3d {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method_mut("emit", |_, particles, count: u32| {
+            particles.emit(count);
+            Ok(())
+        });
+        methods.add_method_mut("advance", |_, particles, dt: f32| {
+            check_dt(dt)?;
+            particles.advance(dt);
+            Ok(())
+        });
+        methods.add_method("count", |_, particles, ()| Ok(particles.count()));
+        methods.add_method_mut("clear", |_, particles, ()| {
+            particles.clear();
+            Ok(())
+        });
+        methods.add_method(
+            "is_emitting",
+            |_, particles, ()| Ok(particles.is_emitting()),
+        );
+        methods.add_method_mut("set_emitting", |_, particles, emitting: bool| {
+            particles.set_emitting(emitting);
+            Ok(())
+        });
+        methods.add_method("position", |_, particles, ()| {
+            Ok(vector(particles.origin().translation))
+        });
+        methods.add_method_mut("set_position", |_, particles, position: mlua::Vector| {
+            let at = vector3(position);
+            check_finite(&at, "a position")?;
+            let origin = Affine3 {
+                translation: at,
+                ..particles.origin()
+            };
+            particles.set_origin(origin, [0.0; 3]);
+            Ok(())
+        });
+        // Turned as a node in a view is: rolled, then pitched, then turned about `y`.
+        methods.add_method_mut(
+            "set_orientation",
+            |_, particles, (yaw, pitch, roll): (f32, Option<f32>, Option<f32>)| {
+                let [pitch, roll] = [pitch.unwrap_or(0.0), roll.unwrap_or(0.0)];
+                check_finite(&[yaw, pitch, roll], "an orientation")?;
+                let turned = Affine3::from_rotation_y(yaw)
+                    * Affine3::from_rotation_x(pitch)
+                    * Affine3::from_rotation_z(roll);
+                let origin = Affine3 {
+                    translation: particles.origin().translation,
+                    ..turned
+                };
+                particles.set_origin(origin, [0.0; 3]);
+                Ok(())
+            },
+        );
+        methods.add_method("settings", |lua, particles, ()| {
+            (&particle_settings_3d_value(particles.settings())).into_lua(lua)
+        });
+        methods.add_method_mut("set_settings", |_, particles, change: mlua::Table| {
+            let change =
+                plain(mlua::Value::Table(change), "the settings").map_err(mlua::Error::runtime)?;
+            particle_settings_3d(change, particles.settings())
+                .and_then(|settings| particles.set_settings(settings))
+                .map_err(mlua::Error::runtime)
+        });
+        methods.add_method_mut(
+            "set_sprite",
+            |_, particles, sprite: Option<mlua::UserDataRef<Sprite>>| {
+                particles.set_sprite(sprite.map(|sprite| Sprite::clone(&sprite)));
+                Ok(())
+            },
+        );
+        methods.add_method_mut(
+            "set_mesh",
+            |_, particles, mesh: Option<mlua::UserDataRef<Mesh>>| {
+                particles.set_mesh(mesh.map(|mesh| Mesh::clone(&mesh)));
+                Ok(())
+            },
+        );
+    }
+}
+
 /// Fails unless every one of `numbers` is finite, which positions and the like must be so the
 /// scene can be drawn, and written.
 fn check_finite(numbers: &[f32], what: &str) -> mlua::Result<()> {
@@ -2288,7 +2376,10 @@ impl mlua::UserData for SceneNode {
         });
         methods.add_method("particle_settings", |lua, node, ()| {
             let settings = node.read_kind("particles", |kind| match kind {
-                Kind::Particles(node) => Some(particle_settings_value(node.particles.settings())),
+                Kind::Particles(node) => Some(match &node.particles {
+                    Emitter::Flat(particles) => particle_settings_value(particles.settings()),
+                    Emitter::View(particles) => particle_settings_3d_value(particles.settings()),
+                }),
                 _ => None,
             })?;
             (&settings).into_lua(lua)
@@ -2297,10 +2388,12 @@ impl mlua::UserData for SceneNode {
             let change =
                 plain(mlua::Value::Table(change), "the settings").map_err(mlua::Error::runtime)?;
             node.write_kind("particles", |kind| match kind {
-                Kind::Particles(node) => Some(
-                    particle_settings(change, node.particles.settings())
-                        .and_then(|settings| node.particles.set_settings(settings)),
-                ),
+                Kind::Particles(node) => Some(match &mut node.particles {
+                    Emitter::Flat(particles) => particle_settings(change, particles.settings())
+                        .and_then(|settings| particles.set_settings(settings)),
+                    Emitter::View(particles) => particle_settings_3d(change, particles.settings())
+                        .and_then(|settings| particles.set_settings(settings)),
+                }),
                 _ => None,
             })?
             .map_err(mlua::Error::runtime)

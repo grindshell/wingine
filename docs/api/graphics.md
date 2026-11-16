@@ -691,25 +691,77 @@ are split into steps of at most a sixtieth of a second, so particles move alike 
 Starting particles takes its sines from [`exact`](exact.md)'s math, so a game advancing its
 emitters by the same steps gets the same particles on every platform.
 
+### Particles in a 3D view
+
+An emitter in a [3D view](#3d-views) flies its particles in three dimensions, among the view's
+meshes, which hide those behind them. Its settings are those above, read in 3D, and those below.
+Its particles fly along the emitter's `+z`, as a spot light shines, so it has no `direction`, and
+`spread` is half the angle of the cone they fly in about it: 0 sends them all along it, and pi
+or more every way, as by default. `gravity` is `{ x, y, z }`, and a particle's `scales` are its
+width in world units, its height as its sprite's shape makes it. They cast no shadows, and fade
+into the view's fog as everything does.
+
+| Setting | What it is | Default |
+|---|---|---|
+| `look` | What each particle is: `"billboard"`, its sprite or a square, facing the camera, turned by its angle; `"streak"`, the same stretched back along the way it's flying, from where it is, for sparks and rain; or `"mesh"`, its emitter's mesh, turned by its angle about an axis of its own. One with no mesh draws billboards. | `"billboard"` |
+| `streak` | A streak's length, for each world unit a second it's flying, added to its width. | `0.02` |
+| `lit` | Whether the view's light falls on its particles: billboards and streaks as billboards are, meshes as meshes. Unlit, they show their colors as they are, whatever lights them. | `false` |
+| `glow` | How much of their own colors lit particles show whatever lights them, as a [mesh's](#graphicsdraw_mesh). | `"#000000"` |
+| `bounce` | How much of its speed a particle keeps as it comes back off the plane it was sent out from, the plane through where the emitter was, square to its `+z`: chips knocked out of a floor land on it and bounce. `false`, as by default, passes through everything. | `false` |
+
+Particles that are blended normally and never less than wholly opaque draw with the view's
+meshes. The rest, those that fade or blend another way, draw after them: tested against what's
+nearer and hidden by it, but hiding nothing, so what's behind shows through them; those blended
+normally the farthest from the camera first. Meshes never blend; only particles do. Those that
+add or screen fade to nothing in fog, and those that multiply to white, so a spark far off adds
+nothing rather than the fog's color.
+
+```lua
+local sparks = wg.graphics.new_particles({
+    look = "streak", rate = 0, lifetime = { 0.1, 0.3 }, speed = { 4, 10 }, spread = 1.1,
+    gravity = { 0, -6, 0 }, drag = 4, scales = { 0.02, 0 }, colors = { "#fff0c0" }, blend = "add",
+})
+
+function update(dt: number)
+    if hit then
+        -- Out of the surface: an emitter's `+z` along its way out.
+        sparks:set_position(hit.point)
+        sparks:set_orientation(math.atan2(hit.normal.x, hit.normal.z), -math.asin(hit.normal.y))
+        sparks:emit(6)
+    end
+    sparks:advance(dt)
+end
+
+function draw()
+    wg.graphics.begin_3d(view)
+    -- ... the world's meshes ...
+    wg.graphics.draw_particles(sparks)
+end
+```
+
 ### `graphics.new_particles`
 
 ```lua
 wg.graphics.new_particles(settings: ParticleSettings?, sprite: Sprite?): Particles
+wg.graphics.new_particles(settings: ParticleSettings3d, shown: (Sprite | Mesh)?): Particles3d
 ```
 
 Returns an emitter with `settings`, at the origin, with no particles yet. Each particle shows
-`sprite`, centered on where it is, or without one, a white square. It works anywhere, and fails
-on a setting there isn't, or one out of range, saying which.
+`sprite`, centered on where it is, or without one, a white square. Settings that say how its
+particles `look`, or give `gravity` three numbers, make one for a 3D view, whose particles show a
+sprite, or are a mesh. It works anywhere, and fails on a setting there isn't, or one out of range,
+saying which.
 
 ### `graphics.draw_particles`
 
 ```lua
-wg.graphics.draw_particles(particles: Particles)
+wg.graphics.draw_particles(particles: Particles | Particles3d)
 ```
 
 Draws the emitter's particles, oldest first, in its blend mode, then goes back to the mode drawing
 was in. With a [camera](#graphicsset_camera) set, particles are in the world, as everything else
-drawn is.
+drawn is. A 3D emitter's draw in the [3D view](#3d-views) begun last, and a 2D one's can't: drawing
+either where the other goes is an error saying so.
 
 ### `Particles`
 
@@ -818,6 +870,47 @@ particles:set_sprite(sprite: Sprite?)
 ```
 
 Changes what its particles show, or with `nil`, white squares.
+
+### `Particles3d`
+
+An emitter for a 3D view, from `new_particles` with settings that say how its particles `look`.
+It has `emit`, `advance`, `count`, `clear`, `is_emitting`, `set_emitting`, `settings`,
+`set_settings` and `set_sprite`, as a 2D one's, with [3D settings](#particles-in-a-3d-view), and:
+
+#### `particles3d:position`
+
+```lua
+particles3d:position(): vector
+```
+
+Returns where it sends particles out from.
+
+#### `particles3d:set_position`
+
+```lua
+particles3d:set_position(position: vector)
+```
+
+Moves where it sends particles out from. Particles it sends out as it moves are spread along the
+way, the next time it advances.
+
+#### `particles3d:set_orientation`
+
+```lua
+particles3d:set_orientation(yaw: number, pitch: number?, roll: number?)
+```
+
+Turns it, as a node in a view turns: rolled, then pitched, then turned about `y`. Its particles
+fly along its `+z`, so a yaw of `atan2(x, z)` and a pitch of `-asin(y)` send them along the way
+`x`, `y`, `z`, of length 1.
+
+#### `particles3d:set_mesh`
+
+```lua
+particles3d:set_mesh(mesh: Mesh?)
+```
+
+Changes the mesh its particles are when they look like one.
 
 ## Text
 

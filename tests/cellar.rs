@@ -204,6 +204,19 @@ fn standing_on_every_candle_lights_them_all() {
     );
     let [red, green, blue, _] = glow.to_be_bytes();
     assert!(red > 190 && red > green && green > blue, "{glow:#x}");
+    // And it smokes, where the unlit ones don't.
+    simulation.run_for(0.5);
+    let smoke: (u32, u32) = simulation.eval(
+        "(function()
+            local lit, unlit = 0, 0
+            for _, candle in cellar.candles do
+                local count = candle.smoke:particle_count()
+                if candle.lit then lit += count else unlit += count end
+            end
+            return lit, unlit
+        end)()",
+    );
+    assert!(smoke.0 > 0 && smoke.1 == 0, "{smoke:?}");
     walk(&mut simulation, &[down, right, right, up, up, up, up]);
     assert_eq!(simulation.eval::<u32>("cellar.lit"), 2);
     // Standing on a lit candle again lights nothing more.

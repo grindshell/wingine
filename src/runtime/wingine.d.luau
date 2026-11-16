@@ -104,6 +104,50 @@ export type ParticleSettings = {
     attached: boolean?,
 }
 
+--- What a particle in a 3D view is drawn as: its sprite, or a square, facing the camera; the same
+--- stretched back along the way it flies; or its emitter's mesh, turned in 3D.
+export type Look = "billboard" | "streak" | "mesh"
+
+--- What an emitter in a 3D view sends out, and how its particles move and look: for
+--- `graphics.new_particles` and particles nodes in a view. As `ParticleSettings`, but that its
+--- particles fly along its `+z`, within a cone `spread` is half the angle of, so it has no
+--- `direction`; its `gravity` has three numbers; and its scales are widths in world units.
+export type ParticleSettings3d = {
+    --- What each particle is drawn as. A script's emitter is a 3D one by having it.
+    look: Look,
+    --- A streak's length, for each world unit a second it flies, added to its width. By default,
+    --- 0.02.
+    streak: number?,
+    --- Whether the view's light falls on its particles; unlit, they show their colors as they
+    --- are. By default, false.
+    lit: boolean?,
+    --- How much of their own colors lit particles show whatever lights them. By default, black.
+    glow: Color?,
+    --- How much of its speed a particle keeps as it bounces off the plane it was sent out from,
+    --- or `false` to pass through everything, as by default.
+    bounce: (number | boolean)?,
+    emitting: boolean?,
+    rate: number?,
+    limit: number?,
+    warmup: number?,
+    seed: number?,
+    lifetime: (number | { number })?,
+    speed: (number | { number })?,
+    --- Half the angle of the cone particles fly in, about the emitter's `+z`, in radians: pi or
+    --- more every way, as by default.
+    spread: number?,
+    --- How much faster particles fly each second, `{ x, y, z }`. By default, `{ 0, 0, 0 }`.
+    gravity: { number }?,
+    drag: number?,
+    angle: (number | { number })?,
+    spin: (number | { number })?,
+    --- A particle's widths over its life, in world units. By default, `{ 1 }`.
+    scales: { number }?,
+    colors: { Color }?,
+    blend: Blend?,
+    attached: boolean?,
+}
+
 --- How `audio.play` plays a sound.
 export type PlaySettings = {
     --- Linear volume: 1 is as recorded. By default, 1.
@@ -654,6 +698,39 @@ declare extern type Particles with
     function set_sprite(self, sprite: Sprite?): ()
 end
 
+--- An emitter of particles in a 3D view, from `graphics.new_particles` with settings that say
+--- how its particles `look`, which `graphics.draw_particles` draws in the view begun last. It
+--- doesn't keep time: games advance it.
+declare extern type Particles3d with
+    --- Sends `count` particles out at once from where it is, emitting or not.
+    function emit(self, count: number): ()
+    --- Moves its particles on by `dt` seconds, and sends new ones out at its rate while emitting.
+    function advance(self, dt: number): ()
+    --- Returns how many particles are alive.
+    function count(self): number
+    --- Ends every particle's life at once.
+    function clear(self): ()
+    --- Returns whether it sends particles out at its rate.
+    function is_emitting(self): boolean
+    --- Starts or stops sending particles out at its rate.
+    function set_emitting(self, emitting: boolean): ()
+    --- Returns where it sends particles out from.
+    function position(self): vector
+    --- Moves where it sends particles out from.
+    function set_position(self, position: vector): ()
+    --- Turns it, as a node in a view turns, which turns the way its particles fly: along its
+    --- `+z`.
+    function set_orientation(self, yaw: number, pitch: number?, roll: number?): ()
+    --- Returns its settings, every one of them.
+    function settings(self): ParticleSettings3d
+    --- Changes the settings `settings` has, keeping the rest and its particles.
+    function set_settings(self, settings: ParticleSettings3d): ()
+    --- Changes what its billboards and streaks show, or with `nil`, white squares.
+    function set_sprite(self, sprite: Sprite?): ()
+    --- Changes the mesh its particles are when they look like one.
+    function set_mesh(self, mesh: Mesh?): ()
+end
+
 --- A font to draw text with: the built-in pixel font, `graphics.default_font()`, or one from
 --- `graphics.load_font`.
 declare extern type Font with
@@ -914,10 +991,10 @@ declare extern type SceneNode with
     function is_emitting(self): boolean
     --- Starts or stops a particles node sending particles out at its rate.
     function set_emitting(self, emitting: boolean): ()
-    --- Returns a particles node's settings, every one of them.
-    function particle_settings(self): ParticleSettings
+    --- Returns a particles node's settings, every one of them: a 3D view's, for one in a view.
+    function particle_settings(self): ParticleSettings | ParticleSettings3d
     --- Changes the settings of a particles node that `settings` has, keeping the rest.
-    function set_particle_settings(self, settings: ParticleSettings): ()
+    function set_particle_settings(self, settings: ParticleSettings | ParticleSettings3d): ()
     --- Moves the particles of this node and every particles node inside it on by `dt` seconds,
     --- sending new ones out from where each node is now. Scenes keep no time, so games call it.
     function advance_particles(self, dt: number): ()
@@ -1168,11 +1245,13 @@ export type GraphicsApi = {
     set_camera: ((x: number, y: number, bounds: Rect?, zoom: number?) -> ()) & ((nothing: nil) -> ()),
     --- Blends what's drawn after with what's under it as `blend` says, until the frame ends.
     set_blend: (blend: Blend) -> (),
-    --- Returns an emitter of particles with `settings`, each showing `sprite` or a white square.
-    --- It works anywhere.
-    new_particles: (settings: ParticleSettings?, sprite: Sprite?) -> Particles,
-    --- Draws the particles of `particles`, in its blend mode.
-    draw_particles: (particles: Particles) -> (),
+    --- Returns an emitter of particles with `settings`, each showing `sprite` or a white square;
+    --- or with settings that say how its particles `look`, one for a 3D view, whose particles
+    --- show a sprite, or are a mesh. It works anywhere.
+    new_particles: ((settings: ParticleSettings?, sprite: Sprite?) -> Particles) & ((settings: ParticleSettings3d, shown: (Sprite | Mesh)?) -> Particles3d),
+    --- Draws the particles of `particles`, in its blend mode: a 3D emitter's in the 3D view begun
+    --- last, and a 2D one's anywhere else.
+    draw_particles: (particles: Particles | Particles3d) -> (),
     --- Returns the canvas's width and height in canvas pixels.
     size: () -> (number, number),
     --- Returns `color` as a number `0xRRGGBBAA`, the fastest way to pass it, with its alpha
