@@ -2,11 +2,13 @@
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use super::{excepted, followed, ray_distance};
+use super::{Tags, except_tagged, excepted, followed, ray_distance};
 use crate::{
     lua::{SceneNode, check_finite},
     math::{Affine, Rect},
-    physics::{Body, BodyKind, Character, ColliderId, Material, Pose, Shape, Solid, World},
+    physics::{
+        Body, BodyKind, Character, ColliderId, Material, Passing, Pose, Shape, Solid, World,
+    },
     scene::{Kind, NodeId, Scene},
 };
 
@@ -29,6 +31,8 @@ pub struct PhysicsWorld {
     by_node: HashMap<NodeId, usize>,
     /// The [`Scene::revision`] the colliders last followed their nodes at.
     followed: Option<u64>,
+    /// The tags its queries have named, which its colliders hold as bits.
+    tags: Tags,
 }
 
 /// A node of a [`PhysicsWorld`] with a collider.
@@ -437,6 +441,7 @@ impl PhysicsWorld {
             by_collider: HashMap::new(),
             by_node: HashMap::new(),
             followed: None,
+            tags: Tags::default(),
         }
     }
 
@@ -543,6 +548,11 @@ impl PhysicsWorld {
                 (collider, What::Body(Box::new(bodied)))
             }
         };
+        // Its node's tags, of those queries have named, which they go through it by.
+        let tags = self.tags.of(scene.node(id));
+        if tags != 0 {
+            self.world.set_tags(collider, tags);
+        }
         let covered = Covered {
             node: id,
             collider,
@@ -697,14 +707,58 @@ impl PhysicsWorld {
     fn query_nodes(
         &mut self,
         options: Option<&mlua::Table>,
-        query: impl FnOnce(&mut World, &[ColliderId]) -> Vec<ColliderId>,
+        query: impl FnOnce(&mut World, &Passing<ColliderId>) -> Vec<ColliderId>,
     ) -> mlua::Result<Vec<SceneNode>> {
-        let except = self.except(options)?;
-        let Some(scene) = self.followed()? else {
+        let Some((scene, found)) = self.passing(options, query)? else {
             return Ok(Vec::new());
         };
-        let found = query(&mut self.world, &except);
         Ok(self.nodes(&scene, &found))
+    }
+
+    /// Asks `ask` of its world, once the colliders have followed their nodes, going through what
+    /// a query's `options` say: the colliders of the nodes of `except`, and of the nodes tagged
+    /// with any of `except_tagged`. Returns the scene and the answer, or `None` if the world has
+    /// no nodes yet. Tags are read as the 3D world reads them
+    /// ([`PhysicsWorld3d`](super::PhysicsWorld3d)'s `passing`).
+    fn passing<T>(
+        &mut self,
+        options: Option<&mlua::Table>,
+        ask: impl FnOnce(&mut World, &Passing<ColliderId>) -> T,
+    ) -> mlua::Result<Option<(Rc<RefCell<Scene>>, T)>> {
+        let except = self.except(options)?;
+        let names = except_tagged(options)?;
+        let Some(scene) = self.followed()? else {
+            return Ok(None);
+        };
+        let answer = {
+            let borrowed = scene
+                .try_borrow()
+                .map_err(|_| mlua::Error::runtime("the scene is being changed"))?;
+            let (world, covered, by_collider) = (&mut self.world, &self.covered, &self.by_collider);
+            let (tags, past) = self.tags.named(&names, |name, bit| {
+                for one in covered {
+                    if borrowed.contains_node(one.node) && borrowed.node(one.node).has_tag(name) {
+                        let had = world.tags(one.collider);
+                        world.set_tags(one.collider, had | bit);
+                    }
+                }
+            });
+            // Tags past those with bits, asked of each collider's node by name.
+            let also = |collider: ColliderId| {
+                by_collider.get(&collider).is_some_and(|&index| {
+                    let node = covered[index].node;
+                    borrowed.contains_node(node)
+                        && past.iter().any(|tag| borrowed.node(node).has_tag(tag))
+                })
+            };
+            let passing = Passing {
+                except: &except,
+                tags,
+                also: if past.is_empty() { None } else { Some(&also) },
+            };
+            ask(world, &passing)
+        };
+        Ok(Some((scene, answer)))
     }
 }
 
@@ -974,11 +1028,12 @@ impl mlua::UserData for PhysicsWorld {
                     return Err(mlua::Error::runtime("a ray's direction can't be zero"));
                 }
                 let distance = ray_distance(options.as_ref())?;
-                let except = world.except(options.as_ref())?;
-                let Some(scene) = world.followed()? else {
+                let asked = world.passing(options.as_ref(), |world, passing| {
+                    world.cast_ray_passing([x, y], [dx, dy], distance, passing)
+                })?;
+                let Some((scene, hit)) = asked else {
                     return Ok(None);
                 };
-                let hit = world.world.cast_ray([x, y], [dx, dy], distance, &except);
                 let Some((hit, covered)) = hit.and_then(|hit| {
                     let covered = &world.covered[*world.by_collider.get(&hit.collider)?];
                     Some((hit, covered))
@@ -1003,8 +1058,8 @@ impl mlua::UserData for PhysicsWorld {
                     let message = format!("a circle's radius must be more than 0, not {radius}");
                     return Err(mlua::Error::runtime(message));
                 }
-                world.query_nodes(options.as_ref(), |world, except| {
-                    world.overlapping_circle([x, y], radius, except)
+                world.query_nodes(options.as_ref(), |world, passing| {
+                    world.overlapping_circle_passing([x, y], radius, passing)
                 })
             },
         );
@@ -1019,8 +1074,8 @@ impl mlua::UserData for PhysicsWorld {
                     );
                     return Err(mlua::Error::runtime(message));
                 }
-                world.query_nodes(options.as_ref(), |world, except| {
-                    world.overlapping(Affine::IDENTITY, area, except)
+                world.query_nodes(options.as_ref(), |world, passing| {
+                    world.overlapping_passing(Affine::IDENTITY, area, passing)
                 })
             },
         );

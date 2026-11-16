@@ -14,7 +14,7 @@ use rapier3d::{
     },
 };
 
-use super::{BodyKind, Material, STEP, check_material, check_sensor_kind, parts};
+use super::{BodyKind, Material, Passing, STEP, check_material, check_sensor_kind, parts};
 use crate::math::Bounds3;
 
 /// Rapier's vectors and rotations, which are glam's.
@@ -335,18 +335,44 @@ impl World3d {
                 bounce: old.restitution(),
             }
         });
+        // Its tags too, which queries go through it by.
+        let tags = self.tags(id);
         for handle in old {
             self.rapier.remove_collider(handle);
         }
         let made = made
             .density(weighed(kind, material.density))
             .friction(material.friction)
-            .restitution(material.bounce);
+            .restitution(material.bounce)
+            .user_data(tags);
         let collider = self
             .rapier
             .insert_collider(sensed(made, sensor), Some(id.0));
         self.fresh.push(collider);
         Ok(())
+    }
+
+    /// Gives the body `id` the tags `tags`, as bits, which a query whose [`Passing::tags`] share
+    /// one goes through, until they're set again: kept as it's reshaped. A body starts with none.
+    /// Does nothing to one that's been removed.
+    pub fn set_tags(&mut self, id: BodyId, tags: u128) {
+        let Some(body) = self.rapier.bodies.get(id.0) else {
+            return;
+        };
+        for &handle in body.colliders() {
+            self.rapier.colliders[handle].user_data = tags;
+        }
+    }
+
+    /// The tags of the body `id`, as [`World3d::set_tags`] gave them: none for one that's been
+    /// removed.
+    pub fn tags(&self, id: BodyId) -> u128 {
+        let Some(body) = self.rapier.bodies.get(id.0) else {
+            return 0;
+        };
+        body.colliders()
+            .first()
+            .map_or(0, |&handle| self.rapier.colliders[handle].user_data)
     }
 
     /// Removes the body `id`, if it hasn't been already.
@@ -603,10 +629,22 @@ impl World3d {
         max_distance: f32,
         except: &[BodyId],
     ) -> Option<RayHit3d> {
+        let passing = Passing::except(except);
+        self.cast_ray_passing(origin, direction, max_distance, &passing)
+    }
+
+    /// Casts a ray as [`World3d::cast_ray`] does, going through what `passing` says.
+    pub fn cast_ray_passing(
+        &mut self,
+        origin: [f32; 3],
+        direction: [f32; 3],
+        max_distance: f32,
+        passing: &Passing<BodyId>,
+    ) -> Option<RayHit3d> {
         self.refresh();
         let direction = Vector::from(direction);
         let ray = Ray::new(Vector::from(origin), direction);
-        let excepted = |_: ColliderHandle, collider: &Collider| !excepts(except, collider);
+        let excepted = |_: ColliderHandle, collider: &Collider| !passes(passing, collider);
         let filter = QueryFilter::default()
             .exclude_sensors()
             .predicate(&excepted);
@@ -639,9 +677,19 @@ impl World3d {
         shape: &Shape3d,
         except: &[BodyId],
     ) -> Result<Vec<BodyId>, String> {
+        self.overlapping_passing(shape, &Passing::except(except))
+    }
+
+    /// Returns the bodies `shape` touches or overlaps, as [`World3d::overlapping`] does, other
+    /// than what `passing` says.
+    pub fn overlapping_passing(
+        &mut self,
+        shape: &Shape3d,
+        passing: &Passing<BodyId>,
+    ) -> Result<Vec<BodyId>, String> {
         let made = collider(shape, BodyKind::Fixed)?;
         self.refresh();
-        Ok(self.touching(made.position, &*made.shape, except))
+        Ok(self.touching(made.position, &*made.shape, passing))
     }
 
     /// Returns the bodies that overlap or touch the body `id`, a sensor's or any other's, other
@@ -654,7 +702,9 @@ impl World3d {
         let mut found = Vec::new();
         for &handle in body.colliders() {
             let collider = &self.rapier.colliders[handle];
-            for touched in self.touching(*collider.position(), collider.shape(), &[id]) {
+            let itself = [id];
+            let passing = Passing::except(&itself);
+            for touched in self.touching(*collider.position(), collider.shape(), &passing) {
                 if !found.contains(&touched) {
                     found.push(touched);
                 }
@@ -663,9 +713,9 @@ impl World3d {
         found
     }
 
-    /// The bodies `shape` at `pose` touches, other than those in `except` and sensors.
-    fn touching(&self, pose: Pose, shape: &dyn Shape, except: &[BodyId]) -> Vec<BodyId> {
-        let excepted = |_: ColliderHandle, collider: &Collider| !excepts(except, collider);
+    /// The bodies `shape` at `pose` touches, other than what `passing` says and sensors.
+    fn touching(&self, pose: Pose, shape: &dyn Shape, passing: &Passing<BodyId>) -> Vec<BodyId> {
+        let excepted = |_: ColliderHandle, collider: &Collider| !passes(passing, collider);
         let filter = QueryFilter::default()
             .exclude_sensors()
             .predicate(&excepted);
@@ -1014,11 +1064,12 @@ fn square(normal: Vector) -> Vector {
         .unwrap_or(normal)
 }
 
-/// Whether `collider` is of one of the bodies `except`.
-fn excepts(except: &[BodyId], collider: &Collider) -> bool {
+/// Whether a query that goes through what `passing` says goes through `collider`: by its body,
+/// or by its body's tags, which it holds as its `user_data`.
+fn passes(passing: &Passing<BodyId>, collider: &Collider) -> bool {
     collider
         .parent()
-        .is_some_and(|body| except.contains(&BodyId(body)))
+        .is_some_and(|body| passing.passes(BodyId(body), collider.user_data))
 }
 
 /// Fails unless a sensor can be of `kind` and `shape`: an area doesn't fall, and is solid all

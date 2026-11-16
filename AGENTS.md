@@ -201,6 +201,12 @@ own right.
     carried by what it stands on as far as that moved in the last step (3D's only follows it
     down). Its units are pixels, so `set_length_unit` tunes Rapier, and Luau's densities are of
     square metres.
+  - A query goes through what its `Passing` says: colliders or bodies by id, and by tags, bits
+    each collider holds as its `user_data` (`set_tags`), which 3D's `set_shape` carries over
+    as it makes a body a new collider. Luau's worlds give a tag a bit the first time a query's
+    `except_tagged` names it, once they've followed their nodes, and every body or collider of
+    a node with it that bit, and a body its node's bits as it's added (`Tags`); a tag past the
+    128th is asked of each body's node by name, the same answer, slower.
   - Queries never find sensors. Unit tests pin hashes so CI checks Windows and Linux agree;
     scene nodes' 2D transforms take their sines from `libm` (`Affine::from_parts_exact`) so
     colliders placed by them do too.

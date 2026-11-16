@@ -4382,6 +4382,103 @@ mod physics {
     }
 
     #[test]
+    fn colliders_are_passed_by_their_nodes_tags_as_by_a_list_of_them() {
+        // Areas 4 across, scattered by a seed over 100 by 100, tagged by turns with nothing,
+        // `a`, `b`, and both.
+        let mut state: u64 = 5;
+        let mut roll = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 40) as f32 / (1u64 << 24) as f32
+        };
+        let mut areas = String::new();
+        for i in 0..40 {
+            let (x, y) = (roll() * 100.0, roll() * 100.0);
+            let tags = [
+                "",
+                r#", tags = { "a" }"#,
+                r#", tags = { "b" }"#,
+                r#", tags = { "a", "b" }"#,
+            ][i % 4];
+            areas += &format!(
+                r#"{{ name = "area{i}", kind = "area", x = {x}, y = {y}, width = 4, height = 4{tags} }},
+                "#
+            );
+        }
+        let scene = format!("return {{ format = 2, children = {{ {areas} }} }}");
+        let main = "local wg = require('@wingine')
+            field = wg.scene.load('field.scene.luau')
+            world = wg.physics.world()
+            for i = 0, 39 do
+                world:add(field:find('area' .. i))
+            end
+            seed = 3
+            function roll()
+                seed = (seed * 1103515245 + 12345) % 2147483648
+                return seed / 2147483648
+            end
+            function tagged(tags)
+                local found = {}
+                for _, tag in tags do
+                    for _, node in field:tagged(tag) do
+                        table.insert(found, node)
+                    end
+                end
+                return found
+            end
+            function same(a, b)
+                if a == nil or b == nil then
+                    return a == b
+                end
+                return a.node == b.node and a.distance == b.distance and a.x == b.x and a.y == b.y
+            end
+            function listed(nodes)
+                local found = {}
+                for _, node in nodes do
+                    table.insert(found, node:name())
+                end
+                return table.concat(found, ' ')
+            end
+            function check(rays)
+                local differed, passed = 0, 0
+                for _ = 1, rays do
+                    local x, y = roll() * 100, roll() * 100
+                    local turn = roll() * 2 * math.pi
+                    local dx, dy = math.cos(turn), math.sin(turn)
+                    for _, tags in { { 'a' }, { 'b' }, { 'a', 'b' } } do
+                        local by_tag, by_list = { except_tagged = tags }, { except = tagged(tags) }
+                        local hit = world:ray(x, y, dx, dy, by_tag)
+                        differed += if same(hit, world:ray(x, y, dx, dy, by_list)) then 0 else 1
+                        passed += if same(hit, world:ray(x, y, dx, dy)) then 0 else 1
+                        local circle = listed(world:overlap_circle(x, y, 8, by_tag))
+                        differed += if circle == listed(world:overlap_circle(x, y, 8, by_list)) then 0 else 1
+                        local area = { x = x - 8, y = y - 8, width = 16, height = 16 }
+                        local box = listed(world:overlap_box(area, by_tag))
+                        differed += if box == listed(world:overlap_box(area, by_list)) then 0 else 1
+                    end
+                end
+                return differed, passed
+            end";
+        let folder = game(
+            "physics_tagged",
+            &[("field.scene.luau", &scene), ("main.luau", main)],
+        );
+        let mut simulation = simulation(&folder);
+        let (differed, passed): (u32, u32) = simulation.eval("check(40)");
+        assert_eq!(differed, 0);
+        assert!(passed > 0, "nothing was passed");
+        // Reshaped, and one removed just before a tag is first named.
+        simulation.exec(
+            "field:find('area1'):set_size(12, 12)
+            field:find('area2'):remove()",
+        );
+        simulation.exec("world:ray(0, 0, 1, 1, { except_tagged = { 'c' } })");
+        let (differed, _): (u32, u32) = simulation.eval("check(40)");
+        assert_eq!(differed, 0, "reshaped and removed");
+    }
+
+    #[test]
     fn adding_a_node_again_changes_how_solid_it_is() {
         let mut simulation = yard("physics_again");
         // Inside the wall, only its edges are in the way.
@@ -5397,6 +5494,301 @@ mod physics {
         simulation.exec("crate:set_position_3d(vector.create(5, 5, 5))");
         let moved = "world:overlap_ball(vector.create(5, 5, 5), 0.1)";
         assert_eq!(names(&mut simulation, moved), "crate");
+    }
+
+    /// A 3D view of `count` boxes half a unit across, `box0` and on, scattered by `seed` over 20
+    /// by 20 and up to 4 up, tagged by turns with nothing, `a`, `b`, and both; a floor; and
+    /// `holder`, tagged `a`, with `held`, an untagged box, in it.
+    fn tagged_boxes(seed: u64, count: usize) -> String {
+        let mut state = seed;
+        let mut roll = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 40) as f32 / (1u64 << 24) as f32
+        };
+        let mut boxes = String::new();
+        for i in 0..count {
+            let (x, y, z) = (roll() * 20.0 - 10.0, roll() * 4.0, roll() * 20.0 - 10.0);
+            let tags = [
+                "",
+                r#", tags = { "a" }"#,
+                r#", tags = { "b" }"#,
+                r#", tags = { "a", "b" }"#,
+            ][i % 4];
+            boxes += &format!(
+                r#"{{ name = "box{i}", kind = "mesh", shape = "cuboid", x = {x}, y = {y}, z = {z}, size = {{ 0.5, 0.5, 0.5 }}{tags} }},
+                "#
+            );
+        }
+        format!(
+            r##"return {{
+    format = 2,
+    children = {{
+        {{
+            name = "view", kind = "view3d", width = 0, height = 0, stretch = {{ 1, 1 }},
+            camera = {{ position = {{ 0, 4, 8 }}, target = {{ 0, 0, 0 }} }},
+            children = {{
+                {{ name = "floor", kind = "mesh", shape = "cuboid", y = -0.5, size = {{ 30, 1, 30 }} }},
+                {boxes}
+                {{
+                    name = "holder", kind = "node", x = 11, tags = {{ "a" }},
+                    children = {{ {{ name = "held", kind = "mesh", shape = "cuboid", y = 1, size = {{ 0.5, 0.5, 0.5 }} }} }},
+                }},
+            }},
+        }},
+    }},
+}}"##
+        )
+    }
+
+    /// Luau that compares queries passing by `except_tagged` with the same queries passing by
+    /// `except` every node with those tags, in `world`, of `view`: `check(rays)` casts `rays`
+    /// rays, balls and boxes from places a seed picks, and returns how many differed, and how
+    /// many passing by tag found something other than passing nothing, which says the check
+    /// passed something.
+    const COMPARE: &str = "seed = 7
+        function roll()
+            seed = (seed * 1103515245 + 12345) % 2147483648
+            return seed / 2147483648
+        end
+        function tagged(tags, also)
+            local found = {}
+            for _, tag in tags do
+                for _, node in view:tagged(tag) do
+                    table.insert(found, node)
+                end
+            end
+            if also then
+                table.insert(found, also)
+            end
+            return found
+        end
+        function same(a, b)
+            if a == nil or b == nil then
+                return a == b
+            end
+            return a.node == b.node and a.distance == b.distance and a.point == b.point
+                and a.normal == b.normal
+        end
+        function listed(nodes)
+            local found = {}
+            for _, node in nodes do
+                table.insert(found, node:path())
+            end
+            return table.concat(found, ' ')
+        end
+        function check(rays)
+            local differed, passed = 0, 0
+            local also = view:find('box0')
+            for _ = 1, rays do
+                local origin = vector.create(roll() * 24 - 12, roll() * 5, roll() * 24 - 12)
+                local way = vector.normalize(vector.create(roll() * 2 - 1, roll() * 2 - 1, roll() * 2 - 1))
+                for _, tags in { { 'a' }, { 'b' }, { 'a', 'b' } } do
+                    for _, with in { false, true } do
+                        local one = if with then also else nil
+                        local by_tag = { except = one, except_tagged = tags }
+                        local by_list = { except = tagged(tags, one) }
+                        local hit = world:ray(origin, way, by_tag)
+                        differed += if same(hit, world:ray(origin, way, by_list)) then 0 else 1
+                        passed += if same(hit, world:ray(origin, way)) then 0 else 1
+                        local ball = listed(world:overlap_ball(origin, 2, by_tag))
+                        differed += if ball == listed(world:overlap_ball(origin, 2, by_list)) then 0 else 1
+                        passed += if ball == listed(world:overlap_ball(origin, 2)) then 0 else 1
+                        local low, high = origin - vector.create(2, 1, 2), origin + vector.create(2, 1, 2)
+                        local box = listed(world:overlap_box(low, high, by_tag))
+                        differed += if box == listed(world:overlap_box(low, high, by_list)) then 0 else 1
+                    end
+                end
+            end
+            return differed, passed
+        end";
+
+    /// The tagged boxes' scene, `seed`'s, loaded as `boxes` with its view `view`, the floor in
+    /// `world`, and [`COMPARE`]'s `check`.
+    fn boxes(test: &str, seed: u64) -> Simulation<LuauGame> {
+        let main = "local wg = require('@wingine')
+            boxes = wg.scene.load('boxes.scene.luau')
+            view = boxes:find('view')
+            world = wg.physics.world_3d()
+            world:add(view:find('floor'))";
+        let scene = tagged_boxes(seed, 40);
+        let folder = game(test, &[("boxes.scene.luau", &scene), ("main.luau", main)]);
+        let mut simulation = simulation(&folder);
+        simulation.exec(COMPARE);
+        simulation
+    }
+
+    #[test]
+    fn queries_pass_tagged_bodies_as_they_pass_a_list_of_them() {
+        for seed in [1, 2, 3] {
+            let mut simulation = boxes(&format!("physics_3d_tagged_{seed}"), seed);
+            // Half the boxes, then the tags are first named.
+            simulation.exec(
+                "for i = 0, 19 do
+                    world:add(view:find('box' .. i))
+                end",
+            );
+            let (differed, passed): (u32, u32) = simulation.eval("check(20)");
+            assert_eq!(differed, 0, "seed {seed}, named with half the boxes");
+            assert!(passed > 0, "seed {seed}: nothing was passed");
+            // The rest, after: each given its bits as it's added. And the untagged box held by
+            // a node tagged `a`, which isn't passed by `a`.
+            simulation.exec(
+                "for i = 20, 39 do
+                    world:add(view:find('box' .. i))
+                end
+                world:add(view:find('holder/held'))",
+            );
+            let (differed, passed): (u32, u32) = simulation.eval("check(20)");
+            assert_eq!(differed, 0, "seed {seed}, added after");
+            assert!(passed > 0, "seed {seed}: nothing was passed after");
+            // A body replaced, as solid as a box, and a copy of a tagged box with its tags.
+            simulation.exec(
+                "world:add(view:find('box1'), { shape = 'box' })
+                local copy = view:add(view:find('box3'), 'copy')
+                copy:set_position_3d(vector.create(0, 1, 0))
+                world:add(copy)",
+            );
+            let (differed, _): (u32, u32) = simulation.eval("check(20)");
+            assert_eq!(differed, 0, "seed {seed}, replaced and copied");
+        }
+
+        // What's held by a node with the tag isn't passed by it.
+        let mut simulation = boxes("physics_3d_tagged_held", 1);
+        simulation.exec("world:add(view:find('holder/held'))");
+        let name: Option<String> = simulation.eval(
+            "(function()
+                local hit = world:ray(vector.create(11, 5, 0), vector.create(0, -1, 0), { except_tagged = { 'a' } })
+                return hit and hit.node:name()
+            end)()",
+        );
+        assert_eq!(name.as_deref(), Some("held"));
+    }
+
+    #[test]
+    fn a_tagged_body_is_passed_by_its_tag_after_it_is_reshaped() {
+        let mut simulation = boxes("physics_3d_tagged_reshaped", 1);
+        simulation.exec(
+            "lifted = view:find('box1')
+            lifted:set_position_3d(vector.create(0, 2, 0))
+            world:add(lifted)",
+        );
+        let down = "world:ray(vector.create(0, 5, 0), vector.create(0, -1, 0)";
+        let distance = |simulation: &mut Simulation<LuauGame>, options: &str| -> (String, f32) {
+            simulation.eval(&format!(
+                "(function()
+                    local hit = {down}{options})
+                    return hit.node:name(), hit.distance
+                end)()"
+            ))
+        };
+        assert_eq!(
+            distance(&mut simulation, ", { except_tagged = { 'a' } }").0,
+            "floor"
+        );
+        let (name, before) = distance(&mut simulation, "");
+        assert_eq!(name, "box1");
+        // Stretched, it's made a new collider, and keeps its tags.
+        simulation.exec("lifted:set_scale_3d(4)");
+        let (name, after) = distance(&mut simulation, "");
+        assert_eq!(name, "box1");
+        assert!(after < before - 0.5, "reshaped: {before}, then {after}");
+        assert_eq!(
+            distance(&mut simulation, ", { except_tagged = { 'a' } }").0,
+            "floor"
+        );
+    }
+
+    #[test]
+    fn a_tag_first_named_after_a_node_is_removed_passes_what_is_left() {
+        let mut simulation = boxes("physics_3d_tagged_removed", 1);
+        // Two boxes tagged `b`, one over the other; the lower one goes, and the next thing
+        // asked is a query naming `b` for the first time.
+        simulation.exec(
+            "upper, lower = view:find('box2'), view:find('box6')
+            upper:set_position_3d(vector.create(0, 3, 0))
+            lower:set_position_3d(vector.create(0, 1.5, 0))
+            world:add(upper)
+            world:add(lower)
+            world:ray(vector.create(0, 5, 0), vector.create(0, -1, 0))
+            lower:remove()",
+        );
+        let name: String = simulation.eval(
+            "world:ray(vector.create(0, 5, 0), vector.create(0, -1, 0), { except_tagged = { 'b' } }).node:name()",
+        );
+        assert_eq!(name, "floor");
+        let name: String = simulation
+            .eval("world:ray(vector.create(0, 5, 0), vector.create(0, -1, 0)).node:name()");
+        assert_eq!(name, "box2");
+    }
+
+    #[test]
+    fn tags_past_the_ones_with_bits_are_passed_the_same() {
+        let mut simulation = boxes("physics_3d_tagged_past", 2);
+        simulation.exec(
+            "for i = 0, 39 do
+                world:add(view:find('box' .. i))
+            end",
+        );
+        // 128 tags named first, which nothing has, take every bit: `a` and `b` come after.
+        simulation.exec(
+            "for i = 1, 128 do
+                world:ray(vector.create(0, 5, 0), vector.create(0, -1, 0), { except_tagged = { 'none' .. i } })
+            end",
+        );
+        let (differed, passed): (u32, u32) = simulation.eval("check(20)");
+        assert_eq!(differed, 0, "past the bits");
+        assert!(passed > 0, "nothing was passed");
+        // The 128th, and a 129th named among them, the same.
+        let (differed, _): (u32, u32) = simulation.eval(
+            "(function()
+                local differed = 0
+                local down = vector.create(0, -1, 0)
+                for i = 0, 39 do
+                    local node = view:find('box' .. i)
+                    local over = node:position_3d() + vector.create(0, 3, 0)
+                    for _, tags in { { 'none128', 'a' }, { 'a', 'none128' }, { 'none129', 'b' } } do
+                        local by_tag = world:ray(over, down, { except_tagged = tags })
+                        differed += if same(by_tag, world:ray(over, down, { except = tagged(tags) })) then 0 else 1
+                    end
+                end
+                return differed, 0
+            end)()",
+        );
+        assert_eq!(differed, 0, "at the boundary");
+    }
+
+    #[test]
+    fn except_tagged_is_a_list_of_tags() {
+        let mut simulation = pen("physics_3d_tagged_errors");
+        let error = |simulation: &mut Simulation<LuauGame>, code: &str| -> String {
+            simulation.eval(&format!(
+                "tostring(select(2, pcall(function() {code} end)))"
+            ))
+        };
+        let down = "world:ray(vector.zero, vector.create(0, -1, 0)";
+        for (code, expected) in [
+            (
+                format!("{down}, {{ except_tagged = 'a' }})"),
+                "not a string",
+            ),
+            (
+                format!("{down}, {{ except_tagged = {{ 'a', 3 }} }})"),
+                "holding a number",
+            ),
+            (
+                "world:overlap_ball(vector.zero, 1, { except_tagged = walker })".to_string(),
+                "not a userdata",
+            ),
+        ] {
+            let err = error(&mut simulation, &code);
+            assert!(
+                err.contains("`except_tagged` is a list of tags"),
+                "{code}: {err}"
+            );
+            assert!(err.contains(expected), "{code}: {err}");
+        }
     }
 
     #[test]

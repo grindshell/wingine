@@ -396,12 +396,18 @@ export type RayOptions = {
     distance: number?,
     --- A node, or a list of them, whose colliders or bodies it goes through.
     except: (SceneNode | { SceneNode })?,
+    --- Tags whose nodes' colliders or bodies it goes through: those of a node tagged with any
+    --- of them, its own tags, not those of nodes it's in. As quick however many have them.
+    except_tagged: { string }?,
 }
 
 --- How a world's overlaps look: `overlap_circle`, `overlap_ball` and `overlap_box`.
 export type OverlapOptions = {
     --- A node, or a list of them, whose colliders or bodies don't count.
     except: (SceneNode | { SceneNode })?,
+    --- Tags whose nodes' colliders or bodies don't count: those of a node tagged with any of
+    --- them, its own tags, not those of nodes it's in. As quick however many have them.
+    except_tagged: { string }?,
 }
 
 --- Where a 2D world's `world:ray` hit a collider, in the scene's coordinates.

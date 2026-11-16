@@ -14,7 +14,7 @@ use rapier2d::{
     },
 };
 
-use super::{BodyKind, Material, STEP, check_material, check_sensor_kind, parts};
+use super::{BodyKind, Material, Passing, STEP, check_material, check_sensor_kind, parts};
 use crate::math::{Affine, Rect};
 
 /// Rapier's vectors, which are glam's, and its poses: where something is and how it's turned.
@@ -708,11 +708,23 @@ impl World {
         max_distance: f32,
         except: &[ColliderId],
     ) -> Option<RayHit> {
+        let passing = Passing::except(except);
+        self.cast_ray_passing(origin, direction, max_distance, &passing)
+    }
+
+    /// Casts a ray as [`World::cast_ray`] does, going through what `passing` says.
+    pub fn cast_ray_passing(
+        &mut self,
+        origin: [f32; 2],
+        direction: [f32; 2],
+        max_distance: f32,
+        passing: &Passing<ColliderId>,
+    ) -> Option<RayHit> {
         self.refresh();
         let direction = Vector::from(direction);
         let ray = Ray::new(Vector::from(origin), direction);
         let excepted = |handle: ColliderHandle, collider: &Collider| {
-            collider.is_enabled() && !except.contains(&ColliderId(handle))
+            collider.is_enabled() && !passing.passes(ColliderId(handle), collider.user_data)
         };
         let filter = QueryFilter::default()
             .exclude_sensors()
@@ -749,11 +761,22 @@ impl World {
         rect: Rect,
         except: &[ColliderId],
     ) -> Vec<ColliderId> {
+        self.overlapping_passing(transform, rect, &Passing::except(except))
+    }
+
+    /// Returns the colliders a placed rectangle touches or overlaps, as [`World::overlapping`]
+    /// does, other than what `passing` says.
+    pub fn overlapping_passing(
+        &mut self,
+        transform: Affine,
+        rect: Rect,
+        passing: &Passing<ColliderId>,
+    ) -> Vec<ColliderId> {
         let Some(shape) = shape(transform, rect, Solid::Whole) else {
             return Vec::new();
         };
         self.refresh();
-        self.touching(Isometry::IDENTITY, &*shape, except)
+        self.touching(Isometry::IDENTITY, &*shape, passing)
     }
 
     /// Returns the colliders that the circle around `center` touches or overlaps, other than
@@ -765,12 +788,23 @@ impl World {
         radius: f32,
         except: &[ColliderId],
     ) -> Vec<ColliderId> {
+        self.overlapping_circle_passing(center, radius, &Passing::except(except))
+    }
+
+    /// Returns the colliders a circle touches or overlaps, as [`World::overlapping_circle`]
+    /// does, other than what `passing` says.
+    pub fn overlapping_circle_passing(
+        &mut self,
+        center: [f32; 2],
+        radius: f32,
+        passing: &Passing<ColliderId>,
+    ) -> Vec<ColliderId> {
         if !(radius > 0.0 && radius.is_finite()) {
             return Vec::new();
         }
         self.refresh();
         let at = Isometry::from_translation(Vector::from(center));
-        self.touching(at, &Ball::new(radius), except)
+        self.touching(at, &Ball::new(radius), passing)
     }
 
     /// Returns the colliders that overlap or touch the collider `id`, a sensor's or any other's,
@@ -783,18 +817,23 @@ impl World {
         if !collider.is_enabled() {
             return Vec::new();
         }
-        self.touching(*collider.position(), collider.shape(), &[id])
+        let itself = [id];
+        self.touching(
+            *collider.position(),
+            collider.shape(),
+            &Passing::except(&itself),
+        )
     }
 
-    /// The colliders `shape` at `pose` touches, other than those in `except` and sensors.
+    /// The colliders `shape` at `pose` touches, other than what `passing` says and sensors.
     fn touching(
         &self,
         pose: Isometry,
         shape: &dyn ParryShape,
-        except: &[ColliderId],
+        passing: &Passing<ColliderId>,
     ) -> Vec<ColliderId> {
         let excepted = |handle: ColliderHandle, collider: &Collider| {
-            collider.is_enabled() && !except.contains(&ColliderId(handle))
+            collider.is_enabled() && !passing.passes(ColliderId(handle), collider.user_data)
         };
         let filter = QueryFilter::default()
             .exclude_sensors()
@@ -804,6 +843,24 @@ impl World {
             .intersect_shape(pose, shape)
             .map(|(handle, _)| ColliderId(handle))
             .collect()
+    }
+
+    /// Gives the collider `id` the tags `tags`, as bits, which a query whose [`Passing::tags`]
+    /// share one goes through, until they're set again: kept as it's moved and reshaped. A
+    /// collider starts with none. Does nothing to one that's been removed.
+    pub fn set_tags(&mut self, id: ColliderId, tags: u128) {
+        if let Some(collider) = self.rapier.colliders.get_mut(id.0) {
+            collider.user_data = tags;
+        }
+    }
+
+    /// The tags of the collider `id`, as [`World::set_tags`] gave them: none for one that's been
+    /// removed.
+    pub fn tags(&self, id: ColliderId) -> u128 {
+        self.rapier
+            .colliders
+            .get(id.0)
+            .map_or(0, |collider| collider.user_data)
     }
 
     /// Removes the collider `id`, and if it's a body's, the body, if it hasn't been already.

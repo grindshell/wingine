@@ -19,6 +19,10 @@
 //! Rapier is built with its `enhanced-determinism`, and angles are turned to rotations and back
 //! with `libm`, so the same colliders, bodies and moves give the same results to the bit on every
 //! platform. Its types stay inside the engine.
+//!
+//! A query goes through what its [`Passing`] says: colliders or bodies by their ids, and by their
+//! tags, bits a world keeps on each of its colliders ([`World::set_tags`],
+//! [`World3d::set_tags`]), which cost a query the same however many colliders have them.
 
 mod world2d;
 mod world3d;
@@ -97,6 +101,40 @@ impl Default for Material {
             friction: 0.5,
             bounce: 0.0,
         }
+    }
+}
+
+/// What a query goes through, besides sensors, which none finds: a [`World`]'s colliders or a
+/// [`World3d`]'s bodies, `Id`, of `except`; those whose tags share a bit with `tags`; and those
+/// `also` says, if it's given, for what bits can't say. A query that goes through nothing is
+/// [`Passing::except`] of nothing.
+#[derive(Clone, Copy)]
+pub struct Passing<'a, Id> {
+    /// The colliders or bodies it goes through.
+    pub except: &'a [Id],
+    /// The tags it goes through, as bits: a collider or body whose tags, set by its world's
+    /// `set_tags`, share any of them.
+    pub tags: u128,
+    /// Whether it goes through a collider or body besides, asked of each it comes to that the
+    /// others don't pass.
+    pub also: Option<&'a dyn Fn(Id) -> bool>,
+}
+
+impl<'a, Id> Passing<'a, Id> {
+    /// Going through the colliders or bodies `except`, and nothing else.
+    pub fn except(except: &'a [Id]) -> Self {
+        Self {
+            except,
+            tags: 0,
+            also: None,
+        }
+    }
+}
+
+impl<Id: PartialEq + Copy> Passing<'_, Id> {
+    /// Whether a query goes through `id`, whose tags are `tags`.
+    fn passes(&self, id: Id, tags: u128) -> bool {
+        tags & self.tags != 0 || self.except.contains(&id) || self.also.is_some_and(|also| also(id))
     }
 }
 

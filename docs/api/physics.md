@@ -513,23 +513,25 @@ hits a collider, or `nil` if it hits nothing:
 
 A ray that starts inside a node solid all over hits it at once, at a `distance` of 0, with a
 normal of zero, and edges are hit from either side, so a ray inside a fence hits it. `options` are
-the 3D world's: `distance`, how far it goes, and `except`, a node or a list of them whose
-colliders it goes through. The direction can't be zero. Sensors are never hit.
+the 3D world's: `distance`, how far it goes; `except`, a node or a list of them whose colliders it
+goes through; and `except_tagged`, tags whose nodes' colliders it goes through. The direction
+can't be zero. Sensors are never hit.
 
 ### `world:overlap_circle`
 
 ```lua
-world:overlap_circle(x: number, y: number, radius: number, options: { except: (SceneNode | { SceneNode })? }?): { SceneNode }
+world:overlap_circle(x: number, y: number, radius: number, options: OverlapOptions?): { SceneNode }
 ```
 
 Returns the nodes whose colliders the circle around `x`, `y` touches, even by an edge, in the
-order they were added, but those `except` names and sensors. Edges count only where the circle
-touches them, not if it's inside them. `radius` must be more than 0.
+order they were added, but those `except` names, those tagged with any of `except_tagged`, and
+sensors. Edges count only where the circle touches them, not if it's inside them. `radius` must
+be more than 0.
 
 ### `world:overlap_box`
 
 ```lua
-world:overlap_box(box: Rect, options: { except: (SceneNode | { SceneNode })? }?): { SceneNode }
+world:overlap_box(box: Rect, options: OverlapOptions?): { SceneNode }
 ```
 
 Returns the nodes whose colliders `box`, a rectangle in the scene's coordinates, touches, as
@@ -676,18 +678,32 @@ ball anywhere on or inside it, so a ray that starts inside one hits it at once, 
 |---|---|
 | `distance` | How far it goes, in lengths of `direction`: as far as there is, by default. |
 | `except` | A node, or a list of them, whose bodies it goes through, such as the one looking. |
+| `except_tagged` | A list of tags whose nodes' bodies it goes through: those of a node tagged with any of them. |
 
 `direction` can't be zero. Sensors are never hit.
+
+`except` costs what it's long, for each body a query comes to: a ray past a crowd of characters
+is quicker by `except_tagged`, which costs the same however many are tagged. It goes by the tags
+of the node a body is of, not of the nodes that's in, as `hit.node:has_tag` asks. A world gives
+each tag it's asked about a bit of each of its bodies, as many as 128, the first time a query
+names it, and a body its node's bits as it's added; a tag named after those is asked of each
+body's node by name, which is slower but the same answer.
+
+```lua
+-- An enemy's look at the player, past every enemy and its own body.
+local hit = world:ray(eyes, way, { distance = far, except = self, except_tagged = { "enemy" } })
+```
 
 ### `world:overlap_ball`
 
 ```lua
-world:overlap_ball(center: vector, radius: number, options: { except: (SceneNode | { SceneNode })? }?): { SceneNode }
+world:overlap_ball(center: vector, radius: number, options: OverlapOptions?): { SceneNode }
 ```
 
 Returns the nodes whose bodies the ball around `center` touches, even by an edge, in the order they
-were added, but those `except` names and sensors. Triangles count only where the ball touches
-them, not if it's inside what they're around. `radius` must be more than 0.
+were added, but those `except` names, those tagged with any of `except_tagged`, and sensors.
+Triangles count only where the ball touches them, not if it's inside what they're around.
+`radius` must be more than 0.
 
 ```lua
 -- A blast, pushing every crate near it away.
@@ -701,7 +717,7 @@ end
 ### `world:overlap_box`
 
 ```lua
-world:overlap_box(min: vector, max: vector, options: { except: (SceneNode | { SceneNode })? }?): { SceneNode }
+world:overlap_box(min: vector, max: vector, options: OverlapOptions?): { SceneNode }
 ```
 
 Returns the nodes whose bodies the box between the corners `min` and `max` touches, along the

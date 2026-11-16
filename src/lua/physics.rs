@@ -12,7 +12,7 @@ use super::{SceneNode, check_finite, not_3d, vector, vector3};
 use crate::{
     graphics::{Mesh, Model},
     math::{Affine3, Bounds3},
-    physics::{Body3d, BodyId, BodyKind, Character3d, Material, Pose3d, Shape3d, World3d},
+    physics::{Body3d, BodyId, BodyKind, Character3d, Material, Passing, Pose3d, Shape3d, World3d},
     scene::{Kind, Node, NodeId, Scene},
 };
 
@@ -40,6 +40,77 @@ fn excepted(options: Option<&mlua::Table>) -> mlua::Result<Vec<mlua::UserDataRef
             })
         })
         .collect()
+}
+
+/// The tags a query's `except_tagged` option names: a list of strings.
+fn except_tagged(options: Option<&mlua::Table>) -> mlua::Result<Vec<String>> {
+    let Some(options) = options else {
+        return Ok(Vec::new());
+    };
+    let refused =
+        |what: &str| mlua::Error::runtime(format!("`except_tagged` is a list of tags, not {what}"));
+    // What Luau calls it: its numbers are all one type.
+    let kind = |value: &mlua::Value| match value {
+        mlua::Value::Integer(_) | mlua::Value::Number(_) => "number",
+        other => other.type_name(),
+    };
+    match options.get::<mlua::Value>("except_tagged")? {
+        mlua::Value::Nil => Ok(Vec::new()),
+        mlua::Value::Table(tags) => tags
+            .sequence_values::<mlua::Value>()
+            .map(|tag| match tag? {
+                mlua::Value::String(tag) => Ok(tag.to_str()?.to_string()),
+                other => Err(refused(&format!("a list holding a {}", kind(&other)))),
+            })
+            .collect(),
+        other => Err(refused(&format!("a {}", kind(&other)))),
+    }
+}
+
+/// The tags queries of a world have named in `except_tagged`, each with a bit of the tags its
+/// colliders or bodies hold ([`crate::physics::Passing::tags`]), in the order first named, as
+/// many as there are bits. One named after those is asked of each node a query comes to, by
+/// its name: slower, but the same answer, whatever was named before.
+#[derive(Default)]
+struct Tags {
+    bits: HashMap<String, u32>,
+}
+
+impl Tags {
+    /// How many tags have bits.
+    const MOST: usize = u128::BITS as usize;
+
+    /// The bits of `node`'s tags.
+    fn of(&self, node: &Node) -> u128 {
+        node.tags()
+            .iter()
+            .filter_map(|tag| self.bits.get(tag))
+            .fold(0, |bits, &bit| bits | 1 << bit)
+    }
+
+    /// The bits of `names` that have them, giving one to each that hasn't while there are bits
+    /// left, which `give` is to set on what has that tag; and those left without, by name.
+    fn named(&mut self, names: &[String], mut give: impl FnMut(&str, u128)) -> (u128, Vec<String>) {
+        let mut bits = 0;
+        let mut past = Vec::new();
+        for name in names {
+            let bit = match self.bits.get(name) {
+                Some(&bit) => 1 << bit,
+                None if self.bits.len() < Self::MOST => {
+                    let bit = self.bits.len() as u32;
+                    self.bits.insert(name.clone(), bit);
+                    give(name, 1 << bit);
+                    1 << bit
+                }
+                None => {
+                    past.push(name.clone());
+                    0
+                }
+            };
+            bits |= bit;
+        }
+        (bits, past)
+    }
 }
 
 /// How far a query's ray goes, from its `distance` option: as far as there is, by default.
@@ -84,6 +155,13 @@ fn followed(
 /// those and of what's inside them (see [`PhysicsWorld3d::follow`]). So a write to a node with
 /// no body at it or in it, a view's camera or a rig's joint, costs the next query a lookup.
 ///
+/// A query goes through the bodies of the nodes its `except` names, which costs what the list is
+/// long for each body it comes to, and through those of nodes tagged with any of its
+/// `except_tagged`, which costs the same however many there are: each body holds the bits of its
+/// node's tags among those queries have named ([`Tags`]), given as it's added, and to every body
+/// at once the first time a query names a tag, once the bodies have followed their nodes. A tag
+/// named past the 128th is asked of each body's node by name.
+///
 /// Adding a body costs by how many models and meshes there are, not by how many bodies: the
 /// world makes the shape of a model, shaped one way and stretched one way, once, and keeps it
 /// for as long as it lasts, for every body of a copy of the model to share ([`Shapes`]). A body
@@ -115,6 +193,8 @@ pub struct PhysicsWorld3d {
     looked: u64,
     /// The shapes it has made of what its nodes show.
     shapes: Shapes,
+    /// The tags its queries have named, which its bodies hold as bits.
+    tags: Tags,
 }
 
 /// What a [`PhysicsWorld3d`] keeps to follow its nodes by, and what following them has cost:
@@ -876,6 +956,11 @@ impl PhysicsWorld3d {
             material: asked.material,
             sensor: asked.sensor,
         })?;
+        // Its node's tags, of those queries have named, which they go through it by.
+        let tags = self.tags.of(scene.node(id));
+        if tags != 0 {
+            self.world.set_tags(body, tags);
+        }
         let bodied = Bodied {
             node: id,
             body,
@@ -1230,15 +1315,66 @@ impl PhysicsWorld3d {
         shape: &Shape3d,
         options: Option<&mlua::Table>,
     ) -> mlua::Result<Vec<SceneNode>> {
-        let except = self.except(options)?;
-        let Some(scene) = self.followed()? else {
+        let asked = self.passing(options, |world, passing| {
+            world.overlapping_passing(shape, passing)
+        })?;
+        let Some((scene, found)) = asked else {
             return Ok(Vec::new());
         };
-        let found = self
-            .world
-            .overlapping(shape, &except)
-            .map_err(mlua::Error::runtime)?;
+        let found = found.map_err(mlua::Error::runtime)?;
         Ok(self.nodes(&scene, &found))
+    }
+
+    /// Asks `ask` of its world, once the bodies have followed their nodes, going through what a
+    /// query's `options` say: the bodies of the nodes of `except`, and of the nodes tagged with
+    /// any of `except_tagged`. Returns the scene and the answer, or `None` if the world has no
+    /// nodes yet.
+    ///
+    /// A tag is read only once the bodies have followed, since a body whose node has gone is
+    /// the world's until then, and its node can't be asked. A tag no query has named before is
+    /// given a bit then, and the bodies of the nodes with it are given that bit, but for one
+    /// whose node isn't in the scene, of which there should be none.
+    fn passing<T>(
+        &mut self,
+        options: Option<&mlua::Table>,
+        ask: impl FnOnce(&mut World3d, &Passing<BodyId>) -> T,
+    ) -> mlua::Result<Option<(Rc<RefCell<Scene>>, T)>> {
+        let except = self.except(options)?;
+        let names = except_tagged(options)?;
+        let Some(scene) = self.followed()? else {
+            return Ok(None);
+        };
+        let answer = {
+            let borrowed = scene
+                .try_borrow()
+                .map_err(|_| mlua::Error::runtime("the scene is being changed"))?;
+            let (world, bodies, by_body) = (&mut self.world, &self.bodies, &self.by_body);
+            let (tags, past) = self.tags.named(&names, |name, bit| {
+                for bodied in bodies {
+                    if borrowed.contains_node(bodied.node)
+                        && borrowed.node(bodied.node).has_tag(name)
+                    {
+                        let had = world.tags(bodied.body);
+                        world.set_tags(bodied.body, had | bit);
+                    }
+                }
+            });
+            // Tags past those with bits, asked of each body's node by name.
+            let also = |body: BodyId| {
+                by_body.get(&body).is_some_and(|&index| {
+                    let node = bodies[index].node;
+                    borrowed.contains_node(node)
+                        && past.iter().any(|tag| borrowed.node(node).has_tag(tag))
+                })
+            };
+            let passing = Passing {
+                except: &except,
+                tags,
+                also: if past.is_empty() { None } else { Some(&also) },
+            };
+            ask(world, &passing)
+        };
+        Ok(Some((scene, answer)))
     }
 
     /// The body of `node`, or an error saying it has none.
@@ -1390,11 +1526,12 @@ impl mlua::UserData for PhysicsWorld3d {
                     return Err(mlua::Error::runtime("a ray's direction can't be zero"));
                 }
                 let distance = ray_distance(options.as_ref())?;
-                let except = world.except(options.as_ref())?;
-                let Some(scene) = world.followed()? else {
+                let asked = world.passing(options.as_ref(), |world, passing| {
+                    world.cast_ray_passing(origin, direction, distance, passing)
+                })?;
+                let Some((scene, hit)) = asked else {
                     return Ok(None);
                 };
-                let hit = world.world.cast_ray(origin, direction, distance, &except);
                 let Some((hit, bodied)) = hit.and_then(|hit| {
                     let bodied = &world.bodies[*world.by_body.get(&hit.body)?];
                     Some((hit, bodied))

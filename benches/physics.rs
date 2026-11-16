@@ -6,9 +6,10 @@
 //! crates have come to rest. Each does something else beside stepping the world: nothing, setting a
 //! tile that isn't solid, casting rays and overlapping boxes, or walking characters. The big 3D
 //! view's cases are what a world of many bodies costs when the scene changes where no body is,
-//! or where few are; the copies' what adding fixed bodies of copies of a model costs, as a level
-//! built of a kit's pieces loads. The Rust cases step a world of tumbling boxes by a sixtieth of
-//! a second, and by a 59.94 Hz display's frame.
+//! or where few are, and what a query costs that passes some of them, by `except` and by
+//! `except_tagged`, and the first query to name a tag; the copies' what adding fixed bodies of
+//! copies of a model costs, as a level built of a kit's pieces loads. The Rust cases step a world
+//! of tumbling boxes by a sixtieth of a second, and by a 59.94 Hz display's frame.
 
 use std::{
     fmt::Write as _,
@@ -103,6 +104,89 @@ fn main() {
         fs::write(game.join("main.luau"), main_3d_many(work)).unwrap();
         report(&format!("3D, {MANY} boxes: {case}"), update_time(&game));
     }
+    // What a query costs that passes some of many bodies: by a list of them, and by their tag.
+    let level_tagged = level_3d_tagged();
+    for (name, case, setup, query) in [
+        (
+            "3d-except-16",
+            "100 rays passing 16 by `except`",
+            "",
+            RAY_EXCEPT_16,
+        ),
+        (
+            "3d-tagged-16",
+            "100 rays passing 16 by `except_tagged`",
+            "",
+            RAY_TAGGED_16,
+        ),
+        (
+            "3d-except-64",
+            "100 rays passing 64 by `except`",
+            "",
+            RAY_EXCEPT_64,
+        ),
+        (
+            "3d-tagged-64",
+            "100 rays passing 64 by `except_tagged`",
+            "",
+            RAY_TAGGED_64,
+        ),
+        (
+            "3d-except-256",
+            "100 rays passing 256 by `except`",
+            "",
+            RAY_EXCEPT_256,
+        ),
+        (
+            "3d-tagged-256",
+            "100 rays passing 256 by `except_tagged`",
+            "",
+            RAY_TAGGED_256,
+        ),
+        (
+            "3d-ball-except-64",
+            "100 balls passing 64 by `except`",
+            "",
+            BALL_EXCEPT_64,
+        ),
+        (
+            "3d-ball-tagged-64",
+            "100 balls passing 64 by `except_tagged`",
+            "",
+            BALL_TAGGED_64,
+        ),
+        (
+            "3d-box-tagged-64",
+            "100 boxes passing 64 by `except_tagged`",
+            "",
+            BOX_TAGGED_64,
+        ),
+        (
+            "3d-past-64",
+            "100 rays passing 64 by a tag past the 128th",
+            NAME_128,
+            RAY_TAGGED_64,
+        ),
+    ] {
+        let game = folder.join(name);
+        fs::create_dir_all(&game).unwrap();
+        fs::write(game.join("bench.scene.luau"), &level_tagged).unwrap();
+        fs::write(game.join("main.luau"), main_3d_tagged(setup, query)).unwrap();
+        report(&format!("3D, {MANY} boxes: {case}"), update_time(&game));
+    }
+    // What the first query to name a tag costs, giving every body its bit, and the same query
+    // again, by the median of twenty each.
+    let game = folder.join("3d-first-named");
+    fs::create_dir_all(&game).unwrap();
+    fs::write(game.join("bench.scene.luau"), &level_tagged).unwrap();
+    fs::write(game.join("main.luau"), main_3d_tagged(FIRST_NAMED, "")).unwrap();
+    let (first, again) = first_named(&game);
+    report(
+        &format!("3D, {MANY} boxes: a ray naming a tag first"),
+        first,
+    );
+    report(&format!("3D, {MANY} boxes: the same ray again"), again);
+
     // What adding fixed bodies costs, as a level of copies of a kit's pieces loads.
     let kit = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples/kenney_prototype-kit/Models/GLB format");
@@ -530,6 +614,105 @@ const RIGS_POSED: &str = "
         end
         world:ray(vector.create(i * 4 - 60, 10, i - 15), down)
     end";
+
+/// The big 3D view, its first 16 boxes tagged `p16` too, its first 64 `p64`, and its first 256
+/// `p256`, for queries to pass.
+fn level_3d_tagged() -> String {
+    let level = level_3d_many();
+    let mut tagged = String::new();
+    let mut parts = level.split("tags = { \"solid\" }");
+    tagged.push_str(parts.next().unwrap());
+    for (i, part) in parts.enumerate() {
+        let mut tags = String::from("tags = { \"solid\"");
+        for most in [16, 64, 256] {
+            if i < most {
+                write!(tags, ", \"p{most}\"").unwrap();
+            }
+        }
+        tagged.push_str(&tags);
+        tagged.push_str(" }");
+        tagged.push_str(part);
+    }
+    tagged
+}
+
+/// The tagged 3D game, which does `setup` once, and each update asks `query` a hundred times,
+/// at places over the ground, `at`, before stepping the world: its lists of the boxes tagged
+/// `p16`, `p64` and `p256` are `lists`.
+fn main_3d_tagged(setup: &str, query: &str) -> String {
+    format!(
+        "local wg = require('@wingine')
+        local level = wg.scene.load('bench.scene.luau')
+        local world = wg.physics.world_3d()
+        for _, node in level:tagged('solid') do
+            world:add(node)
+        end
+        local down = vector.create(0, -1, 0)
+        local lists = {{ p16 = level:tagged('p16'), p64 = level:tagged('p64'), p256 = level:tagged('p256') }}
+        {setup}
+
+        function update(dt)
+            for i = 1, 100 do
+                local at = vector.create((i * 37) % 160 - 80, 10, (i * 53) % 80 - 40)
+                {query}
+            end
+            world:step(dt)
+        end"
+    )
+}
+
+const RAY_EXCEPT_16: &str = "world:ray(at, down, { except = lists.p16 })";
+const RAY_TAGGED_16: &str = "world:ray(at, down, { except_tagged = { 'p16' } })";
+const RAY_EXCEPT_64: &str = "world:ray(at, down, { except = lists.p64 })";
+const RAY_TAGGED_64: &str = "world:ray(at, down, { except_tagged = { 'p64' } })";
+const RAY_EXCEPT_256: &str = "world:ray(at, down, { except = lists.p256 })";
+const RAY_TAGGED_256: &str = "world:ray(at, down, { except_tagged = { 'p256' } })";
+const BALL_EXCEPT_64: &str =
+    "world:overlap_ball(at - vector.create(0, 10, 0), 2, { except = lists.p64 })";
+const BALL_TAGGED_64: &str =
+    "world:overlap_ball(at - vector.create(0, 10, 0), 2, { except_tagged = { 'p64' } })";
+const BOX_TAGGED_64: &str = "world:overlap_box(at - vector.create(2, 11, 2), at - \
+     vector.create(-2, 9, -2), { except_tagged = { 'p64' } })";
+
+/// 128 tags named, which no box has, so that every tag named after them is past the bits.
+const NAME_128: &str = "for i = 1, 128 do
+        world:ray(vector.zero, down, { except_tagged = { 'none' .. i } })
+    end";
+
+/// Twenty rays each naming a tag first, timed one by one, and the first of them again, as
+/// `first` and `again`, their medians in milliseconds.
+const FIRST_NAMED: &str = "local function median(times)
+        table.sort(times)
+        return times[#times // 2 + 1] * 1000
+    end
+    local firsts, agains = {}, {}
+    local at = vector.create(0, 10, 0)
+    for i = 1, 20 do
+        local began = os.clock()
+        world:ray(at, down, { except_tagged = { 'new' .. i } })
+        firsts[i] = os.clock() - began
+        began = os.clock()
+        world:ray(at, down, { except_tagged = { 'new' .. i } })
+        agains[i] = os.clock() - began
+    end
+    first, again = median(firsts), median(agains)";
+
+/// The tagged game in `game`'s first named and again, in seconds.
+fn first_named(game: &Path) -> (f32, f32) {
+    let config = WindowConfig {
+        width: 320,
+        height: 180,
+        ..Default::default()
+    };
+    let mut simulation = Simulation::new(&config, |ctx| LuauGame::load(ctx, game))
+        .expect("a GPU adapter is available");
+    simulation.step();
+    if let Some(err) = simulation.game().error() {
+        panic!("{}: {err}", game.display());
+    }
+    let (first, again): (f32, f32) = simulation.eval("first, again");
+    (first / 1000.0, again / 1000.0)
+}
 
 /// A 3D view of what's copied, far off: a model, a box, and a group to copy the copies into.
 const LEVEL_COPIES: &str = "return {
