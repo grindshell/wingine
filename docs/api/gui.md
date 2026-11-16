@@ -120,9 +120,55 @@ while it's open.
 
 ```lua
 ui:scroll(contents: (Ui) -> ())
+ui:scroll(options: ScrollOptions, contents: (Ui) -> ())
 ```
 
-Scrolls what `contents` adds up and down, when there's more than fits.
+Scrolls what `contents` adds up and down, when there's more than fits. `options` is a table with:
+
+| Option | What it does | Default |
+|---|---|---|
+| `stick_to_bottom` | Whether it keeps to its end as more is added, as a log or a chat does. It does while it's scrolled to its end: scrolled back to read, it stays where it's put. | `false` |
+
+```lua
+ui:scroll({ stick_to_bottom = true }, function(ui)
+    for _, line in log do
+        ui:label(line)
+    end
+end)
+```
+
+### `ui:modal`
+
+```lua
+ui:modal(name: string, contents: (Ui) -> ()): boolean
+```
+
+A box in the middle of the window, over everything else, which `contents` fills, and which must be
+answered: while it's laid out, the rest of the interface is dimmed and can't be clicked or typed
+into. `name` tells it apart from other modals. A [window](#uiwindow) only floats, and what's
+behind it still works.
+
+Returns whether the player asked to be rid of it, by pressing Escape or clicking outside it. As
+with everything in an interface, it shows only in the frames the game lays it out, so the game
+keeps whether it's open:
+
+```lua
+if removing then
+    local dismissed = ui:modal("remove", function(ui)
+        ui:heading("Remove this file?")
+        if ui:button("Remove it") then
+            remove(removing)
+            removing = nil
+        end
+        if ui:button("Keep it") then
+            removing = nil
+        end
+    end)
+    if dismissed then
+        removing = nil
+    end
+end
+```
 
 ### `ui:grid`
 
@@ -239,11 +285,11 @@ it's typed into: returns `value` after any change, kept between `min` and `max` 
 ### `ui:text_input`
 
 ```lua
-ui:text_input(text: string, hint: string?): (string, boolean)
+ui:text_input(text: string, field: (string | TextInputOptions)?): (string, boolean)
 ```
 
-A field of one line of text, showing `hint` greyed out while it's empty. Returns its text after any
-typing, and whether Enter was pressed in it, as for a field of commands:
+A field of one line of text. Returns its text after any typing, and whether Enter was pressed in
+it, as for a field of commands. `field` is its hint, shown greyed out while it's empty:
 
 ```lua
 local command, entered = ui:text_input(command, "Command")
@@ -253,14 +299,27 @@ if entered then
 end
 ```
 
+Or `field` is a table with any of:
+
+| Option | What it does | Default |
+|---|---|---|
+| `id` | Which text it holds, as a [text edit](#uitext_edit)'s says. | Where the field is |
+| `label` | What [tests](testing.md#the-interface) and screen readers find it by, as well as by its hint. Nothing shows it. | None |
+| `hint` | Text shown greyed out while it's empty. | None |
+
+```lua
+file.title = ui:text_input(file.title, { id = file.name, hint = "Title" })
+```
+
 ### `ui:text_edit`
 
 ```lua
-ui:text_edit(text: string, options: TextEditOptions?): (string, boolean)
+ui:text_edit(text: string, options: TextEditOptions?): (string, boolean, TextCursor?)
 ```
 
 A field of many lines of text, in which Enter starts a new line, as for notes or a document.
-Returns its text after any typing, and whether that changed it, as for saving it only then:
+Returns its text after any typing, whether that changed it, as for saving it only then, and
+[where its cursor is](#the-cursor):
 
 ```lua
 local changed
@@ -271,9 +330,9 @@ end
 ```
 
 It's as wide as there's room for, and grows taller with its text, so one that may outgrow the
-window goes in a [`ui:scroll`](#uiscroll). The field has what egui's fields have: a cursor moved
-by the arrow keys and the mouse, selections, the clipboard, and undo. `options` is a table with
-any of:
+window is given `fill`, or goes in a [`ui:scroll`](#uiscroll) with what else scrolls. The field
+has what egui's fields have: a cursor moved by the arrow keys and the mouse, selections, the
+clipboard, and undo. `options` is a table with any of:
 
 | Option | What it does | Default |
 |---|---|---|
@@ -282,6 +341,20 @@ any of:
 | `hint` | Text shown greyed out while it's empty. | None |
 | `rows` | How many lines tall it is at least. | 4 |
 | `monospace` | Whether its text is in the monospace font, as for code. | `false` |
+| `fill` | Whether it takes all the room its container has left: see below. | `false` |
+
+With `fill`, the field is as tall as what its container has left below what was added before it,
+however tall the window is, and text taller than that scrolls within it, following the cursor. So
+a document that is all of a panel, or all the panels leave, needs no size worked out for it:
+
+```lua
+function gui(ui: Ui)
+    ui:panel("top", toolbar)
+    file.text = ui:text_edit(file.text, { id = file.name, fill = true })
+end
+```
+
+Whatever is added after it in the same container has no room, so add a field that fills last.
 
 A field keeps its cursor, its selection and its undo history from frame to frame by where it is in
 the interface. So a field that holds one text and then another, as an editor's does when another
@@ -294,6 +367,28 @@ file.text = ui:text_edit(file.text, { id = file.name })
 
 The whole text goes to the field and comes back every frame, so a long one costs more than a
 short one whether or not it changes.
+
+#### The cursor
+
+The third result is where the field's cursor is in its text, or `nil` until it has had one, which
+it has from the first time it's clicked or typed in:
+
+| Field | What it is |
+|---|---|
+| `line` | The line the cursor is on, from 1. Lines are what `"\n"` ends, not the rows a long line wraps into. |
+| `column` | How far along the line it is, from 1, counting characters. |
+| `offset` | How many bytes of the text are before it, so `string.sub(text, 1, offset)` is the text before the cursor. |
+| `anchor` | The same of the other end of what's selected, before or after the cursor. It's `offset` when nothing is selected. |
+
+```lua
+local text, _, cursor = ui:text_edit(file.text, { id = file.name, fill = true })
+if cursor then
+    status = `Line {cursor.line}, column {cursor.column}`
+    selected = string.sub(text, math.min(cursor.offset, cursor.anchor) + 1, math.max(cursor.offset, cursor.anchor))
+end
+```
+
+A script reads the cursor and can't move it.
 
 ### `ui:progress`
 

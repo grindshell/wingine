@@ -402,17 +402,21 @@
 //!
 //! - Containers: `ui:window(title or { title, x, y, width, height, resizable, collapsible }, fn)`,
 //!   `ui:panel(side or { side, size, resizable }, fn)`, `ui:horizontal(fn)`, `ui:vertical(fn)`,
-//!   `ui:group(fn)`, `ui:collapsing(title, fn)`, `ui:scroll(fn)`, `ui:grid(name, fn)` with
-//!   `ui:end_row()`, and `ui:enabled(enabled, fn)`.
+//!   `ui:group(fn)`, `ui:collapsing(title, fn)`, `ui:scroll(fn)` or
+//!   `ui:scroll({ stick_to_bottom }, fn)`, `ui:grid(name, fn)` with `ui:end_row()`,
+//!   `ui:enabled(enabled, fn)`, and `ui:modal(name, fn)`, a box over everything that must be
+//!   answered, which returns whether the player asked to be rid of it.
 //! - Text: `ui:label(text, color)`, `ui:heading(text)`, `ui:monospace(text)` and `ui:small(text)`.
 //! - Widgets: `ui:button(text)` and `ui:sprite_button(sprite, text, selected, tint, width,
 //!   height)`, a sprite in a frame, named `text` and framed as chosen when `selected`, return
 //!   whether they were clicked; `ui:checkbox(text, checked)`,
 //!   `ui:radio(current, value, text)`, `ui:combo(text, current, choices)`,
 //!   `ui:slider(text, value, min, max, step)`, `ui:drag(text, value, speed, min, max)` and
-//!   `ui:text_input(text, hint)` (which also returns whether Enter was pressed) return their
-//!   values, and `ui:text_edit(text, { id, label, hint, rows, monospace })`, a field of many
-//!   lines as wide as there's room for, its text and whether typing changed it;
+//!   `ui:text_input(text, hint or { id, label, hint })` (which also returns whether Enter was
+//!   pressed) return their values, and
+//!   `ui:text_edit(text, { id, label, hint, rows, monospace, fill })`, a field of many lines as
+//!   wide as there's room for, its text, whether typing changed it, and where its cursor is
+//!   (`{ line, column, offset, anchor }`);
 //!   `ui:progress(fraction, text)` and `ui:sprite(sprite, tint, width, height)` show them.
 //! - `ui:separator()` and `ui:space(amount)`.
 //!

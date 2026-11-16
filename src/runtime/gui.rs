@@ -236,13 +236,37 @@ fn add_containers(methods: &mut Methods<'_, '_>) {
         let shown = egui::CollapsingHeader::new(title).show(ui, |ui| call::<()>(lua, ui, &f));
         shown.body_returned.unwrap_or(Ok(()))
     });
-    methods.add("scroll", |lua, ui, f: Function| {
-        // By where it is, since a script may have several side by side.
-        let id = ui.next_auto_id();
-        egui::ScrollArea::vertical()
-            .id_salt(id)
-            .show(ui, |ui| call::<()>(lua, ui, &f))
-            .inner
+    methods.add(
+        "scroll",
+        |lua, ui, (first, second): (Value, Option<Function>)| {
+            // Its contents, or a table of options and then its contents.
+            let (options, f) = match (first, second) {
+                (Value::Function(f), None) => (None, f),
+                (Value::Table(options), Some(f)) => (Some(options), f),
+                _ => {
+                    return Err(mlua::Error::runtime(
+                        "a scroll takes a function, or a table of options and a function",
+                    ));
+                }
+            };
+            // By where it is, since a script may have several side by side.
+            let id = ui.next_auto_id();
+            let mut area = egui::ScrollArea::vertical().id_salt(id);
+            if let Some(options) = &options {
+                check_options(options, "scroll", &["stick_to_bottom"])?;
+                if let Some(stick) = options.get::<Option<bool>>("stick_to_bottom")? {
+                    area = area.stick_to_bottom(stick);
+                }
+            }
+            area.show(ui, |ui| call::<()>(lua, ui, &f)).inner
+        },
+    );
+    methods.add("modal", |lua, ui, (name, f): (String, Function)| {
+        let modal = egui::Modal::new(egui::Id::unique(("modal", name)));
+        let shown = modal.show(ui.ctx(), |ui| call::<()>(lua, ui, &f));
+        let dismissed = shown.should_close();
+        shown.inner?;
+        Ok(dismissed)
     });
     methods.add("grid", |lua, ui, (name, f): (String, Function)| {
         egui::Grid::new(name)
@@ -373,33 +397,67 @@ fn add_widgets(methods: &mut Methods<'_, '_>) {
     );
     methods.add(
         "text_input",
-        |_, ui, (mut text, hint): (String, Option<String>)| {
-            let field = egui::TextEdit::singleline(&mut text).hint_text(hint.unwrap_or_default());
+        |_, ui, (mut text, field): (String, Option<Value>)| {
+            // Its hint, or a table of options holding it.
+            let mut id = None;
+            let mut label = None;
+            let mut hint = String::new();
+            match field {
+                None | Some(Value::Nil) => {}
+                Some(Value::String(given)) => hint = given.to_str()?.to_owned(),
+                Some(Value::Table(options)) => {
+                    check_options(&options, "text input", &["id", "label", "hint"])?;
+                    id = options.get::<Option<String>>("id")?;
+                    label = options.get::<Option<String>>("label")?;
+                    hint = options.get::<Option<String>>("hint")?.unwrap_or_default();
+                }
+                Some(other) => {
+                    return Err(mlua::Error::runtime(format!(
+                        "a text input takes its hint or a table of options, not {}",
+                        other.type_name()
+                    )));
+                }
+            }
+            let mut field = egui::TextEdit::singleline(&mut text).hint_text(hint.clone());
+            // As a text edit's: see there.
+            if let Some(id) = id {
+                field = field.id_salt(id);
+            }
             let response = ui.add(field);
             let entered = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if let Some(label) = label {
+                name_field(&response, &text, &hint, label);
+            }
             Ok((text, entered))
         },
     );
     methods.add(
         "text_edit",
-        |_, ui, (mut text, options): (String, Option<Table>)| {
+        |lua, ui, (mut text, options): (String, Option<Table>)| {
             let mut id = None;
             let mut label = None;
             let mut hint = String::new();
             let mut rows = None;
             let mut monospace = false;
+            let mut fill = false;
             if let Some(options) = &options {
                 check_options(
                     options,
                     "text edit",
-                    &["id", "label", "hint", "rows", "monospace"],
+                    &["id", "label", "hint", "rows", "monospace", "fill"],
                 )?;
                 id = options.get::<Option<String>>("id")?;
                 label = options.get::<Option<String>>("label")?;
                 hint = options.get::<Option<String>>("hint")?.unwrap_or_default();
                 rows = options.get::<Option<usize>>("rows")?;
                 monospace = options.get::<Option<bool>>("monospace")?.unwrap_or(false);
+                fill = options.get::<Option<bool>>("fill")?.unwrap_or(false);
             }
+            // The scroll area of a field that fills, by the field's id, or by where it is.
+            let scroll = match &id {
+                Some(id) => egui::Id::unique(("text edit", id)),
+                None => ui.next_auto_id(),
+            };
             // As wide as there's room for, as a page is, rather than egui's few hundred points.
             let mut field = egui::TextEdit::multiline(&mut text)
                 .desired_width(f32::INFINITY)
@@ -416,19 +474,30 @@ fn add_widgets(methods: &mut Methods<'_, '_>) {
             if monospace {
                 field = field.font(egui::TextStyle::Monospace);
             }
-            let response = ui.add(field);
-            let changed = response.changed();
+            let output = if fill {
+                // All the room its container has left, in a scroll area of its own: the field is
+                // at least as tall as that, and text taller than it scrolls, following the
+                // cursor.
+                let room = ui.available_height();
+                egui::ScrollArea::vertical()
+                    .id_salt(scroll)
+                    .auto_shrink(false)
+                    .show(ui, |ui| field.min_size(egui::vec2(0.0, room)).show(ui))
+                    .inner
+            } else {
+                field.show(ui)
+            };
+            let changed = output.response.changed();
             // Named by its label, which nothing shows on screen, as tests and screen readers
             // find it.
             if let Some(label) = label {
-                response.widget_info(|| {
-                    let mut info =
-                        egui::WidgetInfo::text_edit(response.enabled(), &text, &text, &hint);
-                    info.label = Some(label.clone());
-                    info
-                });
+                name_field(&output.response, &text, &hint, label);
             }
-            Ok((text, changed))
+            let cursor = match output.cursor_range {
+                Some(range) => Some(cursor(lua, &text, range)?),
+                None => None,
+            };
+            Ok((text, changed, cursor))
         },
     );
     methods.add(
@@ -442,6 +511,47 @@ fn add_widgets(methods: &mut Methods<'_, '_>) {
             Ok(())
         },
     );
+}
+
+/// Names a text field by `label`, which nothing shows on screen, as tests and screen readers
+/// find it.
+fn name_field(response: &egui::Response, text: &str, hint: &str, label: String) {
+    response.widget_info(|| {
+        let mut info = egui::WidgetInfo::text_edit(response.enabled(), text, text, hint);
+        info.label = Some(label.clone());
+        info
+    });
+}
+
+/// Where the cursor of a field holding `text` is, as scripts read it: its `line` and `column`,
+/// from 1, counting characters; its `offset`, the bytes of `text` before it, so that
+/// `string.sub(text, 1, offset)` is the text before the cursor; and `anchor`, the same of the
+/// other end of what's selected, which is `offset` when nothing is.
+fn cursor(lua: &Lua, text: &str, range: egui::text::CCursorRange) -> mlua::Result<Table> {
+    // The bytes before character `index` of the text, and its line and column.
+    let place = |index: usize| {
+        let (mut line, mut column) = (1, 1);
+        for (count, (offset, character)) in text.char_indices().enumerate() {
+            if count == index {
+                return (offset, line, column);
+            }
+            if character == '\n' {
+                line += 1;
+                column = 1;
+            } else {
+                column += 1;
+            }
+        }
+        (text.len(), line, column)
+    };
+    let (offset, line, column) = place(range.primary.index.0);
+    let (anchor, _, _) = place(range.secondary.index.0);
+    let cursor = lua.create_table()?;
+    cursor.set("line", line)?;
+    cursor.set("column", column)?;
+    cursor.set("offset", offset)?;
+    cursor.set("anchor", anchor)?;
+    Ok(cursor)
 }
 
 /// What a `what` is given first: a string, or a table of options holding the string as `key`, as

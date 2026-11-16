@@ -7276,6 +7276,292 @@ mod gui {
     }
 
     #[test]
+    fn a_text_edit_that_fills_takes_the_room_its_container_has_left() {
+        let mut simulation = interface(
+            "gui_text_edit_fill",
+            "notes = 'one'",
+            "ui:panel('top', function(ui)
+                ui:label('Above')
+            end)
+            notes = ui:text_edit(notes, { label = 'Notes', fill = true })",
+        );
+        // From under the panel to the bottom of the window, 300 tall, though its text is a line.
+        let above = simulation.gui_rect("Above").unwrap();
+        let notes = simulation.gui_rect("Notes").unwrap();
+        assert!(notes.y >= above.y + above.h, "{above:?} {notes:?}");
+        assert!(notes.h > 240.0, "{notes:?}");
+        assert!(notes.y + notes.h <= 300.0, "{notes:?}");
+        assert!(notes.w > 350.0, "{notes:?}");
+
+        // And of the window as it's resized.
+        simulation.resize(400, 200);
+        simulation.run_frames(3);
+        let notes = simulation.gui_rect("Notes").unwrap();
+        assert!(notes.h > 140.0 && notes.y + notes.h <= 200.0, "{notes:?}");
+
+        // Text taller than the room scrolls within it, following the cursor as it's typed at
+        // the end, so the panel above stays where it was.
+        simulation.exec("notes = string.rep('line\\n', 200)");
+        simulation.run_frames(2);
+        // In what shows of it: the field itself is as tall as its text now, and mostly out of
+        // sight.
+        simulation.click(MouseButton::Left, 200.0, 100.0);
+        simulation.key_down(Key::LeftControl);
+        simulation.tap(Key::End);
+        simulation.key_up(Key::LeftControl);
+        simulation.type_text("end");
+        simulation.run_frames(3);
+        assert!(simulation.eval::<String>("notes").ends_with("line\nend"));
+        assert_eq!(simulation.gui_rect("Above").unwrap(), above);
+    }
+
+    #[test]
+    fn a_text_edit_says_where_its_cursor_is() {
+        let mut simulation = interface(
+            "gui_text_edit_cursor",
+            "notes = 'h\u{e9}llo\\nworld'
+            cursor = nil",
+            "ui:panel({ side = 'left', size = 300 }, function(ui)
+                local text, _, where = ui:text_edit(notes, { label = 'Notes', rows = 6 })
+                notes, cursor = text, where
+            end)",
+        );
+        let cursor = |simulation: &mut Simulation<LuauGame>| {
+            simulation.eval::<(u32, u32, u32, u32)>(
+                "cursor.line, cursor.column, cursor.offset, cursor.anchor",
+            )
+        };
+        // None until it has one.
+        assert!(simulation.eval::<bool>("cursor == nil"));
+
+        // A click below the text puts it at the text's end: the second line, after five
+        // characters, with all the text's bytes before it, of which the accented letter is two.
+        simulation.click_gui("Notes");
+        simulation.step();
+        assert_eq!(cursor(&mut simulation), (2, 6, 12, 12));
+        assert_eq!(
+            simulation.eval::<String>("string.sub(notes, 1, cursor.offset)"),
+            "h\u{e9}llo\nworld"
+        );
+
+        simulation.type_text("!");
+        simulation.run_frames(2);
+        assert_eq!(cursor(&mut simulation), (2, 7, 13, 13));
+
+        // To the start of the line, then of the text, then two characters along.
+        simulation.tap(Key::Home);
+        simulation.run_frames(2);
+        assert_eq!(cursor(&mut simulation), (2, 1, 7, 7));
+        simulation.key_down(Key::LeftControl);
+        simulation.tap(Key::Home);
+        simulation.key_up(Key::LeftControl);
+        simulation.run_frames(2);
+        assert_eq!(cursor(&mut simulation), (1, 1, 0, 0));
+        simulation.tap(Key::Right);
+        simulation.step();
+        simulation.tap(Key::Right);
+        simulation.run_frames(2);
+        assert_eq!(cursor(&mut simulation), (1, 3, 3, 3));
+        assert_eq!(
+            simulation.eval::<String>("string.sub(notes, 1, cursor.offset)"),
+            "h\u{e9}"
+        );
+
+        // With everything selected, the cursor and the selection's other end are the text's
+        // two ends.
+        simulation.key_down(Key::LeftControl);
+        simulation.tap(Key::A);
+        simulation.key_up(Key::LeftControl);
+        simulation.run_frames(2);
+        let (_, _, offset, anchor) = cursor(&mut simulation);
+        assert_eq!((offset.min(anchor), offset.max(anchor)), (0, 13));
+    }
+
+    #[test]
+    fn a_text_input_given_an_id_keeps_each_texts_undo_history_apart() {
+        let mut simulation = interface(
+            "gui_text_input_id",
+            "files = { a = 'first', b = 'second' }
+            open = 'a'",
+            "ui:panel({ side = 'left', size = 300 }, function(ui)
+                if ui:button('Other') then
+                    open = if open == 'a' then 'b' else 'a'
+                end
+                files[open] = ui:text_input(files[open], { id = open, label = 'Name', hint = 'A name' })
+            end)",
+        );
+        // Found by its label, and by its hint, as one given only a hint is.
+        assert!(simulation.gui_rect("A name").is_some());
+        simulation.click_gui("Name");
+        simulation.type_text("!");
+        simulation.step();
+        assert_eq!(simulation.eval::<String>("files.a"), "first!");
+
+        // In the other file there's nothing to undo, and the first is as it was left.
+        simulation.click_gui("Other");
+        simulation.step();
+        simulation.click_gui("Name");
+        simulation.key_down(Key::LeftControl);
+        simulation.tap(Key::Z);
+        simulation.key_up(Key::LeftControl);
+        simulation.run_frames(2);
+        assert_eq!(simulation.eval::<String>("files.b"), "second");
+        assert_eq!(simulation.eval::<String>("files.a"), "first!");
+    }
+
+    #[test]
+    fn a_text_input_refuses_what_isnt_a_hint_or_its_options() {
+        for (field, message) in [
+            ("3", "a text input takes its hint or a table of options"),
+            ("{ rows = 3 }", "a text input's options are"),
+        ] {
+            let main = format!("function gui(ui: Ui)\nui:text_input('', {field})\nend");
+            let folder = game(
+                "gui_text_input_option",
+                &[("conf.luau", WINDOW), ("main.luau", &main)],
+            );
+            let mut simulation = simulation(&folder);
+            simulation.run_frames(2);
+            let error = simulation.game().error().expect("the game stopped");
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_scroll_that_sticks_keeps_to_its_end_as_more_is_added() {
+        // Whether the last of 200 lines shows, in a window that holds a dozen.
+        let last_shows = |test: &str, stick: bool| {
+            let state = format!("lines = 5\nstick = {stick}");
+            let mut simulation = interface(
+                test,
+                &state,
+                "ui:panel({ side = 'left', size = 200 }, function(ui)
+                    ui:scroll({ stick_to_bottom = stick }, function(ui)
+                        for i = 1, lines do
+                            ui:label('Line ' .. i)
+                        end
+                    end)
+                end)",
+            );
+            simulation.exec("lines = 200");
+            simulation.run_frames(4);
+            simulation
+                .gui_rect("Line 200")
+                .is_some_and(|line| line.y >= 0.0 && line.y + line.h <= 300.0)
+        };
+        assert!(last_shows("gui_scroll_stick", true));
+        assert!(!last_shows("gui_scroll_loose", false));
+    }
+
+    #[test]
+    fn a_scroll_takes_its_contents_alone_or_after_its_options() {
+        let mut simulation = interface(
+            "gui_scroll_forms",
+            "",
+            "ui:panel('left', function(ui)
+                ui:scroll(function(ui)
+                    ui:label('Alone')
+                end)
+                ui:scroll({}, function(ui)
+                    ui:label('After options')
+                end)
+            end)",
+        );
+        assert!(simulation.gui_rect("Alone").is_some());
+        assert!(simulation.gui_rect("After options").is_some());
+
+        let folder = game(
+            "gui_scroll_option",
+            &[
+                ("conf.luau", WINDOW),
+                (
+                    "main.luau",
+                    "function gui(ui: Ui)
+                        ui:scroll({ sticky = true }, function() end)
+                    end",
+                ),
+            ],
+        );
+        let mut stopped = super::simulation(&folder);
+        stopped.run_frames(2);
+        let error = stopped.game().error().expect("the game stopped");
+        assert!(
+            error.to_string().contains("a scroll's options are"),
+            "{error}"
+        );
+        simulation.step();
+    }
+
+    #[test]
+    fn a_modal_must_be_answered_before_whats_behind_it_is_used() {
+        let mut simulation = interface(
+            "gui_modal",
+            "asking = false
+            behind = 0
+            answer = nil
+            dismissed = 0",
+            "ui:panel('left', function(ui)
+                if ui:button('Ask') then
+                    asking = true
+                end
+                if ui:button('Behind') then
+                    behind += 1
+                end
+            end)
+            if asking then
+                local gone = ui:modal('question', function(ui)
+                    ui:heading('Sure?')
+                    if ui:button('Yes') then
+                        answer = 'yes'
+                        asking = false
+                    end
+                end)
+                if gone then
+                    dismissed += 1
+                    asking = false
+                end
+            end",
+        );
+        let ask = simulation.gui_rect("Ask").unwrap();
+        let behind = simulation.gui_rect("Behind").unwrap();
+        let click = |simulation: &mut Simulation<LuauGame>, rect: wingine::math::Rect| {
+            simulation.click(
+                MouseButton::Left,
+                rect.x + rect.w / 2.0,
+                rect.y + rect.h / 2.0,
+            );
+            simulation.run_frames(2);
+        };
+        click(&mut simulation, behind);
+        assert_eq!(simulation.eval::<u32>("behind"), 1);
+
+        // With the modal up, a click on the button behind it doesn't press it: a click outside
+        // the modal is the player asking to be rid of it.
+        click(&mut simulation, ask);
+        assert!(simulation.gui_rect("Sure?").is_some());
+        click(&mut simulation, behind);
+        assert_eq!(simulation.eval::<u32>("behind"), 1);
+        assert_eq!(simulation.eval::<u32>("dismissed"), 1);
+        assert!(simulation.gui_rect("Sure?").is_none());
+
+        // So is Escape.
+        click(&mut simulation, ask);
+        simulation.tap(Key::Escape);
+        simulation.run_frames(2);
+        assert_eq!(simulation.eval::<u32>("dismissed"), 2);
+        assert!(simulation.gui_rect("Sure?").is_none());
+
+        // Its own widgets work, and what's behind it does again once it's gone.
+        click(&mut simulation, ask);
+        simulation.click_gui("Yes");
+        simulation.run_frames(2);
+        assert_eq!(simulation.eval::<String>("answer"), "yes");
+        assert_eq!(simulation.eval::<u32>("dismissed"), 2);
+        click(&mut simulation, behind);
+        assert_eq!(simulation.eval::<u32>("behind"), 2);
+    }
+
+    #[test]
     fn a_text_edit_refuses_an_option_it_doesnt_know() {
         let folder = game(
             "gui_text_edit_option",

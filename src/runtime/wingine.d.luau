@@ -504,6 +504,38 @@ export type TextEditOptions = {
     rows: number?,
     --- Whether its text is in the monospace font. By default, false.
     monospace: boolean?,
+    --- Whether it takes all the room its container has left, scrolling its text within it when
+    --- there's more than fits. By default, false.
+    fill: boolean?,
+}
+
+--- Where the cursor of a `ui:text_edit` is in its text.
+export type TextCursor = {
+    --- The line it's on, from 1, and how far along it, from 1, counting characters.
+    line: number,
+    column: number,
+    --- How many bytes of the text are before it: `string.sub(text, 1, offset)` is that text.
+    offset: number,
+    --- The same of the other end of what's selected: `offset`, when nothing is.
+    anchor: number,
+}
+
+--- A field of one line of text, for `ui:text_input`.
+export type TextInputOptions = {
+    --- Which text it holds, when a field in one place holds one text then another: its cursor,
+    --- selection and undo history are kept by it. By default, where the field is.
+    id: string?,
+    --- What tests and screen readers find it by. Nothing shows it.
+    label: string?,
+    --- Shown greyed out while it's empty.
+    hint: string?,
+}
+
+--- How `ui:scroll` scrolls.
+export type ScrollOptions = {
+    --- Whether it keeps to its end as more is added, while it's scrolled there. By default,
+    --- false.
+    stick_to_bottom: boolean?,
 }
 
 --- How `ui.menu` finds its items and takes input. The actions are named as `input.bind` binds
@@ -1041,8 +1073,14 @@ declare extern type Ui with
     function group(self, contents: (Ui) -> ()): ()
     --- A header that opens and closes what `contents` adds, which runs only while it's open.
     function collapsing(self, title: string, contents: (Ui) -> ()): ()
-    --- Scrolls what `contents` adds up and down when it doesn't fit.
-    function scroll(self, contents: (Ui) -> ()): ()
+    --- Scrolls what `contents` adds up and down when it doesn't fit: `ui:scroll(contents)`, or
+    --- with options first, `ui:scroll(options, contents)`.
+    function scroll(self, options: ScrollOptions | ((Ui) -> ()), contents: ((Ui) -> ())?): ()
+    --- A box in the middle of the window, over everything, which `contents` fills, and which
+    --- must be answered: nothing behind it can be used while it's laid out. `name` tells it
+    --- apart from other modals. Returns whether the player asked to be rid of it, with Escape or
+    --- a click outside it.
+    function modal(self, name: string, contents: (Ui) -> ()): boolean
     --- Lines what `contents` adds up in columns, a row at a time: `ui:end_row()` ends each.
     function grid(self, name: string, contents: (Ui) -> ()): ()
     --- Ends a row of a grid.
@@ -1071,12 +1109,12 @@ declare extern type Ui with
     --- A number field, changed by dragging or typing: returns `value` after any change, by
     --- `speed` for each point dragged (1 by default), kept between `min` and `max` if given.
     function drag(self, text: string, value: number, speed: number?, min: number?, max: number?): number
-    --- A text field, showing `hint` while empty: returns its text after any typing, and whether
-    --- Enter was pressed in it.
-    function text_input(self, text: string, hint: string?): (string, boolean)
+    --- A text field, showing its hint while empty, given as the hint or with options: returns
+    --- its text after any typing, and whether Enter was pressed in it.
+    function text_input(self, text: string, field: (string | TextInputOptions)?): (string, boolean)
     --- A field of many lines of text, as wide as there's room for: returns its text after any
-    --- typing, and whether that changed it.
-    function text_edit(self, text: string, options: TextEditOptions?): (string, boolean)
+    --- typing, whether that changed it, and where its cursor is, once it has had one.
+    function text_edit(self, text: string, options: TextEditOptions?): (string, boolean, TextCursor?)
     --- A bar filled `fraction` of the way, from 0 to 1, with `text` on it.
     function progress(self, fraction: number, text: string?): ()
     --- Shows `sprite`, its colors multiplied by `tint`, at `width` by `height` points, or its own
