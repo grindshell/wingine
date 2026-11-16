@@ -201,7 +201,10 @@
 //!   `casts_shadow` is `false`; billboards shade nothing. A view has 24 shadow maps, which the
 //!   lights nearest its camera take first: a spot light whose `cone` is no more than a sixth of
 //!   a turn takes one, and any other light six. A light there are none left for lights without
-//!   shadows.
+//!   shadows. With `bounds`, six numbers `{ x0, y0, z0, x1, y1, z1 }`, a box's least corner and
+//!   then its most, it lights only within that box, faces and all, in the coordinates its node's
+//!   place is in, so the box moves, turns and stretches with its node's parent: a room's lights
+//!   kept to the room's inside light nothing through its walls, floor or ceiling.
 //!
 //! Nodes in a view are placed in 3D, in its world, right-handed with `y` up: by `x`, `y` and `z`,
 //! turned by `yaw`, `pitch` and `roll`, radians about `y`, `x` and `z`, and stretched by `scale_x`,
@@ -2801,9 +2804,12 @@ impl Scene {
                     billboard.tint,
                 );
             }
-            // A spot light shines the way its node's front faces.
+            // A spot light shines the way its node's front faces, and a light's box is in its
+            // parent's coordinates. A box placed with no room in it lights nothing.
             Kind::Light(light) => {
-                world.add_light(light.light(transform.translation, transform.z_axis));
+                if let Some(light) = light.light(transform.translation, transform.z_axis, parent) {
+                    world.add_light(light);
+                }
             }
             _ => {}
         }

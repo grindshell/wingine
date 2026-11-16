@@ -230,6 +230,14 @@ export type LightSettings = {
     --- and any other light six. A light there are none left for lights without shadows. By
     --- default, `false`.
     shadows: boolean?,
+    --- The box it lights within, faces and all, if it keeps to one: six numbers, its least
+    --- corner and then its most, `{ x0, y0, z0, x1, y1, z1 }`, each less than the other every
+    --- way. A light node's is in the coordinates its node's place is in, its parent's, and moves,
+    --- turns and stretches with that; one for `graphics.begin_3d` is in the world's. Outside it,
+    --- it lights nothing, whatever its range, so a light without shadows can be kept from
+    --- lighting through walls and floors. `false`, for `node:set_light`, takes it away. By
+    --- default, none.
+    bounds: ({ number } | false)?,
 }
 
 --- A light at a place in a 3D view, for `graphics.begin_3d`.
@@ -793,7 +801,8 @@ declare extern type SceneNode with
     function fog(self): Fog?
     --- Changes a 3D view's fog, whole, or with `nil`, takes it away.
     function set_fog(self, fog: Fog?): ()
-    --- Returns a light node's settings, its color as a number, and `cone` only for a spot light.
+    --- Returns a light node's settings, its color as a number, `cone` only for a spot light,
+    --- and `bounds` only for one that keeps to a box.
     function light(self): LightSettings
     --- Changes those of a light node's settings that `settings` gives. A light is where its node
     --- is, and a spot light shines along its node's `+z`, so those are the node's to change.

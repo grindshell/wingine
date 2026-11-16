@@ -45,9 +45,9 @@ fn the_cellar_starts_dark_with_the_hero_at_the_start() {
     let mut simulation = simulation();
     simulation.run_frames(1);
     assert_eq!(tile(&mut simulation), (5, 5));
-    assert_eq!(simulation.eval::<u32>("#cellar.candles"), 4);
+    assert_eq!(simulation.eval::<u32>("#cellar.candles"), 5);
     assert_eq!(simulation.eval::<u32>("cellar.lit"), 0);
-    // The floor, a plane under the whole map, the walls, the props, and 5 billboards, then the
+    // The floor, a plane under the whole map, the walls, the props, and 6 billboards, then the
     // HUD: its shade, then its text. The walls are one mesh, so they're one draw call, as are the
     // billboards, of one sheet. The props are a crate, a barrel, a table, a crate and a barrel: a
     // draw call for the crates and one for the barrels, wherever they are, and two for the
@@ -76,7 +76,7 @@ fn the_cellar_starts_dark_with_the_hero_at_the_start() {
         })
         .sum();
     assert_eq!(stats.draw_calls, 1 + 1 + (1 + 1 + 2) + 1 + 2);
-    assert_eq!(stats.triangles, 2 + WALLS * 12 + prop_triangles + 5 * 2);
+    assert_eq!(stats.triangles, 2 + WALLS * 12 + prop_triangles + 6 * 2);
     // Each candle holds a flame, a light that's out until it's lit.
     assert_eq!(stats.lights, 0);
     assert!(!simulation.eval::<bool>("cellar.candles[1].flame:is_visible()"));
@@ -140,7 +140,7 @@ fn the_mouse_points_at_props() {
     assert_eq!(simulation.eval::<String>("cellar.pointed.kind"), "crate");
     // Its name is drawn over it: a quad for each letter, after the HUD's.
     let glyphs = |text: &str| text.chars().filter(|c| *c != ' ').count() as u32;
-    let hud = 1 + glyphs("Candles lit: 0/4");
+    let hud = 1 + glyphs("Candles lit: 0/5");
     let quads = simulation.context().frame_stats().quads;
     assert_eq!(quads, hud + glyphs("crate"));
 
@@ -212,19 +212,30 @@ fn standing_on_every_candle_lights_them_all() {
     walk(&mut simulation, &[left, left, left, down, down, left, left]);
     assert_eq!(simulation.eval::<u32>("cellar.lit"), 3);
     assert!(!simulation.eval::<bool>("cellar.done"));
-    walk(&mut simulation, &[left, left, left, up, up]);
-    assert_eq!(tile(&mut simulation), (1, 1));
+    // Into the gap between two walls, where the fifth candle is, and back out of it.
+    walk(&mut simulation, &[left, up]);
+    assert_eq!(tile(&mut simulation), (3, 2));
     assert_eq!(simulation.eval::<u32>("cellar.lit"), 4);
+    // Its flame casts no shadows, but keeps to a box round the gap.
+    assert!(simulation.eval::<bool>(
+        "(function()
+            local flame = cellar.candles[5].flame:light()
+            return not flame.shadows and #flame.bounds == 6
+        end)()"
+    ));
+    walk(&mut simulation, &[down, left, left, up, up]);
+    assert_eq!(tile(&mut simulation), (1, 1));
+    assert_eq!(simulation.eval::<u32>("cellar.lit"), 5);
     assert!(simulation.eval::<bool>("cellar.done"));
-    assert_eq!(simulation.context().frame_stats().lights, 4);
-    // Four flames take every shadow map a view has.
+    assert_eq!(simulation.context().frame_stats().lights, 5);
+    // Four flames take every shadow map a view has, and the fifth wants none.
     let stats = simulation.context().frame_stats();
     assert_eq!([stats.shadow_maps, stats.shadows_left_out], [24, 0]);
 
     // The message over the hero's head is drawn: a quad for each glyph of it, and the HUD's.
     simulation.run_frames(1);
     let glyphs = |text: &str| text.chars().filter(|c| *c != ' ').count() as u32;
-    let hud = 1 + glyphs("Candles lit: 4/4");
+    let hud = 1 + glyphs("Candles lit: 5/5");
     let quads = simulation.context().frame_stats().quads;
     assert_eq!(quads, hud + glyphs("Every candle is lit!"));
 }

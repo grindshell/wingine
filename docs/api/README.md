@@ -195,12 +195,13 @@ See [`graphics.begin_3d`](graphics.md#graphicsbegin_3d).
 ### `Light` and `LightSettings`
 
 A light at a place in a 3D view, one of a `Lighting`'s `lights`: a table of a `position`, and
-any of `color`, `range`, `energy`, `shadows`, and for a spot light, `cone`, `direction` and
-`edge`. See [`graphics.begin_3d`](graphics.md#graphicsbegin_3d).
+any of `color`, `range`, `energy`, `shadows`, `bounds`, and for a spot light, `cone`,
+`direction` and `edge`. See [`graphics.begin_3d`](graphics.md#graphicsbegin_3d).
 
 `LightSettings` is a scene's light node's: a table with any of `color`, `range`, `energy`, `cone`,
-`edge` and `shadows`, a light's fields but its `position` and `direction`, which are its node's.
-See [`node:light`](scene.md#nodelight) and [`node:set_light`](scene.md#nodeset_light).
+`edge`, `shadows` and `bounds`, a light's fields but its `position` and `direction`, which are its
+node's, and with its `bounds` in its parent's coordinates. See [`node:light`](scene.md#nodelight)
+and [`node:set_light`](scene.md#nodeset_light).
 
 ### `MeshOptions`
 

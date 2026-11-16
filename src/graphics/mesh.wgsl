@@ -8,9 +8,12 @@ struct Light {
     // light, which has no cone.
     direction: vec4<f32>,
     // The first of the view's shadow maps that are its own, or under 0 for a light without
-    // shadows; how many are, one or six; and how large a texel of them is, in world units, a
-    // world unit from the light along the way a map looks.
+    // shadows; how many are, one or six; how large a texel of them is, in world units, a world
+    // unit from the light along the way a map looks; and 1 for a light that keeps to a box, or 0.
     shadow: vec4<f32>,
+    // The rows of what takes the world onto its box's cube, from -1 to 1 each way, for a light
+    // that keeps to a box.
+    bounds: array<vec4<f32>, 3>,
 }
 
 struct View {
@@ -196,6 +199,15 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @locatio
         let reach = 1.0 - distance / position.w;
         if reach <= 0.0 {
             continue;
+        }
+        if view.lights[i].shadow.w > 0.5 {
+            // A light that keeps to a box lights nothing outside it, faces and all inside.
+            let bounds = view.lights[i].bounds;
+            let place = vec4<f32>(in.world.xyz, 1.0);
+            let along = vec3<f32>(dot(bounds[0], place), dot(bounds[1], place), dot(bounds[2], place));
+            if any(abs(along) > vec3<f32>(1.0)) {
+                continue;
+            }
         }
         let toward = to_light / max(distance, 1e-6);
         var level = reach;

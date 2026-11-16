@@ -72,8 +72,13 @@ struct LightUniform {
     /// point light.
     direction: [f32; 4],
     /// The first of the view's shadow maps that are its own, or -1 for none, how many are, and
-    /// how large their texels are a world unit from the light, then nothing.
+    /// how large their texels are a world unit from the light, then 1 if it keeps to a box, or
+    /// 0.
     shadow: [f32; 4],
+    /// The rows of what takes the world onto its box's cube, from -1 to 1 each way, if it keeps
+    /// to one: a place's `x`, `y` and `z` in the cube are each row's dot product with the place,
+    /// and 1.
+    bounds: [[f32; 4]; 3],
 }
 
 impl LightUniform {
@@ -83,19 +88,33 @@ impl LightUniform {
         let [r, g, b, _] = light.color.to_linear();
         let [outer, inner] = light.cone_cosines();
         let [dx, dy, dz] = normalize3(light.direction).unwrap_or([0.0, 0.0, 1.0]);
+        let mut shadow = match first_map {
+            Some(first) => [
+                first as f32,
+                light.shadow_maps() as f32,
+                light.shadow_texel(),
+                0.0,
+            ],
+            None => [-1.0, 0.0, 0.0, 0.0],
+        };
+        let mut bounds = [[0.0; 4]; 3];
+        if let Some(onto_cube) = light.bounds {
+            shadow[3] = 1.0;
+            bounds = std::array::from_fn(|row| {
+                [
+                    onto_cube.x_axis[row],
+                    onto_cube.y_axis[row],
+                    onto_cube.z_axis[row],
+                    onto_cube.translation[row],
+                ]
+            });
+        }
         Self {
             position: [x, y, z, light.range],
             color: [r * light.energy, g * light.energy, b * light.energy, inner],
             direction: [dx, dy, dz, outer],
-            shadow: match first_map {
-                Some(first) => [
-                    first as f32,
-                    light.shadow_maps() as f32,
-                    light.shadow_texel(),
-                    0.0,
-                ],
-                None => [-1.0, 0.0, 0.0, 0.0],
-            },
+            shadow,
+            bounds,
         }
     }
 }

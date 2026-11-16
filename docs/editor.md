@@ -208,8 +208,10 @@ a model's file; for both, a tint, **casts shadow**, whether it shades what's beh
 lights with shadows, and **glow**, how much of its own colors it shows whatever lights it; a
 billboard's sprite, size, tint and glow; and a light's color, range and energy,
 with a checkbox that gives it a cone, making it a spot light, and then half the cone's angle, in
-degrees, and its edge, and **shadows**, whether the view's meshes and models in its way shade
-what's behind them. While the Animation panel shows a clip, **♦** keys a node's `z`, `yaw`,
+degrees, and its edge, **shadows**, whether the view's meshes and models in its way shade
+what's behind them, and **bounds**, a checkbox that keeps it to a box, and then the box's least
+corner and its most, in its parent's coordinates, which the viewport draws with its reach.
+While the Animation panel shows a clip, **♦** keys a node's `z`, `yaw`,
 `pitch`, `roll` and scale as it does `x` and `y`.
 
 ## Animating rigs

@@ -595,7 +595,8 @@ node:light(): LightSettings
 
 Returns the settings of a [light node](../scenes.md#3d-views), as a table: its `color`, a number
 `0xRRGGBBAA`, its `range`, `energy`, `edge` and `shadows`, and for a spot light, its `cone`,
-which a point light's table doesn't have. An error for a node that isn't a light.
+which a point light's table doesn't have, and for one that keeps to a box, its `bounds`, six
+numbers. An error for a node that isn't a light.
 
 ### `node:set_light`
 
@@ -604,21 +605,27 @@ node:set_light(settings: LightSettings)
 ```
 
 Changes those of a light node's settings that `settings` gives, any of `color`, `range`, `energy`,
-`cone`, `edge` and `shadows`, keeping the rest. A `cone` makes a point light a spot light; a cone
-can be widened, up to pi, but not taken away. Where a light is and the way a spot light shines are
-its node's, which [`set_position_3d`](#nodeset_position_3d) and
-[`set_orientation`](#nodeset_orientation) change.
+`cone`, `edge`, `shadows` and `bounds`, keeping the rest. A `cone` makes a point light a spot
+light; a cone can be widened, up to pi, but not taken away. `bounds = false` takes a light's box
+away. Where a light is and the way a spot light shines are its node's, which
+[`set_position_3d`](#nodeset_position_3d) and [`set_orientation`](#nodeset_orientation) change.
 
 ```lua
 -- A torch that flickers.
 torch:set_light({ energy = 0.9 + 0.1 * math.sin(time * 13) })
+-- A lamp that lights its room and the one east of it, which a door has opened onto.
+lamp:set_light({ bounds = { -7.25, -0.25, -7.25, 23.25, 4.25, 7.25 } })
 ```
 
-Settings a light can't have, such as a `range` of 0 or an `edge` without a `cone`, are an error,
-and the light keeps those it had. A node that isn't a light is an error too.
+Settings a light can't have, such as a `range` of 0, an `edge` without a `cone`, or `bounds`
+whose least corner isn't less than its most every way, are an error, and the light keeps those it
+had. A node that isn't a light is an error too.
 
 `shadows` is whether the view's meshes and models in the light's way shade what's behind them,
 as [`graphics.begin_3d`](graphics.md#graphicsbegin_3d) describes, with what shadows cost.
+`bounds` is the box it lights within, faces and all, in the coordinates its node's place is in,
+its parent's, so the box moves, turns and stretches with its parent, and not with the light:
+see [3D views](../scenes.md#3d-views).
 
 ### `node:casts_shadow`
 

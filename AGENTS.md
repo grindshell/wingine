@@ -119,6 +119,15 @@ own right.
   normal matrix only billboards have. In scenes a light is a `light` node (`LightDef`), a spot
   shining along its node's `+z`. `Lighting` and `View3d` stay `Copy`, and native libraries can't
   add lights: the ABI's lighting is unchanged.
+- Bounds: a light may keep to a box (`Light::bounds`, an `Affine3` taking the world onto the cube
+  from -1 to 1, made by `Light::within`), lighting nothing outside it, faces inclusive, so one
+  without shadows doesn't light through walls. The uniform carries the affine's three rows, and
+  `shadow.w` says a light has one; `mesh.wgsl` skips a light for a pixel outside it, `level_at`
+  gives 0 there, and `lights_of` leaves out a light whose box's corners are all outside one side
+  of what the camera sees. In scenes it's a light node's `bounds`, six numbers in its parent's
+  coordinates (`LightDef::bounds`, a `Bounds3`), so the box moves, turns and stretches with the
+  parent; `draw_3d` hands `LightDef::light` the parent's placement, and a box placed with no room
+  in it lights nothing.
 - Shadows: a light with `Light::shadows` takes one shadow map, or six (`Light::shadow_maps`), of
   the `Light::SHADOW_MAPS` a view has, handed out by `shadows_of`, the nearest the camera first;
   a light left without lights the view without shadows, and the sun casts none. The maps are the

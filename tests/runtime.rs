@@ -3510,6 +3510,27 @@ fn scene_lights_work_from_luau() {
     let (near, _) = lit(&mut simulation);
     assert!(near[0] > 185 && near[1] == 0 && near[2] == 0, "{near:?}");
     assert_eq!(simulation.eval::<f32>("lamp:light().range"), 2.0);
+    assert!(simulation.eval::<bool>("lamp:light().bounds == nil"));
+
+    // Kept to a box, in its parent's coordinates, it lights only the wall's left half; and
+    // moved with its parent, the box goes with it. `false` takes the box away.
+    simulation.exec("lamp:set_light({ color = '#ffffff', bounds = { -0.5, -2, -2, 0.5, 2, 2 } })");
+    let (near, far) = lit(&mut simulation);
+    assert!(near[0] > 185, "{near:?}");
+    assert_eq!(far, BLACK);
+    assert_eq!(
+        simulation.eval::<Vec<f32>>("lamp:light().bounds"),
+        [-0.5, -2.0, -2.0, 0.5, 2.0, 2.0]
+    );
+    simulation.exec("view:find('post'):set_position_3d(vector.create(0.5, 0, 0))");
+    let (near, far) = lit(&mut simulation);
+    assert_eq!(near, BLACK);
+    assert!(far[0] > 185, "{far:?}");
+    simulation.exec("lamp:set_light({ bounds = false })");
+    let (near, _) = lit(&mut simulation);
+    assert!(near[0] > 100, "{near:?}");
+    assert!(simulation.eval::<bool>("lamp:light().bounds == nil"));
+    simulation.exec("view:find('post'):set_position_3d(vector.create(-0.5, 0, 0))");
 
     // With a cone it shines along its node's `+z`, away from the wall, until it's turned round:
     // then on what's within its cone, with a hard rim.
@@ -3538,6 +3559,15 @@ fn scene_lights_work_from_luau() {
             "`cone` is an angle above 0, up to pi",
         ),
         ("lamp:set_light({ edge = 2 })", "`edge` is from 0 to 1"),
+        (
+            "lamp:set_light({ bounds = { 1, 0, 0, 0, 1, 1 } })",
+            "each less than the other every way",
+        ),
+        (
+            "lamp:set_light({ bounds = { 0, 0, 0, 1, 1 } })",
+            "six finite numbers",
+        ),
+        ("lamp:set_light({ bounds = 3 })", "six numbers"),
         ("view:find('wall'):light()", "light"),
         ("view:find('wall'):set_light({})", "light"),
         ("view:set_lighting({ lights = {} })", "its light nodes"),
@@ -3599,7 +3629,19 @@ fn views_take_lights_from_luau() {
     assert!(near[0] > 185 && near[1] == 0 && near[2] > 100, "{near:?}");
     assert!(far[0] == 0 && far[2] > 0, "{far:?}");
 
+    // Kept to a box, in the world's coordinates: the wall's left half.
+    simulation.exec(
+        "lights = { { position = vector.create(-0.5, 0, 0), range = 2, bounds = { -1, -2, -2, 0, 2, 2 } } }",
+    );
+    let (near, far) = lit(&mut simulation);
+    assert!(near[0] > 185, "{near:?}");
+    assert_eq!(far, BLACK);
+
     for (light, message) in [
+        (
+            "{ position = vector.zero, bounds = { 1, 0, 0, 0, 1, 1 } }",
+            "each less than the other every way",
+        ),
         ("{ range = 2 }", "a light has a `position`"),
         (
             "{ position = vector.zero, cone = 0.5 }",

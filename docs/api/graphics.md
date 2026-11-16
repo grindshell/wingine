@@ -1089,10 +1089,13 @@ Each of the `lights` is a table:
 | `direction` | The way a spot light shines, a vector of any length. A light with a `cone` must have one. |
 | `edge` | The part of the cone, from its rim inward, across which a spot light fades, from 0, a hard rim, to 1. By default, 0. Only a light with a `cone` has one. |
 | `shadows` | Whether the view's meshes and models in its way shade what's behind them. By default, `false`. |
+| `bounds` | The box it lights within, faces and all, if it keeps to one: six numbers, its least corner and then its most, `{ x0, y0, z0, x1, y1, z1 }`, in the world's coordinates, each less than the other every way. By default, none. |
 
 A light's level at a surface is `energy * (1 - distance / range)`: it falls off in a straight
 line, to nothing at its range. A spot light's level is nothing outside its cone, and across the
 cone's `edge` it fades to nothing at the rim, by the cosine of the angle from the way it shines.
+A light that keeps to a box lights nothing outside it, whatever its range: nothing fades at its
+faces.
 The surface gets the light's `color` times that level, and less of it the more it's turned away
 from the light, as of the sun's. So a view lights a surface by its ambient light, the sun's by how
 squarely the surface faces it, and each light's the same way, added together.
@@ -1120,11 +1123,21 @@ wg.graphics.begin_3d({
 A surface whose normal is zero faces nothing, so it gets nothing from lights, as from the sun.
 
 A view is lit by 32 lights at once. Lights that reach nothing its camera sees don't count toward
-them; of the rest, the 32 nearest the camera light the view. Any more are left out: the engine
-logs a warning the first time, and [`graphics.frame_stats`](#graphicsframe_stats) counts them as
-`lights_left_out`.
+them, nor those whose box is wholly out of what it sees; of the rest, the 32 nearest the camera
+light the view. Any more are left out: the engine logs a warning the first time, and
+[`graphics.frame_stats`](#graphicsframe_stats) counts them as `lights_left_out`.
 
-A light without `shadows` shines through a wall onto what's behind it. With them, the view's
+A light without `shadows` shines through a wall onto what's behind it, unless it keeps to a box
+that the wall is the side of: a box round a room, its faces inside the room's walls, floor and
+ceiling, keeps the room's light in it for nothing, where shadows take maps.
+
+```lua
+-- A lamp in a room 8 wide and 4 high, whose walls are a metre thick: it lights the room, and
+-- nothing through its walls, its floor or its ceiling.
+{ position = vector.create(4, 3.5, 4), range = 6, bounds = { 0.25, -0.25, 0.25, 7.75, 4.25, 7.75 } }
+```
+
+With `shadows`, the view's
 meshes and models shade what's behind them from the light, billboards too. The shadows have hard
 edges: a place is in one or it isn't. Some things cast none: billboards, which face the camera,
 not the light; the pixels of a mesh's sprite less than half opaque, which aren't drawn either; a

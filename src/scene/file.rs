@@ -22,6 +22,7 @@ use crate::{
         mlua::{self, chunk::ChunkMode},
         parse_hex, unpacked_color,
     },
+    math::{Affine3, Bounds3},
     particles::ParticleSettings,
 };
 
@@ -682,7 +683,8 @@ pub struct BillboardDef {
 
 /// A light at its node's place in a 3D view, lighting what's within its range: see [`Light`].
 /// With a `cone` it's a spot light, shining along its node's `+z`, the way a model's front
-/// faces. It moves and turns with its node, but doesn't stretch.
+/// faces. It moves and turns with its node, but doesn't stretch. With `bounds` it lights only
+/// within a box, which moves, turns and stretches with its node's parent.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LightDef {
     /// Its light on a surface facing it squarely, at its place.
@@ -697,6 +699,9 @@ pub struct LightDef {
     pub edge: f32,
     /// Whether the view's meshes and models in its way shade what's behind them.
     pub shadows: bool,
+    /// The box it lights within, faces and all, if it keeps to one, in the coordinates its
+    /// node's place is in: its parent's. `None` lights all it reaches.
+    pub bounds: Option<Bounds3>,
 }
 
 impl Default for LightDef {
@@ -709,14 +714,17 @@ impl Default for LightDef {
             cone: None,
             edge: 0.0,
             shadows: false,
+            bounds: None,
         }
     }
 }
 
 impl LightDef {
-    /// The light it is at `position`, shining along `direction` if it's a spot light.
-    pub fn light(&self, position: [f32; 3], direction: [f32; 3]) -> Light {
-        Light {
+    /// The light it is at `position`, shining along `direction` if it's a spot light, and
+    /// keeping to its box placed by `parent`, what places its node's parent. `None` if its box,
+    /// placed so, has no room in it.
+    pub fn light(&self, position: [f32; 3], direction: [f32; 3], parent: Affine3) -> Option<Light> {
+        let light = Light {
             position,
             color: self.color,
             range: self.range,
@@ -725,6 +733,11 @@ impl LightDef {
             cone: self.cone,
             edge: self.edge,
             shadows: self.shadows,
+            bounds: None,
+        };
+        match self.bounds {
+            Some(bounds) => light.within(bounds, parent),
+            None => Some(light),
         }
     }
 
@@ -750,6 +763,15 @@ impl LightDef {
         }
         if self.cone.is_none() && self.edge != 0.0 {
             return Some("a light has an `edge` only with a `cone`, whose edge it is".into());
+        }
+        if let Some(Bounds3 { min, max }) = self.bounds
+            && !(0..3).all(|axis| min[axis] < max[axis])
+        {
+            let [[x0, y0, z0], [x1, y1, z1]] = [min, max];
+            return Some(format!(
+                "`bounds` is a box's least corner and then its most, each less than the other \
+                 every way, not {{ {x0}, {y0}, {z0}, {x1}, {y1}, {z1} }}"
+            ));
         }
         None
     }
@@ -1933,6 +1955,10 @@ fn read_kind(
                 Some(cone) => Some(finite(cone, "cone")?),
                 None => None,
             };
+            let bounds = match fields.take("bounds") {
+                Some(bounds) => Some(light_bounds(bounds, "bounds")?),
+                None => None,
+            };
             let light = LightDef {
                 color: optional_color(fields, "color")?,
                 range,
@@ -1940,6 +1966,7 @@ fn read_kind(
                 cone,
                 edge,
                 shadows: optional_boolean(fields, "shadows", false)?,
+                bounds,
             };
             if let Some(problem) = light.problem() {
                 return Err(problem);
@@ -2592,6 +2619,21 @@ fn pair(value: Value, field: &str) -> Result<[f32; 2], String> {
     match <[Value; 2]>::try_from(list(value, field)?) {
         Ok([x, y]) => Ok([finite(x, field)?, finite(y, field)?]),
         Err(_) => Err(format!("`{field}` must be two numbers, {{ x, y }}")),
+    }
+}
+
+/// A light's box, six finite numbers: its least corner, then its most, `{ x0, y0, z0, x1, y1,
+/// z1 }`. Whether the first is less than the second is `LightDef::problem`'s to say.
+pub(crate) fn light_bounds(value: Value, field: &str) -> Result<Bounds3, String> {
+    match <[Value; 6]>::try_from(list(value, field)?) {
+        Ok([x0, y0, z0, x1, y1, z1]) => Ok(Bounds3 {
+            min: [finite(x0, field)?, finite(y0, field)?, finite(z0, field)?],
+            max: [finite(x1, field)?, finite(y1, field)?, finite(z1, field)?],
+        }),
+        Err(_) => Err(format!(
+            "`{field}` must be six numbers, a box's least corner and then its most, \
+             {{ x0, y0, z0, x1, y1, z1 }}"
+        )),
     }
 }
 
@@ -3676,9 +3718,17 @@ mod tests {
                 cone: Some(0.6),
                 edge: 0.25,
                 shadows: false,
+                bounds: None,
             }
         );
         assert!(light("shadows = true").shadows);
+        assert_eq!(
+            light("bounds = { -7.25, -0.25, -7.25, 7.25, 4.25, 7.25 }").bounds,
+            Some(Bounds3 {
+                min: [-7.25, -0.25, -7.25],
+                max: [7.25, 4.25, 7.25],
+            })
+        );
         for (fields, message) in [
             ("range = 0", "`range` must be above 0"),
             ("energy = -1", "`energy` can't be less than 0"),
@@ -3686,6 +3736,16 @@ mod tests {
             ("cone = 0.5, edge = 2", "`edge` is from 0 to 1"),
             ("edge = 0.5", "a light has an `edge` only with a `cone`"),
             ("shadows = 1", "`shadows`"),
+            ("bounds = { 0, 0, 0, 1, 1 }", "`bounds` must be six numbers"),
+            ("bounds = 3", "`bounds` must be a list"),
+            (
+                "bounds = { 0, 0, 0, 1, 0, 1 }",
+                "each less than the other every way",
+            ),
+            (
+                "bounds = { 2, 0, 0, 1, 1, 1 }",
+                "each less than the other every way",
+            ),
             ("tint = '#ffffff'", "a light node has no field `tint`"),
         ] {
             let err = error(&source(fields));
@@ -3700,9 +3760,21 @@ mod tests {
             "{written}"
         );
         assert!(!written.contains("shadows"), "{written}");
+        assert!(!written.contains("bounds"), "{written}");
         let shadowed = parse(&source("shadows = true")).unwrap().to_luau().unwrap();
         assert!(shadowed.contains("shadows = true"), "{shadowed}");
         assert_eq!(parse(&shadowed).unwrap().to_luau().unwrap(), shadowed);
+        let bounded = parse(&source(
+            "bounds = { -7.25, -0.25, -7.25, 7.25, 4.25, 7.25 }",
+        ))
+        .unwrap()
+        .to_luau()
+        .unwrap();
+        assert!(
+            bounded.contains("bounds = { -7.25, -0.25, -7.25, 7.25, 4.25, 7.25 }"),
+            "{bounded}"
+        );
+        assert_eq!(parse(&bounded).unwrap().to_luau().unwrap(), bounded);
         assert_eq!(parse(&written).unwrap().to_luau().unwrap(), written);
         assert_eq!(
             parse(&written).unwrap().children[0].children[0].kind,

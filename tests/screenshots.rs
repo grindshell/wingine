@@ -19,7 +19,7 @@ use wingine::{
         MeshVertex, Model, ModelPart, Resolution, Scaling, SpriteSheet, Texture, View3d,
     },
     headless::{Comparison, Headless, Image},
-    math::{Affine, Affine3, Rect},
+    math::{Affine, Affine3, Bounds3, Rect},
     particles::{ParticleSettings, Particles},
     scene::{Assets, Scene, SceneFile, Shape, TilesetFile},
     tilemap::{Tile, Tilemap, Tileset},
@@ -2104,6 +2104,91 @@ fn dark_view(camera: Camera3d, [width, height]: [f32; 2]) -> View3d {
         },
         ..View3d::new(camera, Rect::new(0.0, 0.0, width, height))
     }
+}
+
+/// A slab between two storeys, two pillars standing on it, and a light without shadows under
+/// the slab, reaching past it: unkept, it lights the pillars' sides that face it, through the
+/// slab, as a room's light lit the room over it; kept to the storey under the slab, it lights
+/// nothing over it. Then a light over the slab, kept to a box round the left pillar: the floor
+/// is lit as far as the box's side and no farther, and the right pillar isn't lit at all.
+#[test]
+fn a_light_keeps_to_its_box() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let cube = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let camera = Camera3d::perspective([0.0, 2.5, 5.0], [0.0, 0.5, -1.0], 0.8);
+    let view = dark_view(camera, [128.0, 96.0]);
+    let grey = Color::rgb8(0xc0, 0xc0, 0xc0);
+    let under = Light::point([0.0, -1.5, 2.0], Color::WHITE, 6.0);
+    let below = Bounds3 {
+        min: [-4.0, -5.0, -4.0],
+        max: [4.0, -1.0, 4.0],
+    };
+    let kept_under = under.within(below, Affine3::IDENTITY).unwrap();
+    let over = Light::point([-1.5, 2.5, 1.0], Color::rgb8(0xff, 0xd0, 0x90), 6.0);
+    let left = Bounds3 {
+        min: [-4.0, 0.0, -4.0],
+        max: [0.0, 4.0, 4.0],
+    };
+    let kept_over = over.within(left, Affine3::IDENTITY).unwrap();
+    let mut render = |lights: &[Light]| {
+        headless
+            .render(128, 96, |canvas| {
+                canvas.clear(Color::BLACK);
+                let mut view = canvas.begin_3d(view);
+                for &light in lights {
+                    view.add_light(light);
+                }
+                let slab = Affine3::from_translation([0.0, -0.5, 0.0])
+                    * Affine3::from_scale([8.0, 1.0, 8.0]);
+                view.draw_mesh(&cube, slab, None, grey);
+                for x in [-1.5, 1.5] {
+                    let pillar = Affine3::from_translation([x, 1.0, -1.0])
+                        * Affine3::from_scale([1.0, 2.0, 1.0]);
+                    view.draw_mesh(&cube, pillar, None, grey);
+                }
+            })
+            .unwrap()
+    };
+    let unlit = render(&[]);
+    let leaking = render(&[under]);
+    let kept = render(&[kept_under]);
+    let frame = render(&[kept_under, kept_over]);
+    let pixel = |image: &Image, point: [f32; 3]| {
+        let [x, y] = view.project(point).expect("it's in view");
+        image.pixel(x as u32, y as u32)
+    };
+    let [left_pillar, right_pillar] = [[-1.5, 0.5, -0.5], [1.5, 0.5, -0.5]];
+    let [left_floor, right_floor] = [[-0.5, 0.0, 1.0], [0.5, 0.0, 1.0]];
+
+    // Unkept, the light under the slab lights the pillars over it; kept, nothing at all over it.
+    assert_eq!(pixel(&unlit, left_pillar), [0, 0, 0, 255]);
+    assert!(
+        pixel(&leaking, left_pillar)[0] > 40,
+        "{:?}",
+        pixel(&leaking, left_pillar)
+    );
+    assert!(pixel(&leaking, right_pillar)[0] > 40);
+    assert_eq!(
+        kept.compare(&unlit, 0),
+        Comparison::SameSize {
+            differing: 0,
+            largest: 0
+        }
+    );
+    // The light over the slab lights its box, the left pillar and the floor to its side, and
+    // nothing past it.
+    assert!(pixel(&frame, left_pillar)[0] > 40);
+    assert!(pixel(&frame, left_floor)[0] > 40);
+    assert_eq!(pixel(&frame, right_pillar), [0, 0, 0, 255]);
+    assert_eq!(pixel(&frame, right_floor), [0, 0, 0, 255]);
+    // As the CPU has it.
+    assert_eq!(kept_under.level_at(left_pillar), 0.0);
+    assert!(under.level_at(left_pillar) > 0.0);
+    assert_eq!(kept_over.level_at(right_floor), 0.0);
+    assert!(over.level_at(right_floor) > 0.0);
+
+    assert_screenshot(&headless.adapter_name(), "a_light_keeps_to_its_box", frame);
 }
 
 /// A floor, a cube and a ball lit by one light with shadows: the cube and the ball shade the

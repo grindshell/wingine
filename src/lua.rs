@@ -107,10 +107,12 @@
 //!   world units from its camera to `far`, which it must have, more than `near`. A
 //!   [`Light`] is a table of a `position`, a vector, and optionally `color` (white), `range`
 //!   (5), `energy` (1), `shadows` (whether the view's meshes and models in its way shade what's
-//!   behind them, `false`), and for a spot light, `cone` (half its angle, in radians),
-//!   `direction` (a vector) and `edge` (0); a light node's settings are those but its position
-//!   and direction, which are its node's: `node:light()` (its color a number) and
-//!   `node:set_light(settings)` (those given, keeping the rest). A [`Mesh`]
+//!   behind them, `false`), `bounds` (six numbers, a box's least corner and then its most, in
+//!   the world's coordinates, which it lights only within), and for a spot light, `cone` (half
+//!   its angle, in radians), `direction` (a vector) and `edge` (0); a light node's settings are
+//!   those but its position and direction, which are its node's, and its `bounds` are in its
+//!   parent's coordinates: `node:light()` (its color a number) and `node:set_light(settings)`
+//!   (those given, keeping the rest, `bounds = false` taking its box away). A [`Mesh`]
 //!   is userdata with `mesh:triangle_count()` and `mesh:bounds()`, the least and greatest
 //!   corners of the box its vertices take up, as vectors, or nothing if it has none. A [`Model`]
 //!   is userdata with the same methods, its box holding its parts placed in it.
@@ -290,7 +292,7 @@ use crate::{
     },
     grid::{Direction, GridMover},
     input::{Control, GamepadButton, Key, MouseButton},
-    math::{Affine, Bounds3, Rect},
+    math::{Affine, Affine3, Bounds3, Rect},
     particles::Particles,
     scene::{
         AreaNode, BillboardNode, Clip, Kind, LightDef, MeshNode, ModelNode, Node, NodeId,
@@ -1305,8 +1307,36 @@ impl IntoLua for Fog {
 }
 
 /// Changes the settings of `light` that `table` gives, any of `color`, `range`, `energy`,
-/// `cone`, `edge` and `shadows`, failing if it couldn't then light anything.
+/// `cone`, `edge`, `shadows` and `bounds`, `false` taking its box away, failing if it couldn't
+/// then light anything.
 fn light_settings(table: &mlua::Table, light: &mut LightDef) -> mlua::Result<()> {
+    match table.get::<mlua::Value>("bounds")? {
+        mlua::Value::Nil => {}
+        mlua::Value::Boolean(false) => light.bounds = None,
+        mlua::Value::Table(numbers) => {
+            let shape = "a light's `bounds` is six finite numbers, a box's least corner and then \
+                         its most, { x0, y0, z0, x1, y1, z1 }, or false for none";
+            let numbers = numbers
+                .sequence_values::<f32>()
+                .collect::<mlua::Result<Vec<f32>>>()
+                .map_err(|_| mlua::Error::runtime(shape))?;
+            match <[f32; 6]>::try_from(numbers) {
+                Ok([x0, y0, z0, x1, y1, z1])
+                    if [x0, y0, z0, x1, y1, z1].iter().all(|n| n.is_finite()) =>
+                {
+                    light.bounds = Some(Bounds3 {
+                        min: [x0, y0, z0],
+                        max: [x1, y1, z1],
+                    });
+                }
+                _ => return Err(mlua::Error::runtime(shape)),
+            }
+        }
+        _ => {
+            let message = "a light's `bounds` is six numbers, { x0, y0, z0, x1, y1, z1 }, or false";
+            return Err(mlua::Error::runtime(message));
+        }
+    }
     if let Some(color) = table.get::<Option<Color>>("color")? {
         light.color = color;
     }
@@ -1333,10 +1363,10 @@ fn light_settings(table: &mlua::Table, light: &mut LightDef) -> mlua::Result<()>
 
 impl FromLua for Light {
     /// A light of a view drawn without a scene: a table of a `position`, the settings a light
-    /// node has, and for a spot light, a `direction`.
+    /// node has, its `bounds` in the world's coordinates, and for a spot light, a `direction`.
     fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
         let mlua::Value::Table(table) = &value else {
-            let message = "expected a table { position, color, range, energy, direction, cone, edge, shadows }";
+            let message = "expected a table { position, color, range, energy, direction, cone, edge, shadows, bounds }";
             return Err(conversion_error(&value, "Light", message.into()));
         };
         let Some(position) = table.get::<Option<mlua::Vector>>("position")? else {
@@ -1350,7 +1380,11 @@ impl FromLua for Light {
             return Err(mlua::Error::runtime(message));
         }
         let direction = direction.map_or([0.0, 0.0, 1.0], vector3);
-        let light = settings.light(vector3(position), direction);
+        let Some(light) = settings.light(vector3(position), direction, Affine3::IDENTITY) else {
+            return Err(mlua::Error::runtime(
+                "a light's bounds have no room in them",
+            ));
+        };
         match light.problem() {
             Some(problem) => Err(mlua::Error::runtime(problem)),
             None => Ok(light),
@@ -1359,16 +1393,21 @@ impl FromLua for Light {
 }
 
 impl IntoLua for LightDef {
-    /// A table `{ color, range, energy, cone, edge, shadows }`, its color a number
-    /// `0xRRGGBBAA`, and `cone` left out of a point light's.
+    /// A table `{ color, range, energy, cone, edge, shadows, bounds }`, its color a number
+    /// `0xRRGGBBAA`, and `cone` left out of a point light's, and `bounds`, six numbers, of one
+    /// that doesn't keep to a box.
     fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
-        let table = lua.create_table_with_capacity(0, 6)?;
+        let table = lua.create_table_with_capacity(0, 7)?;
         table.set("color", packed_color(self.color))?;
         table.set("range", self.range)?;
         table.set("energy", self.energy)?;
         table.set("cone", self.cone)?;
         table.set("edge", self.edge)?;
         table.set("shadows", self.shadows)?;
+        if let Some(Bounds3 { min, max }) = self.bounds {
+            let [[x0, y0, z0], [x1, y1, z1]] = [min, max];
+            table.set("bounds", [x0, y0, z0, x1, y1, z1])?;
+        }
         Ok(mlua::Value::Table(table))
     }
 }

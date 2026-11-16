@@ -544,6 +544,15 @@ impl Writer {
                 if light.shadows {
                     self.field("shadows", "true");
                 }
+                if let Some(bounds) = light.bounds {
+                    let [x0, y0, z0] = bounds.min;
+                    let [x1, y1, z1] = bounds.max;
+                    let mut numbers = Vec::with_capacity(6);
+                    for number in [x0, y0, z0, x1, y1, z1] {
+                        numbers.push(single(number, "bounds")?);
+                    }
+                    self.field("bounds", &format!("{{ {} }}", numbers.join(", ")));
+                }
             }
             KindDef::Stack(stack) => self.stack(stack)?,
             KindDef::Panel(panel) => match &panel.look {

@@ -8,7 +8,7 @@ use bytemuck::{Pod, Zeroable};
 use super::{
     Camera3d, Canvas, Color, Mesh, Model, Projection, Ray, Sprite, Texture, camera3d::Mat4,
 };
-use crate::math::{Affine3, Rect, add3, dot3, normalize3, scale3, sub3};
+use crate::math::{Affine3, Bounds3, Rect, add3, dot3, normalize3, scale3, sub3};
 
 /// What a 3D view shows, where on the canvas, and how it's lit: see [`Canvas::begin_3d`].
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -174,6 +174,11 @@ pub struct Light {
     /// Shadows have hard edges. A view has [`Light::SHADOW_MAPS`] shadow maps: a light takes
     /// [`Light::shadow_maps`] of them, and one there are none left for lights without shadows.
     pub shadows: bool,
+    /// The box it lights within, if it keeps to one: what takes the world onto the cube from -1
+    /// to 1 each way, inside which, faces and all, it lights what it reaches, and outside which
+    /// it lights nothing, whatever its range. A box keeps a light without shadows from lighting
+    /// through walls and floors, as a room's. [`Light::within`] makes one from a box's corners.
+    pub bounds: Option<Affine3>,
 }
 
 impl Light {
@@ -199,7 +204,53 @@ impl Light {
             cone: None,
             edge: 0.0,
             shadows: false,
+            bounds: None,
         }
+    }
+
+    /// The light, keeping to `bounds`, a box placed by `placed`: a room's inside, say, in the
+    /// room's coordinates, and where the room is. `None` if the box placed so has no room in it,
+    /// as when `placed` squashes it flat.
+    pub fn within(self, bounds: Bounds3, placed: Affine3) -> Option<Self> {
+        let half = bounds.size().map(|size| size / 2.0);
+        // What takes the cube from -1 to 1 onto the box, in the world.
+        let cube = Affine3 {
+            x_axis: [half[0], 0.0, 0.0],
+            y_axis: [0.0, half[1], 0.0],
+            z_axis: [0.0, 0.0, half[2]],
+            translation: bounds.center(),
+        };
+        let onto_cube = (placed * cube).inverse()?;
+        let finite = |v: [f32; 3]| v.iter().all(|v| v.is_finite());
+        let axes = [
+            onto_cube.x_axis,
+            onto_cube.y_axis,
+            onto_cube.z_axis,
+            onto_cube.translation,
+        ];
+        axes.into_iter().all(finite).then_some(Self {
+            bounds: Some(onto_cube),
+            ..self
+        })
+    }
+
+    /// Whether `point` is in its box, faces and all, or it has none.
+    pub fn bounds_hold(&self, point: [f32; 3]) -> bool {
+        self.bounds.is_none_or(|onto_cube| {
+            onto_cube
+                .apply(point)
+                .iter()
+                .all(|&along| along.abs() <= 1.0)
+        })
+    }
+
+    /// The corners of its box in the world, if it has one.
+    fn corners(&self) -> Option<[[f32; 3]; 8]> {
+        let onto_world = self.bounds?.inverse()?;
+        Some(std::array::from_fn(|corner| {
+            let pick = |axis: usize| if corner & (1 << axis) == 0 { -1.0 } else { 1.0 };
+            onto_world.apply([pick(0), pick(1), pick(2)])
+        }))
     }
 
     /// How many of a view's shadow maps it takes, if it casts shadows: one for a spot light
@@ -304,6 +355,17 @@ impl Light {
                 return Some("a spot light's direction must be finite, and not zero".into());
             }
         }
+        if let Some(onto_cube) = self.bounds {
+            let rows = [
+                onto_cube.x_axis,
+                onto_cube.y_axis,
+                onto_cube.z_axis,
+                onto_cube.translation,
+            ];
+            if !rows.into_iter().all(finite) || onto_cube.inverse().is_none() {
+                return Some("a light's bounds must be finite, with room in them".into());
+            }
+        }
         None
     }
 
@@ -317,9 +379,13 @@ impl Light {
     }
 
     /// How much of its color reaches `point`, with nothing in the way: its energy at its place,
-    /// falling in a straight line to 0 at its range, and for a spot light, 0 outside its cone.
-    /// It's what a surface there facing the light squarely is lit by, as the view draws it.
+    /// falling in a straight line to 0 at its range, and for a spot light, 0 outside its cone,
+    /// and for one that keeps to a box, 0 outside that. It's what a surface there facing the
+    /// light squarely is lit by, as the view draws it.
     pub fn level_at(&self, point: [f32; 3]) -> f32 {
+        if !self.bounds_hold(point) {
+            return 0.0;
+        }
         let to_point = sub3(point, self.position);
         let distance = dot3(to_point, to_point).sqrt();
         let reach = (1.0 - distance / self.range).max(0.0);
@@ -341,10 +407,10 @@ impl Light {
     }
 }
 
-/// Which of `lights` light `view`, into `chosen` as indices into them: those whose reach is in
-/// what its camera sees, short of where its fog hides everything, and when there are more than
-/// [`Light::MAX`], the nearest to the camera, in the order they were added. Returns how many it
-/// left out for being too many.
+/// Which of `lights` light `view`, into `chosen` as indices into them: those whose reach, and
+/// box if they keep to one, are in what its camera sees, short of where its fog hides
+/// everything, and when there are more than [`Light::MAX`], the nearest to the camera, in the
+/// order they were added. Returns how many it left out for being too many.
 pub(crate) fn lights_of(view: &View3d, lights: &[Light], chosen: &mut Vec<u32>) -> u32 {
     chosen.clear();
     if lights.is_empty() {
@@ -365,12 +431,16 @@ pub(crate) fn lights_of(view: &View3d, lights: &[Light], chosen: &mut Vec<u32>) 
         if hidden.is_some_and(|far| view.distance(light.position) - light.range >= far) {
             return false;
         }
+        // A box wholly outside a side is out of sight, as a reach is.
+        let corners = light.corners();
         planes.iter().all(|&[a, b, c, d]| {
             let length = (a * a + b * b + c * c).sqrt();
             let [px, py, pz] = light.position;
             // A plane the matrix doesn't give, as of a view with no size, cuts nothing off.
             if length > 0.0 {
-                (a * px + b * py + c * pz + d) / length >= -light.range
+                let inside = |[x, y, z]: [f32; 3]| (a * x + b * y + c * z + d) / length;
+                inside([px, py, pz]) >= -light.range
+                    && corners.is_none_or(|corners| corners.into_iter().any(|at| inside(at) >= 0.0))
             } else {
                 true
             }
@@ -935,6 +1005,97 @@ mod tests {
         assert_eq!(chosen, (8..40).collect::<Vec<u32>>());
         assert_eq!(lights_of(&view, &row, &mut chosen), 8);
         assert_eq!(chosen, (0..32).collect::<Vec<u32>>());
+    }
+
+    #[test]
+    fn a_light_keeps_to_its_box_wherever_its_parent_places_it() {
+        // A room 4 wide, deep and high about the origin, its floor at 0, and a light in it a
+        // metre under its ceiling, reaching past its floor and its ceiling.
+        let room = Bounds3 {
+            min: [-2.0, 0.0, -2.0],
+            max: [2.0, 4.0, 2.0],
+        };
+        let lamp = Light::point([0.0, 3.0, 0.0], Color::WHITE, 6.0);
+        let kept = lamp.within(room, Affine3::IDENTITY).unwrap();
+        assert_eq!(kept.problem(), None);
+        assert_eq!(
+            kept.level_at([0.0, 0.0, 0.0]),
+            lamp.level_at([0.0, 0.0, 0.0])
+        );
+        assert!(kept.level_at([0.0, 0.0, 0.0]) > 0.0, "its floor");
+        assert!(
+            kept.level_at([2.0, 1.0, 2.0]) > 0.0,
+            "a corner, on its faces"
+        );
+        assert!(
+            lamp.level_at([0.0, -1.0, 0.0]) > 0.0,
+            "unkept, under its floor"
+        );
+        assert_eq!(
+            kept.level_at([0.0, -1.0, 0.0]),
+            0.0,
+            "kept, nothing under its floor"
+        );
+        assert_eq!(kept.level_at([0.0, 5.0, 0.0]), 0.0, "nor over its ceiling");
+        assert_eq!(kept.level_at([2.5, 1.0, 0.0]), 0.0, "nor past a wall");
+
+        // Its box goes where its parent places it, turned and stretched: twice as wide along
+        // its own `x`, a quarter turn left, and 10 along the world's `x`. So it's 4 either side
+        // of 0 along `z`, and 2 either side of 10 along `x`.
+        let placed = Affine3::from_translation([10.0, 0.0, 0.0])
+            * Affine3::from_rotation_y(std::f32::consts::FRAC_PI_2)
+            * Affine3::from_scale([2.0, 1.0, 1.0]);
+        let turned = Light {
+            position: placed.apply([0.0, 3.0, 0.0]),
+            ..lamp
+        }
+        .within(room, placed)
+        .unwrap();
+        assert!(
+            turned.bounds_hold([10.0, 1.0, 3.9]),
+            "the stretched way, turned"
+        );
+        assert!(!turned.bounds_hold([10.0, 1.0, 4.1]));
+        assert!(turned.bounds_hold([11.9, 1.0, 0.0]), "the other way");
+        assert!(!turned.bounds_hold([12.1, 1.0, 0.0]));
+        assert!(!turned.bounds_hold([10.0, -0.1, 0.0]));
+
+        // A box placed with no room in it is none, and one that's broken is a problem.
+        assert_eq!(
+            lamp.within(room, Affine3::from_scale([1.0, 0.0, 1.0])),
+            None
+        );
+        let broken = Light {
+            bounds: Some(Affine3::from_scale([0.0; 3])),
+            ..lamp
+        };
+        assert!(broken.problem().unwrap().contains("bounds"));
+    }
+
+    #[test]
+    fn a_light_whose_box_is_out_of_view_lights_nothing_of_it() {
+        // Looking along `-z` from the origin, at a light 2 behind the camera, reaching 6, so
+        // into view: kept to a box behind the camera, it's out of view; kept to a box reaching
+        // ahead of the camera, it isn't.
+        let camera = Camera3d::perspective([0.0; 3], [0.0, 0.0, -1.0], 0.8);
+        let view = View3d::new(camera, Rect::new(0.0, 0.0, 160.0, 90.0));
+        let lamp = Light::point([0.0, 0.0, 2.0], Color::WHITE, 6.0);
+        let behind = Bounds3 {
+            min: [-2.0, -2.0, 0.5],
+            max: [2.0, 2.0, 4.0],
+        };
+        let reaching = Bounds3 {
+            min: [-2.0, -2.0, -2.0],
+            max: [2.0, 2.0, 4.0],
+        };
+        let lights = [
+            lamp,
+            lamp.within(behind, Affine3::IDENTITY).unwrap(),
+            lamp.within(reaching, Affine3::IDENTITY).unwrap(),
+        ];
+        let mut chosen = Vec::new();
+        assert_eq!(lights_of(&view, &lights, &mut chosen), 0);
+        assert_eq!(chosen, [0, 2]);
     }
 
     #[test]

@@ -609,6 +609,26 @@ return {
                                 },
                             },
                         },
+                        {
+                            name = "candle_5",
+                            kind = "billboard",
+                            x = 3.7,
+                            z = 2.2,
+                            sheet = "tiles",
+                            cell = { 3, 15 },
+                            tint = "#a09890",
+                            tags = { "candle" },
+                            children = {
+                                {
+                                    name = "flame",
+                                    kind = "light",
+                                    y = 0.6,
+                                    color = "#ffb060",
+                                    range = 4,
+                                    bounds = { -0.75, -0.1, -1.25, 0.35, 1, 1.85 },
+                                },
+                            },
+                        },
                     },
                 },
                 {

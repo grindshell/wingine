@@ -6,8 +6,10 @@
 -- camera, which follows the hero from above and behind. Each candle holds a `flame`, a light
 -- that's out until the candle is lit, and then lights the cellar around it, the walls and the
 -- props shading what's behind them, while the candle glows, showing its own colors as bright as
--- they are however little light falls on it. Walk with the arrow keys or WASD, and point at a
--- prop with the mouse to name it.
+-- they are however little light falls on it. Four flames take every shadow map a view has, so
+-- the fifth, in the gap between two walls, casts none: it keeps to a box round the gap, its
+-- `bounds`, and lights nothing through the walls either side. Walk with the arrow keys or WASD,
+-- and point at a prop with the mouse to name it.
 --
 -- A tile is a world unit, with columns along `x` and rows along `z`, so up the map is away from
 -- the camera, and each node of the view stands on the tile its position is in.

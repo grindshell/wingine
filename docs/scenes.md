@@ -588,8 +588,11 @@ The world is right-handed with `y` up, as glTF's is. The kinds of node in it:
   to pi, it's a spot light, shining along its node's `+z`, the way a model's front faces, and
   fading across the `edge` of the cone, a part of it from its rim inward, from 0 to 1 (0, a hard
   rim). Without a `cone` it's a point light, shining every way, and has no `edge`. With `shadows`
-  (`false`), the view's meshes and models in its way shade what's behind them. It moves and turns
-  with its node, but doesn't stretch.
+  (`false`), the view's meshes and models in its way shade what's behind them. With `bounds`, six
+  numbers, a box's least corner and then its most, `{ x0, y0, z0, x1, y1, z1 }`, each less than
+  the other every way, it lights only within that box, faces and all, which is in the
+  coordinates its node's `x`, `y` and `z` are in. It moves and turns with its node, but doesn't
+  stretch; its box moves, turns and stretches with its node's parent.
 - **`node`** and **`instance`**: a place, and a scene file placed here, as in the 2D scene. A
   prop can be a scene of its own, of meshes or models, placed into levels by instances and changed
   by overrides.
@@ -616,7 +619,24 @@ lit by 32 lights at once: of those that reach what its camera sees, the nearest 
 Scripts read and change a light with [`node:light`](api/scene.md#nodelight) and
 [`node:set_light`](api/scene.md#nodeset_light).
 
-A light without `shadows` shines through walls. With them, as the example's lamp has, the view's
+A light without `shadows` shines through walls, unless it keeps to a box whose sides are in them.
+A room's lights, given the room's inside for their `bounds`, a little into its walls, floor and
+ceiling, light the room and nothing past it, and the box is the room's, written in its numbers,
+wherever an instance places the room and however it turns it:
+
+```lua
+{
+    name = "panel",
+    kind = "light",
+    x = 1,
+    y = 3.5,
+    range = 6,
+    bounds = { -7.25, -0.25, -7.25, 7.25, 4.25, 7.25 },
+},
+```
+
+A box costs nothing to draw, where shadows cost maps, but it doesn't stop light at what's inside
+it, and nothing fades at its faces. With `shadows`, as the example's lamp has, the view's
 meshes and models shade what's behind them from it, with hard edges: the crate shades the floor
 around it. Billboards are shaded but shade nothing, and a mesh or model whose `casts_shadow` is
 `false` doesn't either, which a lamp's own model wants, if its light is inside it. Shadows cost

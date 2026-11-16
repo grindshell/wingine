@@ -1418,6 +1418,30 @@ impl Viewport {
                     }
                 }
             }
+            // And the box it keeps to, if it keeps to one, placed as its parent is.
+            if let Some(bounds) = light.bounds {
+                let node = scene.node(id);
+                let placed = node.parent().and_then(|parent| scene.transform_3d(parent));
+                let placed = placed.unwrap_or_default();
+                let corner = |at: usize| {
+                    let pick = |axis: usize| {
+                        if at & (1 << axis) == 0 {
+                            bounds.min[axis]
+                        } else {
+                            bounds.max[axis]
+                        }
+                    };
+                    placed.apply([pick(0), pick(1), pick(2)])
+                };
+                for a in 0..8 {
+                    for axis in 0..3 {
+                        let b = a | 1 << axis;
+                        if b != a {
+                            draw(&[corner(a), corner(b)]);
+                        }
+                    }
+                }
+            }
         }
         let Some(at) = shown(origin) else {
             return;

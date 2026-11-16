@@ -16,6 +16,7 @@ use wingine::{
     Context,
     graphics::{Align, Blend, Camera3d, Color, Fog, Projection},
     gui::egui,
+    math::Bounds3,
     particles::ParticleSettings,
     scene::{
         CellDef, KindDef, NodeDef, PanelFill, PanelLookDef, Placement3, Props, Shape, SheetDef,
@@ -856,6 +857,42 @@ impl Inspector {
                     shadows.widget_info(|| {
                         let cast = light.shadows;
                         egui::WidgetInfo::selected(egui::Role::CheckBox, true, cast, "shadows")
+                    });
+                    ui.end_row();
+                    // The box it lights within, in its parent's coordinates: a box as wide as its
+                    // reach about the parent's origin, to begin with.
+                    over.label(ui, "bounds", &["bounds"]);
+                    ui.vertical(|ui| {
+                        let mut kept = light.bounds.is_some();
+                        let response = ui.checkbox(&mut kept, "");
+                        response.widget_info(|| {
+                            egui::WidgetInfo::selected(egui::Role::CheckBox, true, kept, "bounds")
+                        });
+                        if response.changed() {
+                            let reach = light.range;
+                            light.bounds = kept.then_some(Bounds3 {
+                                min: [-reach; 3],
+                                max: [reach; 3],
+                            });
+                        }
+                        if let Some(bounds) = &mut light.bounds {
+                            for (corner, name) in
+                                [(&mut bounds.min, "least"), (&mut bounds.max, "most")]
+                            {
+                                ui.horizontal(|ui| {
+                                    ui.label(name);
+                                    for (value, axis) in corner.iter_mut().zip(["x", "y", "z"]) {
+                                        number(ui, &format!("bounds {name} {axis}"), value, 0.05);
+                                    }
+                                });
+                            }
+                            // Its most corner stays past its least every way.
+                            for axis in 0..3 {
+                                if bounds.max[axis] <= bounds.min[axis] {
+                                    bounds.max[axis] = bounds.min[axis] + 0.01;
+                                }
+                            }
+                        }
                     });
                     ui.end_row();
                 });
