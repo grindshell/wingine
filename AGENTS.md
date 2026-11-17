@@ -12,8 +12,8 @@ models in 3D views picked by boxes, lit by a sun and by lights at places that ca
 glowing, and fading into fog under a sky,
 sprite animation, particles, a camera, keyboard, mouse and gamepad input bound to
 actions, grid movement, physics with Rapier (bodies and characters, in 2D and in 3D views),
-text in the built-in font, bitmap fonts and TrueType fonts, audio, saves, folders the player
-picks, Luau scripting with
+text in the built-in font, bitmap fonts and TrueType fonts, audio, songs of the engine's own
+instruments baked or played live, saves, folders the player picks, Luau scripting with
 tasks, native libraries written in Rust, scenes (levels, screens and rigged characters), menus
 over scenes' nodes, egui interfaces, and an editor built on the engine. Each feature is finished
 with a game or example that uses it, with tests.
@@ -198,6 +198,24 @@ own right.
   (`Sound::from_samples`, Luau's `audio.make`, which takes a `buffer` of 32-bit floats),
   checked to be numbers, since one NaN would fill the mix. Headless, and without a sound device, audio plays to a silent mixer
   advanced by game time, so tests can check what's playing.
+- `src/music/`: songs (`*.song.luau`), whose module docs are the format's reference.
+  - `SongFile` (`file.rs`) is the plain data the editor edits, read through `scene::file`'s
+    helpers and written canonically by `scene::writer`'s `Writer`, with a format version of its
+    own; `Song::new` checks its names and resolves them to indices, so a file can name what it
+    lacks and say so only when it's played.
+  - `synth.rs` renders a note: an oscillator, an envelope, a pitch sweep and vibrato, and a
+    state-variable filter. `sequencer.rs` walks sections and patterns in control steps of 32
+    frames from the song's start, placing events by its tempo's segments, so what it renders
+    never depends on how the mixer cuts its buffers. All of it is `libm`'s math, so hashes of a
+    note and a bake pinned in tests check platforms agree.
+  - `render.rs` bakes a song to a 16-bit WAV, a loop's tails mixed into its start
+    (`wingine bake`). `live.rs` plays one on the audio thread (`Audio::play_song`,
+    `PlayingSong`): commands in and reports out over bounded channels, nothing allocated there,
+    the sequencer made at the mixer's rate on its first `process`. A live song and a bake at that
+    rate are the same samples.
+  - Events and positions reach the game in `Audio::advance`, after each update, so an update
+    hears what the mixer played to the last. A Luau test resumes after its frame's advance, so it
+    hears a song's events an update before the game does.
 - `src/input.rs` and `gamepads.rs`: `Input`, keys, mouse, gamepads and actions. A system's repeat
   of a held key is a repeat, not a press. `text` is what keys typed; input methods are off unless a
   game takes one, since they change which key events arrive. Actions keep their controls in the
@@ -321,8 +339,11 @@ own right.
   the module as `Wingine`, which `wingine.luau` returns for luau-lsp to read through that alias;
   `tests/runtime.rs` checks it declares exactly what the module and its tables hold.
 - `Textures` caches images, fonts and models by path, so each is read once.
-- `ui.menu` and `audio.play` hand out userdata holding the `Lent`, so they're documented with
-  their tables. A game's `gui(ui)` gets egui's `Ui` borrowed through `Lua::scope`, so a `Ui` kept
+- `ui.menu`, `audio.play` and `audio.play_song` hand out userdata holding the `Lent`, so they're
+  documented with their tables. A performance's `on`, `off` and `wait_for` are Luau
+  (`SONG_LISTENERS`, in `runtime/audio.rs`) over its `events`, reached through field getters from
+  a table in the VM's app data; a listener is a task reading each update's events, starting each
+  call as a task of its own. A game's `gui(ui)` gets egui's `Ui` borrowed through `Lua::scope`, so a `Ui` kept
   past its call fails rather than dangle. `Ui`'s methods are functions that borrow the `Ui`
   they're called on, not mlua mutable methods, which refuse to run inside themselves, so a
   container can hold another of its kind. A canvas (`ui:canvas`) lends its function a `Paint`
@@ -349,8 +370,8 @@ own right.
   to mlua's answers), but remembering whether each path is a file or folder (`Lookups`), once a
   load in a window and once a run in tests: asking the file system for every `require` was a third
   of a large game's load. `require.rs` is the web's, over the page's files.
-- `src/main.rs`: the `wingine` executable: run a game, `--watch`, `test`, `export`, and with no
-  arguments, the `game` folder beside it.
+- `src/main.rs`: the `wingine` executable: run a game, `--watch`, `test`, `export`, `bake`, and
+  with no arguments, the `game` folder beside it.
 
 ### Web
 
@@ -408,6 +429,12 @@ own right.
   Its tests (`crates/wingine-editor/tests/editor.rs`) click widgets by label; those that wait in
   real time run frames
   only when it wants them (`wait_for`), and `settle` checks it stops wanting them.
+- The Music screen (`music.rs`) edits `SongFile`s: a `SongDocument` (`song_document.rs`) holds
+  one, what's selected in it by name, and the song it makes, made again only once the file
+  changes. `history.rs`'s `History<S>`, undo of whole-file snapshots, is shared with `Document`.
+  `songs.rs` holds the pure edits, which keep names in step as things are renamed. A song changed
+  as it plays plays again from where it was once the change is made, and the screen asks for
+  frames only while one plays (`MusicEditor::keep_playing`).
 
 ### Examples
 
@@ -430,6 +457,11 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
   course with physics, a level seen from the side with 2D bodies (both with their run's hash
   pinned), a night of particles and blend modes with fireworks, and a type specimen of the
   engine's fonts.
+- `bandstand/`: a rhythm game played to a song played live: layers faded in as the player keeps
+  time, the chorus at the next bar after a long streak, quicker each verse, the lights flashing
+  on the drums' notes and confetti at a marker. Presses are judged against beats counted from the
+  song's events and its `position()`, the mixer's time rather than the game's. Its song is in the
+  canonical layout, which its tests check: after editing it by hand, save it in the editor.
 - `sprites.rs`, `shapes.rs`, `meshes.rs`, `gui.rs`: examples in Rust; `native-particles/` a native
   library that `tests/native.rs` builds.
 - Assets: art drawn for the examples is under the project's licenses; Kenney's packs are CC0 and
@@ -522,6 +554,7 @@ cargo run -- examples/pong
 cargo run -- --watch examples/pong
 cargo run -- test examples/pong
 cargo run --release -- export examples/pong target/export/pong
+cargo run -- bake examples/bandstand/bandstand.song.luau target/bandstand.wav
 cargo run --release -- examples/shmup
 cargo run -p wingine-editor -- examples/garden
 cargo run --example sprites

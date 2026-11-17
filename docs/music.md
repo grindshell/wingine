@@ -210,6 +210,9 @@ band:on("marker:drop", function()
 end)
 ```
 
+The [bandstand example](../examples/bandstand) is a rhythm game made this way, its presses judged
+by the song's beats and position.
+
 What happens in a song is heard the update after the mixer plays it, a few milliseconds after the
 speakers do. Without a sound device, and when a game runs without a window, songs are silent but
 keep time in game time, so what happens in them lands on the same updates every run.

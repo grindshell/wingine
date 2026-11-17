@@ -42,12 +42,15 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **Input** from the keyboard, mouse and gamepads, bound to named actions players can rebind.
 - **Audio** with [kira](https://github.com/tesselode/kira): sound effects to change, pause and
   stop as they play, and music that crossfades.
+- **Songs** of the engine's own instruments, sections of patterns of notes, baked to WAV or played
+  live: faster, into another section at the next bar, with layers faded in as the game asks, and
+  their beats, markers and notes heard by scripts to time what they do.
 - **Luau scripting** with [mlua](https://github.com/mlua-rs/mlua): sandboxed scripts with tasks
   that `wait` across frames. Whole games can be written in Luau, and replay the same inputs the
   same way on every platform.
 - **Saves**, **headless runs** for tests and scripted screenshots, and **egui** interfaces over any
   game.
-- **An editor** for scenes and scripts, laid out like Godot's.
+- **An editor** for scenes, scripts and songs, laid out like Godot's.
 
 Wingine targets Windows, macOS and Linux. CI builds and tests it on Windows and Linux. Games also
 run in a browser, experimentally: see [the web](docs/web.md).
@@ -81,6 +84,7 @@ need ALSA's library (`libasound2`) and glibc 2.35 or newer.
 | [Quarry](#quarry) | Luau, in 2D with physics | `cargo run -- examples/quarry` |
 | [Bonfire](#bonfire) | Luau, around particles and blend modes | `cargo run -- examples/bonfire` |
 | [Lettering](#lettering) | Luau, around fonts | `cargo run -- examples/lettering` |
+| [Bandstand](#bandstand) | Luau, around a song played live | `cargo run -- examples/bandstand` |
 | [Sprites](#sprites) | Rust, with Luau scripts | `cargo run --example sprites` |
 | [Shapes](#shapes) | Rust | `cargo run --example shapes` |
 | [Meshes](#meshes) | Rust, in 3D | `cargo run --example meshes` |
@@ -239,6 +243,19 @@ crisp. Its scene's text nodes name their [font files](docs/api/graphics.md#font-
 ![The fonts of the lettering example](docs/screenshots/lettering.png)
 
 Up and Down resize the sample line, and the paragraph reveals itself a glyph at a time.
+
+### Bandstand
+
+[`examples/bandstand`](examples/bandstand) is a rhythm game played to a [song](docs/music.md) of
+the engine's own instruments, which the game changes as it plays. Keep time and the bass, then the
+lead, fade in; a long streak plays the chorus from the next bar; the song quickens each time the
+verse comes around; the drums flash the lights; and the drop sets off confetti.
+
+![The whole band playing the chorus as confetti flies at the drop](docs/screenshots/bandstand.png)
+
+Press Space, click, or press a gamepad's A as each cue reaches the ring. Its song,
+[`bandstand.song.luau`](examples/bandstand/bandstand.song.luau), opens on the editor's Music
+screen, which plays it as it's changed.
 
 ### Sprites
 
