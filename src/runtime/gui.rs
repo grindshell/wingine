@@ -501,11 +501,12 @@ fn add_widgets(methods: &mut Methods<'_, '_>) {
             let mut rows = None;
             let mut monospace = false;
             let mut fill = false;
+            let mut tab = Tab::Focus;
             if let Some(options) = &options {
                 check_options(
                     options,
                     "text edit",
-                    &["id", "label", "hint", "rows", "monospace", "fill"],
+                    &["id", "label", "hint", "rows", "monospace", "fill", "tab"],
                 )?;
                 id = options.get::<Option<String>>("id")?;
                 label = options.get::<Option<String>>("label")?;
@@ -513,28 +514,49 @@ fn add_widgets(methods: &mut Methods<'_, '_>) {
                 rows = options.get::<Option<usize>>("rows")?;
                 monospace = options.get::<Option<bool>>("monospace")?.unwrap_or(false);
                 fill = options.get::<Option<bool>>("fill")?.unwrap_or(false);
+                tab = Tab::read(options.get("tab")?)?;
             }
             // The scroll area of a field that fills, by the field's id, or by where it is.
             let scroll = match &id {
                 Some(id) => egui::Id::unique(("text edit", id)),
                 None => ui.next_auto_id(),
             };
-            // As wide as there's room for, as a page is, rather than egui's few hundred points.
-            let mut field = egui::TextEdit::multiline(&mut text)
-                .desired_width(f32::INFINITY)
-                .hint_text(hint.clone());
-            // egui keeps a field's cursor, selection and undo history by its id, which is where
-            // it is unless it's given one: so a field that shows one text then another, in the
-            // same place, would undo the second into the first.
-            if let Some(id) = id {
-                field = field.id_salt(id);
-            }
-            if let Some(rows) = rows {
-                field = field.desired_rows(rows);
-            }
-            if monospace {
-                field = field.font(egui::TextStyle::Monospace);
-            }
+            // Whether Tab or Shift+Tab changed the text, before the field saw it.
+            let mut tabbed = false;
+            let mut show = |ui: &mut egui::Ui, room: Option<f32>| {
+                // egui keeps a field's cursor, selection and undo history by its id, which is
+                // where it is unless it's given one: so a field that shows one text then another,
+                // in the same place, would undo the second into the first.
+                let field_id = match &id {
+                    Some(id) => ui.make_persistent_id(("text edit field", id)),
+                    None => {
+                        let field_id = ui.next_auto_id();
+                        ui.skip_ahead_auto_ids(1);
+                        field_id
+                    }
+                };
+                if let Tab::Spaces(width) = tab {
+                    tabbed = indent_on_tab(ui, field_id, &mut text, width);
+                }
+                // As wide as there's room for, as a page is, rather than egui's few hundred
+                // points.
+                let mut field = egui::TextEdit::multiline(&mut text)
+                    .id(field_id)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(hint.clone())
+                    // Tab keeps the field focused, and types a tab, unless it was taken above.
+                    .lock_focus(tab != Tab::Focus);
+                if let Some(rows) = rows {
+                    field = field.desired_rows(rows);
+                }
+                if monospace {
+                    field = field.font(egui::TextStyle::Monospace);
+                }
+                if let Some(room) = room {
+                    field = field.min_size(egui::vec2(0.0, room));
+                }
+                field.show(ui)
+            };
             let output = if fill {
                 // All the room its container has left, in a scroll area of its own: the field is
                 // at least as tall as that, and text taller than it scrolls, following the
@@ -543,12 +565,12 @@ fn add_widgets(methods: &mut Methods<'_, '_>) {
                 egui::ScrollArea::vertical()
                     .id_salt(scroll)
                     .auto_shrink(false)
-                    .show(ui, |ui| field.min_size(egui::vec2(0.0, room)).show(ui))
+                    .show(ui, |ui| show(ui, Some(room)))
                     .inner
             } else {
-                field.show(ui)
+                show(ui, None)
             };
-            let changed = output.response.changed();
+            let changed = output.response.changed() || tabbed;
             // Named by its label, which nothing shows on screen, as tests and screen readers
             // find it.
             if let Some(label) = label {
@@ -572,6 +594,157 @@ fn add_widgets(methods: &mut Methods<'_, '_>) {
             Ok(())
         },
     );
+}
+
+/// What Tab does in a text edit, its `tab` option.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tab {
+    /// Moves focus to the next widget, as in any field: without the option, or `false`.
+    Focus,
+    /// Types a tab character, `true`; Shift+Tab takes one, or four spaces, off the line's start.
+    Character,
+    /// A number: indents by that many spaces, to the next stop, or each line selected a level
+    /// more; Shift+Tab takes a level off each line.
+    Spaces(usize),
+}
+
+impl Tab {
+    /// The most spaces a level of indentation may be.
+    const MOST_SPACES: usize = 16;
+
+    fn read(value: Value) -> mlua::Result<Self> {
+        let spaces = match value {
+            Value::Nil | Value::Boolean(false) => return Ok(Self::Focus),
+            Value::Boolean(true) => return Ok(Self::Character),
+            Value::Integer(spaces) => Some(spaces as f64),
+            Value::Number(spaces) => Some(spaces),
+            _ => None,
+        };
+        match spaces {
+            Some(spaces)
+                if spaces.fract() == 0.0 && (1.0..=Self::MOST_SPACES as f64).contains(&spaces) =>
+            {
+                Ok(Self::Spaces(spaces as usize))
+            }
+            _ => Err(mlua::Error::runtime(format!(
+                "a text edit's tab is true or a whole number of spaces from 1 to {}, not {}",
+                Self::MOST_SPACES,
+                match spaces {
+                    Some(spaces) => spaces.to_string(),
+                    None => "that".to_owned(),
+                }
+            ))),
+        }
+    }
+}
+
+/// Indents or unindents the text of the field `id` by `width` spaces if it has focus and Tab or
+/// Shift+Tab was pressed, taking the key from egui, and puts its cursor where it goes. Returns
+/// whether it changed the text.
+fn indent_on_tab(ui: &mut egui::Ui, id: egui::Id, text: &mut String, width: usize) -> bool {
+    if !ui.memory(|memory| memory.has_focus(id)) {
+        return false;
+    }
+    let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) else {
+        return false;
+    };
+    let Some(range) = state.cursor.char_range() else {
+        return false;
+    };
+    let (a, b) = (range.primary.index.0, range.secondary.index.0);
+    let count = text.chars().count();
+    let selection = a.min(b).min(count)..a.max(b).min(count);
+    // Shift+Tab first: Tab without Shift would take it too.
+    let unindented =
+        ui.input_mut(|input| input.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab));
+    let indented = !unindented
+        && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Tab));
+    let cursor = if unindented {
+        unindent(text, selection, width)
+    } else if indented {
+        indent(text, selection, width)
+    } else {
+        return false;
+    };
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::one(
+            egui::text::CCursor::new(cursor),
+        )));
+    state.store(ui.ctx(), id);
+    true
+}
+
+/// The byte of `text` its character `index` starts at, or its end.
+fn byte_of(text: &str, index: usize) -> usize {
+    text.char_indices()
+        .nth(index)
+        .map_or(text.len(), |(byte, _)| byte)
+}
+
+/// Replaces the characters `range` of `text` with `with`, returning the character after it.
+fn replace(text: &mut String, range: std::ops::Range<usize>, with: &str) -> usize {
+    let start = byte_of(text, range.start);
+    let end = byte_of(text, range.end);
+    text.replace_range(start..end, with);
+    range.start + with.chars().count()
+}
+
+/// The lines `selection` touches, as characters of `text`: the start of the first, and the start
+/// of each after it.
+fn line_starts(text: &str, selection: &std::ops::Range<usize>) -> Vec<usize> {
+    let before = &text[..byte_of(text, selection.start)];
+    let first = selection.start
+        - before
+            .rsplit('\n')
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .count();
+    let mut starts = vec![first];
+    for (i, c) in text.chars().enumerate().skip(first) {
+        if i >= selection.end.max(first + 1) {
+            break;
+        }
+        if c == '\n' && i + 1 < selection.end {
+            starts.push(i + 1);
+        }
+    }
+    starts
+}
+
+/// Tab: spaces to the next stop of `width`, in place of what's selected within a line, or with
+/// lines selected, a level more of indentation for each. Returns where the cursor goes.
+fn indent(text: &mut String, selection: std::ops::Range<usize>, width: usize) -> usize {
+    let starts = line_starts(text, &selection);
+    if starts.len() == 1 {
+        let column = selection.start - starts[0];
+        let spaces = width - column % width;
+        return replace(text, selection, &" ".repeat(spaces));
+    }
+    for &start in starts.iter().rev() {
+        replace(text, start..start, &" ".repeat(width));
+    }
+    selection.end + width * starts.len()
+}
+
+/// Shift+Tab: a level less of indentation, `width` spaces or a tab, for each line selected, or
+/// the cursor's. Returns where the cursor goes.
+fn unindent(text: &mut String, selection: std::ops::Range<usize>, width: usize) -> usize {
+    let mut cursor = selection.end;
+    for &start in line_starts(text, &selection).iter().rev() {
+        let mut after = text.chars().skip(start);
+        let taken = match after.next() {
+            Some('\t') => 1,
+            Some(' ') => 1 + after.take(width - 1).take_while(|c| *c == ' ').count(),
+            _ => 0,
+        };
+        replace(text, start..start + taken, "");
+        if start < cursor {
+            cursor -= taken.min(cursor - start);
+        }
+    }
+    cursor
 }
 
 /// Names a text field by `label`, which nothing shows on screen, as tests and screen readers
@@ -962,5 +1135,48 @@ mod tests {
         let mut declared = declared_methods("Paint");
         declared.sort_unstable();
         assert_eq!(declared, registered);
+    }
+
+    #[test]
+    fn tab_indents_by_spaces_and_shift_tab_unindents() {
+        // Within a line, to the next stop, in place of what's selected.
+        let mut text = String::from("a\nb\nc");
+        assert_eq!(indent(&mut text, 1..1, 4), 4);
+        assert_eq!(text, "a   \nb\nc");
+        let mut text = String::from("ab\n");
+        assert_eq!(indent(&mut text, 1..2, 2), 2);
+        assert_eq!(text, "a \n");
+        // Across lines, each line a level, and back.
+        let mut text = String::from("a\nb\nc");
+        let cursor = indent(&mut text, 0..3, 4);
+        assert_eq!(text, "    a\n    b\nc");
+        assert_eq!(cursor, 11);
+        let cursor = unindent(&mut text, 2..cursor, 4);
+        assert_eq!(text, "a\nb\nc");
+        assert_eq!(cursor, 3);
+        // A line with less than a level loses what it has, and one with a tab loses the tab.
+        let mut text = String::from("  x");
+        assert_eq!(unindent(&mut text, 3..3, 4), 1);
+        assert_eq!(text, "x");
+        let mut text = String::from("\t  x");
+        assert_eq!(unindent(&mut text, 4..4, 2), 3);
+        assert_eq!(text, "  x");
+        // Characters, not bytes.
+        let mut text = String::from("é\nü");
+        assert_eq!(indent(&mut text, 0..3, 2), 7);
+        assert_eq!(text, "  é\n  ü");
+    }
+
+    #[test]
+    fn a_text_edits_tab_is_true_or_a_number_of_spaces() {
+        assert_eq!(Tab::read(Value::Nil).unwrap(), Tab::Focus);
+        assert_eq!(Tab::read(Value::Boolean(false)).unwrap(), Tab::Focus);
+        assert_eq!(Tab::read(Value::Boolean(true)).unwrap(), Tab::Character);
+        assert_eq!(Tab::read(Value::Number(4.0)).unwrap(), Tab::Spaces(4));
+        for wrong in [Value::Number(0.0), Value::Number(2.5), Value::Number(17.0)] {
+            let error = Tab::read(wrong).unwrap_err().to_string();
+            assert!(error.contains("from 1 to 16"), "{error}");
+        }
+        assert!(Tab::read(Value::Integer(3)).is_ok());
     }
 }

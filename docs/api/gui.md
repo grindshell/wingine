@@ -342,6 +342,7 @@ clipboard, and undo. `options` is a table with any of:
 | `rows` | How many lines tall it is at least. | 4 |
 | `monospace` | Whether its text is in the monospace font, as for code. | `false` |
 | `fill` | Whether it takes all the room its container has left: see below. | `false` |
+| `tab` | What Tab does in it: see [Tab](#tab). | Moves on |
 
 With `fill`, the field is as tall as what its container has left below what was added before it,
 however tall the window is, and text taller than that scrolls within it, following the cursor. So
@@ -367,6 +368,26 @@ file.text = ui:text_edit(file.text, { id = file.name })
 
 The whole text goes to the field and comes back every frame, so a long one costs more than a
 short one whether or not it changes.
+
+#### Tab
+
+In a field, as in any widget, Tab moves the keyboard's focus on to the next. A field of code or
+of indented text wants Tab for itself, and says so with `tab`:
+
+- **A number**, from 1 to 16, indents by that many spaces: to the next stop that many apart, in
+  place of anything selected within a line, or with lines selected, each a level more. Shift+Tab
+  takes a level off each line selected, or the cursor's: that many spaces, as many as it has, or
+  a tab. The text holds no tabs that Tab typed.
+- **`true`** types a tab character, and Shift+Tab takes a tab, or four spaces, off the start of
+  the cursor's line.
+
+```lua
+-- Luau, indented as Luau usually is.
+script.text = ui:text_edit(script.text, { id = script.name, monospace = true, tab = 4 })
+```
+
+Tab stays in the field from the frame after it's focused, so one pressed in the very frame the
+field is clicked still moves on.
 
 #### The cursor
 

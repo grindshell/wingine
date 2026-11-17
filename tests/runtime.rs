@@ -8085,6 +8085,89 @@ mod gui {
     }
 
     #[test]
+    fn a_text_edit_given_tab_indents_by_spaces_or_types_a_tab() {
+        let mut simulation = interface(
+            "gui_text_edit_tab",
+            "code = 'local t = {'
+            tabbed = ''
+            plain = ''
+            changes = 0",
+            "ui:panel({ side = 'left', size = 300 }, function(ui)
+                local changed
+                code, changed = ui:text_edit(code, { label = 'Code', tab = 4 })
+                if changed then
+                    changes += 1
+                end
+                tabbed = ui:text_edit(tabbed, { label = 'Tabbed', tab = true })
+                plain = ui:text_edit(plain, { label = 'Plain' })
+            end)",
+        );
+        let shift_tab = |simulation: &mut Simulation<LuauGame>| {
+            simulation.key_down(Key::LeftShift);
+            simulation.tap(Key::Tab);
+            simulation.key_up(Key::LeftShift);
+            simulation.run_frames(2);
+        };
+        // Spaces to the next stop, keeping the field focused, and saying it changed.
+        simulation.click_gui("Code");
+        simulation.tap(Key::Enter);
+        simulation.step();
+        simulation.tap(Key::Tab);
+        simulation.step();
+        simulation.type_text("x = 1,");
+        simulation.run_frames(2);
+        assert_eq!(simulation.eval::<String>("code"), "local t = {\n    x = 1,");
+        assert!(simulation.eval::<u32>("changes") >= 3);
+        simulation.tap(Key::Tab);
+        simulation.run_frames(2);
+        assert_eq!(
+            simulation.eval::<String>("code"),
+            "local t = {\n    x = 1,  "
+        );
+        // Shift+Tab takes a level off the line, wherever the cursor is in it.
+        shift_tab(&mut simulation);
+        assert_eq!(simulation.eval::<String>("code"), "local t = {\nx = 1,  ");
+        shift_tab(&mut simulation);
+        assert_eq!(simulation.eval::<String>("code"), "local t = {\nx = 1,  ");
+        // Every line selected is indented, and the cursor goes to the end of what was.
+        simulation.key_down(Key::LeftControl);
+        simulation.tap(Key::A);
+        simulation.key_up(Key::LeftControl);
+        simulation.step();
+        simulation.tap(Key::Tab);
+        simulation.run_frames(2);
+        assert_eq!(
+            simulation.eval::<String>("code"),
+            "    local t = {\n    x = 1,  "
+        );
+        simulation.type_text("!");
+        simulation.run_frames(2);
+        assert_eq!(
+            simulation.eval::<String>("code"),
+            "    local t = {\n    x = 1,  !"
+        );
+
+        // With `true`, a tab character. egui keeps Tab in a field only from its second frame
+        // focused, so a Tab in the frame it's clicked would still move on.
+        simulation.click_gui("Tabbed");
+        simulation.run_frames(2);
+        simulation.tap(Key::Tab);
+        simulation.step();
+        simulation.type_text("y");
+        simulation.run_frames(2);
+        assert_eq!(simulation.eval::<String>("tabbed"), "\ty");
+
+        // Without it, Tab moves on, and types nothing.
+        simulation.click_gui("Plain");
+        simulation.run_frames(2);
+        simulation.tap(Key::Tab);
+        simulation.run_frames(2);
+        simulation.type_text("z");
+        simulation.run_frames(2);
+        assert_eq!(simulation.eval::<String>("plain"), "");
+    }
+
+    #[test]
     fn a_text_input_given_an_id_keeps_each_texts_undo_history_apart() {
         let mut simulation = interface(
             "gui_text_input_id",

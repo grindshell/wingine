@@ -637,6 +637,10 @@ export type TextEditOptions = {
     --- Whether it takes all the room its container has left, scrolling its text within it when
     --- there's more than fits. By default, false.
     fill: boolean?,
+    --- What Tab does in it: by default, moves on to the next widget. `true` types a tab
+    --- character. A number from 1 to 16 indents by that many spaces, to the next stop, or each
+    --- line selected a level more. Either way Shift+Tab takes a level off each line.
+    tab: (boolean | number)?,
 }
 
 --- Where the cursor of a `ui:text_edit` is in its text.

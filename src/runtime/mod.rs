@@ -477,9 +477,10 @@
 //!   `ui:slider(text, value, min, max, step)`, `ui:drag(text, value, speed, min, max)` and
 //!   `ui:text_input(text, hint or { id, label, hint })` (which also returns whether Enter was
 //!   pressed) return their values, and
-//!   `ui:text_edit(text, { id, label, hint, rows, monospace, fill })`, a field of many lines as
-//!   wide as there's room for, its text, whether typing changed it, and where its cursor is
-//!   (`{ line, column, offset, anchor }`);
+//!   `ui:text_edit(text, { id, label, hint, rows, monospace, fill, tab })`, a field of many lines
+//!   as wide as there's room for, its text, whether typing changed it, and where its cursor is
+//!   (`{ line, column, offset, anchor }`); with `tab`, Tab stays in it, typing a tab (`true`) or
+//!   indenting by that many spaces, every line selected a level, and Shift+Tab unindents;
 //!   `ui:progress(fraction, text)` and `ui:sprite(sprite, tint, width, height)` show them.
 //! - `ui:canvas(label or { label, width, height }, fn)`, a canvas as big as given or as all the
 //!   room its container has left, calls `fn(paint, input)`: `paint` paints it, in points from its
