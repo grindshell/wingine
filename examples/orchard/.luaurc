@@ -1,0 +1,4 @@
+{
+    "globals": ["orchard"],
+    "lint": { "BuiltinGlobalWrite": false }
+}

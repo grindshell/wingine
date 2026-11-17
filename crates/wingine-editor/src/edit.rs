@@ -13,7 +13,7 @@ use wingine::{
     scene::{
         AreaDef, BillboardDef, InstanceDef, KindDef, LightDef, MeshDef, ModelDef, NodeDef,
         PanelDef, PanelFill, PanelLookDef, ParticlesDef, Placement3, RectDef, SceneFile, Shape,
-        SpriteDef, Stack, TextDef, TileLayerDef, TilemapDef, View3dDef,
+        SpriteDef, Stack, TextDef, TileLayerDef, TilemapDef, View3dDef, ViewParticlesDef,
     },
 };
 
@@ -38,7 +38,15 @@ pub const KINDS: [&str; 11] = [
 ];
 
 /// The kinds of node that can be added to a 3D view, placed in 3D.
-pub const KINDS_3D: [&str; 6] = ["node", "mesh", "model", "billboard", "light", "instance"];
+pub const KINDS_3D: [&str; 7] = [
+    "node",
+    "mesh",
+    "model",
+    "billboard",
+    "light",
+    "particles",
+    "instance",
+];
 
 /// Whether the nodes inside `node` are placed in 3D: it's a 3D view, or it's in one.
 pub fn holds_3d_node(node: &NodeDef) -> bool {
@@ -50,17 +58,19 @@ pub fn holds_3d(file: &SceneFile, path: &[usize]) -> bool {
     node(file, path).is_some_and(holds_3d_node)
 }
 
-/// Fits `node` to where it's going: in a 3D view if `in_3d`, where plain nodes and instances are
-/// placed in 3D, or in the 2D scene. Fails for a node that can't go there.
+/// Fits `node` to where it's going: in a 3D view if `in_3d`, where plain nodes, particles and
+/// instances are placed in 3D, or in the 2D scene. Fails for a node that can't go there.
 fn place_for(node: &mut NodeDef, in_3d: bool) -> Result<(), String> {
     let kind = node.kind.name();
-    let either = matches!(node.kind, KindDef::Node | KindDef::Instance(_));
+    let either = matches!(
+        node.kind,
+        KindDef::Node | KindDef::Particles(_) | KindDef::Instance(_)
+    );
     if in_3d {
         if !(either || node.kind.is_3d()) {
             return Err(format!(
-                "a 3D view holds only meshes, models, billboards, lights, plain nodes and \
-                 instances, not \
-                 a {kind}"
+                "a 3D view holds only meshes, models, billboards, lights, particles, plain nodes \
+                 and instances, not a {kind}"
             ));
         }
         if node.placement3.is_none() {
@@ -80,9 +90,10 @@ const MAX_CHECKED_INSTANCES: usize = 32;
 
 /// Fails, saying why, if the nodes of `file`, placed by an instance in a 3D view if `in_3d` or in
 /// the 2D scene, can't be there once it's placed: a view holds only meshes, models, billboards,
-/// plain nodes and instances, placed in 3D, and only views hold meshes, models and billboards.
-/// `load` reads the files its instances place, which are checked too; those it can't read aren't,
-/// since building the preview says what's wrong with them.
+/// lights, particles, plain nodes and instances, placed in 3D, and only views hold meshes, models,
+/// billboards, lights, and particles with what only an emitter in a view has. `load` reads the
+/// files its instances place, which are checked too; those it can't read aren't, since building
+/// the preview says what's wrong with them.
 pub fn check_placed(
     file: &SceneFile,
     in_3d: bool,
@@ -126,6 +137,13 @@ fn check_nodes(
         } else if node.kind.is_3d() || node.placement3.is_some() {
             return Err(format!(
                 "its node `{path}` is {a} {kind} node placed in 3D, which only a 3D view holds"
+            ));
+        } else if let KindDef::Particles(particles) = &node.kind
+            && particles.view != ViewParticlesDef::default()
+        {
+            return Err(format!(
+                "its node `{path}` is a particles node with what only an emitter in a 3D view \
+                 has"
             ));
         }
         if let KindDef::Instance(instance) = &node.kind
@@ -383,26 +401,38 @@ fn retarget_clips(file: &mut SceneFile, old: &str, new: &str) {
 }
 
 /// What a new node shows: a sprite from `sheet`, a tilemap of `tileset`, an instance of `scene`,
-/// or a model of `model`.
+/// or a model of `model`; and whether it goes `in_view`, in a 3D view, where particles are sized
+/// for the view's world.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Showing<'a> {
     pub sheet: &'a str,
     pub tileset: &'a str,
     pub scene: &'a str,
     pub model: &'a str,
+    pub in_view: bool,
 }
 
 /// A new node of `kind`, one of [`KINDS`] or [`KINDS_3D`], with what it shows set to something
-/// visible, from `showing`: a tilemap has a layer, and a 3D view looks at its world's origin
-/// from above and in front.
+/// visible, from `showing`: a tilemap has a layer, a 3D view looks at its world's origin from
+/// above and in front, and particles in a view rise.
 pub fn new_node(kind: &str, showing: Showing) -> NodeDef {
     let Showing {
         sheet,
         tileset,
         scene,
         model,
+        in_view,
     } = showing;
     let kind_def = match kind {
+        // A wisp rising and fading, a fifth of a unit across: its node turns its `+z`, which
+        // particles in a view fly along, up.
+        "particles" if in_view => KindDef::Particles(ParticlesDef::new(ParticleSettings {
+            speed: [0.5, 1.0],
+            spread: 0.3,
+            scales: vec![0.2],
+            colors: vec![Color::WHITE, Color::rgba(1.0, 1.0, 1.0, 0.0)],
+            ..ParticleSettings::default()
+        })),
         "sprite" => KindDef::Sprite(SpriteDef {
             sheet: sheet.to_owned(),
             cell: [0, 0],
@@ -501,6 +531,12 @@ pub fn new_node(kind: &str, showing: Showing) -> NodeDef {
     if let KindDef::Tilemap(map) = &node.kind {
         node.children
             .push(tile_layer("ground", map.columns, map.rows));
+    }
+    if kind == "particles" && in_view {
+        node.placement3 = Some(Placement3 {
+            pitch: -std::f32::consts::FRAC_PI_2,
+            ..Placement3::default()
+        });
     }
     // Named for the file it shows, as `tree` for `tree.scene.luau`.
     let file = match kind {
@@ -905,6 +941,11 @@ mod tests {
                 "loop",
                 "{ { name = 'again', kind = 'instance', scene = 'loop' } }",
             ),
+            ("puff", "{ { name = 'puff', kind = 'particles' } }"),
+            (
+                "sparks",
+                "{ { name = 'sparks', kind = 'particles', look = 'streak' } }",
+            ),
         ]
         .into_iter()
         .map(|(name, children)| {
@@ -936,6 +977,17 @@ mod tests {
         assert!(check("turned", true).unwrap_err().contains("`rotation`"));
         // A scene placing itself is for building the preview to say.
         assert_eq!(check("loop", true), Ok(()));
+        // Particles go either way, unless they have what only an emitter in a view has.
+        assert_eq!(check("puff", true), Ok(()));
+        assert_eq!(check("puff", false), Ok(()));
+        assert_eq!(check("sparks", true), Ok(()));
+        assert_eq!(
+            check("sparks", false),
+            Err(
+                "its node `sparks` is a particles node with what only an emitter in a 3D view has"
+                    .into()
+            )
+        );
     }
 
     #[test]
@@ -968,6 +1020,29 @@ mod tests {
             },
         );
         assert_eq!(tree.name, "tree");
+
+        // Particles in a view rise, along their `+z` turned up, and only a view takes them; the
+        // 2D scene takes 2D particles.
+        let mut file = SceneFile::default();
+        file.children.push(new_node("view3d", Showing::default()));
+        let in_view = Showing {
+            in_view: true,
+            ..Showing::default()
+        };
+        let wisp = new_node("particles", in_view);
+        let pitch = wisp.placement3.map(|placement| placement.pitch);
+        assert_eq!(pitch, Some(-std::f32::consts::FRAC_PI_2));
+        assert_eq!(add(&mut file, &[0], wisp.clone()), Ok(vec![0, 0]));
+        assert!(add(&mut file, &[], wisp).is_err());
+        let puff = new_node("particles", Showing::default());
+        assert_eq!(puff.placement3, None);
+        assert_eq!(add(&mut file, &[], puff.clone()), Ok(vec![1]));
+        // Put in a view, 2D particles are placed in 3D there.
+        let path = add(&mut file, &[0], puff).unwrap();
+        assert_eq!(
+            node(&file, &path).unwrap().placement3,
+            Some(Placement3::default())
+        );
     }
 
     #[test]

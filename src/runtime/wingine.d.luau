@@ -113,8 +113,9 @@ export type Look = "billboard" | "streak" | "mesh"
 --- particles fly along its `+z`, within a cone `spread` is half the angle of, so it has no
 --- `direction`; its `gravity` has three numbers; and its scales are widths in world units.
 export type ParticleSettings3d = {
-    --- What each particle is drawn as. A script's emitter is a 3D one by having it.
-    look: Look,
+    --- What each particle is drawn as. By default, `"billboard"`. A script's emitter is a 3D one
+    --- by having it, or a `gravity` of three numbers.
+    look: Look?,
     --- A streak's length, for each world unit a second it flies, added to its width. By default,
     --- 0.02.
     streak: number?,
@@ -864,8 +865,8 @@ declare extern type Particles with
 end
 
 --- An emitter of particles in a 3D view, from `graphics.new_particles` with settings that say
---- how its particles `look`, which `graphics.draw_particles` draws in the view begun last. It
---- doesn't keep time: games advance it.
+--- how its particles `look` or give `gravity` three numbers, which `graphics.draw_particles` draws
+--- in the view begun last. It doesn't keep time: games advance it.
 declare extern type Particles3d with
     --- Sends `count` particles out at once from where it is, emitting or not.
     function emit(self, count: number): ()
@@ -1188,8 +1189,9 @@ declare extern type SceneNode with
     function set_visible(self, visible: boolean): ()
     --- Returns the width and height it covers, before any scaling, or a billboard's.
     function size(self): (number, number)
-    --- Changes the size of a sprite, a rect, an area, a 3D view, a billboard, or the rectangle
-    --- particles start in.
+    --- Changes the size of a sprite, a rect, an area, a stack, a panel, a 3D view, a billboard, or
+    --- the rectangle particles start in. A stack or a panel then has a size of its own both ways,
+    --- rather than fitting what it holds.
     function set_size(self, width: number, height: number): ()
     --- Returns the smallest rectangle in the scene's coordinates around what it covers, or `nil`
     --- for a plain node.
@@ -1214,7 +1216,8 @@ declare extern type SceneNode with
     function casts_shadow(self): boolean
     --- Changes whether a mesh or model shades what's behind it from lights with `shadows`.
     function set_casts_shadow(self, casts: boolean): ()
-    --- Changes the color of a rect or text node.
+    --- Changes the color of a rect or text node, or the fill of a panel that isn't showing a
+    --- sprite.
     function set_color(self, color: Color): ()
     --- Returns how a sprite, rect, text, tile layer or particles node mixes with what's under it.
     function blend(self): Blend
@@ -1519,8 +1522,8 @@ export type GraphicsApi = {
     --- Blends what's drawn after with what's under it as `blend` says, until the frame ends.
     set_blend: (blend: Blend) -> (),
     --- Returns an emitter of particles with `settings`, each showing `sprite` or a white square;
-    --- or with settings that say how its particles `look`, one for a 3D view, whose particles
-    --- show a sprite, or are a mesh. It works anywhere.
+    --- or with settings that say how its particles `look` or give `gravity` three numbers, one
+    --- for a 3D view, whose particles show a sprite, or are a mesh. It works anywhere.
     new_particles: ((settings: ParticleSettings?, sprite: Sprite?) -> Particles) & ((settings: ParticleSettings3d, shown: (Sprite | Mesh)?) -> Particles3d),
     --- Draws the particles of `particles`, in its blend mode: a 3D emitter's in the 3D view begun
     --- last, and a 2D one's anywhere else.

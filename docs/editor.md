@@ -185,8 +185,8 @@ with **➕**, as any node; it's laid out as an area, so the Anchors menu and its
 size it.
 
 - **➕** inside a view adds what views hold: a **mesh**, a **model** of one of the game's model
-  files, a **billboard** of one of the scene's sheets, a **light**, or a plain **node**. Instances
-  can go in views too, from **⛓** or dropped in, placed in 3D.
+  files, a **billboard** of one of the scene's sheets, a **light**, **particles**, rising, or a
+  plain **node**. Instances can go in views too, from **⛓** or dropped in, placed in 3D.
 - **Dragging a model file** from the FileSystem dock into a view adds a model node showing it,
   where the ray under the pointer meets the ground. A scene file dropped in a view is placed there
   the same way. A scene holding what a view can't, such as sprites, isn't placed in one, nor a

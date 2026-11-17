@@ -1330,6 +1330,68 @@ fn scenes_that_cannot_go_in_a_view_are_refused() {
 }
 
 #[test]
+fn particles_are_added_to_views_and_placed_in_them() {
+    let folder = copy_of("cellar", "particles_in_views");
+    let smoke = "return { format = 2, children = { \
+                 { name = 'smoke', kind = 'particles', look = 'streak' } } }";
+    fs::write(folder.join("smoke.scene.luau"), smoke).unwrap();
+    let mut simulation = editor(Some(folder));
+    simulation
+        .game_mut()
+        .open_scene("cellar.scene.luau")
+        .unwrap();
+    simulation.run_frames(2);
+    // Whether the node at `names` of the preview is an emitter in a view, and how many
+    // particles it has.
+    let emitter = |simulation: &Simulation<Editor>, names: &str| {
+        let scene = simulation
+            .game()
+            .document()
+            .unwrap()
+            .preview
+            .as_ref()
+            .unwrap();
+        let id = scene.find(scene.root(), names).unwrap();
+        let wingine::scene::Kind::Particles(node) = scene.node(id).kind() else {
+            panic!("`{names}` is particles");
+        };
+        node.particles.view().map(|particles| particles.count())
+    };
+
+    // ➕ inside the view adds an emitter, turned to rise, which the preview sets going.
+    select(&mut simulation, "view");
+    menu(&mut simulation, "➕", "✨ particles");
+    assert_eq!(
+        selected_name(&simulation).as_deref(),
+        Some("view/particles")
+    );
+    let wisp = node(&simulation, "view/particles");
+    assert!(matches!(wisp.kind, KindDef::Particles(_)), "{wisp:?}");
+    let pitch = wisp.placement3.map(|placement| placement.pitch);
+    assert_eq!(pitch, Some(-FRAC_PI_2));
+    assert!(simulation.game().document().unwrap().error.is_none());
+    let count = emitter(&simulation, "view/particles");
+    assert!(count.is_some_and(|count| count > 0), "{count:?}");
+
+    // A scene of particles dropped in the view is placed there.
+    let row = middle(simulation.gui_rect("smoke.scene.luau").unwrap());
+    let to = world_to_window(&simulation, "view", [6.5, 0.0, 5.5]);
+    drag(&mut simulation, row, to);
+    assert_eq!(selected_name(&simulation).as_deref(), Some("view/smoke"));
+    let placed = node(&simulation, "view/smoke");
+    assert!(matches!(placed.kind, KindDef::Instance(_)), "{placed:?}");
+    assert!(placed.placement3.is_some());
+    let lines = simulation.game().output().lines();
+    assert!(
+        !lines.iter().any(|line| line.level == Level::Error),
+        "{:?}",
+        lines.iter().map(|line| &line.text).collect::<Vec<_>>()
+    );
+    assert!(simulation.game().document().unwrap().error.is_none());
+    assert!(emitter(&simulation, "view/smoke/smoke").is_some());
+}
+
+#[test]
 fn models_are_read_again_when_files_beside_them_change() {
     let folder = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join("editor")

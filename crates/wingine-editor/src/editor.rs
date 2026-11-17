@@ -507,6 +507,7 @@ impl Editor {
                     sheet: &sheet,
                     tileset: &tileset,
                     model: &model,
+                    in_view: edit::holds_3d(document.file(), &parent),
                     ..edit::Showing::default()
                 };
                 let node = edit::new_node(kind, showing);
