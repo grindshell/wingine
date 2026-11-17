@@ -1145,6 +1145,7 @@ in one hide each other by how near they are, but a later view draws over an earl
 | `rect` | Where on the canvas the view shows, a [`Rect`](README.md#rect). By default, the whole canvas. With a [camera](#graphicsset_camera) set, it's in world positions, as everything drawn is. |
 | `lighting` | How the view is lit: a table, below. By default, the default sun and ambient light. |
 | `fog` | What the view shows fades to with distance: a table, below. By default, nothing. |
+| `sky` | What the view shows wherever nothing is drawn, which its fog fades into: a table, below. By default, nothing: what was drawn before the view shows behind it. |
 
 The camera's table:
 
@@ -1276,10 +1277,10 @@ lit and shaded. The distance is from where the camera is, so turning the camera 
 more or less; under an orthographic camera, with a `height`, it's how far ahead of the camera a
 place is.
 
-A view draws no background: what's behind its meshes is what was drawn before it, or what
-[`graphics.clear`](#graphicsclear) filled the canvas with. So clear to the fog's color, and the
-far side of a world fades into what's behind it, and what comes and goes past `far`, such as
-parts of a world loaded around the player, can't be seen to.
+A view without a `sky` draws no background: what's behind its meshes is what was drawn before
+it, or what [`graphics.clear`](#graphicsclear) filled the canvas with. So clear to the fog's
+color, and the far side of a world fades into what's behind it, and what comes and goes past
+`far`, such as parts of a world loaded around the player, can't be seen to.
 
 ```lua
 -- Dusk: the ground fades into the sky from 24 units off, and is gone at 48.
@@ -1296,6 +1297,44 @@ end
 A light none of whose reach is nearer the camera than the fog's `far` lights nothing that
 shows. It isn't one of the view's 32 lights, takes no shadow maps, and isn't counted as left
 out.
+
+The sky's table:
+
+| Field | What it is |
+|---|---|
+| `horizon` | Its color level with the camera, a [`Color`](README.md#color). By default, black. |
+| `zenith` | Its color straight up, and from `band` up. By default, the horizon's. |
+| `ground` | Its color straight down, and from `band` down. By default, the horizon's. |
+| `band` | How far up and down from the horizon, in radians, it becomes the zenith's color and the ground's: above 0. Past a quarter turn is a quarter turn, which it is by default. |
+
+A sky is what a view shows wherever nothing is drawn, all round the camera, as though infinitely
+far off: it turns as the camera turns and never comes nearer. Each pixel of it is a color by the
+height of the way the camera looks through it: the horizon's level, becoming the zenith's or the
+ground's in a straight line in the way's height, to `band` radians up or down and past it,
+mixed in linear light. The horizon is level with the camera, not the middle of the view, so
+looking up moves it down the view. An orthographic camera looks the same way through every
+pixel, so its sky is one color. Colors' alphas are ignored: a sky is opaque.
+
+It's behind everything in its view, and covers what was drawn on the canvas before the view, in
+its `rect`; a view with a sky and nothing drawn in it still shows the sky. The view's fog fades
+into it: what's far fades into the sky the way it's seen from the camera, so at `far` and past it
+a thing is the very sky that would show there without it, above the horizon or below it, and the
+fog's `color` goes unused. Particles that blend normally fade into it too.
+
+A sky lights nothing, and nothing lights it: it isn't the sun or the ambient light, and takes
+none of the view's lights or shadow maps. It's a draw call of its own, worked out only for the
+pixels nothing in the view hides.
+
+```lua
+-- Dusk under a great vault: dark overhead, a lit haze at the horizon, and the ground fading
+-- into it from 24 units off.
+wg.graphics.begin_3d({
+    camera = camera,
+    fog = { near = 24, far = 48 },
+    sky = { zenith = "#05060a", horizon = "#3a2f25", ground = "#0e0b09", band = 0.5 },
+})
+wg.graphics.draw_mesh(ground, vector.zero)
+```
 
 Meshes, models and billboards can glow: show a color whatever lights them, or doesn't, such as a
 window lit from inside, a screen, or a candle's flame. A model's parts give off what their

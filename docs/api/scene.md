@@ -33,7 +33,7 @@ the files.
   [`glow`](#nodeglow), [`set_glow`](#nodeset_glow)
 - [3D views](#3d-views): [`camera`](#nodecamera), [`set_camera`](#nodeset_camera),
   [`lighting`](#nodelighting), [`set_lighting`](#nodeset_lighting), [`fog`](#nodefog),
-  [`set_fog`](#nodeset_fog), [`pick`](#nodepick),
+  [`set_fog`](#nodeset_fog), [`sky`](#nodesky), [`set_sky`](#nodeset_sky), [`pick`](#nodepick),
   [`project`](#nodeproject), [`ray`](#noderay)
 - [Posing](#posing): [`pose`](#nodepose), [`Clip`](#clip)
 - [Adding and removing nodes](#adding-and-removing-nodes): [`add`](#nodeadd),
@@ -740,6 +740,33 @@ have a `far`, more than `near`, as in [`graphics.begin_3d`](graphics.md#graphics
 ```lua
 -- The fog closes in as night falls.
 view:set_fog({ color = sky, near = 8, far = 48 - 24 * night })
+```
+
+### `node:sky`
+
+```lua
+node:sky(): Sky?
+```
+
+Returns the view's sky, `zenith`, `horizon` and `ground` as numbers `0xRRGGBBAA`, and `band`,
+or nothing if it has none.
+
+### `node:set_sky`
+
+```lua
+node:set_sky(sky: Sky?)
+```
+
+Changes the view's sky, whole: the horizon is black, the zenith and the ground the horizon's
+color, and the band a quarter turn, where they're left out, as in
+[`graphics.begin_3d`](graphics.md#graphicsbegin_3d). With `nil`, the view has none, and what was
+drawn before it shows behind it. The view's fog fades into its sky, so a sky eased from one to
+another, a step each update, takes the fog's far side with it.
+
+```lua
+-- Walking into a hall's haze: the sky eases from the corridor's black to the hall's, as `t`
+-- goes from 0 to 1.
+view:set_sky({ zenith = mix(BLACK, VAULT, t), horizon = mix(BLACK, HAZE, t), band = 0.5 })
 ```
 
 ### `node:pick`

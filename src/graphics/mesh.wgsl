@@ -34,6 +34,20 @@ struct View {
     eye: vec4<f32>,
     // The way the camera looks, of length 1, then 1 for an orthographic camera, or 0.
     eye_forward: vec4<f32>,
+    // Its sky's color straight up, linear, then 1, or 0 for a view without a sky.
+    sky_zenith: vec4<f32>,
+    // Its sky's color level with the camera, linear, then how many times a way's height it is
+    // along from there to the zenith or the ground.
+    sky_horizon: vec4<f32>,
+    // Its sky's color straight down, linear.
+    sky_ground: vec4<f32>,
+    // How far the way the view's right edge looks is from the way its middle does, along the
+    // camera's right, and the same of its top edge along its up: nothing for an orthographic
+    // camera.
+    sky_right: vec4<f32>,
+    sky_up: vec4<f32>,
+    // What places the view's clip space on the target's: across and down scaled, then moved.
+    sky_crop: vec4<f32>,
     lights: array<Light, 32>,
     // What maps the world onto each shadow map, as a camera at its light would see it.
     shadow_maps: array<mat4x4<f32>, 24>,
@@ -182,13 +196,18 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @locatio
     if color.a < 0.5 {
         discard;
     }
-    let shown = shade(in, front_facing, color.rgb, emitted);
-    return vec4<f32>(mix(shown, view.fog_color.rgb, fog_amount(in.world.xyz)), 1.0);
+    var shown = shade(in, front_facing, color.rgb, emitted);
+    let fog = fog_amount(in.world.xyz);
+    if fog > 0.0 {
+        shown = mix(shown, fades_into(in.world.xyz), fog);
+    }
+    return vec4<f32>(shown, 1.0);
 }
 
-// What a blended pixel fades to in fog, set as its pipeline is made: 0 the fog's color, for one
-// blended normally, which covers what's behind it; 1 black, for one that adds or screens, which
-// then adds nothing; 2 white, for one that multiplies, which then darkens nothing.
+// What a blended pixel fades to in fog, set as its pipeline is made: 0 what an opaque one does,
+// the sky or the fog's color, for one blended normally, which covers what's behind it; 1 black,
+// for one that adds or screens, which then adds nothing; 2 white, for one that multiplies, which
+// then darkens nothing.
 override fades_to: u32 = 0u;
 
 // A blended mesh's pixel, which only particles are: shaded as an opaque one is, whatever its
@@ -198,7 +217,7 @@ fn fs_blended(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @loca
     let color = textureSample(mesh_texture, mesh_sampler, in.uv) * in.color;
     let emitted = in.emission * textureSample(emission_texture, emission_sampler, in.uv).rgb;
     let shown = shade(in, front_facing, color.rgb, emitted);
-    var toward = view.fog_color.rgb;
+    var toward = fades_into(in.world.xyz);
     if fades_to == 1u {
         toward = vec3<f32>(0.0);
     } else if fades_to == 2u {
@@ -218,6 +237,50 @@ fn fog_amount(world: vec3<f32>) -> f32 {
     let away = world - view.eye.xyz;
     let distance = select(length(away), dot(away, view.eye_forward.xyz), view.eye_forward.w > 0.5);
     return clamp((distance - view.fog.x) * view.fog.y, 0.0, 1.0);
+}
+
+// What's at `world` fades into in fog: the sky the way it's seen from the camera, as though
+// nothing were there, or for an orthographic camera, the way it looks; or without a sky, the
+// fog's color.
+fn fades_into(world: vec3<f32>) -> vec3<f32> {
+    if view.sky_zenith.a < 0.5 {
+        return view.fog_color.rgb;
+    }
+    let way = select(world - view.eye.xyz, view.eye_forward.xyz, view.eye_forward.w > 0.5);
+    return sky_at(way);
+}
+
+// The view's sky the way `way` looks, whatever its length: from its horizon's color, level, to
+// its zenith's or its ground's, in a straight line in the way's height, as `Sky::color_at` has it.
+fn sky_at(way: vec3<f32>) -> vec3<f32> {
+    let size = length(way);
+    let height = select(0.0, way.y / size, size > 0.0);
+    let along = min(abs(height) * view.sky_horizon.w, 1.0);
+    let toward = select(view.sky_ground.rgb, view.sky_zenith.rgb, height >= 0.0);
+    return mix(view.sky_horizon.rgb, toward, along);
+}
+
+struct SkyOut {
+    @builtin(position) clip_position: vec4<f32>,
+    // The way the camera looks through it, not of length 1.
+    @location(0) way: vec3<f32>,
+}
+
+// A corner of one triangle covering the view, at the far end of its depth, so only what nothing
+// nearer hides shows it, carrying the way the camera looks there. The view's clip space is from -1
+// to 1 across and up, which the triangle's corners at -1 and 3 cover.
+@vertex
+fn vs_sky(@builtin(vertex_index) index: u32) -> SkyOut {
+    let corner = vec2<f32>(select(-1.0, 3.0, index == 1u), select(-1.0, 3.0, index == 2u));
+    var out: SkyOut;
+    out.clip_position = vec4<f32>(corner * view.sky_crop.xy + view.sky_crop.zw, 1.0, 1.0);
+    out.way = view.eye_forward.xyz + view.sky_right.xyz * corner.x + view.sky_up.xyz * corner.y;
+    return out;
+}
+
+@fragment
+fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(sky_at(in.way), 1.0);
 }
 
 // What a pixel of `color`, giving off `emitted`, shows before fog: lit by the view's sun,

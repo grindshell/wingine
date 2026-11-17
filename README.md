@@ -21,8 +21,8 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **3D views** among the 2D: meshes, glTF models and billboarded sprites, lit by a sun and by
   lights at places that can cast shadows or keep to a box, glowing where they give off light of
   their own, fading
-  into fog with distance, for 2.5D games, rendered at the canvas's resolution, and picked with
-  the mouse.
+  into fog with distance, under a sky that fog fades into, for 2.5D games, rendered at the
+  canvas's resolution, and picked with the mouse.
 - **Tilemaps** with layers, and a **camera** that follows the player.
 - **Particles**: emitters of sprites or squares that fly, turn, change color and size as they
   age, and leave trails, in scenes or made by scripts, the same to the bit on every platform.
@@ -198,9 +198,10 @@ Walk with the arrow keys, and point at a prop to name it.
 
 [`examples/course`](examples/course) is a course to run around in 3D, collecting coins, built
 from Kenney's [Prototype Kit](https://kenney.nl/assets/prototype-kit) and made solid by a
-[physics world](docs/api/physics.md#in-3d). Its far side fades into the sky, by the view's fog.
+[physics world](docs/api/physics.md#in-3d). Its far side fades into the view's sky, a pale
+haze toward the horizon, by the view's fog.
 
-![The figurine jumping toward the block and its coin, its shadow on the ground below](docs/screenshots/course.png)
+![The figurine jumping, its shadow on the ground below, the course's far side fading into a pale sky](docs/screenshots/course.png)
 
 Walk with the arrow keys or a stick, jump with Space, and zoom with the mouse wheel. The player
 climbs the stairs, pushes crates over, and casts a shadow where a jump will land.

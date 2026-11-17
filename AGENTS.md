@@ -9,7 +9,7 @@ systems, and don't build more 3D features unless asked.
 
 Wingine has what its examples need: tilemaps and batched sprites in blend modes, meshes and glTF
 models in 3D views picked by boxes, lit by a sun and by lights at places that cast shadows,
-glowing, and fading into fog,
+glowing, and fading into fog under a sky,
 sprite animation, particles, a camera, keyboard, mouse and gamepad input bound to
 actions, grid movement, physics with Rapier (bodies and characters, in 2D and in 3D views),
 text in the built-in font, bitmap fonts and TrueType fonts, audio, saves, folders the player
@@ -156,11 +156,24 @@ own right.
 - Fog (`Fog`, a `View3d`'s `fog`): `mesh.wgsl` mixes what a pixel shows, lit and shaded, with the
   fog's color by its distance from the camera, in a straight line from `near` to `far`, in linear
   light; from where the camera is (`View3d::distance`), or ahead of an orthographic one. A view
-  draws no background, so a game clears the canvas to the fog's color itself. `lights_of` leaves
-  out a light all of whose reach is `far` or more away, uncounted, so `shadows_of` gives it no
-  maps. Fog that can't be (`Fog::problem`) is none. In scenes it's a view's `fog`
-  (`View3dDef::fog`), written only if it has one. Native libraries can't give a view fog: the
-  ABI's view is unchanged.
+  without a sky draws no background, so a game clears the canvas to the fog's color itself.
+  `lights_of` leaves out a light all of whose reach is `far` or more away, uncounted, so
+  `shadows_of` gives it no maps. Fog that can't be (`Fog::problem`) is none. In scenes it's a
+  view's `fog` (`View3dDef::fog`), written only if it has one. Native libraries can't give a view
+  fog: the ABI's view is unchanged.
+- Sky (`Sky`, a `View3d`'s `sky`): a gradient by the height of the way each pixel looks, from
+  `horizon` to `zenith` or `ground` over `band` radians, in a straight line in the height, in
+  linear light (`Sky::color_at`); `Sky::flat` is one color. It's one triangle over the view
+  (`mesh.wgsl`'s `vs_sky`, placed through the view's crop, `sky_crop`), at the far depth, drawn
+  by its own pipeline, which reads only the view's group, after the view's opaque runs and before
+  its blended ones (`MeshRenderer::draw`), passing only where the depth is as cleared; so a view
+  with a sky covers its rect, and is drawn with nothing in it. The uniform carries its colors,
+  `1 / sin(band)` (`Sky::steepness`), and the camera's right and up scaled by its angle, from
+  which each corner carries the way it looks; an orthographic camera's sky is one color. Fog fades
+  into it (`fades_into`), the way each surface is seen, instead of into its color. It's a draw
+  call of its own in `draw_call_count`. A sky that can't be (`Sky::problem`, a band not above 0)
+  is none. In scenes it's a view's `sky` (`View3dDef::sky`), written with its horizon, and the
+  rest unless it's the horizon's or a quarter turn. Native libraries can't give a view one.
 - `src/graphics/font.rs`: `Font` and `TextLayout`. Built-in and bitmap fonts have their glyphs in
   one texture (`Metrics`; bitmap glyphs cut from a font file's PNG, as wide as their ink).
   TrueType and OpenType fonts (`Face`, `FaceSize`) rasterize a glyph with `ab_glyph` the first time

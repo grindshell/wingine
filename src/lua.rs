@@ -110,7 +110,10 @@
 //!   `height` (world units, for none) being the projection, one or the other. [`Lighting`] is a
 //!   table `{ direction, color, ambient }`, any of them left out keeping its default. [`Fog`] is
 //!   a table `{ color, near, far }`: what a view shows fades to `color` (white) from `near` (0)
-//!   world units from its camera to `far`, which it must have, more than `near`. A
+//!   world units from its camera to `far`, which it must have, more than `near`. [`Sky`] is a
+//!   table `{ zenith, horizon, ground, band }`: what a view shows wherever nothing is drawn,
+//!   which its fog fades into instead of its color, `horizon` (black) level with the camera,
+//!   becoming `zenith` and `ground` (the horizon's) `band` radians (a quarter turn) up and down. A
 //!   [`Light`] is a table of a `position`, a vector, and optionally `color` (white), `range`
 //!   (5), `energy` (1), `shadows` (whether the view's meshes and models in its way shade what's
 //!   behind them, `false`), `bounds` (six numbers, a box's least corner and then its most, in
@@ -163,7 +166,9 @@
 //!   `node:set_camera(camera)`, `node:lighting()` (its colors numbers),
 //!   `node:set_lighting(lighting)` (its sun and ambient light: `lights` there is an error, a
 //!   scene's being its light nodes), `node:fog()` (its color a number, or nothing for a view
-//!   without fog), `node:set_fog(fog)` (or `nil` for none), `node:pick(x, y)` (its nodes under a point of the scene,
+//!   without fog), `node:set_fog(fog)` (or `nil` for none), `node:sky()` (its colors numbers, or
+//!   nothing for a view without a sky), `node:set_sky(sky)` (whole, or `nil` for none),
+//!   `node:pick(x, y)` (its nodes under a point of the scene,
 //!   nearest first), `node:project(point)` (where a point of its world shows in the scene, or
 //!   nothing) and `node:ray(x, y)` (where the ray into its world through a point of the scene
 //!   starts and the way it goes, of length 1, or nothing outside the view). What they cover: `node:size()` (before stretching with its parent, or a
@@ -295,7 +300,7 @@ use crate::{
     folders::{Entry, EntryKind, Folder},
     graphics::{
         Animation, Blend, Camera3d, Color, Fog, Font, Light, Lighting, Mesh, Model, Projection,
-        Scaling, Sprite, SpriteSheet, TextLayout,
+        Scaling, Sky, Sprite, SpriteSheet, TextLayout,
     },
     grid::{Direction, GridMover},
     input::{Control, GamepadButton, Key, MouseButton},
@@ -1372,6 +1377,42 @@ impl IntoLua for Fog {
     }
 }
 
+impl FromLua for Sky {
+    /// A table of any of `zenith`, `horizon`, `ground` and `band`: black at the horizon, the
+    /// horizon's color up and down, and a band of a quarter turn where they're left out.
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        let mlua::Value::Table(table) = &value else {
+            let message = "expected a table { zenith, horizon, ground, band }".into();
+            return Err(conversion_error(&value, "Sky", message));
+        };
+        let horizon = table
+            .get::<Option<Color>>("horizon")?
+            .unwrap_or(Color::BLACK);
+        let sky = Sky {
+            zenith: table.get::<Option<Color>>("zenith")?.unwrap_or(horizon),
+            horizon,
+            ground: table.get::<Option<Color>>("ground")?.unwrap_or(horizon),
+            band: table.get::<Option<f32>>("band")?.unwrap_or(Sky::WHOLE_BAND),
+        };
+        match sky.problem() {
+            Some(problem) => Err(mlua::Error::runtime(problem)),
+            None => Ok(sky),
+        }
+    }
+}
+
+impl IntoLua for Sky {
+    /// A table `{ zenith, horizon, ground, band }`, its colors numbers `0xRRGGBBAA`.
+    fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
+        let table = lua.create_table_with_capacity(0, 4)?;
+        table.set("zenith", packed_color(self.zenith))?;
+        table.set("horizon", packed_color(self.horizon))?;
+        table.set("ground", packed_color(self.ground))?;
+        table.set("band", self.band)?;
+        Ok(mlua::Value::Table(table))
+    }
+}
+
 /// Changes the settings of `light` that `table` gives, any of `color`, `range`, `energy`,
 /// `cone`, `edge`, `shadows` and `bounds`, `false` taking its box away, failing if it couldn't
 /// then light anything.
@@ -2133,6 +2174,21 @@ impl mlua::UserData for SceneNode {
             node.write_kind("fog", |kind| match kind {
                 Kind::View3d(view) => {
                     view.fog = fog;
+                    Some(())
+                }
+                _ => None,
+            })
+        });
+        methods.add_method("sky", |_, node, ()| {
+            node.read_kind("sky", |kind| match kind {
+                Kind::View3d(view) => Some(view.sky),
+                _ => None,
+            })
+        });
+        methods.add_method("set_sky", |_, node, sky: Option<Sky>| {
+            node.write_kind("sky", |kind| match kind {
+                Kind::View3d(view) => {
+                    view.sky = sky;
                     Some(())
                 }
                 _ => None,

@@ -2,6 +2,7 @@
 //! folders.
 
 use std::{
+    f32::consts::FRAC_PI_2,
     fs,
     path::{Path, PathBuf},
 };
@@ -4003,6 +4004,168 @@ fn views_take_fog_from_luau() {
         simulation.step();
         let err: String = simulation.eval("tostring(problem)");
         assert!(err.contains(message), "{fog}: {err}");
+    }
+}
+
+/// A view looking level along `-z`, its sky blue overhead, red at the horizon and green
+/// underfoot, from half a radian up and down; and a white wall ahead, 6 units off, in black fog
+/// whole at 5.
+const SKIED: &str = r##"return {
+    format = 4,
+    children = {
+        {
+            name = "view", kind = "view3d", width = 0, height = 0, stretch = { 1, 1 },
+            camera = { position = { 0, 0, 0 }, target = { 0, 0, -1 } },
+            lighting = { color = "#000000", ambient = "#ffffff" },
+            fog = { near = 1, far = 5, color = "#000000" },
+            sky = { zenith = "#0000ff", horizon = "#ff0000", ground = "#00ff00", band = 0.5 },
+            children = {
+                { name = "wall", kind = "mesh", shape = "cuboid", z = -6, size = { 4, 4, 0.1 } },
+            },
+        },
+    },
+}"##;
+
+#[test]
+fn scene_skies_work_from_luau() {
+    let folder = game(
+        "scene_sky",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            ("skied.scene.luau", SKIED),
+            (
+                "main.luau",
+                "local wg = require('@wingine')
+                level = wg.scene.load('skied.scene.luau')
+                view = level:find('view')
+                wall = view:find('wall')
+                function draw()
+                    wg.graphics.clear('#ffffff')
+                    wg.graphics.draw_scene(level)
+                    stats = wg.graphics.frame_stats()
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    assert_eq!(simulation.game().error().map(ToString::to_string), None);
+    let shot = |simulation: &mut Simulation<LuauGame>| {
+        simulation.step();
+        simulation.screenshot().unwrap()
+    };
+    assert_eq!(
+        simulation.eval::<(String, String, String, f32)>(
+            "(function() local sky = view:sky() return string.format('%08x', sky.zenith), \
+             string.format('%08x', sky.horizon), string.format('%08x', sky.ground), \
+             sky.band end)()"
+        ),
+        ("0000ffff".into(), "ff0000ff".into(), "00ff00ff".into(), 0.5)
+    );
+
+    // Its top edge looks 0.4 of a radian up, most of the way to the zenith's blue; its bottom
+    // edge as far down, most of the way to the ground's green; and between, the horizon's red,
+    // where the wall in the fog is the very sky behind it.
+    let frame = shot(&mut simulation);
+    let [top, middle, bottom] = [0, 10, 19].map(|y| frame.pixel(0, y));
+    assert!(top[2] > 200 && top[0] < 160 && top[1] == 0, "{top:?}");
+    assert!(
+        bottom[1] > 200 && bottom[0] < 160 && bottom[2] == 0,
+        "{bottom:?}"
+    );
+    assert!(middle[0] > 240 && middle[2] == 0, "{middle:?}");
+    let walled = frame.pixel(10, 10);
+    simulation.exec("wall:set_visible(false)");
+    let behind = shot(&mut simulation).pixel(10, 10);
+    for channel in 0..3 {
+        assert!(
+            walled[channel].abs_diff(behind[channel]) <= 2,
+            "{walled:?} {behind:?}"
+        );
+    }
+    // The sky is a draw call of its own, and the view draws it with nothing in it.
+    simulation.step();
+    assert_eq!(simulation.eval::<u32>("stats.draw_calls"), 1);
+
+    // One color every way, if it says only its horizon.
+    simulation.exec("view:set_sky({ horizon = '#00ff00' })");
+    let flat = shot(&mut simulation);
+    for point in [[0, 0], [10, 10], [19, 19]] {
+        assert_eq!(flat.pixel(point[0], point[1]), [0, 255, 0, 255]);
+    }
+    assert_eq!(simulation.eval::<f32>("view:sky().band"), FRAC_PI_2);
+
+    // Without a sky, what the canvas was cleared to shows, and nothing is drawn.
+    simulation.exec("view:set_sky(nil)");
+    assert_eq!(shot(&mut simulation).pixel(0, 0), [255, 255, 255, 255]);
+    assert!(simulation.eval::<bool>("view:sky() == nil"));
+    simulation.step();
+    assert_eq!(simulation.eval::<u32>("stats.draw_calls"), 0);
+
+    for (code, message) in [
+        ("view:set_sky({ band = 0 })", "a sky's band must be above 0"),
+        ("view:set_sky({ horizon = 'sky blue' })", "sky blue"),
+        ("view:set_sky(5)", "Sky"),
+        ("wall:sky()", "which has no sky"),
+        ("wall:set_sky(nil)", "which has no sky"),
+    ] {
+        let err: String = simulation.eval(&format!(
+            "tostring(select(2, pcall(function() {code} end)))"
+        ));
+        assert!(err.contains(message), "{code}: {err}");
+    }
+    // A sky that failed changed nothing.
+    assert!(simulation.eval::<bool>("view:sky() == nil"));
+}
+
+#[test]
+fn views_take_skies_from_luau() {
+    let folder = game(
+        "view_sky",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "local wg = require('@wingine')
+                sky = { horizon = '#ff0000', zenith = '#0000ff' }
+                function draw()
+                    wg.graphics.clear('#ffffff')
+                    ok, problem = pcall(wg.graphics.begin_3d, {
+                        camera = { position = vector.zero, target = vector.create(0, 1, -1) },
+                        sky = sky,
+                    })
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    assert_eq!(simulation.game().error().map(ToString::to_string), None);
+    let shot = |simulation: &mut Simulation<LuauGame>| {
+        simulation.step();
+        simulation.screenshot().unwrap()
+    };
+    // Looking an eighth of a turn up, with a band of a quarter turn: bluer up the view, and
+    // redder down it, with no ground in sight.
+    let frame = shot(&mut simulation);
+    let [top, bottom] = [frame.pixel(10, 0), frame.pixel(10, 19)];
+    assert!(
+        top[2] > bottom[2] && top[0] < bottom[0],
+        "{top:?} {bottom:?}"
+    );
+    assert_eq!(top[1], 0);
+
+    simulation.exec("sky = nil");
+    assert_eq!(shot(&mut simulation).pixel(10, 10), [255, 255, 255, 255]);
+
+    for (sky, message) in [
+        ("{ band = -1 }", "a sky's band must be above 0"),
+        ("5", "Sky"),
+    ] {
+        simulation.exec(&format!("sky = {sky}"));
+        simulation.step();
+        let err: String = simulation.eval("tostring(problem)");
+        assert!(err.contains(message), "{sky}: {err}");
     }
 }
 

@@ -130,8 +130,8 @@ impl Canvas {
     }
 
     /// The draw calls rendering what was drawn so far this frame will take: one for each run of
-    /// quads with the same texture, and one for each kind of mesh drawn in each 3D view, the same
-    /// mesh showing the same texture: see [`MeshOrder`].
+    /// quads with the same texture, one for each kind of mesh drawn in each 3D view, the same
+    /// mesh showing the same texture (see [`MeshOrder`]), and one for each view's sky.
     pub(crate) fn draw_call_count(&self) -> u32 {
         let quads = self.batches.iter().filter(|b| !b.quads.is_empty()).count();
         let meshes: usize = self
@@ -139,7 +139,8 @@ impl Canvas {
             .iter()
             .map(|segment| {
                 let Range { start, end } = segment.draws.clone();
-                MeshOrder::kind_count(&self.mesh_draws[start as usize..end as usize])
+                let sky = usize::from(segment.view.sky().is_some());
+                MeshOrder::kind_count(&self.mesh_draws[start as usize..end as usize]) + sky
             })
             .sum();
         (quads + meshes) as u32

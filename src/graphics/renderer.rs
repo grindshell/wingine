@@ -10,12 +10,12 @@ use wgpu::util::DeviceExt;
 
 use super::{
     Blend, Color, Light, Mesh, MeshData, Projection, Texture,
-    camera3d::{self, Mat4},
+    camera3d::{self, Basis, Mat4},
     canvas::{Batch, Canvas, Vertex},
     mesh::GpuVertex,
     view3d::{Instance, MeshOrder, Segment3d, lights_of, shadows_of},
 };
-use crate::math::{Rect, normalize3};
+use crate::math::{Rect, normalize3, scale3};
 
 /// Initial GPU buffer room, in quads. Buffers grow as needed.
 const INITIAL_QUADS: u32 = 1024;
@@ -55,6 +55,22 @@ struct ViewUniform {
     /// The way the camera looks, of length 1, then 1 for an orthographic camera, whose fog is by
     /// how far ahead of it things are, or 0.
     eye_forward: [f32; 4],
+    /// Its sky's color straight up, linear, then 1, or 0 for a view without a sky.
+    sky_zenith: [f32; 4],
+    /// Its sky's color level with the camera, linear, then how many times a way's height it is
+    /// along from there to the zenith or the ground.
+    sky_horizon: [f32; 4],
+    /// Its sky's color straight down, linear, then nothing.
+    sky_ground: [f32; 4],
+    /// How far the way the view's right edge looks is from the way its middle does, along the
+    /// camera's right, for a way of length 1 along `eye_forward`; then nothing. Nothing for an
+    /// orthographic camera, which looks the same way from everywhere.
+    sky_right: [f32; 4],
+    /// The same, of its top edge, along the camera's up.
+    sky_up: [f32; 4],
+    /// What places the view's clip space on the target's, where the view is cut to it: across
+    /// and down scaled, then moved.
+    sky_crop: [f32; 4],
     lights: [LightUniform; Light::MAX],
     /// What maps the world onto each of its shadow maps.
     shadow_maps: [Mat4; Light::SHADOW_MAPS],
@@ -159,6 +175,9 @@ struct MeshRenderer {
     /// For blended draws, in each of [`Blend::ALL`]: showing both sides, tested against the
     /// view's depth and not writing it.
     blended: [wgpu::RenderPipeline; 4],
+    /// For a view's sky: one triangle over the view, at the far end of its depth, where nothing
+    /// is nearer, writing no depth.
+    sky: wgpu::RenderPipeline,
     views_layout: wgpu::BindGroupLayout,
     /// Each view's [`ViewUniform`], `view_stride` bytes apart.
     views_buffer: wgpu::Buffer,
@@ -574,8 +593,9 @@ impl Renderer {
         }
         let canvas_size = [canvas.width(), canvas.height()];
         self.viewports.clear();
+        // A view with nothing drawn in it draws nothing, unless it has a sky to show.
         self.viewports.extend(canvas.segments.iter().map(|segment| {
-            (!segment.draws.is_empty())
+            (!segment.draws.is_empty() || segment.view.sky().is_some())
                 .then(|| Viewport::new(segment.view.rect, canvas_size, target_size))
                 .flatten()
         }));
@@ -814,6 +834,45 @@ impl MeshRenderer {
                 .map(|front| pipeline(front, cull_mode, None))
         });
         let blended = Blend::ALL.map(|blend| pipeline(wgpu::FrontFace::Ccw, None, Some(blend)));
+        // The sky is drawn after the view's opaque meshes, where the depth is still as cleared,
+        // the far end, which its triangle is at: so only pixels nothing hides work it out. It
+        // reads only the view's uniform, so a view with nothing in it needs no texture bound.
+        let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sky"),
+            bind_group_layouts: &[Some(&views_layout)],
+            immediate_size: 0,
+        });
+        let sky = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sky"),
+            layout: Some(&sky_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_sky"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_sky"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
 
         let shadow_shader = device.create_shader_module(wgpu::include_wgsl!("shadow.wgsl"));
         let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -904,6 +963,7 @@ impl MeshRenderer {
         Self {
             pipelines,
             blended,
+            sky,
             views_layout,
             views_buffer,
             views_bind_group,
@@ -1123,7 +1183,8 @@ impl MeshRenderer {
     }
 
     /// Draws the meshes of the `index`th of `canvas`'s 3D views, as uploaded, onto `target` at
-    /// `viewport`, in a pass of its own that keeps what's on the target and clears `depth`.
+    /// `viewport`, in a pass of its own that keeps what's on the target and clears `depth`; and
+    /// its sky, if it has one, after its opaque meshes and before those that blend.
     #[expect(clippy::too_many_arguments)]
     fn draw(
         &self,
@@ -1165,8 +1226,17 @@ impl MeshRenderer {
         pass.set_bind_group(0, &self.views_bind_group, &[offset]);
         pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         let mut pipeline = None;
+        let mut sky = canvas.segments[index].view.sky().is_some();
+        let draw_sky = |pass: &mut wgpu::RenderPass| {
+            pass.set_pipeline(&self.sky);
+            pass.draw(0..3, 0..1);
+        };
         for run in &self.runs[self.view_runs[index].clone()] {
             let draw = &canvas.mesh_draws[run.draw as usize];
+            if sky && draw.blend.is_some() {
+                draw_sky(&mut pass);
+                (sky, pipeline) = (false, None);
+            }
             let wanted = (draw.double_sided, draw.mirrored, draw.blend);
             if pipeline != Some(wanted) {
                 match draw.blend {
@@ -1189,6 +1259,9 @@ impl MeshRenderer {
             pass.set_vertex_buffer(0, mesh.vertex_buffer().slice(..));
             pass.set_index_buffer(mesh.index_buffer().slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..mesh.index_count(), 0, run.instances.clone());
+        }
+        if sky {
+            draw_sky(&mut pass);
         }
     }
 }
@@ -1277,6 +1350,32 @@ fn view_uniform(
     let [ex, ey, ez] = view.camera.position;
     let [fx, fy, fz] = view.camera.forward();
     let orthographic = matches!(view.camera.projection, Projection::Orthographic { .. });
+    // The sky's colors, and the ways the view's edges look, from which its triangle finds the
+    // way each pixel does.
+    let (sky_zenith, sky_horizon, sky_ground) = match view.sky() {
+        Some(sky) => {
+            let [[zr, zg, zb, _], [hr, hg, hb, _], [gr, gg, gb, _]] =
+                [sky.zenith, sky.horizon, sky.ground].map(Color::to_linear);
+            (
+                [zr, zg, zb, 1.0],
+                [hr, hg, hb, sky.steepness()],
+                [gr, gg, gb, 0.0],
+            )
+        }
+        None => ([0.0; 4], [0.0; 4], [0.0; 4]),
+    };
+    let (sky_right, sky_up) = match view.camera.projection {
+        Projection::Perspective { fov_y } => {
+            let Basis { right, up, .. } = view.camera.basis();
+            let half_height = (fov_y / 2.0).tan();
+            let [rx, ry, rz] = scale3(right, half_height * aspect);
+            let [ux, uy, uz] = scale3(up, half_height);
+            ([rx, ry, rz, 0.0], [ux, uy, uz, 0.0])
+        }
+        Projection::Orthographic { .. } => ([0.0; 4], [0.0; 4]),
+    };
+    let crop = &viewport.crop;
+    let sky_crop = [crop[0][0], crop[1][1], crop[3][0], crop[3][1]];
     let mut uniform = ViewUniform {
         view_proj,
         light_direction: [x, y, z, 0.0],
@@ -1287,6 +1386,12 @@ fn view_uniform(
         fog,
         eye: [ex, ey, ez, 0.0],
         eye_forward: [fx, fy, fz, if orthographic { 1.0 } else { 0.0 }],
+        sky_zenith,
+        sky_horizon,
+        sky_ground,
+        sky_right,
+        sky_up,
+        sky_crop,
         lights: Zeroable::zeroed(),
         shadow_maps: Zeroable::zeroed(),
     };

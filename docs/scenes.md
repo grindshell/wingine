@@ -588,9 +588,16 @@ fills the canvas; it moves with its node, but doesn't turn or stretch. Its other
   view's `light` nodes.
 - `fog`, if the view has any: `{ color = "#10141f", near = 24, far = 48 }`. What the view shows
   fades to `color` (`"#ffffff"`) with its distance from the camera, from none at `near` (`0`)
-  world units to nothing else at `far`, which a fog must have, more than `near`. A view draws
-  no background, so a game clears the canvas to the fog's color for the world's far side to
-  fade into what's behind it. See [`graphics.begin_3d`](api/graphics.md#graphicsbegin_3d).
+  world units to nothing else at `far`, which a fog must have, more than `near`. A view without
+  a sky draws no background, so a game clears the canvas to the fog's color for the world's far
+  side to fade into what's behind it. See [`graphics.begin_3d`](api/graphics.md#graphicsbegin_3d).
+- `sky`, if the view has one: `{ zenith = "#05060a", horizon = "#3a2f25", ground = "#0e0b09",
+  band = 0.5 }`. What the view shows wherever nothing is drawn, all round the camera as though
+  infinitely far off: the color of `horizon` (`"#000000"`) level with the camera, becoming
+  `zenith`'s up and `ground`'s down (each the horizon's if left out) over `band` radians (a
+  quarter turn). Its fog fades into it instead of into `color`, so what's past the fog's `far`
+  is the sky it's seen against. `{ horizon = "#10141f" }` is one color every way. See
+  [`graphics.begin_3d`](api/graphics.md#graphicsbegin_3d).
 
 The world is right-handed with `y` up, as glTF's is. The kinds of node in it:
 

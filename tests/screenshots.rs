@@ -16,7 +16,7 @@ use wingine::{
     Context,
     graphics::{
         Align, Blend, Camera, Camera3d, Canvas, Color, Fog, Font, Light, Lighting, Mesh, MeshData,
-        MeshVertex, Model, ModelPart, Resolution, Scaling, SpriteSheet, Texture, View3d,
+        MeshVertex, Model, ModelPart, Resolution, Scaling, Sky, SpriteSheet, Texture, View3d,
     },
     headless::{Comparison, Headless, Image},
     math::{Affine, Affine3, Bounds3, Rect},
@@ -2004,6 +2004,239 @@ fn fog_over_distance() {
     }
 
     assert_screenshot(&headless.adapter_name(), "fog_over_distance", frame);
+}
+
+/// Whether two pixels are the same color, within what GPUs differ by.
+fn alike(a: [u8; 4], b: [u8; 4]) -> bool {
+    (0..4).all(|channel| a[channel].abs_diff(b[channel]) <= CHANNEL_TOLERANCE)
+}
+
+/// The color `sky` shows through the middle of pixel `x`, `y` of `view`, as bytes.
+fn sky_through(sky: &Sky, view: &View3d, [x, y]: [u32; 2]) -> [u8; 4] {
+    let way = view.ray([x as f32 + 0.5, y as f32 + 0.5]).direction;
+    let Color { r, g, b, a } = sky.color_at(way);
+    [r, g, b, a].map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+/// A dusk sky behind views with nothing in them: every pixel the color the sky has the way it
+/// looks, the horizon's level with the camera, the zenith's from the band up, the ground's from
+/// it down; and the same with the camera looking up, where the horizon is lower in the view, with
+/// the view hanging off the canvas's left edge, and in a view a quarter of the canvas. What's
+/// outside the views is what the canvas was cleared to. A view without a sky over one with shows
+/// the first's sky where it draws nothing, and an orthographic view's sky is one color.
+#[test]
+fn sky_behind_views() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let cube = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let sky = Sky {
+        zenith: Color::rgb8(0x10, 0x18, 0x40),
+        horizon: Color::rgb8(0xe0, 0x90, 0x50),
+        ground: Color::rgb8(0x20, 0x18, 0x10),
+        band: 0.35,
+    };
+    let clear = Color::rgb8(0xff, 0x00, 0xff);
+    let camera = Camera3d::perspective([0.0, 1.0, 0.0], [0.0, 1.0, -1.0], 0.9);
+    let level = View3d {
+        sky: Some(sky),
+        ..View3d::new(camera, Rect::new(0.0, 0.0, 128.0, 96.0))
+    };
+    let up = View3d {
+        camera: Camera3d {
+            target: [0.0, 1.4, -1.0],
+            ..camera
+        },
+        rect: Rect::new(-32.0, 0.0, 160.0, 96.0),
+        ..level
+    };
+    let small = View3d {
+        rect: Rect::new(80.0, 8.0, 40.0, 30.0),
+        ..level
+    };
+    let mut render = |views: &[View3d]| {
+        headless
+            .render(128, 96, |canvas| {
+                canvas.clear(clear);
+                for &view in views {
+                    canvas.begin_3d(view);
+                }
+            })
+            .unwrap()
+    };
+    let check = |image: &Image, view: &View3d, points: &[[u32; 2]]| {
+        for &point in points {
+            let [shown, wanted] = [
+                image.pixel(point[0], point[1]),
+                sky_through(&sky, view, point),
+            ];
+            assert!(alike(shown, wanted), "{shown:?} at {point:?}: {wanted:?}");
+        }
+    };
+    let across = [
+        [0, 0],
+        [64, 0],
+        [127, 10],
+        [5, 30],
+        [70, 47],
+        [64, 48],
+        [100, 70],
+        [127, 95],
+    ];
+
+    let frame = render(&[level]);
+    check(&frame, &level, &across);
+    // The top edge, 0.45 up, past the band, is the zenith's, and the bottom edge the ground's.
+    assert!(alike(
+        frame.pixel(64, 0),
+        sky_through(&Sky::flat(sky.zenith), &level, [64, 0])
+    ));
+    assert!(alike(
+        frame.pixel(64, 95),
+        sky_through(&Sky::flat(sky.ground), &level, [64, 95])
+    ));
+
+    // Looking up, the horizon is lower, and the view's cut to the canvas.
+    let raised = render(&[up]);
+    check(&raised, &up, &across);
+    assert!(!alike(raised.pixel(64, 47), frame.pixel(64, 47)));
+
+    // A view a quarter of the canvas covers only its rect.
+    let corner = render(&[small]);
+    check(&corner, &small, &[[80, 8], [100, 20], [119, 37]]);
+    for point in [[79, 20], [100, 7], [120, 20], [100, 38], [10, 10]] {
+        assert_eq!(corner.pixel(point[0], point[1]), [0xff, 0x00, 0xff, 0xff]);
+    }
+
+    // An orthographic camera looks one way from every pixel.
+    let flat = View3d {
+        camera: Camera3d::orthographic([0.0, 1.0, 0.0], [0.0, 1.2, -1.0], 4.0),
+        ..level
+    };
+    let one = render(&[flat]);
+    let way = sky.color_at([0.0, 0.2, -1.0]);
+    let wanted = [way.r, way.g, way.b, way.a].map(|c| (c * 255.0).round() as u8);
+    for point in [[0, 0], [64, 48], [127, 95]] {
+        assert!(alike(one.pixel(point[0], point[1]), wanted), "{point:?}");
+    }
+
+    // A view without a sky, drawing a cube, over the one with: the sky shows round the cube.
+    let over = headless
+        .render(128, 96, |canvas| {
+            canvas.clear(clear);
+            canvas.begin_3d(level);
+            let mut view = canvas.begin_3d(View3d { sky: None, ..level });
+            let place = Affine3::from_translation([0.0, 1.0, -4.0]);
+            view.draw_mesh(&cube, place, None, Color::WHITE);
+        })
+        .unwrap();
+    check(&over, &level, &[[0, 0], [10, 48], [120, 90]]);
+    assert!(!alike(
+        over.pixel(64, 48),
+        sky_through(&sky, &level, [64, 48])
+    ));
+
+    assert_screenshot(&headless.adapter_name(), "sky_behind_views", raised);
+}
+
+/// The floor and cubes of `fog_over_distance`, in the same fog, under a sky: what's past where
+/// the fog is whole is the sky the way it's seen, so the floor's far end can't be told from the
+/// sky under the horizon, though the sky changes down the view and the fog's own color is
+/// another; what's nearer than the fog is as it is without a sky; and between, it's between.
+#[test]
+fn fog_fades_into_the_sky() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let ground = ctx.create_mesh(&MeshData::plane([6.0, 40.0])).unwrap();
+    let cube = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let camera = Camera3d::perspective([0.0, 2.0, 2.0], [0.0, 0.5, -10.0], 0.8);
+    let sky = Sky {
+        zenith: Color::rgb8(0x20, 0x40, 0x90),
+        horizon: Color::rgb8(0xc0, 0xd0, 0xe0),
+        ground: Color::rgb8(0x40, 0x38, 0x30),
+        band: 0.3,
+    };
+    // A color the canvas is cleared to, and the fog's, which neither shows.
+    let clear = Color::rgb8(0xff, 0x00, 0xff);
+    let fog = Fog::new(Color::rgb8(0x00, 0xff, 0x00), 6.0, 18.0);
+    let foggy = View3d {
+        fog: Some(fog),
+        ..View3d::new(camera, Rect::new(0.0, 0.0, 128.0, 96.0))
+    };
+    let skied = View3d {
+        sky: Some(sky),
+        ..foggy
+    };
+    let mut render = |view: View3d| {
+        headless
+            .render(128, 96, |canvas| {
+                canvas.clear(clear);
+                let mut view = canvas.begin_3d(view);
+                // Darker than the sky between, so a pixel half faded is plainly between them.
+                let floor = Affine3::from_translation([0.0, 0.0, -18.0]);
+                view.draw_mesh(&ground, floor, None, Color::rgb8(0x50, 0x50, 0x50));
+                for [x, z] in [[-1.5, -3.0], [1.5, -13.0], [-1.5, -22.0]] {
+                    let place = Affine3::from_translation([x, 0.5, z]);
+                    view.draw_mesh(&cube, place, None, Color::rgb8(0xd0, 0x60, 0x40));
+                }
+            })
+            .unwrap()
+    };
+    let without = render(foggy);
+    let frame = render(skied);
+    let at = |point: [f32; 3]| {
+        let [x, y] = skied.project(point).expect("it's in view");
+        [x as u32, y as u32]
+    };
+
+    // Past where the fog is whole, the floor and the cube on it are the sky they're seen
+    // against, under the horizon, where the sky changes from row to row.
+    for point in [[0.0, 0.0, -30.0], [2.5, 0.0, -30.0], [-1.5, 0.5, -22.0]] {
+        assert_eq!(fog.amount_at(skied.distance(point)), 1.0);
+        let pixel = at(point);
+        let shown = frame.pixel(pixel[0], pixel[1]);
+        let wanted = sky_through(&sky, &skied, pixel);
+        assert!(alike(shown, wanted), "{shown:?} at {point:?}: {wanted:?}");
+    }
+    let [low, high] = [at([0.0, 0.0, -20.0]), at([0.0, 0.0, -34.0])];
+    assert!(!alike(
+        sky_through(&sky, &skied, low),
+        sky_through(&sky, &skied, high)
+    ));
+    // Nearer than the fog, it's as it is without a sky.
+    let near = at([0.0, 0.0, -3.0]);
+    assert_eq!(
+        frame.pixel(near[0], near[1]),
+        without.pixel(near[0], near[1])
+    );
+    // And between, it's between what it is and the sky.
+    let middle = [2.5, 0.0, -9.0];
+    let pixel = at(middle);
+    let amount = fog.amount_at(skied.distance(middle));
+    assert!(amount > 0.4 && amount < 0.5);
+    let shown = frame.pixel(pixel[0], pixel[1]);
+    let behind = sky_through(&sky, &skied, pixel);
+    let bare = render(View3d { fog: None, ..skied });
+    let as_it_is = bare.pixel(pixel[0], pixel[1]);
+    for channel in 0..3 {
+        let [low, high] = if as_it_is[channel] < behind[channel] {
+            [as_it_is[channel], behind[channel]]
+        } else {
+            [behind[channel], as_it_is[channel]]
+        };
+        assert!(
+            shown[channel] > low && shown[channel] < high,
+            "{shown:?} isn't between {as_it_is:?} and {behind:?}"
+        );
+    }
+    // Nowhere is the fog's own color, or the canvas's.
+    for y in 0..96 {
+        for x in (0..128).step_by(4) {
+            let pixel = frame.pixel(x, y);
+            assert!(pixel != [0x00, 0xff, 0x00, 0xff] && pixel != [0xff, 0x00, 0xff, 0xff]);
+        }
+    }
+
+    assert_screenshot(&headless.adapter_name(), "fog_fades_into_the_sky", frame);
 }
 
 /// In a view with no light at all: a cube that glows white shows its own color, one that glows

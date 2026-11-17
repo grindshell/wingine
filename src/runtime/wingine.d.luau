@@ -294,10 +294,11 @@ export type Light = LightSettings & {
 
 --- Fog in a 3D view: what it shows fades to a color with its distance from the camera, in a
 --- straight line, from none at `near` to nothing but the fog at `far` and beyond. The distance is
---- from where the camera is, or for an orthographic camera, how far ahead of it. A view draws no
---- background, so clear the canvas to the fog's color for the far side of a world to fade into
---- what's behind it. A light none of whose reach is nearer than `far` lights nothing that shows,
---- so isn't one of the view's.
+--- from where the camera is, or for an orthographic camera, how far ahead of it. In a view with a
+--- `sky`, what's far fades into the sky instead, the way it's seen from the camera, and `color`
+--- goes unused. A view without one draws no background, so clear the canvas to the fog's color
+--- for the far side of a world to fade into what's behind it. A light none of whose reach is
+--- nearer than `far` lights nothing that shows, so isn't one of the view's.
 export type Fog = {
     --- What things fade to. By default, white. From `node:fog`, a number.
     color: Color?,
@@ -305,6 +306,27 @@ export type Fog = {
     near: number?,
     --- How far from the camera there's nothing but fog, in world units, more than `near`.
     far: number,
+}
+
+--- A 3D view's sky: what it shows wherever nothing is drawn, all round the camera as though
+--- infinitely far off, so it turns as the camera does and never comes nearer. It's the color of
+--- its horizon level with the camera, becoming its zenith's up to `band` radians over it and its
+--- ground's down to `band` under it, in a straight line in the height of the way each pixel
+--- looks, mixed in linear light. It covers what was drawn on the canvas before the view, and the
+--- view's fog fades into it. It lights nothing. An orthographic camera looks the same way from
+--- every pixel, so its sky is one color.
+export type Sky = {
+    --- Its color straight up, and from `band` up. By default, the horizon's. From `node:sky`, a
+    --- number.
+    zenith: Color?,
+    --- Its color level with the camera. By default, black. From `node:sky`, a number.
+    horizon: Color?,
+    --- Its color straight down, and from `band` down. By default, the horizon's. From
+    --- `node:sky`, a number.
+    ground: Color?,
+    --- How far up and down from the horizon it becomes the zenith's color and the ground's, in
+    --- radians, above 0: past a quarter turn is a quarter turn. By default, a quarter turn.
+    band: number?,
 }
 
 --- A 3D view, for `graphics.begin_3d`, `graphics.project` and `graphics.ray`.
@@ -316,6 +338,9 @@ export type View3d = {
     lighting: Lighting?,
     --- What it shows fades to with distance. By default, nothing.
     fog: Fog?,
+    --- What it shows wherever nothing is drawn, which its fog fades into. By default, nothing:
+    --- what was drawn before it shows.
+    sky: Sky?,
 }
 
 --- How `graphics.draw_mesh` places and colors a mesh: scaled, rolled, pitched and turned, in that
@@ -959,6 +984,10 @@ declare extern type SceneNode with
     function fog(self): Fog?
     --- Changes a 3D view's fog, whole, or with `nil`, takes it away.
     function set_fog(self, fog: Fog?): ()
+    --- Returns a 3D view's sky, its colors as numbers, or nothing if it has none.
+    function sky(self): Sky?
+    --- Changes a 3D view's sky, whole, or with `nil`, takes it away.
+    function set_sky(self, sky: Sky?): ()
     --- Returns a light node's settings, its color as a number, `cone` only for a spot light,
     --- and `bounds` only for one that keeps to a box.
     function light(self): LightSettings

@@ -16,7 +16,7 @@ use super::{
 };
 use crate::{
     Error, Result,
-    graphics::{Align, Blend, Camera3d, Color, Fog, Light, Lighting, MeshData, Projection},
+    graphics::{Align, Blend, Camera3d, Color, Fog, Light, Lighting, MeshData, Projection, Sky},
     lua::{
         DEFAULT_FOV, is_identifier,
         mlua::{self, chunk::ChunkMode},
@@ -658,6 +658,8 @@ pub struct View3dDef {
     pub lighting: Lighting,
     /// What it shows fades to with distance, if anything.
     pub fog: Option<Fog>,
+    /// What it shows wherever nothing is drawn, if anything, which its fog fades into.
+    pub sky: Option<Sky>,
 }
 
 /// A sprite of one of a scene's sheets: the sheet's name and the sprite's column and row in it.
@@ -1928,6 +1930,7 @@ fn read_kind(
                 None => Lighting::default(),
             };
             let fog = fields.take("fog").map(read_fog).transpose()?;
+            let sky = fields.take("sky").map(read_sky).transpose()?;
             KindDef::View3d(View3dDef {
                 size,
                 stretch,
@@ -1935,6 +1938,7 @@ fn read_kind(
                 camera: read_camera(camera)?,
                 lighting,
                 fog,
+                sky,
             })
         }
         "mesh" => {
@@ -2586,6 +2590,46 @@ fn read_fog(fog: Value) -> Result<Fog, String> {
     }
 }
 
+/// A view's sky, `{ zenith, horizon, ground, band }`: a black horizon where it's left out, the
+/// horizon's color up and down where those are, and a band of a quarter turn.
+fn read_sky(sky: Value) -> Result<Sky, String> {
+    let mut fields = Fields::new(sky, "`sky`")?;
+    let horizon = match fields.take("horizon") {
+        Some(value) => color(value, "sky.horizon")?,
+        None => Color::BLACK,
+    };
+    // A color the same as the horizon's, to the byte, is the horizon's, so it writes and reads
+    // back the same.
+    let mut toward = |field: &str| -> Result<Color, String> {
+        let Some(value) = fields.take(field) else {
+            return Ok(horizon);
+        };
+        let read = color(value, &format!("sky.{field}"))?;
+        Ok(if read.to_rgba8() == horizon.to_rgba8() {
+            horizon
+        } else {
+            read
+        })
+    };
+    let zenith = toward("zenith")?;
+    let ground = toward("ground")?;
+    let band = match fields.take("band") {
+        Some(band) => finite(band, "sky.band")?,
+        None => Sky::WHOLE_BAND,
+    };
+    fields.finish("`sky`")?;
+    let sky = Sky {
+        zenith,
+        horizon,
+        ground,
+        band,
+    };
+    match sky.problem() {
+        Some(problem) => Err(problem),
+        None => Ok(sky),
+    }
+}
+
 /// A sprite's `sheet` and `cell`, which the sprite of a node or a tile must have.
 fn read_sheet_cell(
     fields: &mut Fields,
@@ -3066,6 +3110,9 @@ pub(super) fn node_fields(node: &NodeDef) -> BTreeMap<String, Value> {
             if let Some(fog) = &view.fog {
                 set("fog", fog_value(fog));
             }
+            if let Some(sky) = &view.sky {
+                set("sky", sky_value(sky));
+            }
         }
         KindDef::Mesh(mesh) => {
             set("shape", string(mesh.shape.name()));
@@ -3216,6 +3263,19 @@ fn fog_value(fog: &Fog) -> Value {
             ("color".to_owned(), hex_value(fog.color)),
             ("near".to_owned(), Value::Number(fog.near.into())),
             ("far".to_owned(), Value::Number(fog.far.into())),
+        ]
+        .into(),
+    )
+}
+
+/// A sky as a scene file holds it, with every field.
+fn sky_value(sky: &Sky) -> Value {
+    Value::Map(
+        [
+            ("zenith".to_owned(), hex_value(sky.zenith)),
+            ("horizon".to_owned(), hex_value(sky.horizon)),
+            ("ground".to_owned(), hex_value(sky.ground)),
+            ("band".to_owned(), Value::Number(sky.band.into())),
         ]
         .into(),
     )
@@ -4147,6 +4207,33 @@ mod tests {
         assert_eq!(fog_of(""), None);
         let plain = Fog::new(Color::WHITE, 0.0, 12.0);
         assert_eq!(fog_of("fog = { far = 12 },"), Some(plain));
+        // A sky is black where it doesn't say, the horizon's color up and down, and changes all
+        // the way up; and a view has none unless it says so.
+        let sky_of = |fields: &str| {
+            let source = format!(
+                "return {{ format = 2, children = {{ {{ name = 'view', kind = 'view3d', \
+                 width = 1, height = 1, {bare} {fields} }} }} }}"
+            );
+            match &parse(&source).unwrap().children[0].kind {
+                KindDef::View3d(def) => def.sky,
+                kind => panic!("{kind:?}"),
+            }
+        };
+        assert_eq!(sky_of(""), None);
+        assert_eq!(sky_of("sky = {},"), Some(Sky::flat(Color::BLACK)));
+        let dusk = Color::rgb8(0x10, 0x14, 0x1f);
+        assert_eq!(
+            sky_of("sky = { horizon = '#10141f' },"),
+            Some(Sky::flat(dusk))
+        );
+        assert_eq!(
+            sky_of("sky = { zenith = '#000000', horizon = '#10141f', band = 0.5 },"),
+            Some(Sky {
+                zenith: Color::BLACK,
+                band: 0.5,
+                ..Sky::flat(dusk)
+            })
+        );
 
         let [floor, stack, barrel, hero, prop] = &view.children[..] else {
             panic!("{:?}", view.children);
@@ -4307,6 +4394,18 @@ mod tests {
             (
                 view("", &format!("{camera} fog = {{ far = 2, density = 1 }},")),
                 "`fog` has no field `density`",
+            ),
+            (
+                view("", &format!("{camera} sky = {{ band = 0 }},")),
+                "node `view`: a sky's band must be above 0, not 0",
+            ),
+            (
+                view("", &format!("{camera} sky = {{ horizon = 'blue' }},")),
+                "sky.horizon",
+            ),
+            (
+                view("", &format!("{camera} sky = {{ faces = 'sky.png' }},")),
+                "`sky` has no field `faces`",
             ),
             (
                 view("", &format!("{camera} rotation = 1,")),

@@ -29,22 +29,32 @@ pub struct View3d {
     /// What it shows fades to with distance, if anything. Fog that can't be, such as one whose
     /// `far` isn't past its `near`, is none.
     pub fog: Option<Fog>,
+    /// What it shows wherever nothing is drawn, if anything, which its fog fades into. A sky
+    /// that can't be is none.
+    pub sky: Option<Sky>,
 }
 
 impl View3d {
-    /// A view through `camera` filling `rect`, lit by [`Lighting::default`], without fog.
+    /// A view through `camera` filling `rect`, lit by [`Lighting::default`], without fog or a
+    /// sky.
     pub fn new(camera: Camera3d, rect: Rect) -> Self {
         Self {
             camera,
             rect,
             lighting: Lighting::default(),
             fog: None,
+            sky: None,
         }
     }
 
     /// Its fog, if it has one that can be.
     pub(crate) fn fog(&self) -> Option<Fog> {
         self.fog.filter(|fog| fog.problem().is_none())
+    }
+
+    /// Its sky, if it has one that can be.
+    pub(crate) fn sky(&self) -> Option<Sky> {
+        self.sky.filter(|sky| sky.problem().is_none())
     }
 
     /// How far `point` is from the camera, as fog measures it: in a straight line from where
@@ -113,8 +123,10 @@ impl Default for Lighting {
 /// ([`View3d::distance`]), in a straight line from none at `near` to nothing but fog at `far`
 /// and beyond. It's over the view's meshes, models and billboards alike, lit or not.
 ///
-/// A view draws no background, so what's behind the fog is what the canvas was cleared to, or
-/// had drawn on it: clear it to the fog's color for the far side of a world to fade into it.
+/// In a view with a [`Sky`], what's drawn fades into the sky instead, the way it's seen from the
+/// camera, and `color` goes unused. A view without one draws no background, so what's behind
+/// the fog is what the canvas was cleared to, or had drawn on it: clear it to the fog's color
+/// for the far side of a world to fade into it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Fog {
     /// What things fade to.
@@ -151,6 +163,73 @@ impl Fog {
     /// How much of what's `distance` from the camera is fog, from 0 to 1, as the view draws it.
     pub fn amount_at(&self, distance: f32) -> f32 {
         ((distance - self.near) / (self.far - self.near)).clamp(0.0, 1.0)
+    }
+}
+
+/// A 3D view's sky: what it shows wherever nothing is drawn, all round the camera, as though
+/// infinitely far off, so it turns as the camera does and never comes nearer. It's a gradient by
+/// the height of the way each pixel looks: `horizon` level with the camera, becoming `zenith`
+/// up to `band` radians over it and `ground` down to `band` under it, in a straight line in the
+/// way's height, mixed in linear light ([`Sky::color_at`]).
+///
+/// It's drawn behind everything in its view, over what was drawn on the canvas before the view,
+/// so a view with a sky covers its rect. Its [`Fog`] fades into it. It lights nothing: it isn't
+/// the view's [`Lighting`], and takes none of its lights or shadow maps. Colors' alphas are
+/// ignored.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sky {
+    /// Its color straight up, and from `band` up.
+    pub zenith: Color,
+    /// Its color level with the camera.
+    pub horizon: Color,
+    /// Its color straight down, and from `band` down.
+    pub ground: Color,
+    /// How far up and down from the horizon, in radians, it becomes the zenith's color and the
+    /// ground's: above 0. Past a quarter turn is a quarter turn.
+    pub band: f32,
+}
+
+impl Sky {
+    /// The band of a sky that says none: a quarter turn, so it changes all the way up.
+    pub const WHOLE_BAND: f32 = std::f32::consts::FRAC_PI_2;
+
+    /// A sky of one color every way, as a view without one shows the canvas cleared to it.
+    pub const fn flat(color: Color) -> Self {
+        Self {
+            zenith: color,
+            horizon: color,
+            ground: color,
+            band: Self::WHOLE_BAND,
+        }
+    }
+
+    /// What's wrong with it, if it can't be.
+    pub(crate) fn problem(&self) -> Option<String> {
+        if !(self.band > 0.0 && self.band.is_finite()) {
+            return Some(format!("a sky's band must be above 0, not {}", self.band));
+        }
+        None
+    }
+
+    /// 1 over the sine of its band: how many times its height, in a way of length 1, a way is
+    /// along from its horizon to its zenith or its ground.
+    pub(crate) fn steepness(&self) -> f32 {
+        1.0 / self.band.min(Self::WHOLE_BAND).sin()
+    }
+
+    /// Its color the way `way` looks from the camera, as the view draws it: the length of `way`
+    /// doesn't matter, and one of no length looks at the horizon.
+    pub fn color_at(&self, way: [f32; 3]) -> Color {
+        let height = normalize3(way).map_or(0.0, |[_, y, _]| y);
+        let along = (height.abs() * self.steepness()).min(1.0);
+        let toward = if height >= 0.0 {
+            self.zenith
+        } else {
+            self.ground
+        };
+        let [from, to] = [self.horizon, toward].map(Color::to_linear);
+        let [r, g, b] = [0, 1, 2].map(|i| from[i] + (to[i] - from[i]) * along);
+        Color::from_linear([r, g, b, 1.0])
     }
 }
 
@@ -1441,6 +1520,74 @@ mod tests {
         assert_eq!(wrong.fog(), None);
         assert_eq!(lights_of(&wrong, &lights, &mut chosen), 0);
         assert_eq!(chosen.len(), 4);
+    }
+
+    #[test]
+    fn a_sky_goes_from_its_horizon_to_its_zenith_and_its_ground_by_the_height_of_a_way() {
+        let [zenith, horizon, ground] = [
+            Color::rgb8(0x10, 0x20, 0x40),
+            Color::rgb8(0xc0, 0xa0, 0x80),
+            Color::rgb8(0x00, 0x00, 0x00),
+        ];
+        let sky = Sky {
+            zenith,
+            horizon,
+            ground,
+            band: std::f32::consts::FRAC_PI_6,
+        };
+        assert_eq!(sky.problem(), None);
+        let bytes = |way: [f32; 3]| sky.color_at(way).to_rgba8();
+        // Level, it's the horizon's, and of no length, a way is level.
+        assert_eq!(bytes([0.0, 0.0, -1.0]), horizon.to_rgba8());
+        assert_eq!(bytes([3.0, 0.0, 4.0]), horizon.to_rgba8());
+        assert_eq!(bytes([0.0; 3]), horizon.to_rgba8());
+        // From the band up, the zenith's, and from the band down, the ground's: a sixth of a
+        // half turn is a height of a half.
+        for way in [[0.0, 1.0, 0.0], [0.0, 1.0, -1.0], [0.0, 1.0, -1.7]] {
+            assert_eq!(bytes(way), zenith.to_rgba8(), "{way:?}");
+        }
+        assert_eq!(bytes([1.0, -1.0, 0.0]), ground.to_rgba8());
+        // Half way up the band, half way in linear light, which is nearer the brighter in sRGB.
+        let half = sky.color_at([0.0, 0.25, -(1.0f32 - 0.0625).sqrt()]);
+        let [from, to] = [horizon, zenith].map(Color::to_linear);
+        for (i, shown) in half.to_linear().into_iter().take(3).enumerate() {
+            let wanted = (from[i] + to[i]) / 2.0;
+            assert!((shown - wanted).abs() < 1e-4, "{half:?}");
+        }
+        assert!(half.r > (horizon.r + zenith.r) / 2.0, "{half:?}");
+        // It's opaque, whatever its colors say.
+        let clear = Sky::flat(Color::rgba(0.2, 0.4, 0.6, 0.0));
+        assert_eq!(clear.color_at([0.0, 1.0, 0.0]).a, 1.0);
+        // A flat sky is one color every way, and changes all the way up.
+        assert_eq!(clear.band, std::f32::consts::FRAC_PI_2);
+        assert_eq!(
+            Sky::flat(horizon).color_at([0.2, -0.7, 0.1]).to_rgba8(),
+            horizon.to_rgba8()
+        );
+
+        // A band past a quarter turn is a quarter turn; one not above 0 can't be, and a view's
+        // sky that can't be is none.
+        let wide = Sky { band: 3.0, ..sky };
+        assert_eq!(wide.problem(), None);
+        let flat_band = Sky {
+            band: Sky::WHOLE_BAND,
+            ..sky
+        };
+        assert_eq!(
+            wide.color_at([0.0, 0.5, -1.0]),
+            flat_band.color_at([0.0, 0.5, -1.0])
+        );
+        for band in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let wrong = Sky { band, ..sky };
+            let problem = wrong.problem().expect("it can't be");
+            assert!(problem.contains("band"), "{problem}");
+            let camera = Camera3d::perspective([0.0; 3], [0.0, 0.0, -1.0], 0.8);
+            let view = View3d {
+                sky: Some(wrong),
+                ..View3d::new(camera, Rect::new(0.0, 0.0, 16.0, 9.0))
+            };
+            assert_eq!(view.sky(), None);
+        }
     }
 
     #[test]

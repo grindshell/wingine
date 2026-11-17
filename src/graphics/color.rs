@@ -56,8 +56,8 @@ impl Color {
         ]
     }
 
-    /// The color of linear-space components, as model files give them. Alpha is already linear.
-    #[cfg(feature = "models")]
+    /// The color of linear-space components, as model files give them and a sky mixes them.
+    /// Alpha is already linear.
     pub(crate) fn from_linear([r, g, b, a]: [f32; 4]) -> Self {
         Self::rgba(linear_to_srgb(r), linear_to_srgb(g), linear_to_srgb(b), a)
     }
@@ -71,7 +71,6 @@ fn srgb_to_linear(c: f32) -> f32 {
     }
 }
 
-#[cfg(feature = "models")]
 fn linear_to_srgb(c: f32) -> f32 {
     if c <= 0.0031308 {
         c * 12.92
@@ -110,7 +109,6 @@ mod tests {
         assert!((r - 0.214).abs() < 0.001);
     }
 
-    #[cfg(feature = "models")]
     #[test]
     fn linear_conversion_goes_both_ways() {
         for c in [0.0, 0.002, 0.04, 0.25, 0.5, 0.8, 1.0] {

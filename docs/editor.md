@@ -205,8 +205,9 @@ size it.
 The Inspector shows a node in a view by `x`, `y` and `z`, `yaw`, `pitch` and `roll` in degrees,
 and its scale along each axis, with no rotation or anchor; a view's camera (where it is and looks,
 which way is up, perspective with a field of view or orthographic with a height, and how near and
-far it sees) and lighting, and **fog**, a checkbox that gives it fog, and then the fog's color
-and how far off it begins and is whole; a mesh's shape, its size, and a sprite of the scene's sheets to show;
+far it sees) and lighting, **fog**, a checkbox that gives it fog, and then the fog's color
+and how far off it begins and is whole, and **sky**, a checkbox that gives it a sky of its fog's
+color every way, and then the sky's zenith, horizon and ground and its band; a mesh's shape, its size, and a sprite of the scene's sheets to show;
 a model's file; for both, a tint, **casts shadow**, whether it shades what's behind it from
 lights with shadows, and **glow**, how much of its own colors it shows whatever lights it; a
 billboard's sprite, size, tint and glow; and a light's color, range and energy,

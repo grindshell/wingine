@@ -16,7 +16,7 @@ use super::{
     },
 };
 use crate::{
-    graphics::{Align, Blend, Camera3d, Color, Fog, Lighting, Projection},
+    graphics::{Align, Blend, Camera3d, Color, Fog, Lighting, Projection, Sky},
     lua::{DEFAULT_FOV, is_identifier},
     particles::ParticleSettings,
 };
@@ -233,6 +233,27 @@ impl Writer {
             self.number_field("near", fog.near).map_err(at)?;
         }
         self.number_field("far", fog.far).map_err(at)?;
+        self.close();
+        self.end_field();
+        Ok(())
+    }
+
+    /// A view's `sky`: its horizon, and the rest unless they're at their defaults.
+    fn sky(&mut self, sky: &Sky) -> Result<(), String> {
+        self.key("sky");
+        self.open();
+        let horizon = sky.horizon.to_rgba8();
+        if sky.zenith.to_rgba8() != horizon {
+            self.any_color("zenith", sky.zenith);
+        }
+        self.any_color("horizon", sky.horizon);
+        if sky.ground.to_rgba8() != horizon {
+            self.any_color("ground", sky.ground);
+        }
+        if sky.band != Sky::WHOLE_BAND {
+            self.number_field("band", sky.band)
+                .map_err(|err| format!("sky: {err}"))?;
+        }
         self.close();
         self.end_field();
         Ok(())
@@ -481,6 +502,9 @@ impl Writer {
                 self.lighting(&view.lighting)?;
                 if let Some(fog) = &view.fog {
                     self.fog(fog)?;
+                }
+                if let Some(sky) = &view.sky {
+                    self.sky(sky)?;
                 }
             }
             KindDef::Mesh(mesh) => {
@@ -1513,6 +1537,12 @@ mod tests {
                 near = 6,
                 far = 40,
             },
+            sky = {
+                zenith = "#0a1428",
+                horizon = "#102030",
+                ground = "#000000",
+                band = 0.5,
+            },
             children = {
                 {
                     name = "floor",
@@ -1583,6 +1613,9 @@ mod tests {
             fog = {
                 far = 20,
             },
+            sky = {
+                horizon = "#204060",
+            },
         },
     },
     clips = {
@@ -1614,6 +1647,14 @@ mod tests {
         assert_eq!(view.lighting.color, Lighting::default().color);
         let fog = view.fog.expect("the view has fog");
         assert_eq!([fog.near, fog.far], [6.0, 40.0]);
+        let sky = view.sky.expect("the view has a sky");
+        assert_eq!(sky.band, 0.5);
+        assert_eq!(sky.ground, Color::BLACK);
+        // A sky that says only its horizon is that color every way.
+        let KindDef::View3d(map) = &scene.children[1].kind else {
+            panic!("{:?}", scene.children[1].kind);
+        };
+        assert_eq!(map.sky, Some(Sky::flat(Color::rgb8(0x20, 0x40, 0x60))));
         // Written and read back from Rust, every field the same.
         let written = scene.to_luau().unwrap();
         assert_eq!(parse(&written), scene);

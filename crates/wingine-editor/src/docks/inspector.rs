@@ -14,7 +14,7 @@ use std::{
 
 use wingine::{
     Context,
-    graphics::{Align, Blend, Camera3d, Color, Fog, Projection},
+    graphics::{Align, Blend, Camera3d, Color, Fog, Projection, Sky},
     gui::egui,
     math::Bounds3,
     particles::{Look, ParticleSettings},
@@ -707,6 +707,38 @@ impl Inspector {
                         // It begins at the camera or past it, and is whole farther off.
                         fog.near = fog.near.max(0.0);
                         fog.far = fog.far.max(fog.near + 0.01);
+                    }
+                });
+                ui.strong("Sky");
+                grid(ui, "sky", |ui| {
+                    over.label(ui, "sky", &["sky"]);
+                    let mut shown = view.sky.is_some();
+                    let response = ui.checkbox(&mut shown, "");
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::Role::CheckBox, true, shown, "sky")
+                    });
+                    if response.changed() {
+                        // The color its fog fades to, or the white a fog begins as, every way,
+                        // so ticking it changes nothing the fog meets.
+                        let color = view.fog.map_or(Color::WHITE, |fog| fog.color);
+                        view.sky = shown.then(|| Sky::flat(color));
+                    }
+                    ui.end_row();
+                    if let Some(sky) = &mut view.sky {
+                        over.label(ui, "sky's zenith", &["sky"]);
+                        color(ui, &mut sky.zenith);
+                        ui.end_row();
+                        over.label(ui, "sky's horizon", &["sky"]);
+                        color(ui, &mut sky.horizon);
+                        ui.end_row();
+                        over.label(ui, "sky's ground", &["sky"]);
+                        color(ui, &mut sky.ground);
+                        ui.end_row();
+                        over.label(ui, "sky's band", &["sky"]);
+                        number(ui, "sky's band", &mut sky.band, 0.01);
+                        ui.end_row();
+                        // Above 0, and no more than a quarter turn, past which it's the same.
+                        sky.band = sky.band.clamp(0.01, Sky::WHOLE_BAND);
                     }
                 });
             }),

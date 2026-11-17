@@ -13,7 +13,7 @@ use std::{
 
 use wingine::{
     Redraw, WindowConfig,
-    graphics::{Blend, Color, Fog},
+    graphics::{Blend, Color, Fog, Sky},
     headless::{Headless, Simulation},
     input::{Key, MouseButton},
     scene::{
@@ -874,9 +874,33 @@ fn views_and_their_nodes_are_added_and_inspected() {
         unreachable!()
     };
     assert_eq!(view.fog, Some(Fog::new(Color::WHITE, 0.0, 30.0)));
+    assert_eq!(view.sky, None);
+
+    // Its sky, which it has once its box is ticked: the fog's color every way, and then its
+    // colors and its band.
+    assert!(simulation.gui_rect("sky's band").is_none());
+    let tick = *simulation
+        .gui_rects("sky")
+        .last()
+        .expect("a box for the sky");
+    simulation.click(
+        MouseButton::Left,
+        tick.x + tick.w / 2.0,
+        tick.y + tick.h / 2.0,
+    );
+    simulation.run_frames(3);
+    set_field(&mut simulation, "sky's band", "0.5");
+    let KindDef::View3d(view) = &node(&simulation, "view3d").kind else {
+        unreachable!()
+    };
+    let sky = Sky {
+        band: 0.5,
+        ..Sky::flat(Color::WHITE)
+    };
+    assert_eq!(view.sky, Some(sky));
 
     // Each was a change of its own.
-    for _ in 0..8 {
+    for _ in 0..10 {
         control(&mut simulation, Key::Z);
     }
     assert!(!simulation.game().document().unwrap().is_dirty());

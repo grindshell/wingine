@@ -181,9 +181,13 @@
 //!   `{ position = { x, y, z }, target = { x, y, z } }`, with `up` (`{ 0, 1, 0 }`), `fov`
 //!   (`0.8`) or for an orthographic camera `height`, `near` (`0.1`) and `far` (`1000`) if they
 //!   aren't the defaults; `lighting`, `{ direction, color, ambient }`, is the default lighting,
-//!   field by field, where it leaves fields out; and `fog`, `{ color, near, far }`, if it has
+//!   field by field, where it leaves fields out; `fog`, `{ color, near, far }`, if it has
 //!   any, is what it shows fading to `color` (`"#ffffff"`) from `near` (`0`) world units
-//!   from its camera to `far`, which it must have, more than `near`.
+//!   from its camera to `far`, which it must have, more than `near`; and `sky`,
+//!   `{ zenith, horizon, ground, band }`, if it has one, is what it shows wherever nothing is
+//!   drawn, which its fog fades into instead of `color`: `horizon` (`"#000000"`) level with the
+//!   camera, becoming `zenith` and `ground` (each the horizon's if left out) `band` radians
+//!   (a quarter turn, `1.5707964`) up and down from it.
 //! - `mesh`, in a view: a built-in shape centered on its origin, `shape`, `"cuboid"` with
 //!   `size = { width, height, depth }`, `"plane"`, facing up, with `size = { width, depth }`, or
 //!   `"sphere"` with a `radius`, sizes 1 and the radius a half by default; optionally a sprite,
@@ -461,7 +465,7 @@ use crate::{
     Context, Error, Result,
     graphics::{
         Align, Blend, Camera3d, Canvas, Canvas3d, Color, Fog, Font, Lighting, Mesh, Model, Ray,
-        Sprite, SpriteSheet, TextLayout, Texture, View3d,
+        Sky, Sprite, SpriteSheet, TextLayout, Texture, View3d,
     },
     lua::check_tilemap_size,
     math::{Affine, Affine3, Bounds3, Rect, add3, scale3},
@@ -870,6 +874,8 @@ pub struct View3dNode {
     pub lighting: Lighting,
     /// What it shows fades to with distance, if anything.
     pub fog: Option<Fog>,
+    /// What it shows wherever nothing is drawn, if anything.
+    pub sky: Option<Sky>,
 }
 
 /// What a mesh node shows: its shape's mesh, showing a sprite or white, times its tint.
@@ -2380,6 +2386,7 @@ impl Scene {
             rect: self.bounds(id)?,
             lighting: view.lighting,
             fog: view.fog,
+            sky: view.sky,
         })
     }
 
@@ -2893,6 +2900,7 @@ impl Scene {
                             rect: shown,
                             lighting: view.lighting,
                             fog: view.fog,
+                            sky: view.sky,
                         });
                         for &child in &node.children {
                             self.draw_3d(&mut world, child, Affine3::IDENTITY);
@@ -3583,6 +3591,7 @@ impl Build<'_> {
                 camera: view.camera,
                 lighting: view.lighting,
                 fog: view.fog,
+                sky: view.sky,
             }),
             KindDef::Mesh(mesh) => {
                 let (sprite, sheet) = match &mesh.sprite {

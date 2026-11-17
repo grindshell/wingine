@@ -17,9 +17,14 @@ return {
                 ambient = "#7080a0",
             },
             fog = {
-                color = "#a8c8e8",
                 near = 8,
                 far = 28,
+            },
+            sky = {
+                zenith = "#6898d8",
+                horizon = "#e8eef4",
+                ground = "#88b0e0",
+                band = 0.6,
             },
             children = {
                 {
