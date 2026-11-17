@@ -18,6 +18,11 @@
 //! Writing a file writes it in full to a file of its own first, which then takes the old one's
 //! place, as saves are written, so stopping partway through leaves the old one as it was.
 //!
+//! A folder can go while a game has it: moved, deleted, or on a drive taken out. Then reading in it
+//! finds nothing, and writing and renaming in it fail, rather than make the folders a path is in
+//! from the folder itself down, which would make it again where it was, or on the disk the drive
+//! was mounted on.
+//!
 //! In a window, the dialog is the system's, opened over the window once the frame that asked for
 //! it is done, and the folders picked are remembered in a file beside the game's saves,
 //! `.folders.luau`, which isn't a save. A [`Simulation`](crate::headless::Simulation) opens no
@@ -191,9 +196,11 @@ impl Folder {
     /// Writes `contents` to the file at `path`, replacing any, and making the folders it's in if
     /// they aren't there. It's written in full to a file of its own first, which then takes the old
     /// one's place, so stopping partway through leaves the old one as it was. Fails if `path`
-    /// isn't one, names a folder, or the file can't be written.
+    /// isn't one, names a folder, the folder itself isn't there any more, or the file can't be
+    /// written.
     pub fn write(&self, path: &str, contents: &[u8]) -> Result<()> {
         let parts = self.file_parts(path)?;
+        self.still_there(path)?;
         let file = self.resolve(path, &parts, true)?;
         if file.is_dir() {
             return Err(self.problem(path, "is a folder, not a file"));
@@ -206,11 +213,13 @@ impl Folder {
     }
 
     /// Moves the file or folder at `from` to `to`, making the folders `to` is in if they aren't
-    /// there. Fails if either isn't a path, if there's nothing at `from`, or if there's something
-    /// at `to` already, which renaming never replaces, unless it's what's at `from`, as when a
-    /// name changes only its case on a system that doesn't tell cases apart.
+    /// there. Fails if either isn't a path, if the folder itself isn't there any more, if there's
+    /// nothing at `from`, or if there's something at `to` already, which renaming never replaces,
+    /// unless it's what's at `from`, as when a name changes only its case on a system that
+    /// doesn't tell cases apart.
     pub fn rename(&self, from: &str, to: &str) -> Result<()> {
         let (from_parts, to_parts) = (self.file_parts(from)?, self.file_parts(to)?);
+        self.still_there(to)?;
         let source = self.resolve(from, &from_parts, false)?;
         let target = self.resolve(to, &to_parts, false)?;
         if fs::symlink_metadata(&source).is_err() {
@@ -235,6 +244,17 @@ impl Folder {
                 Err(self.problem(path, "is a folder, which `remove` leaves"))
             }
             _ => fs::remove_file(&file).map_err(|err| write_error(&file, err)),
+        }
+    }
+
+    /// Fails, about `path`, if the folder itself isn't there any more: moved, deleted, or on a
+    /// drive taken out. Writing makes the folders a file is in, which would make it again where it
+    /// was, or on the disk the drive was mounted on.
+    fn still_there(&self, path: &str) -> Result<()> {
+        if self.root.is_dir() {
+            Ok(())
+        } else {
+            Err(self.problem(path, "the folder isn't there any more"))
         }
     }
 
@@ -656,6 +676,33 @@ mod tests {
             Some(&b"\xff not UTF-8"[..])
         );
         assert!(!folder.path().join("wanderer.md.partial").exists());
+    }
+
+    #[test]
+    fn a_folder_that_has_gone_is_never_made_again() {
+        let (folder, _temporary) = folder(&[("a.md", "a")]);
+        let moved = folder.path().with_file_name("moved");
+        fs::rename(folder.path(), &moved).unwrap();
+
+        for err in [
+            folder.write("b.md", b"b").unwrap_err(),
+            folder.write("deep/b.md", b"b").unwrap_err(),
+            folder.rename("a.md", "b.md").unwrap_err(),
+        ] {
+            let err = err.to_string();
+            assert!(err.contains("the folder isn't there any more"), "{err}");
+        }
+        assert!(!folder.path().exists(), "the folder wasn't made again");
+        // As if there were nothing in it.
+        assert_eq!(folder.list("").unwrap(), None);
+        assert_eq!(folder.read("a.md").unwrap(), None);
+        folder.remove("a.md").unwrap();
+        assert!(moved.join("a.md").exists());
+
+        // Back where it was, it works again.
+        fs::rename(&moved, folder.path()).unwrap();
+        folder.write("b.md", b"b").unwrap();
+        assert_eq!(text(&folder, "b.md").as_deref(), Some("b"));
     }
 
     #[test]

@@ -622,7 +622,8 @@ export type FolderEntry = {
 --- A folder the player picked, from `files.pick_folder` or `files.folders`, which reaches the
 --- files in it and in the folders inside it, and nothing else. Paths are relative to it, names
 --- joined by `/`, and can't leave it. Its methods work at any time. Two are equal when they're
---- the same folder.
+--- the same folder. In a folder that has gone, moved or deleted, no file is found, `list()` is
+--- nil, and writing or renaming is an error.
 declare extern type Folder with
     --- Returns the folder's name, the last of its path's.
     function name(self): string
@@ -631,8 +632,9 @@ declare extern type Folder with
     function list(self, path: string?): { FolderEntry }?
     --- Returns what the file at `path` holds, or nil if there's no such file.
     function read(self, path: string): string?
-    --- Writes `contents` to the file at `path`, replacing any, and making the folders it's in. It's
-    --- written in full first, so stopping partway through leaves the old file as it was.
+    --- Writes `contents` to the file at `path`, replacing any, and making the folders it's in inside
+    --- this one. It's written in full first, so stopping partway through leaves the old file as it
+    --- was.
     function write(self, path: string, contents: string): ()
     --- Moves the file or folder at `from` to `to`, which mustn't be there already.
     function rename(self, from: string, to: string): ()

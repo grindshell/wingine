@@ -92,6 +92,11 @@ when the player closes a project. The folder itself still works.
 A folder the player picked. Two are equal, `==`, when they're the same folder, however they were
 reached.
 
+A folder can go while the game has it: moved, deleted, or on a drive taken out. Then reading in
+it finds no file, [`list`](#folderlist) returns `nil` for it, as for any folder that isn't
+there, and writing and renaming in it are errors, never making it again where it was. A game
+that lists the folder now and then can tell the player it's gone. Put back, it works again.
+
 ### `folder:name`
 
 ```lua
@@ -149,7 +154,8 @@ Writes `contents` to the file at `path`, replacing any, and makes the folders it
 aren't there. The file is written in full to a file of its own first, then takes the old one's
 place, as saves are, so a game that stops partway through writing leaves the old one as it was.
 
-A path that names a folder is an error.
+A path that names a folder is an error, as is writing in a folder that [has gone](#folder): the
+folders made are only those inside it.
 
 ### `folder:rename`
 
@@ -160,7 +166,7 @@ folder:rename(from: string, to: string)
 Moves the file or folder at `from` to `to`, making the folders `to` is in if they aren't there.
 Renaming never replaces anything: it's an error if there's something at `to` already, unless it's
 what's at `from`, as when a name changes only its case on a system that doesn't tell cases apart.
-It's an error too if there's nothing at `from`.
+It's an error too if there's nothing at `from`, or the folder [has gone](#folder).
 
 ### `folder:remove`
 
@@ -174,7 +180,7 @@ removes a folder: a path that names one is an error.
 ## Errors
 
 A path that isn't one, or that leads out of the folder, or names a folder where a file is wanted,
-is an error naming the folder and the path:
+or is written to in a folder that has gone, is an error naming the folder and the path:
 
 ```text
 folder `dialogs`, path `../secrets.md`: `.` and `..` aren't names, and a path stays in its folder
