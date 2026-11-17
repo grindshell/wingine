@@ -3,7 +3,7 @@
 The editor edits a game's [scenes](scenes.md): it shows them as the game draws them, and changes
 their nodes with the mouse and the Inspector instead of by hand. It writes scene files back in
 the canonical layout, so what it saves stays easy to read and diffs stay small. It edits the game's
-scripts too, checking them against the engine's API as they're typed. It's laid out like
+scripts too, checking them against the engine's API as they're typed, and its songs. It's laid out like
 [Godot](https://godotengine.org)'s editor, and is itself a game made with Wingine, drawing its
 interface with [egui](https://github.com/emilk/egui).
 
@@ -20,23 +20,25 @@ Folder…** opens any game.
 
 The editor is new, and grows with each part of the current milestone. It edits scenes' nodes, the
 scene's sheets and props, tilemaps' tiles, instances' overrides, screens' layouts, clips, 3D
-views and scripts now.
+views, scripts and songs now.
 
 ## The layout
 
 - **The top bar**: the menus on the left; the main screens in the middle, the **2D** view of the
-  open scene and the **Script** screen of the open scripts; and **Play** and **Stop** on the right.
+  open scene, the **Script** screen of the open scripts and the **Music** screen of the open songs;
+  and **Play** and **Stop** on the right.
 - **The Scene dock**, at the top left: the open scene's tree of nodes.
 - **The FileSystem dock**, below it: the files in the game's folder. Double-click a scene to open
   it, or drag it into the viewport or onto a node to place it there. Drag a model file, `.glb` or
-  `.gltf`, into a [3D view](#3d-views) to add it. Double-click any other Luau file to
-  [edit it](#editing-scripts).
+  `.gltf`, into a [3D view](#3d-views) to add it. Double-click a song to
+  [write it](#writing-songs), and any other Luau file to [edit it](#editing-scripts).
 - **The Inspector**, on the right: every field of the selected node.
 - **The bottom panel**: **Output**, with what the editor says and what a game played from it
   prints, **Tiles**, to [paint tilemaps](#painting-tiles) with, and **Animation**, to
   [animate rigs](#animating-rigs). Click a tab to show it, and click it again to hide the panel.
 - **The middle**: in the 2D screen, a tab for each open scene, the viewport's toolbar, and the
-  viewport; in the Script screen, the open scripts and the one being edited.
+  viewport; in the Script screen, the open scripts and the one being edited; in the Music screen,
+  the open songs, and the one shown's instruments, arrangement and patterns.
 
 Drag the edges between them to resize them.
 
@@ -334,15 +336,46 @@ The engine calls a game's `update` and `draw`, so luau-lsp would warn they're ne
 editor turns that warning off, and a `.luaurc` can too, with `"FunctionUnused": false` in its
 `lint`.
 
+## Writing songs
+
+Double-click a [song](music.md) in the FileSystem dock to open it in the **Music** screen, which
+shows the open songs as tabs. **File > New Song…** makes one, at a path in the game's folder: a
+section of four bars that loops, with a track playing a square-wave lead in an empty pattern.
+
+- **The transport**, along the top: **▶ Song** plays the song from its start, **▶ Section** from the
+  selected section, and **⏹ Stop** stops it. Beside them are the song's tempo, meter and starting
+  section, and while it plays, where it is. A song that can't play, such as one starting with a
+  section it doesn't have, says why there.
+- **Instruments**, on the left: **+** adds one and 🗑 deletes the selected one, unless a track plays
+  it. Below are its name and every setting, with the shape of its envelope, and a keyboard of an
+  octave that plays it.
+- **The arrangement**, in the middle: the sections as columns, in the order they play, and the
+  tracks as rows. Each cell picks the pattern the track plays in that section, or none. Click a
+  section's name to select it and show its name, bars, the section that follows it, and its
+  markers above the grid. Each track has its instrument, volume and pan, buttons to move it up and
+  down, and **M** and **S** to mute and solo it while listening, which the file doesn't keep.
+  **+ Track** and **+ Section** add them; a new section follows the last.
+- **The piano roll**, at the bottom: the selected pattern's notes, a row for each pitch and a column
+  for each step of the grid, the bars and beats marked. Click to add a note a step long, drag a
+  note to move it, drag its right end to lengthen it, and right-click it, or select it and press
+  Delete, to remove it. Each note plays as it's added or moved, on the instrument of a track that
+  plays the pattern. **Snap** sets the grid's step, from a beat down to a sixteenth, and **Zoom** its
+  width. While the song plays a section that plays the pattern, a line shows where it is.
+
+Renaming an instrument, track, pattern or section renames it wherever the song names it. Changing a
+song while it plays plays the changed song from where it was, once the change is made. **File >
+Bake to WAV** renders the song once through to a WAV file beside it, as
+[`wingine bake`](music.md#baking) does.
 ## Saving, undo and playing
 
 - **Ctrl+Z** undoes a change and **Ctrl+Y** (or Ctrl+Shift+Z) redoes it. A drag, or typing in a
   field, is one change. Undo selects what was selected before the change, and redo what was
   selected when it was undone.
-- **Ctrl+S** saves the open scene, or in the Script screen, the script shown. A tab shows `*` while
+- **Ctrl+S** saves the open scene, or in the Script or Music screen, the script or song shown. A
+  tab shows `*` while
   its scene has unsaved changes, and closing it, the editor or the game asks first. What fails to
   save stays open, and Output says why.
-- **F5**, or **Play**, saves every scene and script and plays the game in a window of its own, as
+- **F5**, or **Play**, saves every scene, script and song and plays the game in a window of its own, as
   `cargo run -- --watch path/to/game` would, so it
   [reloads](running-games.md#reloading-as-you-work) whenever a file changes: save a scene or a
   script while it plays and the game starts again with it. What it prints shows in Output. **F8**,
@@ -357,20 +390,20 @@ image, or a scene or script with no unsaved changes, without opening it again. A
 changes is left as it is, and Output says its file changed.
 
 The editor draws only when something changes: when it's used, when a clip plays, while what's
-selected holds particles, when the game it's playing prints something, or when luau-lsp has
-something to say. While nothing happens, it
+selected holds particles, while a song plays, when the game it's playing prints something, or when
+luau-lsp has something to say. While nothing happens, it
 waits, using next to no power.
 
 ## Shortcuts
 
 | Keys | |
 |---|---|
-| Ctrl+S | Save the open scene, or the script shown |
+| Ctrl+S | Save the open scene, or the script or song shown |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
 | Ctrl+Space | Offer what could be typed, in a script |
 | Tab, Shift+Tab | Indent and unindent lines, in a script |
 | Ctrl+D | Duplicate the selected node |
-| Delete | Delete the selected node, or over the timeline, the selected key |
+| Delete | Delete the selected node, or over the timeline, the selected key, or over the piano roll, the selected note |
 | Escape | Select nothing |
 | F2 | Rename the selected node |
 | Q, W, E, S | The Select, Move, Rotate and Scale tools |

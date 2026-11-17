@@ -1,8 +1,8 @@
 //! The editor: a wingine game whose interface is all egui, laid out as Godot's editor is. The
 //! menus, the main screens and Play run along the top; the Scene dock sits over the FileSystem
 //! dock on the left, the Inspector on the right, and Output, Tiles and Animation in a panel along
-//! the bottom; in the middle, the 2D screen shows the open scenes as tabs over the viewport, and
-//! the Script screen the open scripts.
+//! the bottom; in the middle, the 2D screen shows the open scenes as tabs over the viewport, the
+//! Script screen the open scripts, and the Music screen the open songs.
 
 use std::{
     ffi::OsString,
@@ -32,6 +32,7 @@ use crate::{
     },
     document::{Document, Reloaded},
     edit::{self, NodePath},
+    music::{self, MusicEditor},
     play::Play,
     project::{self, AssetCache, Project},
     script_editor::{self, ScriptEditor},
@@ -52,6 +53,8 @@ pub enum MainScreen {
     TwoD,
     /// The open scripts, edited.
     Script,
+    /// The open songs: their instruments, arrangement and patterns.
+    Music,
 }
 
 /// The panels of the bottom panel, switched between by the tabs along its bottom.
@@ -68,6 +71,7 @@ pub enum BottomTab {
 enum Closing {
     Tab(usize),
     Script(usize),
+    Song(usize),
     Window,
     /// The game open, for the game in this folder.
     Project(PathBuf),
@@ -87,6 +91,7 @@ pub struct Editor {
     tiles: Tiles,
     animation: Animation,
     scripts: ScriptEditor,
+    music: MusicEditor,
     /// Seconds the last frame took, which a clip playing moves on by.
     dt: f32,
     /// Whether the panel along the bottom is open, and which of its panels it shows.
@@ -134,6 +139,7 @@ impl Editor {
             tiles: Tiles::default(),
             animation: Animation::default(),
             scripts: ScriptEditor::new(ctx.waker()),
+            music: MusicEditor::default(),
             dt: 0.0,
             bottom_open: true,
             bottom_tab: BottomTab::Output,
@@ -177,6 +183,7 @@ impl Editor {
         self.cache = AssetCache::default();
         self.palette = None;
         self.scripts.set_project(Some(project.folder.clone()));
+        self.music.set_project(Some(project.folder.clone()));
         self.watcher = Some(project::watch(project.folder.clone(), self.waker.clone()));
         let message = format!("Opened {}", project.name);
         if let Err(err) = &project.config {
@@ -206,6 +213,13 @@ impl Editor {
         Ok(())
     }
 
+    /// Opens the song at `path` in the project in the Music screen, and shows it.
+    pub fn open_song(&mut self, path: &str) -> Result<(), String> {
+        self.music.open(path)?;
+        self.screen = MainScreen::Music;
+        Ok(())
+    }
+
     /// Opens the script at `path` in the project in the Script screen, and shows it.
     pub fn open_script(&mut self, path: &str) -> Result<(), String> {
         self.scripts.open(path)?;
@@ -232,6 +246,15 @@ impl Editor {
 
     pub fn scripts_mut(&mut self) -> &mut ScriptEditor {
         &mut self.scripts
+    }
+
+    /// The Music screen, and the songs open in it.
+    pub fn music(&self) -> &MusicEditor {
+        &self.music
+    }
+
+    pub fn music_mut(&mut self) -> &mut MusicEditor {
+        &mut self.music
     }
 
     pub fn documents(&self) -> &[Document] {
@@ -285,9 +308,11 @@ impl Editor {
         self.play.is_some()
     }
 
-    /// Whether any open scene or script has changes that aren't saved.
+    /// Whether any open scene, script or song has changes that aren't saved.
     pub fn has_unsaved_changes(&self) -> bool {
-        self.documents.iter().any(Document::is_dirty) || self.scripts.is_dirty()
+        self.documents.iter().any(Document::is_dirty)
+            || self.scripts.is_dirty()
+            || self.music.is_dirty()
     }
 
     /// Plays games with `runner` instead of the editor's own executable, with `env` set: as tests
@@ -316,17 +341,23 @@ impl Editor {
         }
     }
 
-    /// Saves the script shown, in the Script screen, or the scene shown.
+    /// Saves the script shown, in the Script screen, the song shown, in the Music screen, or the
+    /// scene shown.
     pub fn save_shown(&mut self) {
-        if self.screen == MainScreen::Script {
-            let (level, message) = self.scripts.save_current();
-            self.output.push(level, message);
-        } else {
-            self.save();
+        match self.screen {
+            MainScreen::Script => {
+                let (level, message) = self.scripts.save_current();
+                self.output.push(level, message);
+            }
+            MainScreen::Music => {
+                let (level, message) = self.music.save_current();
+                self.output.push(level, message);
+            }
+            MainScreen::TwoD => self.save(),
         }
     }
 
-    /// Saves every scene and script with unsaved changes.
+    /// Saves every scene, script and song with unsaved changes.
     pub fn save_all(&mut self) {
         let current = self.current;
         for i in 0..self.documents.len() {
@@ -337,6 +368,9 @@ impl Editor {
         }
         self.current = current;
         for (level, message) in self.scripts.save_all() {
+            self.output.push(level, message);
+        }
+        for (level, message) in self.music.save_all() {
             self.output.push(level, message);
         }
     }
@@ -418,6 +452,15 @@ impl Editor {
         match dirty {
             Some(true) if !force => self.closing = Some(Closing::Script(index)),
             Some(_) => self.scripts.close(index),
+            None => {}
+        }
+    }
+
+    /// Closes the song at `index`, asking first if it has unsaved changes, unless `force`.
+    fn close_song(&mut self, ctx: &mut Context, index: usize, force: bool) {
+        match self.music.songs().get(index).map(|song| song.is_dirty()) {
+            Some(true) if !force => self.closing = Some(Closing::Song(index)),
+            Some(_) => self.music.close(ctx, index),
             None => {}
         }
     }
@@ -516,12 +559,20 @@ impl Editor {
         if pressed(ui, Modifiers::NONE, Key::F8) {
             self.stop();
         }
-        // The rest are the 2D screen's.
         if typing || self.screen == MainScreen::Script {
             return;
         }
         let redo = pressed(ui, Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)
             || pressed(ui, Modifiers::COMMAND, Key::Y);
+        if self.screen == MainScreen::Music {
+            if redo {
+                self.music.redo();
+            } else if pressed(ui, Modifiers::COMMAND, Key::Z) {
+                self.music.undo();
+            }
+            return;
+        }
+        // The rest are the 2D screen's.
         if redo && let Some(document) = self.document_mut() {
             document.redo();
         }
@@ -580,12 +631,13 @@ impl Editor {
             egui::UiBuilder::new()
                 .max_rect(egui::Rect::from_center_size(
                     bar.center(),
-                    egui::vec2(180.0, bar.height()),
+                    egui::vec2(270.0, bar.height()),
                 ))
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         middle.selectable_value(&mut self.screen, MainScreen::TwoD, "🖼 2D");
         middle.selectable_value(&mut self.screen, MainScreen::Script, "📜 Script");
+        middle.selectable_value(&mut self.screen, MainScreen::Music, "🎵 Music");
         let mut right = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(bar)
@@ -681,6 +733,10 @@ impl Editor {
                         "Double-click a script to edit it in the Script screen, checked by \
                          luau-lsp if it's installed.",
                     );
+                    ui.label(
+                        "Double-click a song to edit it in the Music screen: click the piano roll \
+                         to add a note, drag to move or lengthen it, right-click to delete it.",
+                    );
                 });
             });
         }
@@ -775,12 +831,21 @@ impl Editor {
                 .map(|script| script.name().to_owned())
                 .into_iter()
                 .collect(),
+            Closing::Song(i) => self
+                .music
+                .songs()
+                .get(i)
+                .map(|song| song.name().to_owned())
+                .into_iter()
+                .collect(),
             Closing::Window | Closing::Project(_) => {
                 let scenes = self.documents.iter().filter(|doc| doc.is_dirty());
                 let scripts = self.scripts.scripts().iter().filter(|s| s.is_dirty());
+                let songs = self.music.songs().iter().filter(|s| s.is_dirty());
                 scenes
                     .map(|doc| doc.name().to_owned())
                     .chain(scripts.map(|script| script.name().to_owned()))
+                    .chain(songs.map(|song| song.name().to_owned()))
                     .collect()
             }
         };
@@ -811,6 +876,7 @@ impl Editor {
         match closing {
             Closing::Tab(i) => self.close_tab(i, true),
             Closing::Script(i) => self.close_script(i, true),
+            Closing::Song(i) => self.close_song(ctx, i, true),
             Closing::Window => ctx.quit(),
             Closing::Project(folder) => {
                 if let Err(err) = self.open_project(folder) {
@@ -834,6 +900,11 @@ impl Editor {
                 let (level, message) = self.scripts.save(i);
                 self.output.push(level, message);
                 !self.scripts.scripts().get(i).is_some_and(|s| s.is_dirty())
+            }
+            Closing::Song(i) => {
+                let (level, message) = self.music.save(i);
+                self.output.push(level, message);
+                !self.music.songs().get(i).is_some_and(|s| s.is_dirty())
             }
             Closing::Window | Closing::Project(_) => {
                 self.save_all();
@@ -1119,7 +1190,9 @@ impl Game for Editor {
                 document.rebuild();
             }
             self.scripts.rescan();
+            self.music.reload_changed();
         }
+        self.music.keep_playing(ctx);
     }
 
     fn gui(&mut self, ctx: &mut Context, ui: &mut egui::Ui) {
@@ -1129,6 +1202,9 @@ impl Game for Editor {
         }
         self.output.take_logged();
         for (level, message) in self.scripts.take_messages() {
+            self.output.push(level, message);
+        }
+        for (level, message) in self.music.take_messages() {
             self.output.push(level, message);
         }
         self.shortcuts(ui);
@@ -1200,6 +1276,11 @@ impl Game for Editor {
             },
             Some(filesystem::Action::OpenScript(path)) => {
                 if let Err(err) = self.open_script(&path) {
+                    self.output.push(Level::Error, err);
+                }
+            }
+            Some(filesystem::Action::OpenSong(path)) => {
+                if let Err(err) = self.open_song(&path) {
                     self.output.push(Level::Error, err);
                 }
             }
@@ -1326,10 +1407,15 @@ impl Game for Editor {
 
         let mut viewport_action = None;
         let mut script_action = None;
+        let mut music_action = None;
         if self.screen == MainScreen::Script {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| script_action = self.scripts.ui(ui));
+        } else if self.screen == MainScreen::Music {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| music_action = self.music.ui(ui, ctx));
         } else {
             egui::CentralPanel::default().show(ui, |ui| {
                 self.tabs(ui);
@@ -1360,6 +1446,16 @@ impl Game for Editor {
             Some(script_editor::Action::Close(i)) => self.close_script(i, false),
             Some(script_editor::Action::Save) => self.save_shown(),
             Some(script_editor::Action::Rescan) => {
+                if let Some(project) = &mut self.project {
+                    project.rescan();
+                }
+            }
+            None => {}
+        }
+        match music_action {
+            Some(music::Action::Close(i)) => self.close_song(ctx, i, false),
+            Some(music::Action::Save) => self.save_shown(),
+            Some(music::Action::Rescan) => {
                 if let Some(project) = &mut self.project {
                     project.rescan();
                 }
@@ -1407,6 +1503,7 @@ impl Game for Editor {
             for document in &mut self.documents {
                 document.end_change();
             }
+            self.music.end_changes();
         }
     }
 

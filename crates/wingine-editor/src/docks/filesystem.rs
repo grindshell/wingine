@@ -1,7 +1,7 @@
 //! The FileSystem dock: the files in the game's folder. Double-clicking a scene opens it, and
 //! dragging one into the viewport or onto a node of the Scene dock places it there. Dragging a
-//! model file into a 3D view in the viewport adds a model node showing it. Double-clicking any
-//! other Luau file opens it in the Script screen.
+//! model file into a 3D view in the viewport adds a model node showing it. Double-clicking a song
+//! opens it in the Music screen, and any other Luau file in the Script screen.
 
 use wingine::gui::egui;
 
@@ -22,6 +22,8 @@ pub enum Action {
     Open(String),
     /// Open the script at this path in the Script screen.
     OpenScript(String),
+    /// Open the song at this path in the Music screen.
+    OpenSong(String),
     /// Place the scene file at this path in the open scene.
     Instance(String),
     /// Read the folder again.
@@ -116,6 +118,8 @@ impl FileSystem {
         }
         if is_scene && response.double_clicked() {
             *action = Some(Action::Open(entry.path.clone()));
+        } else if entry.name.ends_with(".song.luau") && response.double_clicked() {
+            *action = Some(Action::OpenSong(entry.path.clone()));
         } else if entry.name.ends_with(".luau") && response.double_clicked() {
             *action = Some(Action::OpenScript(entry.path.clone()));
         }

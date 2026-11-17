@@ -13,9 +13,11 @@ use std::{
 
 use wingine::{
     Redraw, WindowConfig,
+    audio::Sound,
     graphics::{Blend, Color, Fog, Sky},
     headless::{Headless, Simulation},
     input::{Key, MouseButton},
+    music::{Pitch, SongFile},
     scene::{
         Assets, Clip, Interpolation, KeyValue, Keys, KindDef, MeshDef, Placement3, Property,
         SceneFile, Shape, TileLayerDef, Value,
@@ -30,6 +32,7 @@ use wingine_editor::{
     lsp::{self, Severity},
     play::Play,
     project::AssetCache,
+    songs,
     viewport::Tool,
 };
 
@@ -2274,4 +2277,257 @@ fn project_scripts(folder: &Path, path: &str) -> Vec<String> {
         }
     }
     scripts
+}
+
+/// A song for the Music screen's tests: a section of two bars looping a pattern with a note.
+const SONG: &str = r#"return {
+    format = 1,
+    start = "verse",
+    instruments = { lead = { wave = "square", decay = 0.2, sustain = 0.5 } },
+    tracks = { { name = "melody", instrument = "lead" } },
+    patterns = { tune = { bars = 1, notes = { { 0, "C5", 1 } } } },
+    sections = { verse = { bars = 2, tracks = { melody = "tune" }, next = "verse" } },
+}"#;
+
+/// A copy of Pong with [`SONG`] beside its scripts, as `tune.song.luau`.
+fn song_game(test: &str) -> PathBuf {
+    let folder = copy_of("pong", test);
+    let song = SongFile::parse(SONG, "tune.song.luau").unwrap();
+    song.write(folder.join("tune.song.luau")).unwrap();
+    folder
+}
+
+/// The editor of `folder`, with its song open on the Music screen.
+fn song_editor(folder: &Path) -> Simulation<Editor> {
+    let mut simulation = editor(Some(folder.to_owned()));
+    double_click_gui(&mut simulation, "tune.song.luau");
+    simulation.run_frames(3);
+    simulation
+}
+
+fn pitch(name: &str) -> Pitch {
+    Pitch::from_name(name).unwrap()
+}
+
+/// Where `beat` of `pitch`'s row is in the piano roll.
+fn roll_point(simulation: &Simulation<Editor>, beat: f64, pitch: Pitch) -> [f32; 2] {
+    simulation
+        .game()
+        .music()
+        .roll_point(beat, pitch)
+        .expect("the piano roll shows")
+}
+
+/// The notes of the pattern `tune` of the song shown, as beats, pitches and lengths.
+fn tune(simulation: &Simulation<Editor>) -> Vec<(f64, String, f64)> {
+    let song = simulation.game().music().song().expect("a song is open");
+    song.file().patterns["tune"]
+        .notes
+        .iter()
+        .map(|note| (note.beat, note.pitch.to_string(), note.length))
+        .collect()
+}
+
+fn click_at(simulation: &mut Simulation<Editor>, button: MouseButton, [x, y]: [f32; 2]) {
+    simulation.click(button, x, y);
+    simulation.run_frames(2);
+}
+
+#[test]
+fn double_clicking_a_song_opens_it_on_the_music_screen() {
+    let folder = song_game("song-open");
+    let mut simulation = song_editor(&folder);
+    assert_eq!(simulation.game().screen(), MainScreen::Music);
+    let music = simulation.game().music();
+    assert_eq!(music.songs().len(), 1);
+    let song = music.song().unwrap();
+    assert_eq!(song.selection.pattern.as_deref(), Some("tune"));
+    assert_eq!(song.selection.section.as_deref(), Some("verse"));
+    for label in [
+        "Piano Roll",
+        "Tempo",
+        "Play Song",
+        "Section verse",
+        "melody in verse",
+    ] {
+        assert!(simulation.gui_rect(label).is_some(), "{label}");
+    }
+    // The other screens are a click away, and the song stays open.
+    simulation.click_gui("🖼 2D");
+    assert_eq!(simulation.game().screen(), MainScreen::TwoD);
+    simulation.click_gui("🎵 Music");
+    simulation.run_frames(2);
+    assert_eq!(simulation.game().screen(), MainScreen::Music);
+    assert!(simulation.gui_rect("tune.song.luau").is_some());
+}
+
+#[test]
+fn notes_are_added_moved_lengthened_and_removed_in_the_piano_roll() {
+    let folder = song_game("song-notes");
+    let mut simulation = song_editor(&folder);
+    let c5 = (0.0, "C5".to_owned(), 1.0);
+
+    // A click adds a note a step long, on the step it's in.
+    let at = roll_point(&simulation, 1.1, pitch("E5"));
+    click_at(&mut simulation, MouseButton::Left, at);
+    assert_eq!(tune(&simulation), [c5.clone(), (1.0, "E5".into(), 0.25)]);
+    assert!(simulation.gui_rect("tune.song.luau*").is_some());
+
+    // Dragging it moves it, by steps and rows.
+    let from = roll_point(&simulation, 1.05, pitch("E5"));
+    let to = roll_point(&simulation, 2.05, pitch("D5"));
+    drag(&mut simulation, from, to);
+    assert_eq!(tune(&simulation), [c5.clone(), (2.0, "D5".into(), 0.25)]);
+
+    // Dragging its right end lengthens it.
+    let [x, y] = roll_point(&simulation, 2.25, pitch("D5"));
+    let to = roll_point(&simulation, 3.0, pitch("D5"));
+    drag(&mut simulation, [x - 2.0, y], to);
+    assert_eq!(tune(&simulation), [c5.clone(), (2.0, "D5".into(), 1.0)]);
+
+    // A right-click removes it; undo puts it back, and redo takes it away again.
+    let on = roll_point(&simulation, 2.5, pitch("D5"));
+    click_at(&mut simulation, MouseButton::Right, on);
+    assert_eq!(tune(&simulation), std::slice::from_ref(&c5));
+    control(&mut simulation, Key::Z);
+    assert_eq!(tune(&simulation), [c5.clone(), (2.0, "D5".into(), 1.0)]);
+    simulation.key_down(Key::LeftControl);
+    simulation.tap(Key::Y);
+    simulation.key_up(Key::LeftControl);
+    simulation.run_frames(2);
+    assert_eq!(tune(&simulation), std::slice::from_ref(&c5));
+
+    // Saving writes the song as the engine writes songs.
+    click_at(&mut simulation, MouseButton::Left, at);
+    control(&mut simulation, Key::S);
+    let text = fs::read_to_string(folder.join("tune.song.luau")).unwrap();
+    let saved = SongFile::parse(&text, "tune.song.luau").unwrap();
+    assert_eq!(saved.to_luau().unwrap(), text.replace("\r\n", "\n"));
+    assert_eq!(&saved, simulation.game().music().song().unwrap().file());
+    assert!(!simulation.game().has_unsaved_changes());
+}
+
+#[test]
+fn songs_play_change_as_they_play_and_stop() {
+    let folder = song_game("song-play");
+    let mut simulation = song_editor(&folder);
+    simulation.click_gui("Play Song");
+    simulation.run_frames(30);
+    let music = simulation.game().music();
+    assert!(music.is_playing());
+    let performance = music.performance().unwrap();
+    assert_eq!(
+        simulation.next_frame_in(),
+        Some(0.0),
+        "it draws while it plays"
+    );
+    let beat = simulation
+        .context()
+        .audio()
+        .song(performance)
+        .unwrap()
+        .position()
+        .beat;
+    assert!(beat > 0.5, "{beat}");
+
+    // A note added as it plays plays the changed song from where it was.
+    let at = roll_point(&simulation, 3.0, pitch("E5"));
+    click_at(&mut simulation, MouseButton::Left, at);
+    assert_eq!(tune(&simulation).len(), 2);
+    let changed = simulation.game().music().performance().unwrap();
+    assert_ne!(changed, performance);
+    let position = simulation
+        .context()
+        .audio()
+        .song(changed)
+        .unwrap()
+        .position();
+    assert!(position.beat >= beat, "{} after {beat}", position.beat);
+    assert!(simulation.context().audio().song(performance).is_none());
+
+    simulation.click_gui("Stop Song");
+    assert!(!simulation.game().music().is_playing());
+    settle(&mut simulation);
+    assert_eq!(simulation.next_frame_in(), None);
+}
+
+#[test]
+fn instruments_tracks_and_sections_are_added_and_changed() {
+    let folder = song_game("song-parts");
+    let mut simulation = song_editor(&folder);
+    simulation.click_gui("Add Instrument");
+    simulation.run_frames(2);
+    type_into(&mut simulation, "Attack", "0.5");
+    type_into(&mut simulation, "Tempo", "90");
+    simulation.click_gui("+ Track");
+    simulation.run_frames(2);
+    simulation.click_gui("+ Section");
+    simulation.run_frames(2);
+    type_into(&mut simulation, "Section Bars", "3");
+    let song = simulation.game().music().song().unwrap();
+    let file = song.file();
+    assert_eq!(file.instruments["instrument"].attack, 0.5);
+    assert_eq!(file.tempo, 90.0);
+    assert_eq!(file.tracks[1].name, "track");
+    assert_eq!(file.tracks[1].instrument, "instrument");
+    assert_eq!(file.sections["section"].bars, 3);
+    assert_eq!(file.sections["verse"].next.as_deref(), Some("section"));
+    assert_eq!(songs::section_order(file), ["verse", "section"]);
+    assert!(simulation.gui_rect("track in section").is_some());
+
+    // Each was a change of its own.
+    control(&mut simulation, Key::Z);
+    let song = simulation.game().music().song().unwrap();
+    assert_eq!(song.file().sections["section"].bars, 4);
+    assert!(
+        simulation
+            .game_mut()
+            .music_mut()
+            .song_mut()
+            .unwrap()
+            .song()
+            .is_ok()
+    );
+}
+
+#[test]
+fn songs_are_made_baked_and_closed_from_the_file_menu() {
+    let folder = copy_of("pong", "song-new");
+    let mut simulation = editor(Some(folder.clone()));
+    simulation.click_gui("🎵 Music");
+    simulation.run_frames(2);
+    menu(&mut simulation, "File", "New Song…");
+    simulation.run_frames(2);
+    simulation.click_gui("Create");
+    simulation.run_frames(2);
+    let path = folder.join("music/new.song.luau");
+    assert_eq!(SongFile::read(&path).unwrap(), songs::new_song());
+    assert_eq!(simulation.game().music().songs().len(), 1);
+
+    menu(&mut simulation, "File", "Bake to WAV");
+    let baked = Sound::load(folder.join("music/new.wav")).unwrap();
+    // Four bars of four beats at 120 a minute, looping.
+    assert!(
+        (baked.duration() - 8.0).abs() < 0.01,
+        "{}",
+        baked.duration()
+    );
+    let lines = simulation.game().output().lines();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.text.contains("Baked music/new.wav")),
+        "{lines:?}"
+    );
+
+    // Closing a song with changes asks first.
+    let at = roll_point(&simulation, 0.0, pitch("C5"));
+    click_at(&mut simulation, MouseButton::Left, at);
+    menu(&mut simulation, "File", "Close Song");
+    simulation.run_frames(2);
+    assert_eq!(simulation.game().music().songs().len(), 1);
+    simulation.click_gui("Don't Save");
+    simulation.run_frames(2);
+    assert!(simulation.game().music().songs().is_empty());
+    assert!(!simulation.game().has_unsaved_changes());
 }

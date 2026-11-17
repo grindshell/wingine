@@ -122,6 +122,8 @@ pub fn file_icon(name: &str) -> &'static str {
         "🎬"
     } else if name.ends_with(".tileset.luau") {
         "🗺"
+    } else if name.ends_with(".song.luau") {
+        "🎵"
     } else if name.ends_with(".luau") {
         "📜"
     } else if name.ends_with(".glb") || name.ends_with(".gltf") {

@@ -7,14 +7,18 @@ pub mod docks;
 pub mod document;
 pub mod edit;
 pub mod editor;
+pub mod history;
 pub mod instance;
 pub mod layout;
 pub mod lsp;
 pub mod luau;
+pub mod music;
 pub mod play;
 pub mod project;
 pub mod script;
 pub mod script_editor;
+pub mod song_document;
+pub mod songs;
 pub mod theme;
 pub mod viewport;
 

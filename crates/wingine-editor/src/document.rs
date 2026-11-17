@@ -11,12 +11,10 @@ use wingine::{
 use crate::{
     clips,
     edit::{self, NodePath},
+    history::History,
     project::AssetCache,
     script::modified,
 };
-
-/// How many changes undo goes back through.
-const HISTORY: usize = 200;
 
 /// The most seconds particles in a preview run for as it's built, so they show.
 const PREVIEW_WARMUP: f32 = 5.0;
@@ -30,13 +28,9 @@ pub struct Document {
     saved: SceneFile,
     /// When its file was changed, as of the last time it was read or saved.
     modified: Option<SystemTime>,
-    /// The file before each change, oldest first.
-    undo: Vec<Snapshot>,
-    /// The file after each change undone, latest undone last.
-    redo: Vec<Snapshot>,
-    /// The file before the change being made, while it's being made: a drag, or typing in a
-    /// field, is one change.
-    before: Option<Snapshot>,
+    /// The file before each change, to undo, and after each undone, to redo: a drag, or typing
+    /// in a field, is one change.
+    history: History<Snapshot>,
     /// How many times the file has been put back as it was, by undo or redo, or read again, which
     /// leaves behind what panels had selected in it by index.
     restores: u64,
@@ -119,9 +113,7 @@ impl Document {
             saved: file.clone(),
             modified: None,
             file,
-            undo: Vec::new(),
-            redo: Vec::new(),
-            before: None,
+            history: History::default(),
             restores: 0,
             selected: None,
             inner: None,
@@ -162,13 +154,11 @@ impl Document {
     /// Keeps the file as it is, and what's selected, to undo the change about to be made, unless
     /// one's being made.
     fn begin_change(&mut self) {
-        if self.before.is_none() {
-            self.before = Some(Snapshot {
-                file: self.file.clone(),
-                selected: self.selected.clone(),
-                inner: self.inner.clone(),
-            });
-        }
+        self.history.begin(|| Snapshot {
+            file: self.file.clone(),
+            selected: self.selected.clone(),
+            inner: self.inner.clone(),
+        });
     }
 
     /// Puts the file back as `snapshot` has it, selecting what it had selected, and returns the
@@ -241,16 +231,7 @@ impl Document {
 
     /// Ends the change being made, if any, keeping it to undo if it changed anything.
     pub fn end_change(&mut self) {
-        let Some(before) = self.before.take() else {
-            return;
-        };
-        if before.file != self.file {
-            if self.undo.len() == HISTORY {
-                self.undo.remove(0);
-            }
-            self.undo.push(before);
-            self.redo.clear();
-        }
+        self.history.end(|before| before.file != self.file);
     }
 
     /// Whether the file differs from what's on disk.
@@ -259,29 +240,27 @@ impl Document {
     }
 
     pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty() || self.before.as_ref().is_some_and(|b| b.file != self.file)
+        self.history.can_undo(|before| before.file != self.file)
     }
 
     pub fn can_redo(&self) -> bool {
-        !self.redo.is_empty()
+        self.history.can_redo()
     }
 
     /// Undoes the last change, selecting again what was selected before it.
     pub fn undo(&mut self) {
         self.end_change();
-        if let Some(before) = self.undo.pop() {
-            let after = self.restore(before);
-            self.redo.push(after);
-        }
+        let mut history = mem::take(&mut self.history);
+        history.undo(|before| self.restore(before));
+        self.history = history;
     }
 
     /// Makes the last change undone again, selecting what was selected when it was undone.
     pub fn redo(&mut self) {
         self.end_change();
-        if let Some(after) = self.redo.pop() {
-            let before = self.restore(after);
-            self.undo.push(before);
-        }
+        let mut history = mem::take(&mut self.history);
+        history.redo(|after| self.restore(after));
+        self.history = history;
     }
 
     /// After the file changed out from under the selection: keeps it only if it's still there.
