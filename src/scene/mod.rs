@@ -456,10 +456,11 @@ pub use file::{
     ViewParticlesDef,
 };
 pub(crate) use file::{
-    evaluate_any, is_3d_settings, particle_settings, particle_settings_3d,
-    particle_settings_3d_value, particle_settings_value, plain,
+    Fields, describe_value, evaluate, evaluate_any, finite, is_3d_settings, list, number,
+    particle_settings, particle_settings_3d, particle_settings_3d_value, particle_settings_value,
+    plain, positive_whole, read_file, string, whole,
 };
-pub(crate) use writer::write_value;
+pub(crate) use writer::{Writer, quoted, single, write_value};
 
 use crate::{
     Context, Error, Result,

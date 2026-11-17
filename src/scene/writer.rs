@@ -92,32 +92,32 @@ pub(crate) fn write_value(value: &Value) -> Result<String, String> {
 }
 
 #[derive(Default)]
-struct Writer {
-    out: String,
+pub(crate) struct Writer {
+    pub(crate) out: String,
     depth: usize,
 }
 
 impl Writer {
     /// Starts a table whose entries go on lines of their own.
-    fn open(&mut self) {
+    pub(crate) fn open(&mut self) {
         self.out.push_str("{\n");
         self.depth += 1;
     }
 
-    fn close(&mut self) {
+    pub(crate) fn close(&mut self) {
         self.depth -= 1;
         self.indent();
         self.out.push('}');
     }
 
-    fn indent(&mut self) {
+    pub(crate) fn indent(&mut self) {
         for _ in 0..self.depth {
             self.out.push_str("    ");
         }
     }
 
     /// Starts a field: its key, then its value goes next.
-    fn key(&mut self, key: &str) {
+    pub(crate) fn key(&mut self, key: &str) {
         self.indent();
         if is_identifier(key) {
             self.out.push_str(key);
@@ -129,18 +129,18 @@ impl Writer {
         self.out.push_str(" = ");
     }
 
-    fn end_field(&mut self) {
+    pub(crate) fn end_field(&mut self) {
         self.out.push_str(",\n");
     }
 
     /// A field whose value is `value`, written already.
-    fn field(&mut self, key: &str, value: &str) {
+    pub(crate) fn field(&mut self, key: &str, value: &str) {
         self.key(key);
         self.out.push_str(value);
         self.end_field();
     }
 
-    fn number_field(&mut self, key: &str, value: f32) -> Result<(), String> {
+    pub(crate) fn number_field(&mut self, key: &str, value: f32) -> Result<(), String> {
         let value = single(value, key)?;
         self.field(key, &value);
         Ok(())
@@ -957,7 +957,7 @@ impl Writer {
 }
 
 /// `value` written so Luau reads it back as the same `f32`, if it's finite.
-fn single(value: f32, field: &str) -> Result<String, String> {
+pub(crate) fn single(value: f32, field: &str) -> Result<String, String> {
     if !value.is_finite() {
         return Err(format!(
             "`{field}` is {value}, which can't be written: scene files hold only finite numbers"
@@ -979,7 +979,7 @@ fn hex(color: Color) -> String {
 }
 
 /// `text` as a Luau string literal, in double quotes.
-fn quoted(text: &str) -> String {
+pub(crate) fn quoted(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
     for c in text.chars() {

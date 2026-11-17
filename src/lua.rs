@@ -305,6 +305,7 @@ use crate::{
     grid::{Direction, GridMover},
     input::{Control, GamepadButton, Key, MouseButton},
     math::{Affine, Affine3, Bounds3, Rect},
+    music::{Song, SongSettings},
     particles::{Particles, Particles3d},
     scene::{
         AreaNode, BillboardNode, Clip, Emitter, Kind, LightDef, MeshNode, ModelNode, Node, NodeId,
@@ -1127,6 +1128,55 @@ impl mlua::UserData for TextLayout {
 impl mlua::UserData for Sound {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("duration", |_, sound, ()| Ok(sound.duration()));
+    }
+}
+
+/// A song, whose methods tell what's in it, at any time.
+impl mlua::UserData for Song {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("sections", |_, song, ()| {
+            Ok(song.sections().map(str::to_owned).collect::<Vec<_>>())
+        });
+        methods.add_method("tracks", |_, song, ()| {
+            Ok(song.tracks().map(str::to_owned).collect::<Vec<_>>())
+        });
+        methods.add_method("start", |_, song, ()| Ok(song.start().to_owned()));
+        methods.add_method("tempo", |_, song, ()| Ok(song.tempo()));
+        methods.add_method("meter", |_, song, ()| {
+            let [beats, note] = song.meter();
+            Ok((beats, note))
+        });
+        methods.add_method("bars", |_, song, section: String| {
+            Ok(song.section_bars(&section))
+        });
+        methods.add_method("markers", |_, song, section: String| {
+            Ok(song
+                .markers(&section)
+                .map(|markers| markers.map(str::to_owned).collect::<Vec<_>>()))
+        });
+    }
+}
+
+impl FromLua for SongSettings {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        let defaults = Self::default();
+        match &value {
+            mlua::Value::Nil => Ok(defaults),
+            mlua::Value::Table(table) => Ok(Self {
+                volume: table
+                    .get::<Option<f32>>("volume")?
+                    .unwrap_or(defaults.volume),
+                fade_in: table
+                    .get::<Option<f32>>("fade_in")?
+                    .unwrap_or(defaults.fade_in),
+                section: table.get::<Option<String>>("section")?,
+                beat: table.get::<Option<f64>>("beat")?.unwrap_or(defaults.beat),
+            }),
+            _ => {
+                let message = "expected a table { volume, fade_in, section, beat }".into();
+                Err(conversion_error(&value, "SongSettings", message))
+            }
+        }
     }
 }
 

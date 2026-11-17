@@ -5,6 +5,7 @@
 //! wingine [--watch] path/to/game
 //! wingine test [--update] [--ignored] path/to/game [filter]
 //! wingine export path/to/game path/to/out
+//! wingine bake path/to/song.song.luau path/to/out.wav [section]
 //! wingine
 //! ```
 //!
@@ -13,16 +14,24 @@
 //! it saves screenshots that don't match as their references, and with `--ignored`, it runs only
 //! the tests declared `ignored`, which it otherwise leaves out. `export` makes a folder to
 //! ship, whose executable, a copy of this one, runs the game beside it when it's started with
-//! nothing, as by double-clicking. See the `runtime` module for what the folder holds,
-//! `runtime::testing` for tests, and `runtime::export` for exports.
+//! nothing, as by double-clicking. `bake` renders a song to a WAV file, once through, or one of
+//! its sections as a loop. See the `runtime` module for what the folder holds,
+//! `runtime::testing` for tests, `runtime::export` for exports, and `music` for songs.
 
 use std::{ffi::OsString, path::Path, process::ExitCode};
 
-use wingine::runtime::{self, testing};
+use wingine::{
+    music::Song,
+    runtime::{self, testing},
+};
 
 const USAGE: &str = "usage: wingine [--watch] <game folder>
        wingine test [--update] [--ignored] <game folder> [filter]
-       wingine export <game folder> <out folder>";
+       wingine export <game folder> <out folder>
+       wingine bake <song file> <out wav> [section]";
+
+/// Frames a second songs bake at.
+const BAKE_RATE: u32 = 48_000;
 
 fn main() -> ExitCode {
     static LOGGER: Logger = Logger;
@@ -42,6 +51,9 @@ fn main() -> ExitCode {
         // A game in a folder called `test` or `export` runs as `wingine ./test`.
         [command, rest @ ..] if command == "test" && !rest.is_empty() => return test(rest),
         [command, game, out] if command == "export" => return export(game, out),
+        [command, song, out, section @ ..] if command == "bake" && section.len() <= 1 => {
+            return bake(song, out, section.first());
+        }
         [flag, folder] if flag == "--watch" => runtime::run_watching(folder),
         [folder] if folder != "--watch" => runtime::run(folder),
         _ => {
@@ -87,6 +99,28 @@ fn export(game: &OsString, out: &OsString) -> ExitCode {
     }
 }
 
+/// Bakes the song in the file `song` to the WAV file `out`, or its section `section`, as
+/// `wingine bake` does, saying what it made.
+fn bake(song: &OsString, out: &OsString, section: Option<&OsString>) -> ExitCode {
+    let section = section.map(|section| section.to_string_lossy().into_owned());
+    let baked = Song::load(song).and_then(|song| song.bake(out, BAKE_RATE, section.as_deref()));
+    match baked {
+        Ok(rendered) => {
+            let looping = if rendered.loops { ", looping" } else { "" };
+            println!(
+                "baked {} to {}: {:.2} seconds{looping}",
+                Path::new(song).display(),
+                Path::new(out).display(),
+                rendered.duration()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
 /// Runs a game's tests, as `wingine test` does with `args`, printing each as it finishes, then
 /// the failures and a summary, as `cargo test` does.
 fn test(mut args: &[OsString]) -> ExitCode {

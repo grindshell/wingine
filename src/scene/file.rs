@@ -1017,7 +1017,7 @@ impl FontFile {
     }
 }
 
-fn read_file(path: &Path) -> Result<String> {
+pub(crate) fn read_file(path: &Path) -> Result<String> {
     crate::files::read_to_string(path).map_err(|source| Error::ReadFile {
         path: path.to_owned(),
         source,
@@ -1026,7 +1026,7 @@ fn read_file(path: &Path) -> Result<String> {
 
 /// Runs the Luau `source` with nothing in scope, and returns what it returns, which must be a
 /// table, as plain data.
-fn evaluate(source: &str, path: &Path) -> Result<Value, String> {
+pub(crate) fn evaluate(source: &str, path: &Path) -> Result<Value, String> {
     let lua = file_lua()?;
     let value = run(&lua, source, path)?;
     if !value.is_table() {
@@ -2794,7 +2794,7 @@ fn read_props(props: Option<Value>) -> Result<Props, String> {
 
 /// A table's fields by name, taken one by one as they're read, so whatever's left over is a
 /// field the table shouldn't have.
-pub(super) struct Fields {
+pub(crate) struct Fields {
     pub fields: BTreeMap<String, Value>,
 }
 
@@ -2813,7 +2813,7 @@ impl Fields {
         }
     }
 
-    fn take(&mut self, name: &str) -> Option<Value> {
+    pub(crate) fn take(&mut self, name: &str) -> Option<Value> {
         self.fields.remove(name)
     }
 
@@ -2822,7 +2822,7 @@ impl Fields {
     }
 
     /// Fails if any field hasn't been taken, as one `what`, such as `"a sheet"`, doesn't have.
-    fn finish(self, what: &str) -> Result<(), String> {
+    pub(crate) fn finish(self, what: &str) -> Result<(), String> {
         match self.fields.keys().next() {
             Some(field) => Err(format!("{what} has no field `{field}`")),
             None => Ok(()),
@@ -2831,7 +2831,7 @@ impl Fields {
 }
 
 /// A list's items.
-fn list(value: Value, field: &str) -> Result<Vec<Value>, String> {
+pub(crate) fn list(value: Value, field: &str) -> Result<Vec<Value>, String> {
     match value {
         Value::List(items) => Ok(items),
         value => Err(format!(
@@ -2841,7 +2841,7 @@ fn list(value: Value, field: &str) -> Result<Vec<Value>, String> {
     }
 }
 
-fn number(value: Value, field: &str) -> Result<f64, String> {
+pub(crate) fn number(value: Value, field: &str) -> Result<f64, String> {
     match value {
         Value::Number(number) => Ok(number),
         value => Err(format!(
@@ -2852,7 +2852,7 @@ fn number(value: Value, field: &str) -> Result<f64, String> {
 }
 
 /// A finite number, as `f32`, for positions and sizes.
-fn finite(value: Value, field: &str) -> Result<f32, String> {
+pub(crate) fn finite(value: Value, field: &str) -> Result<f32, String> {
     let number = number(value, field)?;
     let single = number as f32;
     if !single.is_finite() {
@@ -2862,7 +2862,7 @@ fn finite(value: Value, field: &str) -> Result<f32, String> {
 }
 
 /// A whole number from 0 up.
-fn whole(value: Value, field: &str) -> Result<u32, String> {
+pub(crate) fn whole(value: Value, field: &str) -> Result<u32, String> {
     let number = number(value, field)?;
     if number.fract() != 0.0 || !(0.0..=f64::from(u32::MAX)).contains(&number) {
         return Err(format!(
@@ -2872,7 +2872,7 @@ fn whole(value: Value, field: &str) -> Result<u32, String> {
     Ok(number as u32)
 }
 
-fn positive_whole(value: Value, field: &str) -> Result<u32, String> {
+pub(crate) fn positive_whole(value: Value, field: &str) -> Result<u32, String> {
     match whole(value, field)? {
         0 => Err(format!("`{field}` must be at least 1")),
         number => Ok(number),
@@ -2929,7 +2929,7 @@ fn positive(number: f32, field: &str) -> Result<f32, String> {
     }
 }
 
-fn string(value: Value, field: &str) -> Result<String, String> {
+pub(crate) fn string(value: Value, field: &str) -> Result<String, String> {
     match value {
         Value::String(string) => Ok(string),
         value => Err(format!(
@@ -2974,7 +2974,7 @@ fn describe(value: &mlua::Value) -> String {
     }
 }
 
-fn describe_value(value: &Value) -> &'static str {
+pub(crate) fn describe_value(value: &Value) -> &'static str {
     match value {
         Value::Bool(_) => "a boolean",
         Value::Number(_) => "a number",

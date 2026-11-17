@@ -163,6 +163,53 @@ export type PlaySettings = {
     fade_in: number?,
 }
 
+--- How `audio.play_song` plays a song.
+export type SongSettings = {
+    --- Linear volume: 1 is as written. By default, 1.
+    volume: number?,
+    --- Seconds it fades in over from silence. By default, 0: at once.
+    fade_in: number?,
+    --- The section it starts with, by name. By default, the song's start.
+    section: string?,
+    --- Beats into that section it starts. By default, 0.
+    beat: number?,
+}
+
+--- When a change to a song playing happens: at once, at the start of the next beat or bar, or
+--- when the section playing ends, in place of what would follow it.
+export type SongTime = "now" | "beat" | "bar" | "section"
+
+--- How `performance:set_tempo` changes the tempo.
+export type TempoSettings = {
+    --- When it starts to change. By default, now.
+    at: SongTime?,
+    --- How many beats it slides to the new tempo over. By default, 0: at once.
+    over: number?,
+}
+
+--- Something that happened in a song playing, as `performance:events` lists them and listeners
+--- get them. Its `kind` says which of its other fields it has.
+export type SongEvent = {
+    --- "section", a section started: `section`. "beat", a beat started: `bar` and `beat`, each
+    --- from 1. "marker", the song passed a marker: `section` and `name`. "note", a note started
+    --- on a track listened to: `track`, `pitch`, such as "C#4", and `velocity`. "end", the song
+    --- ended: its last section is over and its notes have faded.
+    kind: "section" | "beat" | "marker" | "note" | "end",
+    section: string?,
+    bar: number?,
+    beat: number?,
+    name: string?,
+    track: string?,
+    pitch: string?,
+    velocity: number?,
+}
+
+--- A listener `performance:on` started, for `performance:off` to stop.
+export type SongListener = {
+    --- Whether it's still listening.
+    listening: boolean,
+}
+
 --- How `graphics.load_font` draws a TrueType or OpenType font.
 export type FontSettings = {
     --- How many pixels its em is. A pixel font made as a TrueType font is drawn at the size it was
@@ -900,6 +947,73 @@ declare extern type Voice with
     function is_paused(self): boolean
 end
 
+--- A song of Wingine's own instruments, from `audio.load_song`: sections, each some bars of
+--- patterns its tracks play. Its methods tell what's in it, at any time.
+declare extern type Song with
+    --- Returns the names of its sections, in order of their names.
+    function sections(self): { string }
+    --- Returns the names of its tracks, in order.
+    function tracks(self): { string }
+    --- Returns the name of the section it starts with.
+    function start(self): string
+    --- Returns its tempo as it starts, in beats a minute.
+    function tempo(self): number
+    --- Returns its meter: beats a bar, and the note that's a beat, such as 6 and 8.
+    function meter(self): (number, number)
+    --- Returns how many bars the section named `section` lasts, or nil if there's none.
+    function bars(self, section: string): number?
+    --- Returns the names of the markers in the section named `section`, in order, or nil if
+    --- there's none.
+    function markers(self, section: string): { string }?
+end
+
+--- A song playing, from `audio.play_song`, by which the game changes it and hears what happens in
+--- it. Once it's stopped, or the update after it ends, it's over: changing it does nothing, and it
+--- has no events or position. Its methods work where `audio`'s do; `wait_for` only in a task.
+declare extern type Performance with
+    --- Moves to the section named `section`, `at` the time given (by default, at once). A section
+    --- playing starts again.
+    function go_to(self, section: string, at: SongTime?): ()
+    --- Changes the tempo, in beats a minute, kept from 1 to 999.
+    function set_tempo(self, tempo: number, settings: TempoSettings?): ()
+    --- Fades the track named `track` to `volume` over `fade` seconds (by default, at once).
+    function set_track_volume(self, track: string, volume: number, fade: number?): ()
+    --- Has `events` list the notes the track named `track` starts, or with `false`, stop.
+    function listen(self, track: string, listen: boolean?): ()
+    --- Changes the song's volume over `fade` seconds.
+    function set_volume(self, volume: number, fade: number?): ()
+    --- Pauses the song, fading it out over `fade` seconds, until it's resumed.
+    function pause(self, fade: number?): ()
+    --- Resumes the song where it paused, fading it in over `fade` seconds.
+    function resume(self, fade: number?): ()
+    --- Stops the song, fading it out over `fade` seconds. It's over at once.
+    function stop(self, fade: number?): ()
+    --- Returns whether the song isn't over. A paused one is still playing.
+    function is_playing(self): boolean
+    --- Returns whether the song is paused.
+    function is_paused(self): boolean
+    --- Returns whether the song ended in the last update, which is the last it plays.
+    function has_ended(self): boolean
+    --- Returns the section playing, the bar of it, from 1, and how far into the bar, from 1 at its
+    --- start: 2.5 is halfway through its second beat. Nil once it's over.
+    function position(self): (string?, number?, number?)
+    --- Returns the tempo now, in beats a minute, or nil once it's over.
+    function tempo(self): number?
+    --- Returns what happened in the song as the last update played, in order.
+    function events(self): { SongEvent }
+    --- Returns the song playing.
+    function song(self): Song
+    --- Calls `listener` with each event named `event` from the next update on, each call a task
+    --- of its own: "beat", "bar", "section", "marker", "note:<track>" or "end", or a section or
+    --- marker by name, as "section:chorus" or "marker:drop".
+    function on(self, event: string, listener: (SongEvent) -> ()): SongListener
+    --- Stops a listener `on` started.
+    function off(self, listener: SongListener): ()
+    --- Waits, in a task, for the next event named `event`, as `on` names them, and returns it; or
+    --- nil if the song is over first.
+    function wait_for(self, event: string): SongEvent?
+end
+
 --- Kinds of tile, for building maps with `tilemap.new`.
 declare extern type Tileset with
     --- Adds a kind of tile and returns its ID, for `map:set`. IDs count from 0.
@@ -1552,7 +1666,8 @@ export type InputApi = {
     button_strength: (button: GamepadButton, gamepad: number?) -> number,
 }
 
---- Sound effects and music, from WAV or OGG Vorbis files. Volumes are linear: 1 is as recorded.
+--- Sound effects and music, from WAV or OGG Vorbis files, and songs of Wingine's own instruments.
+--- Volumes are linear: 1 is as recorded.
 export type AudioApi = {
     --- Loads the sound effect at `path`, decoding all of it into memory.
     load: (path: string) -> Sound,
@@ -1575,6 +1690,15 @@ export type AudioApi = {
     stop_music: (fade: number?) -> (),
     --- Returns whether music is playing.
     music_playing: () -> boolean,
+    --- Loads the song file at `path`.
+    load_song: (path: string) -> Song,
+    --- Plays `song` live, on the music track, and returns its performance, by which it's changed
+    --- and heard as it plays.
+    play_song: (song: Song, settings: SongSettings?) -> Performance,
+    --- Returns how many songs are playing, paused ones too.
+    songs_playing: () -> number,
+    --- Stops every song, fading them out over `fade` seconds.
+    stop_songs: (fade: number?) -> (),
     --- Sets the volume of everything: sound effects and music.
     set_volume: (volume: number) -> (),
     --- Sets the volume of sound effects.

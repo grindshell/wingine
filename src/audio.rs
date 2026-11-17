@@ -9,6 +9,10 @@
 //! and panning, at once or gradually), pauses and resumes it, or stops it, which is how a sound
 //! that loops, such as a hum or footsteps, ends.
 //!
+//! [Songs](crate::music) play live on the music track too ([`Audio::play_song`]), each as a
+//! [`PlayingSong`] by which the game changes its tempo, moves between its sections, fades its
+//! tracks in and out, and hears its beats, sections, markers and notes as they pass.
+//!
 //! Files can be WAV or OGG Vorbis, and a sound can be made of samples instead
 //! ([`Sound::from_samples`]), for games that work their sounds out. Volumes are linear: 1 plays a sound as recorded, 0.5 at half
 //! the amplitude, and 0 is silent.
@@ -40,7 +44,10 @@ use kira::{
     track::{MainTrackHandle, TrackBuilder, TrackHandle},
 };
 
-use crate::{Error, Result};
+use crate::{
+    Error, Result,
+    music::{Performance, PlayingSong, Song, SongSettings},
+};
 
 /// Music playing.
 #[cfg(not(target_arch = "wasm32"))]
@@ -65,6 +72,10 @@ pub struct Audio {
     /// The voice the next sound effect plays as.
     next_voice: u64,
     music: Option<MusicHandle>,
+    /// Songs playing, and those that ended in the last update, in the order they started, so by
+    /// their performances.
+    songs: Vec<PlayingSong>,
+    next_performance: u64,
 }
 
 /// A sound effect playing, as [`Audio::play`] started it, by which the game changes, pauses or
@@ -193,6 +204,8 @@ impl Audio {
             sounds: Vec::new(),
             next_voice: 0,
             music: None,
+            songs: Vec::new(),
+            next_performance: 0,
         }
     }
 
@@ -393,6 +406,44 @@ impl Audio {
             .is_some_and(|music| is_playing(music.state()))
     }
 
+    /// Plays `song` live on the music track, so [`Audio::set_music_volume`] sets its volume, as
+    /// `settings` say. Songs play alongside music and one another.
+    ///
+    /// Fails if the song has no section `settings` names, or a setting isn't a number.
+    pub fn play_song(&mut self, song: &Song, settings: SongSettings) -> Result<Performance> {
+        let performance = Performance(self.next_performance);
+        self.next_performance += 1;
+        let (playing, live) = PlayingSong::start(performance, song, &settings)?;
+        self.music_track
+            .play(live)
+            .map_err(|err| Error::PlayAudio(err.to_string()))?;
+        self.songs.push(playing);
+        Ok(performance)
+    }
+
+    /// The song playing as `performance`, to change it or hear what happened in it, unless
+    /// it's over: stopped, or ended in an update before the last.
+    pub fn song(&mut self, performance: Performance) -> Option<&mut PlayingSong> {
+        let index = self
+            .songs
+            .binary_search_by_key(&performance.0, |song| song.performance().0)
+            .ok()?;
+        Some(&mut self.songs[index]).filter(|song| !song.is_over())
+    }
+
+    /// How many songs are playing: started, and neither stopped nor ended before the last
+    /// update. Paused ones count.
+    pub fn songs_playing(&self) -> usize {
+        self.songs.iter().filter(|song| !song.is_over()).count()
+    }
+
+    /// Stops every song, fading them out over `fade` seconds.
+    pub fn stop_songs(&mut self, fade: f32) {
+        for song in &mut self.songs {
+            song.stop(fade);
+        }
+    }
+
     /// Sets the volume of everything. A volume that isn't a number changes nothing, and logs a
     /// warning, as for a voice.
     pub fn set_volume(&mut self, volume: f32) {
@@ -417,18 +468,21 @@ impl Audio {
         }
     }
 
-    /// Stops every sound effect and the music at once, and sets every volume back to 1, as for a
-    /// game starting again in the same window.
+    /// Stops every sound effect, the music and every song at once, and sets every volume back to
+    /// 1, as for a game starting again in the same window.
     pub(crate) fn reset(&mut self) {
         self.stop_sounds(0.0);
         self.stop_music(0.0);
+        self.stop_songs(0.0);
+        self.songs.clear();
         self.set_volume(1.0);
         self.set_sound_volume(1.0);
         self.set_music_volume(1.0);
     }
 
-    /// Called once a frame: renders `dt` seconds of silent output, and forgets sound effects
-    /// that have finished. A sound device renders on its own thread instead.
+    /// Called once an update: renders `dt` seconds of silent output, forgets sound effects that
+    /// have finished, and takes in what happened in each song, forgetting songs that are over. A
+    /// sound device renders on its own thread instead.
     pub(crate) fn advance(&mut self, dt: f32) {
         if let Output::Silent {
             manager,
@@ -444,6 +498,10 @@ impl Audio {
             }
         }
         self.sounds.retain(|sound| is_playing(sound.handle.state()));
+        for song in &mut self.songs {
+            song.hear();
+        }
+        self.songs.retain(|song| !song.is_over());
     }
 }
 
@@ -614,6 +672,7 @@ fn tween(seconds: f32) -> Tween {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::music::{At, Pitch, SongEvent, SongFile};
 
     const FRAME: f32 = 1.0 / 60.0;
     const SOUNDS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/sounds/");
@@ -848,9 +907,154 @@ mod tests {
         assert!(!audio.is_silent(), "no sound device was found");
         audio.set_volume(0.0);
         audio.play_music(format!("{SOUNDS}music.ogg"), 0.0).unwrap();
+        let performance = audio.play_song(&song(), SongSettings::default()).unwrap();
         std::thread::sleep(Duration::from_millis(500));
         let position = audio.music.as_ref().unwrap().position();
         assert!(position > 0.2, "the device rendered {position}s of music");
+        audio.advance(0.5);
+        let beat = audio.song(performance).unwrap().position().beat;
+        assert!(beat > 0.4, "the device rendered {beat} beats of the song");
+    }
+
+    const SONG: &str = r#"return {
+        format = 1,
+        start = "a",
+        instruments = { tone = { release = 0.05 } },
+        tracks = { { name = "t", instrument = "tone" } },
+        patterns = { p = { bars = 1, notes = { { 0, "C4", 1 }, { 3, "G4", 2 } } } },
+        sections = {
+            a = { bars = 1, tracks = { t = "p" }, next = "b" },
+            b = { bars = 1 },
+        },
+    }"#;
+
+    /// A song at 120 beats a minute, so a beat is half a second, 30 updates: a bar of section
+    /// `a`, then one of `b`, then it ends.
+    fn song() -> Song {
+        Song::new(&SongFile::parse(SONG, "test.song.luau").unwrap()).unwrap()
+    }
+
+    /// Runs `audio` for `updates` updates, giving what happened in `performance` in each.
+    fn hear(audio: &mut Audio, performance: Performance, updates: usize) -> Vec<Vec<SongEvent>> {
+        (0..updates)
+            .map(|_| {
+                audio.advance(FRAME);
+                audio
+                    .song(performance)
+                    .map(|song| song.events().to_vec())
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    /// The first of `heard`'s updates in which `event` happened.
+    fn when(heard: &[Vec<SongEvent>], event: SongEvent) -> Option<usize> {
+        heard.iter().position(|events| events.contains(&event))
+    }
+
+    #[test]
+    fn songs_say_what_happens_in_the_update_it_happens() {
+        let mut audio = Audio::silent();
+        let performance = audio.play_song(&song(), SongSettings::default()).unwrap();
+        audio.song(performance).unwrap().listen("t", true).unwrap();
+        let heard = hear(&mut audio, performance, 300);
+        let c4 = SongEvent::Note {
+            track: 0,
+            pitch: Pitch::from_name("C4").unwrap(),
+            velocity: 1.0,
+        };
+        let beat = |bar, beat| SongEvent::Beat { bar, beat };
+        assert_eq!(heard[0], [SongEvent::Section(0), beat(1, 1), c4]);
+        // Each in the update the mixer renders it in, which is up to a buffer late.
+        assert_eq!(when(&heard, beat(1, 2)), Some(30));
+        assert_eq!(when(&heard, SongEvent::Section(1)), Some(120));
+        let end = when(&heard, SongEvent::End).unwrap();
+        assert_eq!(end, 240);
+        // The update after it ends is the last it plays.
+        assert!(heard[end + 1..].iter().all(Vec::is_empty));
+        assert!(audio.song(performance).is_none());
+        assert_eq!(audio.songs_playing(), 0);
+        assert!(audio.songs.is_empty());
+    }
+
+    #[test]
+    fn songs_jump_and_change_tempo_when_asked() {
+        let mut audio = Audio::silent();
+        let jumping = audio.play_song(&song(), SongSettings::default()).unwrap();
+        hear(&mut audio, jumping, 18);
+        audio.song(jumping).unwrap().go_to("b", At::Beat).unwrap();
+        // The next beat is half a second in, 30 updates from the start.
+        let heard = hear(&mut audio, jumping, 30);
+        assert_eq!(when(&heard, SongEvent::Section(1)), Some(30 - 18));
+        assert_eq!(audio.song(jumping).unwrap().position().section, 1);
+
+        let fast = audio.play_song(&song(), SongSettings::default()).unwrap();
+        audio.song(fast).unwrap().set_tempo(240.0, At::Now, 0.0);
+        let heard = hear(&mut audio, fast, 70);
+        assert_eq!(when(&heard, SongEvent::Section(1)), Some(60));
+        assert_eq!(audio.song(fast).unwrap().position().tempo, 240.0);
+        assert_eq!(audio.songs_playing(), 2);
+    }
+
+    #[test]
+    fn songs_pause_resume_and_stop() {
+        let mut audio = Audio::silent();
+        let performance = audio.play_song(&song(), SongSettings::default()).unwrap();
+        hear(&mut audio, performance, 10);
+        let playing = audio.song(performance).unwrap();
+        playing.pause(0.0);
+        assert!(playing.is_paused());
+        hear(&mut audio, performance, 5);
+        let paused_at = audio.song(performance).unwrap().position().beat;
+        assert!(paused_at > 0.3);
+        hear(&mut audio, performance, 30);
+        assert_eq!(audio.song(performance).unwrap().position().beat, paused_at);
+        audio.song(performance).unwrap().resume(0.0);
+        hear(&mut audio, performance, 10);
+        assert!(audio.song(performance).unwrap().position().beat > paused_at);
+
+        audio.song(performance).unwrap().stop(0.1);
+        assert!(
+            audio.song(performance).is_none(),
+            "it's over once it's stopped"
+        );
+        assert_eq!(audio.songs_playing(), 0);
+        audio.advance(FRAME);
+        assert!(audio.songs.is_empty());
+    }
+
+    #[test]
+    fn songs_start_where_theyre_asked_and_reset_stops_them() {
+        let mut audio = Audio::silent();
+        let first = audio.play_song(&song(), SongSettings::default()).unwrap();
+        audio.advance(FRAME);
+        audio.reset();
+        assert!(audio.song(first).is_none());
+        let settings = SongSettings {
+            section: Some("b".to_owned()),
+            beat: 2.0,
+            ..Default::default()
+        };
+        let second = audio.play_song(&song(), settings).unwrap();
+        assert_ne!(first, second, "performances aren't reused");
+        let start = audio.song(second).unwrap().position();
+        assert_eq!((start.section, start.beat), (1, 2.0));
+        let heard = hear(&mut audio, second, 1);
+        assert_eq!(
+            heard[0][..2],
+            [SongEvent::Section(1), SongEvent::Beat { bar: 1, beat: 3 }]
+        );
+        assert!(
+            audio
+                .play_song(
+                    &song(),
+                    SongSettings {
+                        section: Some("chorus".to_owned()),
+                        ..Default::default()
+                    }
+                )
+                .is_err()
+        );
     }
 
     #[test]

@@ -71,6 +71,13 @@ pub enum Error {
     /// A scene or tileset couldn't be written as a file.
     #[error("failed to write a scene: {0}")]
     WriteScene(String),
+    /// A song file couldn't be read, or what it describes can't be played.
+    #[error("song {}: {message}", .path.display())]
+    Song { path: PathBuf, message: String },
+    /// A song can't be played: it names an instrument, pattern or section it doesn't have, or
+    /// can't be written as a file.
+    #[error("invalid song: {0}")]
+    InvalidSong(String),
     /// A save couldn't be read or written, other than by failing to read or write its file: its
     /// name isn't one, its data isn't plain, or there's nowhere to keep it.
     #[error("save `{name}`: {message}")]

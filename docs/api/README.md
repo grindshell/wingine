@@ -18,7 +18,7 @@ that requires it. Pages are named for the module's tables, and functions for the
 | [Built-ins](globals.md) | The game's `update`, `gui`, `draw`, `close_requested` and `reloading`, tasks (`spawn`, `wait`, `wait_until`), `print`, `require` and `approach` |
 | [`graphics`](graphics.md) | Drawing, the camera, blend modes, sprite sheets, sprites, animations, particles, fonts and text, frame stats, and 3D views of meshes, models and billboards, lit by a sun and by lights at places, which can cast shadows, with picking by boxes |
 | [`input`](input.md) | The keyboard, mouse and gamepads, and actions bound to keys and buttons |
-| [`audio`](audio.md) | Sound effects, music and volume |
+| [`audio`](audio.md) | Sound effects, music, songs of the engine's own instruments played live, and volume |
 | [`tilemap`](tilemap.md) | Tilesets and maps of tiles in layers |
 | [`grid`](grid.md) | Characters that walk from tile to tile |
 | [`physics`](physics.md) | Scene nodes and tile maps made solid, bodies that fall, roll and stack, and characters that walk among them, in 2D and in 3D views, up steps and slopes, pushing what they bump into; in both, rays, overlaps and sensors that tell where things are |
@@ -81,8 +81,9 @@ time raises an error saying when it works.
   `graphics.draw_billboard`.
 - **The keyboard, mouse, gamepads and sound** work while the game loads (the top level of
   `main.luau` and the modules it requires), in `update` and the tasks it resumes, and in `gui`:
-  everything in `input`, everything in `audio` but `audio.load` and `audio.make`, and the methods of the
-  [voices](audio.md#voice) it plays. So do
+  everything in `input`, everything in `audio` but `audio.load`, `audio.make` and
+  `audio.load_song`, and the methods of the [voices](audio.md#voice) and
+  [performances](audio.md#performance) it plays. So do
   `graphics.load_sprite_sheet`, `graphics.load_font`, `graphics.load_model`, the functions that
   make meshes
   (`graphics.new_cube`, `new_cuboid`, `new_plane`, `new_sphere` and `new_mesh`), `scene.load`,
@@ -90,15 +91,15 @@ time raises an error saying when it works.
   of them work in `close_requested` and `reloading` too. `graphics.project` and `graphics.ray` work then and in
   `draw`.
 - **Interfaces** are laid out only in `gui`, with the `Ui` it's passed.
-- **Waiting** works only in tasks: `wait`, `wait_until`, and `files.pick_folder`, which waits for
-  the player to pick a folder.
+- **Waiting** works only in tasks: `wait`, `wait_until`, `files.pick_folder`, which waits for
+  the player to pick a folder, and `performance:wait_for`, which waits for a song.
 - **Everything else** works any time: `graphics.size`, `graphics.color`,
   `graphics.default_font`, `graphics.frame_stats`, `graphics.new_animation`,
   `graphics.new_particles`,
-  `graphics.hit_box`, `audio.load`, `audio.make`,
+  `graphics.hit_box`, `audio.load`, `audio.make`, `audio.load_song`,
   `tilemap`, `grid`, `physics`, `save`, the rest of `files`, `ui.menu`, `window.reloaded`, and the
   methods of every object, scene nodes, folders,
-  physics worlds and menus included, but `menu:update` and voices'.
+  physics worlds, menus and songs included, but `menu:update`, voices' and performances'.
 
 ## Values
 

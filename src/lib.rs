@@ -17,6 +17,7 @@ pub mod input;
 pub mod lua;
 pub mod math;
 pub mod menu;
+pub mod music;
 pub mod particles;
 #[cfg(feature = "physics")]
 pub mod physics;

@@ -360,6 +360,41 @@
 //! - `audio.play_music(path, fade)` streams music from a file and loops it, crossfading from any
 //!   music already playing over `fade` seconds.
 //! - `audio.stop_music(fade)` and `audio.music_playing()`
+//! - `audio.load_song(path)` loads a [song](crate::music) file, which works anywhere. A song's
+//!   methods tell what's in it: `song:sections()`, `song:tracks()`, `song:start()`,
+//!   `song:tempo()`, `song:meter()` (beats a bar, and the note that's a beat),
+//!   `song:bars(section)` and `song:markers(section)`, the last two nil for no such section.
+//! - `audio.play_song(song, settings)` plays a song live on the music track and returns its
+//!   `Performance`. Its settings are a table of `volume` (1), `fade_in` (0 seconds), `section`
+//!   to start with (the song's start) and `beat` into it to start at (0). A section it doesn't
+//!   have, or a setting that isn't a number, is an error.
+//! - `audio.songs_playing()` and `audio.stop_songs(fade)`, as for sound effects.
+//! - A performance's methods work where `audio`'s do. Times a change happens `at` are `"now"`,
+//!   `"beat"` and `"bar"`, the start of the next one, and `"section"`, when the section playing
+//!   ends, in place of what would follow it. Names the song doesn't have are errors.
+//!   - `performance:go_to(section, at)` moves to a section (at once by default);
+//!     `performance:set_tempo(tempo, { at, over })` changes the tempo, in beats a minute kept
+//!     from 1 to 999, sliding over `over` beats (0); `performance:set_track_volume(track,
+//!     volume, fade)` fades a track in or out; `performance:set_volume(volume, fade)`,
+//!     `performance:pause(fade)`, `performance:resume(fade)` and `performance:stop(fade)` are as
+//!     a voice's. A stopped song is over at once, and an ended one the update after it ends.
+//!   - `performance:is_playing()`, `performance:is_paused()`, and `performance:has_ended()`,
+//!     whether it ended in the last update, which is the last it plays.
+//!   - `performance:position()` returns the section playing, the bar of it from 1, and how far
+//!     into the bar from 1, as 2.5 is halfway through its second beat; `performance:tempo()` the
+//!     tempo. Both are nil once it's over.
+//!   - `performance:events()` returns what happened as the last update played, in order: tables
+//!     with a `kind`, `"section"` (`section`), `"beat"` (`bar`, `beat`), `"marker"` (`section`,
+//!     `name`), `"note"` (`track`, `pitch`, `velocity`), or `"end"`. Notes are among them only for
+//!     tracks `performance:listen(track, listen)` has it listen to.
+//!   - `performance:on(event, listener)` calls `listener` with each event named `event` from the
+//!     next update on, each call a task of its own, and returns a listener for
+//!     `performance:off(listener)` to stop. Events are named `"beat"`, `"bar"` (a beat that
+//!     starts a bar), `"section"`, `"marker"`, `"end"`, `"note:<track>"`, which listens to the
+//!     track, or a section or marker by name, as `"section:chorus"` or `"marker:drop"`.
+//!     `performance:wait_for(event)` waits in a task for the next such event and returns it, or
+//!     nil if the song is over first. Both are Luau, over `events`.
+//!   - `performance:song()` returns the song.
 //! - `audio.set_volume(volume)`, `audio.set_sound_volume(volume)` and
 //!   `audio.set_music_volume(volume)` set the volume of everything, of sound effects and of
 //!   music, where 1 is as recorded. A volume that isn't a number is an error.
@@ -1022,7 +1057,10 @@ impl LuauGame {
         let graphics = graphics::module(lua, &lent, folder, textures.clone(), font.clone())?;
         api.set("graphics", graphics)?;
         api.set("input", input::module(lua, &lent)?)?;
-        api.set("audio", audio::module(lua, &lent, folder)?)?;
+        api.set(
+            "audio",
+            audio::module(lua, &lent, folder, api.get("spawn")?)?,
+        )?;
         api.set("tilemap", tilemap::module(lua)?)?;
         api.set("grid", grid::module(lua)?)?;
         api.set("physics", physics::module(lua)?)?;

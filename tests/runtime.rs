@@ -1652,6 +1652,255 @@ fn voices_change_pause_and_stop_the_sounds_they_play() {
     }
 }
 
+/// A song at 120 beats a minute, so a beat is half a second: a bar of `a`, then `b`, which loops.
+const SONG: &str = r#"return {
+    format = 1,
+    start = "a",
+    instruments = { tone = { release = 0.05 }, drum = { decay = 0.05, sustain = 0 } },
+    tracks = { { name = "lead", instrument = "tone" }, { name = "drums", instrument = "drum" } },
+    patterns = {
+        tune = { bars = 1, notes = { { 0, "C4", 1 }, { 2, "E4", 1 } } },
+        beat = { bars = 1, notes = { { 0, "C2", 0.5 }, { 1, "D2", 0.5 } } },
+    },
+    sections = {
+        a = { bars = 1, tracks = { lead = "tune", drums = "beat" }, next = "b", markers = { { 2, "half" } } },
+        b = { bars = 1, tracks = { drums = "beat" }, next = "b" },
+    },
+}"#;
+
+#[test]
+fn songs_play_and_scripts_hear_them() {
+    let folder = game(
+        "songs",
+        &[
+            ("music/test.song.luau", SONG),
+            (
+                "main.luau",
+                "local wg = require('@wingine')
+                song = wg.audio.load_song('music/test.song.luau')
+                heard = { beats = 0, bars = 0, sections = {}, markers = {}, notes = {}, events = 0 }
+                band = wg.audio.play_song(song)
+                band:on('beat', function() heard.beats += 1 end)
+                band:on('bar', function() heard.bars += 1 end)
+                band:on('section', function(event) table.insert(heard.sections, event.section) end)
+                band:on('marker:half', function(event) table.insert(heard.markers, event.name) end)
+                band:on('note:drums', function(event) table.insert(heard.notes, event.pitch) end)
+                wg.spawn(function()
+                    local event = band:wait_for('section:b')
+                    heard.waited = event.section
+                    heard.waited_in, heard.waited_bar = band:position()
+                end)
+                function update()
+                    heard.events += #band:events()
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    assert_eq!(
+        simulation.eval::<Vec<String>>("song:sections()"),
+        ["a", "b"]
+    );
+    assert_eq!(
+        simulation.eval::<Vec<String>>("song:tracks()"),
+        ["lead", "drums"]
+    );
+    assert_eq!(simulation.eval::<String>("song:start()"), "a");
+    assert_eq!(
+        simulation.eval::<(f64, u32, u32)>("song:tempo(), song:meter()"),
+        (120.0, 4, 4)
+    );
+    assert_eq!(simulation.eval::<Option<u32>>("song:bars('a')"), Some(1));
+    assert_eq!(
+        simulation.eval::<Vec<String>>("song:markers('a')"),
+        ["half"]
+    );
+    assert!(simulation.eval::<bool>("song:markers('z') == nil and song:bars('z') == nil"));
+
+    // Beats at 0, 0.5 ... 3 seconds, each heard an update after the mixer plays it.
+    simulation.run_for(3.1);
+    assert_eq!(simulation.eval::<u32>("heard.beats"), 7);
+    assert_eq!(simulation.eval::<u32>("heard.bars"), 2);
+    assert_eq!(simulation.eval::<Vec<String>>("heard.sections"), ["a", "b"]);
+    assert_eq!(simulation.eval::<Vec<String>>("heard.markers"), ["half"]);
+    assert_eq!(
+        simulation.eval::<Vec<String>>("heard.notes"),
+        ["C2", "D2", "C2", "D2"]
+    );
+    assert_eq!(simulation.eval::<String>("heard.waited"), "b");
+    assert_eq!(
+        simulation.eval::<(String, u32)>("heard.waited_in, heard.waited_bar"),
+        ("b".to_owned(), 1)
+    );
+    // Every event the listeners heard, and the notes they listened to.
+    assert_eq!(simulation.eval::<u32>("heard.events"), 7 + 2 + 1 + 4);
+    let (section, bar, beat): (String, u32, f64) = simulation.eval("band:position()");
+    assert_eq!((section.as_str(), bar), ("b", 1));
+    // Over a beat into , which started two seconds in: past the middle of its first bar.
+    assert!((3.0..3.3).contains(&beat), "{beat}");
+    assert_eq!(simulation.eval::<f64>("band:tempo()"), 120.0);
+    assert_eq!(
+        simulation.eval::<u32>("require('@wingine').audio.songs_playing()"),
+        1
+    );
+
+    simulation.exec("band:stop()");
+    assert!(simulation.eval::<bool>("not band:is_playing() and band:position() == nil"));
+    simulation.run_for(0.5);
+    assert_eq!(
+        simulation.eval::<u32>("heard.beats"),
+        7,
+        "the listeners stopped"
+    );
+    assert!(simulation.eval::<bool>("#band:events() == 0 and band:tempo() == nil"));
+    assert_eq!(simulation.context().audio().songs_playing(), 0);
+}
+
+#[test]
+fn scripts_move_songs_on_and_change_their_tempo() {
+    let folder = game(
+        "song_changes",
+        &[
+            ("music/test.song.luau", SONG),
+            (
+                "main.luau",
+                "local wg = require('@wingine')
+                song = wg.audio.load_song('music/test.song.luau')
+                sections = {}
+                band = wg.audio.play_song(song, { section = 'a', volume = 0.5 })
+                function update()
+                    for _, event in band:events() do
+                        if event.kind == 'section' then
+                            table.insert(sections, event.section)
+                        end
+                    end
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.run_for(0.3);
+    // At the next beat, half a second in, `a` starts again.
+    simulation.exec("band:go_to('a', 'beat')");
+    simulation.run_for(0.3);
+    assert_eq!(simulation.eval::<Vec<String>>("sections"), ["a", "a"]);
+    simulation.exec("band:set_tempo(240, { at = 'bar', over = 0 })");
+    simulation.run_for(2.0);
+    assert_eq!(simulation.eval::<f64>("band:tempo()"), 240.0);
+    simulation.exec("band:pause()");
+    simulation.run_for(0.1);
+    simulation.exec("paused_at = select(3, band:position())");
+    simulation.run_for(0.5);
+    assert!(
+        simulation.eval::<bool>("band:is_paused() and select(3, band:position()) == paused_at")
+    );
+    simulation.exec("band:resume() band:set_volume(1, 0.5) band:set_track_volume('lead', 0, 1)");
+    assert!(simulation.eval::<bool>("band:is_playing() and not band:is_paused()"));
+    assert!(simulation.eval::<bool>("band:song() ~= nil and not band:has_ended()"));
+
+    // A song that starts partway, and one that ends.
+    simulation.exec(
+        "local wg = require('@wingine')
+        late = wg.audio.play_song(song, { section = 'b', beat = 2 })",
+    );
+    assert_eq!(
+        simulation.eval::<(String, u32, f64)>("late:position()"),
+        ("b".to_owned(), 1, 3.0)
+    );
+    fs::write(
+        folder.join("music/once.song.luau"),
+        SONG.replace("next = \"b\" }", "}"),
+    )
+    .unwrap();
+    simulation.exec(
+        "local wg = require('@wingine')
+        once = wg.audio.play_song(wg.audio.load_song('music/once.song.luau'))
+        wg.spawn(function()
+            ended = once:wait_for('end') ~= nil
+            after = once:wait_for('beat') or 'nothing'
+        end)",
+    );
+    simulation.run_for(4.5);
+    assert!(simulation.eval::<bool>("ended and after == 'nothing' and not once:is_playing()"));
+}
+
+#[test]
+fn songs_say_what_scripts_get_wrong() {
+    let folder = game(
+        "song_errors",
+        &[
+            ("music/test.song.luau", SONG),
+            (
+                "main.luau",
+                "local wg = require('@wingine')
+                song = wg.audio.load_song('music/test.song.luau')
+                band = wg.audio.play_song(song)",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    let audio = "local wg = require('@wingine') ";
+    for (code, problem) in [
+        (
+            format!("{audio} wg.audio.load_song('music/missing.song.luau')"),
+            "missing.song.luau",
+        ),
+        (
+            format!("{audio} wg.audio.play_song(song, {{ section = 'z' }})"),
+            "no section `z` to start with",
+        ),
+        (
+            format!("{audio} wg.audio.play_song(song, {{ volume = 0/0 }})"),
+            "volume must be a number",
+        ),
+        ("band:go_to('chorus')".to_owned(), "no section \"chorus\""),
+        (
+            "band:go_to('b', 'soon')".to_owned(),
+            "\"now\", \"beat\", \"bar\" or \"section\", not \"soon\"",
+        ),
+        ("band:set_tempo(0/0)".to_owned(), "tempo must be a number"),
+        (
+            "band:set_track_volume('bass', 1)".to_owned(),
+            "no track \"bass\"",
+        ),
+        ("band:listen('bass')".to_owned(), "no track \"bass\""),
+        ("band:on('drop', print)".to_owned(), "a song's events are"),
+        (
+            "band:on('note', print)".to_owned(),
+            "\"note\" events name the track",
+        ),
+        (
+            "band:on('note:bass', print)".to_owned(),
+            "no track \"bass\"",
+        ),
+        (
+            "band:on('marker:nope', print)".to_owned(),
+            "no marker \"nope\"",
+        ),
+        ("band:on('section:z', print)".to_owned(), "no section \"z\""),
+        (
+            "band:on('beat:one', print)".to_owned(),
+            "\"beat\" events have no names",
+        ),
+        (
+            "band:on('beat', 3)".to_owned(),
+            "a song's listener is a function",
+        ),
+        ("band:wait_for('beat')".to_owned(), "works only in a task"),
+    ] {
+        let err = simulation.try_exec(&code).unwrap_err().to_string();
+        assert!(err.contains(problem), "{code}: {err}");
+    }
+    // Names are checked even once a song is over.
+    simulation.exec("band:stop()");
+    let err = simulation
+        .try_exec("band:go_to('z')")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("no section \"z\""), "{err}");
+    simulation.exec("band:go_to('a') band:set_volume(1) band:on('beat', print)");
+}
+
 #[test]
 fn fonts_measure_and_scale() {
     let folder = game(
