@@ -1,4 +1,7 @@
 /target
+# The web workspace's build, and the page `web/build.sh` builds.
+/web/target
+/web/dist
 # Screenshots of games' tests that didn't match, from `wingine test`.
 .test-output/
 # Written by `cargo about` for the release archives.

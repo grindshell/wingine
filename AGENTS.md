@@ -47,7 +47,8 @@ networking or 3D pipelines.
 - Rust edition 2024. Licensed under MIT or Apache 2.0 (`LICENSE-MIT`, `LICENSE-APACHE`); every
   crate's manifest says `license = "MIT OR Apache-2.0"`, and new crates say so too.
 - Targets: Windows, macOS, Linux, and the web (`wasm32-unknown-unknown` with WebGPU, as
-  `docs/web.md` describes, patching in mlua's master branch until a release supports it). Code
+  `docs/web.md` describes, built by the `web/` workspace, which patches in mlua's master branch
+  until a release supports it). Code
   that differs on the web is behind `cfg(target_arch = "wasm32")`, and files games load are read
   through `crate::files`, never `std::fs`.
 - `wgpu`, `winit`, `mlua`, `kira` and `egui` change their APIs substantially between releases:
@@ -351,6 +352,19 @@ own right.
 - `src/main.rs`: the `wingine` executable: run a game, `--watch`, `test`, `export`, and with no
   arguments, the `game` folder beside it.
 
+### Web
+
+- `web/`: a Cargo workspace of its own, with its own `Cargo.lock`, whose root patches in mlua's
+  master branch: a patch counts only in the root of the workspace being built, and Cargo can't
+  take mlua from two places in one, so the engine's workspace keeps the release. Experimental:
+  CI neither builds nor lints it, and `cargo fmt` at the root doesn't reach it.
+- `wingine-web` is what a game's module needs beside the engine: WASI libc's allocator as Rust's,
+  the C++ constructors run once from the module's start function, the console log, `start`, and
+  `embed_game` for build scripts (host-only), which `game!` reads back. `player` is the module of
+  a game without native libraries of its own; a game with some builds its own module, in a
+  workspace with the same patch. `build.sh` builds a module into a page with `page/`, sourcing
+  `wasm-env.sh` for WASI SDK's compilers and flags.
+
 ### Scenes
 
 - `src/scene/`: `file.rs` reads scene, tileset and font files by running them as Luau with nothing
@@ -513,12 +527,16 @@ cargo run -p wingine-editor -- examples/garden
 cargo run --example sprites
 cargo build --release -p native-danmaku
 cargo bench
+web/build.sh --game examples/pong
+cargo fmt --manifest-path web/Cargo.toml --all
 ```
 
 The README's examples table lists how to run each example.
 
 Run `cargo fmt` and `cargo clippy --all-targets` before considering a change finished, and keep
-both clean with the `egui` feature off too. CI (`.github/workflows/ci.yml`) runs fmt, clippy with
+both clean with the `egui` feature off too. After changing code that differs on the web, lint it
+there too, with `web/wasm-env.sh` sourced:
+`cargo clippy --manifest-path web/Cargo.toml --target wasm32-unknown-unknown`. CI (`.github/workflows/ci.yml`) runs fmt, clippy with
 `-D warnings` with and without default features, and `cargo test` on Linux and Windows.
 `release.yml` builds the runtime and editor for Windows and Linux (on the oldest Ubuntu runner,
 for glibc; Windows links the C runtime statically), and a `v*` tag publishes them. Each archive

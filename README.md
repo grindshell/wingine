@@ -49,7 +49,8 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
   game.
 - **An editor** for scenes and scripts, laid out like Godot's.
 
-Wingine targets Windows, macOS and Linux. CI builds and tests it on Windows and Linux.
+Wingine targets Windows, macOS and Linux. CI builds and tests it on Windows and Linux. Games also
+run in a browser, experimentally: see [the web](docs/web.md).
 
 ## Getting started
 

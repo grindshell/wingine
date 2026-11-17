@@ -44,9 +44,13 @@ When a game needs compiled code:
 7. [Native library quick start](native-quick-start.md): build one, load it into a game, and call
    it from Luau.
 
+To put a game on a web page, experimentally:
+
+8. [The web](web.md): building a game into a page, and what's different in a browser.
+
 And to look things up:
 
-8. [API reference](api/README.md): every table, function and type scripts use, the built-ins
+9. [API reference](api/README.md): every table, function and type scripts use, the built-ins
    such as `wait` and `spawn`, what tests have, and the `wingine-native` crate for native
    libraries.
 

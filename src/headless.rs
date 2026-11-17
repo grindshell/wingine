@@ -365,6 +365,7 @@ impl<G: Game> Simulation<G> {
     }
 
     /// The game and the context at once, for lending the context to the game's scripts.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn parts(&mut self) -> (&mut G, &mut Context) {
         (&mut self.game, &mut self.headless.ctx)
     }

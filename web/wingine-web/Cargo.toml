@@ -1,0 +1,21 @@
+[package]
+name = "wingine-web"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "What a WebAssembly module running a Wingine game needs beside the engine"
+
+[lib]
+doctest = false
+
+# Only on the web: on other targets, the crate is only `embed_game`, for build scripts.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3.106"
+log = "0.4.34"
+# The CLI that prepares the module for the page must be the same version: `cargo install
+# wasm-bindgen-cli --version 0.2.129`.
+wasm-bindgen = "=0.2.129"
+web-sys = { version = "0.3.106", features = ["console"] }
+# The crate building the module chooses the engine's features.
+wingine = { path = "../..", default-features = false }

@@ -1,0 +1,21 @@
+[package]
+name = "wingine-player"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "A Wingine game without native libraries of its own, in the browser"
+
+[lib]
+crate-type = ["cdylib"]
+doctest = false
+
+[build-dependencies]
+wingine-web = { path = "../wingine-web" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3.106"
+wasm-bindgen = "=0.2.129"
+# Not used directly: it gives the engine its default features.
+wingine = { path = "../.." }
+wingine-web = { path = "../wingine-web" }

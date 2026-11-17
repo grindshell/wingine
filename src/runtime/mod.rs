@@ -946,7 +946,7 @@ impl LuauGame {
         let loaded = config.and_then(|config| {
             Self::load_keeping(ctx, &self.folder, &config, kept.clone(), Reuse::default())
         });
-        let mut game = match loaded {
+        let game = match loaded {
             Ok(game) => game,
             Err(err) => match Self::stopped(ctx, &self.folder, &self.config, err) {
                 Ok(game) => Self { kept, ..game },
@@ -958,9 +958,10 @@ impl LuauGame {
             },
         };
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            game.watcher = self.watcher.take();
-        }
+        let game = Self {
+            watcher: self.watcher.take(),
+            ..game
+        };
         // The old game goes as any does, VM first.
         *self = game;
     }

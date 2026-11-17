@@ -1,0 +1,17 @@
+# The engine built for the web, as its own workspace: `web/build.sh` builds a game into a page.
+#
+# No release of mlua builds Luau for the web yet, and Cargo can't take mlua from crates.io for one
+# target and from git for another, nor hold two copies (`mlua-sys` links `lua`), so the engine
+# depends on mlua's release and this workspace, which only builds for the web, patches in its
+# master branch. A patch counts only in the root of the workspace being built: a game's own
+# workspace that builds a module copies it. Drop it once a release builds for the web.
+[workspace]
+members = ["player", "wingine-web"]
+resolver = "3"
+
+[patch.crates-io]
+mlua = { git = "https://github.com/mlua-rs/mlua", rev = "6308bb38dd8b15b72cf28335bb9abf024aeb1c34" }
+
+[profile.dev]
+# Luau and the renderer are too slow to play unoptimized.
+opt-level = 1

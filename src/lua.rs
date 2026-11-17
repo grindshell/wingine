@@ -626,6 +626,7 @@ impl Scripts {
 
     /// The seconds of the `wait` a script began as it last yielded, if it began one, for whatever
     /// resumes scripts outside the tasks, as Luau tests do. Taking it forgets it.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn take_wait(&self) -> Option<f64> {
         self.began_wait.take()
     }

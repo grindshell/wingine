@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- `build.sh --title` fills in the title; the game's window title replaces it as it starts. -->
+  <title>__TITLE__</title>
+  <!-- wasm-bindgen imports the module's WASI functions by this bare name. -->
+  <script type="importmap">{ "imports": { "wasi_snapshot_preview1": "./wasi.js" } }</script>
+  <style>
+    :root {
+      --background: #101418;
+      --text: #f4f0e8;
+      --muted: #9aa3ad;
+      --accent: #f2c14e;
+      --error: #ff8a80;
+      color-scheme: dark;
+    }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--background);
+      color: var(--text);
+      font: 16px/1.5 system-ui, sans-serif;
+      overflow: hidden;
+    }
+    /* The engine's canvas, which it adds to the page, fills it. */
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      outline: none;
+    }
+    #overlay {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-content: center;
+      justify-items: center;
+      gap: 12px;
+      padding: 16px;
+      text-align: center;
+      background: var(--background);
+    }
+    #overlay[hidden] { display: none; }
+    h1 { margin: 0; font-size: 28px; font-weight: 600; }
+    p { margin: 0; color: var(--muted); max-width: 36em; }
+    button {
+      margin-top: 8px;
+      padding: 10px 28px;
+      font: inherit;
+      font-weight: 600;
+      color: var(--background);
+      background: var(--accent);
+      border: 0;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.5; cursor: progress; }
+    #errors {
+      position: fixed;
+      left: 16px;
+      right: 16px;
+      bottom: 16px;
+      max-height: 40vh;
+      margin: 0;
+      padding: 12px;
+      overflow: auto;
+      color: var(--error);
+      background: rgb(0 0 0 / 0.85);
+      border-radius: 6px;
+      font: 13px/1.4 ui-monospace, monospace;
+      white-space: pre-wrap;
+    }
+    #errors:empty { display: none; }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <h1>__TITLE__</h1>
+    <p id="status">Loading…</p>
+    <button id="play" disabled>Play</button>
+  </div>
+  <pre id="errors"></pre>
+  <script type="module">
+    import { captureMemory } from "./wasi.js";
+
+    const overlay = document.getElementById("overlay");
+    const status = document.getElementById("status");
+    const play = document.getElementById("play");
+    const errors = document.getElementById("errors");
+
+    function showError(message) {
+      errors.textContent += `${message}\n`;
+    }
+
+    function fail(message) {
+      status.textContent = message;
+      play.hidden = true;
+    }
+
+    if (!navigator.gpu) {
+      fail("This browser has no WebGPU, which the game draws with.");
+    } else {
+      try {
+        // WASI's functions need the module's memory before wasm-bindgen starts it.
+        captureMemory();
+        // `build.sh` names the module `game`, whichever crate built it.
+        const { default: init, start } = await import("./pkg/game.js");
+        await init();
+        status.textContent = "Ready.";
+        play.disabled = false;
+        // The browser lets audio play only once the player has interacted with the page.
+        play.addEventListener("click", () => {
+          overlay.hidden = true;
+          try {
+            start(showError);
+          } catch (err) {
+            showError(err);
+          }
+          // Keys reach the canvas while it has focus, and the engine adds it as it starts.
+          requestAnimationFrame(() => document.querySelector("canvas")?.focus());
+        }, { once: true });
+      } catch (err) {
+        // Such as a browser without Wasm exceptions (exnref), which Luau's errors use.
+        fail(`The game couldn't load: ${err}`);
+        console.error(err);
+      }
+    }
+  </script>
+</body>
+</html>

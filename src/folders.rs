@@ -448,6 +448,10 @@ enum Dialog {
     /// Asked for, and not yet opened.
     Asked(u64),
     /// Open, as the window shows it.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        allow(dead_code, reason = "the web has no dialog yet")
+    )]
     Open(u64),
     /// Closed, with the folder picked or none, until the game takes the answer.
     Answered(u64, Option<Folder>),
@@ -538,6 +542,7 @@ impl Folders {
     }
 
     /// Whether a dialog has been asked for, which the window then opens, as this notes.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_asked(&self) -> bool {
         let mut picking = self.lock();
         match picking.dialog {
