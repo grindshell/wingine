@@ -324,7 +324,9 @@ own right.
   their tables. A game's `gui(ui)` gets egui's `Ui` borrowed through `Lua::scope`, so a `Ui` kept
   past its call fails rather than dangle. `Ui`'s methods are functions that borrow the `Ui`
   they're called on, not mlua mutable methods, which refuse to run inside themselves, so a
-  container can hold another of its kind.
+  container can hold another of its kind. A canvas (`ui:canvas`) lends its function a `Paint`
+  the same way: egui's painter clipped to it, which takes positions from its corner, and a table
+  of what the pointer did, read from its `Response` before it's painted.
 - `LuauGame::reload` loads a whole new game in place, after the old one's `reloading` returns
   plain data for the new one's `window.reloaded()`. A game that fails to load becomes a stopped
   game holding that data for the next reload. `--watch` reloads on changes.

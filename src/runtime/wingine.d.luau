@@ -607,6 +607,47 @@ export type ScrollOptions = {
     stick_to_bottom: boolean?,
 }
 
+--- A canvas of an interface, for `ui:canvas`.
+export type CanvasOptions = {
+    --- What tests and screen readers find it by. Nothing shows it.
+    label: string,
+    --- Its size in points. By default, all the room its container has left that way.
+    width: number?,
+    height: number?,
+}
+
+--- What the pointer did to a `ui:canvas` this frame. Positions are in points from the canvas's
+--- top-left corner.
+export type CanvasInput = {
+    --- Whether the pointer is over it, with nothing else in the way.
+    hovered: boolean,
+    --- Where the pointer is, while it's over it or dragging it: nil otherwise.
+    x: number?,
+    y: number?,
+    --- Whether it was clicked, with the primary button pressed and let go without dragging.
+    clicked: boolean,
+    --- How far it was dragged this frame with the primary button held, 0 otherwise.
+    dragged_x: number,
+    dragged_y: number,
+    --- How far the wheel scrolled this frame while the pointer was over it: positive `y` as
+    --- the wheel turns away, to scroll up, and positive `x` as what shows moves right.
+    scrolled_x: number,
+    scrolled_y: number,
+    --- How much a held Ctrl's scroll, or a pinch, zoomed this frame while the pointer was over it:
+    --- above 1 in, below 1 out, and 1 for neither.
+    zoom: number,
+}
+
+--- How `paint:text` and `paint:measure` lay text out.
+export type PaintTextOptions = {
+    --- Its size in points. By default, the interface's text's.
+    size: number?,
+    --- Whether it's in the monospace font. By default, false.
+    monospace: boolean?,
+    --- Which of its edges, or its middle, is at the `x` it's painted at. By default, `"left"`.
+    align: ("left" | "center" | "right")?,
+}
+
 --- How `ui.menu` finds its items and takes input. The actions are named as `input.bind` binds
 --- them, and one that isn't bound does nothing.
 export type MenuOptions = {
@@ -1263,10 +1304,44 @@ declare extern type Ui with
     --- A button showing `sprite` as `ui:sprite` does, in a frame, named `text`, which shows when
     --- it's hovered: returns whether it was clicked. It's framed as chosen when `selected`.
     function sprite_button(self, sprite: Sprite, text: string, selected: boolean?, tint: Color?, width: number?, height: number?): boolean
+    --- A canvas to paint on, named by its label or with options, as big as given or as all the
+    --- room its container has left: calls `paint` with what to paint it with and what the
+    --- pointer did to it this frame.
+    function canvas(self, canvas: string | CanvasOptions, paint: (Paint, CanvasInput) -> ()): ()
     --- A line between what comes before and after.
     function separator(self): ()
     --- Empty space, `amount` points of it, or the usual space between widgets.
     function space(self, amount: number?): ()
+end
+
+--- What a `ui:canvas` is painted with, in the function it's passed to, which it works only
+--- until that returns. Positions are in points from the canvas's top-left corner, and nothing
+--- shows outside the canvas. Later things are painted over earlier ones.
+declare extern type Paint with
+    --- Returns the canvas's width and height in points.
+    function size(self): (number, number)
+    --- A line from `x1`, `y1` to `x2`, `y2`, `thickness` wide (by default, 1).
+    function line(self, x1: number, y1: number, x2: number, y2: number, color: Color, thickness: number?): ()
+    --- Lines through `points`, `{ x1, y1, x2, y2, ... }`: two points or more.
+    function path(self, points: { number }, color: Color, thickness: number?): ()
+    --- Fills the convex polygon whose corners are `points`, `{ x1, y1, x2, y2, ... }`: three or
+    --- more.
+    function fill_polygon(self, points: { number }, color: Color): ()
+    --- Fills a rectangle with its top-left corner at `x`, `y`, its corners rounded `rounding` points.
+    function fill_rect(self, x: number, y: number, width: number, height: number, color: Color, rounding: number?): ()
+    --- The outline of the rectangle `fill_rect` fills, `thickness` wide (by default, 1) inside its
+    --- edges.
+    function outline_rect(self, x: number, y: number, width: number, height: number, color: Color, thickness: number?, rounding: number?): ()
+    --- Fills a circle of `radius` about `x`, `y`.
+    function fill_circle(self, x: number, y: number, radius: number, color: Color): ()
+    --- The outline of the circle `fill_circle` fills, `thickness` wide (by default, 1) inside its
+    --- edge.
+    function outline_circle(self, x: number, y: number, radius: number, color: Color, thickness: number?): ()
+    --- Text on one line, with its top at `y` and its left edge at `x`, or as `options` align it:
+    --- returns its width and height.
+    function text(self, text: string, x: number, y: number, color: Color, options: PaintTextOptions?): (number, number)
+    --- Returns the width and height `text` would take, painted with `options`.
+    function measure(self, text: string, options: PaintTextOptions?): (number, number)
 end
 
 --- Drawing, the camera, blend modes, sprites, animations, particles, text and 3D views. Drawing

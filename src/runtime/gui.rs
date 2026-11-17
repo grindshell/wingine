@@ -5,8 +5,14 @@
 //! methods are registered once, for every `Ui`. Containers call the function they're given with
 //! the `Ui` inside them, in a scope of its own, while their own `Ui` stays borrowed: inside, a
 //! script uses the `Ui` it's given.
+//!
+//! A canvas (`ui:canvas`) hands its function a `Paint` the same way, borrowed for the call: egui's
+//! painter, clipped to the canvas, with positions from the canvas's top-left corner.
 
-use mlua::{AnyUserData, FromLuaMulti, Function, IntoLuaMulti, Lua, Table, UserDataRef, Value};
+use mlua::{
+    AnyUserData, FromLuaMulti, Function, IntoLuaMulti, Lua, Table, UserDataRef, UserDataRegistry,
+    Value,
+};
 
 use super::Lent;
 use crate::{
@@ -32,8 +38,8 @@ pub(super) fn call<R: FromLuaMulti>(lua: &Lua, ui: &mut egui::Ui, f: &Function) 
     lua.scope(|scope| f.call(scope.create_any_userdata_ref_mut(ui)?))
 }
 
-/// Registers `Ui`'s methods in `lua`, showing sprites through what `lent` lends, and returns
-/// their names.
+/// Registers `Ui`'s methods in `lua`, showing sprites through what `lent` lends, and `Paint`'s,
+/// and returns the names of `Ui`'s.
 pub(super) fn register(lua: &Lua, lent: &Lent) -> mlua::Result<Vec<&'static str>> {
     let mut names = Vec::new();
     lua.register_userdata_type::<egui::Ui>(|registry| {
@@ -43,6 +49,7 @@ pub(super) fn register(lua: &Lua, lent: &Lent) -> mlua::Result<Vec<&'static str>
         };
         add_methods(&mut methods, lent);
     })?;
+    register_paint(lua)?;
     Ok(names)
 }
 
@@ -146,6 +153,41 @@ fn add_methods(methods: &mut Methods<'_, '_>, lent: &Lent) {
             response.on_hover_text(text);
             Ok(clicked)
         }
+    });
+    methods.add("canvas", |lua, ui, (canvas, f): (Value, Function)| {
+        let (label, options) = named(canvas, "canvas", "label")?;
+        // All the room its container has left, each way it isn't given a size.
+        let mut size = ui.available_size();
+        if let Some(options) = &options {
+            check_options(options, "canvas", &["label", "width", "height"])?;
+            if let Some(width) = options.get::<Option<f32>>("width")? {
+                size.x = width;
+            }
+            if let Some(height) = options.get::<Option<f32>>("height")? {
+                size.y = height;
+            }
+        }
+        if !(size.x.is_finite() && size.y.is_finite()) {
+            return Err(mlua::Error::runtime(format!(
+                "a canvas's size is a number of points each way, not {} by {}",
+                size.x, size.y
+            )));
+        }
+        let (response, painter) =
+            ui.allocate_painter(size.max(egui::Vec2::ZERO), egui::Sense::click_and_drag());
+        // Named by its label, which nothing shows on screen, as tests and screen readers find it.
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Canvas, response.enabled(), label.as_str())
+        });
+        let input = canvas_input(lua, ui, &response)?;
+        let paint = Paint {
+            origin: response.rect.min,
+            size: response.rect.size(),
+            body: egui::TextStyle::Body.resolve(ui.style()),
+            monospace: egui::TextStyle::Monospace.resolve(ui.style()),
+            painter,
+        };
+        lua.scope(|scope| f.call::<()>((scope.create_any_userdata_ref(&paint)?, input)))
     });
     methods.add("separator", |_, ui, ()| {
         ui.separator();
@@ -554,6 +596,264 @@ fn cursor(lua: &Lua, text: &str, range: egui::text::CCursorRange) -> mlua::Resul
     Ok(cursor)
 }
 
+/// What the pointer did to the canvas `response` is of this frame, as scripts read it: whether
+/// it's over the canvas, and where, from the canvas's top-left corner, while it's over it or
+/// dragging it; whether it clicked it; how far it dragged it with the primary button; and how
+/// far the wheel scrolled, and how much a zoom (a held Ctrl's scroll, a pinch) zoomed, while it's
+/// over it.
+fn canvas_input(lua: &Lua, ui: &egui::Ui, response: &egui::Response) -> mlua::Result<Table> {
+    let input = lua.create_table()?;
+    let hovered = response.hovered();
+    input.set("hovered", hovered)?;
+    let pointer = response.hover_pos().or_else(|| {
+        response
+            .dragged()
+            .then(|| response.interact_pointer_pos())
+            .flatten()
+    });
+    if let Some(pointer) = pointer {
+        let at = pointer - response.rect.min;
+        input.set("x", at.x)?;
+        input.set("y", at.y)?;
+    }
+    input.set("clicked", response.clicked())?;
+    let dragged = if response.dragged_by(egui::PointerButton::Primary) {
+        response.drag_delta()
+    } else {
+        egui::Vec2::ZERO
+    };
+    input.set("dragged_x", dragged.x)?;
+    input.set("dragged_y", dragged.y)?;
+    let (scrolled, zoom) = if hovered {
+        ui.input(|input| (input.smooth_scroll_delta(), input.zoom_delta()))
+    } else {
+        (egui::Vec2::ZERO, 1.0)
+    };
+    input.set("scrolled_x", scrolled.x)?;
+    input.set("scrolled_y", scrolled.y)?;
+    input.set("zoom", zoom)?;
+    Ok(input)
+}
+
+/// What a canvas paints with, which its function is lent: egui's painter, clipped to the canvas,
+/// and where the canvas is, so scripts paint in points from its top-left corner.
+struct Paint {
+    painter: egui::Painter,
+    origin: egui::Pos2,
+    size: egui::Vec2,
+    /// The interface's text, and its monospace text, which text is painted in unless it's given a
+    /// size.
+    body: egui::FontId,
+    monospace: egui::FontId,
+}
+
+impl Paint {
+    /// Where `x`, `y` in the canvas is in the interface.
+    fn at(&self, x: f32, y: f32) -> egui::Pos2 {
+        self.origin + egui::vec2(x, y)
+    }
+
+    /// The rectangle `width` by `height` with its top-left corner at `x`, `y` in the canvas.
+    fn rect(&self, x: f32, y: f32, width: f32, height: f32) -> egui::Rect {
+        egui::Rect::from_min_size(self.at(x, y), egui::vec2(width, height))
+    }
+
+    /// The points of a path or polygon, given as `x1, y1, x2, y2, ...`: at least `least` of them.
+    fn points(&self, what: &str, numbers: &[f32], least: usize) -> mlua::Result<Vec<egui::Pos2>> {
+        if !numbers.len().is_multiple_of(2) || numbers.len() < 2 * least {
+            return Err(mlua::Error::runtime(format!(
+                "a {what} takes at least {least} points, each an x and a y, not {} numbers",
+                numbers.len()
+            )));
+        }
+        Ok(numbers
+            .chunks_exact(2)
+            .map(|point| self.at(point[0], point[1]))
+            .collect())
+    }
+
+    /// Lays out `text` on one line as `options` say, in `color`, and returns it with how it lines
+    /// up with where it's painted.
+    fn layout(
+        &self,
+        text: String,
+        color: egui::Color32,
+        options: Option<&Table>,
+    ) -> mlua::Result<(std::sync::Arc<egui::Galley>, egui::Align)> {
+        let mut font = self.body.clone();
+        let mut align = egui::Align::Min;
+        if let Some(options) = options {
+            check_options(options, "text", &["size", "monospace", "align"])?;
+            if options.get::<Option<bool>>("monospace")?.unwrap_or(false) {
+                font = self.monospace.clone();
+            }
+            if let Some(size) = options.get::<Option<f32>>("size")? {
+                if !(size.is_finite() && size > 0.0) {
+                    return Err(mlua::Error::runtime(format!(
+                        "text's size is a number of points above 0, not {size}"
+                    )));
+                }
+                font.size = size;
+            }
+            align = match options.get::<Option<String>>("align")?.as_deref() {
+                None | Some("left") => egui::Align::Min,
+                Some("center") => egui::Align::Center,
+                Some("right") => egui::Align::Max,
+                Some(other) => {
+                    return Err(mlua::Error::runtime(format!(
+                        r#"text is aligned "left", "center" or "right", not "{other}""#
+                    )));
+                }
+            };
+        }
+        Ok((self.painter.layout_no_wrap(text, font, color), align))
+    }
+}
+
+/// Registers `Paint`'s methods in `lua`, and returns their names.
+fn register_paint(lua: &Lua) -> mlua::Result<Vec<&'static str>> {
+    let mut names = Vec::new();
+    lua.register_userdata_type::<Paint>(|registry| {
+        let mut methods = PaintMethods {
+            registry,
+            names: &mut names,
+        };
+        add_paint_methods(&mut methods);
+    })?;
+    Ok(names)
+}
+
+/// The methods of `Paint`, as they're added, and their names.
+struct PaintMethods<'a, 'r> {
+    registry: &'a mut UserDataRegistry<Paint>,
+    names: &'r mut Vec<&'static str>,
+}
+
+impl PaintMethods<'_, '_> {
+    fn add<A, R>(
+        &mut self,
+        name: &'static str,
+        method: impl Fn(&Paint, A) -> mlua::Result<R> + 'static,
+    ) where
+        A: FromLuaMulti,
+        R: IntoLuaMulti,
+    {
+        use mlua::UserDataMethods;
+        self.names.push(name);
+        self.registry
+            .add_method(name, move |_, paint, args| method(paint, args));
+    }
+}
+
+/// A line, path or outline in `color`, `thickness` wide, or 1.
+fn stroke(color: Color, thickness: Option<f32>) -> egui::Stroke {
+    egui::Stroke::new(thickness.unwrap_or(1.0), color32(color))
+}
+
+fn add_paint_methods(methods: &mut PaintMethods<'_, '_>) {
+    methods.add("size", |paint, ()| Ok((paint.size.x, paint.size.y)));
+    methods.add(
+        "line",
+        |paint, (x1, y1, x2, y2, color, thickness): (f32, f32, f32, f32, Color, Option<f32>)| {
+            let points = [paint.at(x1, y1), paint.at(x2, y2)];
+            paint.painter.line_segment(points, stroke(color, thickness));
+            Ok(())
+        },
+    );
+    methods.add(
+        "path",
+        |paint, (numbers, color, thickness): (Vec<f32>, Color, Option<f32>)| {
+            let points = paint.points("path", &numbers, 2)?;
+            paint.painter.line(points, stroke(color, thickness));
+            Ok(())
+        },
+    );
+    methods.add(
+        "fill_polygon",
+        |paint, (numbers, color): (Vec<f32>, Color)| {
+            let points = paint.points("polygon", &numbers, 3)?;
+            paint.painter.add(egui::Shape::convex_polygon(
+                points,
+                color32(color),
+                egui::Stroke::NONE,
+            ));
+            Ok(())
+        },
+    );
+    methods.add(
+        "fill_rect",
+        |paint,
+         (x, y, width, height, color, rounding): (f32, f32, f32, f32, Color, Option<f32>)| {
+            let rect = paint.rect(x, y, width, height);
+            paint
+                .painter
+                .rect_filled(rect, rounding.unwrap_or(0.0), color32(color));
+            Ok(())
+        },
+    );
+    methods.add(
+        "outline_rect",
+        |paint,
+         (x, y, width, height, color, thickness, rounding): (
+            f32,
+            f32,
+            f32,
+            f32,
+            Color,
+            Option<f32>,
+            Option<f32>,
+        )| {
+            let rect = paint.rect(x, y, width, height);
+            paint.painter.rect_stroke(
+                rect,
+                rounding.unwrap_or(0.0),
+                stroke(color, thickness),
+                egui::StrokeKind::Inside,
+            );
+            Ok(())
+        },
+    );
+    methods.add(
+        "fill_circle",
+        |paint, (x, y, radius, color): (f32, f32, f32, Color)| {
+            paint
+                .painter
+                .circle_filled(paint.at(x, y), radius, color32(color));
+            Ok(())
+        },
+    );
+    methods.add(
+        "outline_circle",
+        |paint, (x, y, radius, color, thickness): (f32, f32, f32, Color, Option<f32>)| {
+            // Inside its edge, as a rectangle's outline is.
+            let stroke = stroke(color, thickness);
+            let radius = (radius - stroke.width / 2.0).max(0.0);
+            paint.painter.circle_stroke(paint.at(x, y), radius, stroke);
+            Ok(())
+        },
+    );
+    methods.add(
+        "text",
+        |paint, (text, x, y, color, options): (String, f32, f32, Color, Option<Table>)| {
+            let color = color32(color);
+            let (galley, align) = paint.layout(text, color, options.as_ref())?;
+            let size = galley.size();
+            let anchor = egui::Align2([align, egui::Align::Min]);
+            let rect = anchor.anchor_size(paint.at(x, y), size);
+            paint.painter.galley(rect.min, galley, color);
+            Ok((size.x, size.y))
+        },
+    );
+    methods.add(
+        "measure",
+        |paint, (text, options): (String, Option<Table>)| {
+            let (galley, _) = paint.layout(text, egui::Color32::WHITE, options.as_ref())?;
+            let size = galley.size();
+            Ok((size.x, size.y))
+        },
+    );
+}
+
 /// What a `what` is given first: a string, or a table of options holding the string as `key`, as
 /// a window takes its title or its options.
 fn named(value: Value, what: &str, key: &str) -> mlua::Result<(String, Option<Table>)> {
@@ -599,13 +899,13 @@ fn color32(color: Color) -> egui::Color32 {
 mod tests {
     use super::*;
 
-    /// The methods `Ui` is declared with in the definitions file.
-    fn declared_methods() -> Vec<String> {
+    /// The methods `type` is declared with in the definitions file.
+    fn declared_methods(type_name: &str) -> Vec<String> {
         // As checked out, which may have turned line endings into CRLF.
         let definitions = super::super::DEFINITIONS.replace("\r\n", "\n");
         let start = definitions
-            .find("declare extern type Ui with\n")
-            .expect("the definitions declare `Ui`");
+            .find(&format!("declare extern type {type_name} with\n"))
+            .unwrap_or_else(|| panic!("the definitions declare `{type_name}`"));
         let block = &definitions[start..];
         let block = &block[..block.find("\nend\n").expect("`Ui`'s block ends")];
         // Methods, and generic ones as properties of generic function types, which methods can't
@@ -626,7 +926,16 @@ mod tests {
     fn the_definitions_declare_every_method_of_ui() {
         let mut registered = register(&Lua::new(), &Lent::default()).unwrap();
         registered.sort_unstable();
-        let mut declared = declared_methods();
+        let mut declared = declared_methods("Ui");
+        declared.sort_unstable();
+        assert_eq!(declared, registered);
+    }
+
+    #[test]
+    fn the_definitions_declare_every_method_of_paint() {
+        let mut registered = register_paint(&Lua::new()).unwrap();
+        registered.sort_unstable();
+        let mut declared = declared_methods("Paint");
         declared.sort_unstable();
         assert_eq!(declared, registered);
     }

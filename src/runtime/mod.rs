@@ -442,10 +442,21 @@
 //!   wide as there's room for, its text, whether typing changed it, and where its cursor is
 //!   (`{ line, column, offset, anchor }`);
 //!   `ui:progress(fraction, text)` and `ui:sprite(sprite, tint, width, height)` show them.
+//! - `ui:canvas(label or { label, width, height }, fn)`, a canvas as big as given or as all the
+//!   room its container has left, calls `fn(paint, input)`: `paint` paints it, in points from its
+//!   top-left corner, clipped to it, with `paint:size()`, `paint:line(x1, y1, x2, y2, color,
+//!   thickness)`, `paint:path(points, color, thickness)`, `paint:fill_polygon(points, color)`,
+//!   `paint:fill_rect(x, y, width, height, color, rounding)`, `paint:outline_rect(x, y, width,
+//!   height, color, thickness, rounding)`, `paint:fill_circle(x, y, radius, color)`,
+//!   `paint:outline_circle(x, y, radius, color, thickness)`, and `paint:text(text, x, y, color,
+//!   { size, monospace, align })` and `paint:measure(text, options)`, which return its size; and
+//!   `input` is what the pointer did to it this frame (`{ hovered, x, y, clicked, dragged_x,
+//!   dragged_y, scrolled_x, scrolled_y, zoom }`).
 //! - `ui:separator()` and `ui:space(amount)`.
 //!
 //! A `Ui` works only until the function it was passed to returns, and inside a container's
-//! function, only the `Ui` it's passed works. Containers hold any others, their own kind too.
+//! function, only the `Ui` it's passed works, as a canvas's `Paint` works only in its function.
+//! Containers hold any others, their own kind too.
 //! Tab reaches the interface only while one of its widgets has keyboard focus, so a game can use
 //! it while its interface shows. Without the `egui` feature, `gui` isn't called.
 //!

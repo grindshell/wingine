@@ -8264,6 +8264,237 @@ mod gui {
         let err = stopped_with(&simulation);
         assert!(err.contains("destructed"), "{err}");
     }
+
+    #[test]
+    fn a_canvas_takes_the_room_left_and_paints_in_it() {
+        let mut simulation = interface(
+            "gui_canvas_paint",
+            "size = nil
+            measured = nil
+            painted = nil",
+            "ui:panel('top', function(ui)
+                ui:label('Above')
+            end)
+            ui:canvas('Picture', function(paint)
+                size = { paint:size() }
+                paint:fill_rect(10, 10, 20, 20, '#ff0000')
+                paint:fill_circle(70, 20, 10, '#0000ff')
+                paint:outline_rect(100, 10, 30, 30, '#00ff00', 4)
+                paint:fill_polygon({ 150, 10, 190, 10, 170, 40 }, '#ffff00')
+                paint:path({ 200, 10, 220, 30, 240, 10 }, '#ff00ff', 2)
+                paint:line(250, 25, 290, 25, '#00ffff', 3)
+                paint:outline_circle(320, 25, 15, '#ffffff', 2)
+                -- Over the panel above, which the canvas doesn't reach.
+                paint:fill_rect(10, -40, 380, 45, '#ffffff')
+                measured = { paint:measure('Wide words', { size = 20 }) }
+                painted = { paint:text('Wide words', 200, 100, '#ffffff', { size = 20, align = 'center' }) }
+            end)",
+        );
+        // From under the panel to the bottom and sides of the window.
+        let above = simulation.gui_rect("Above").unwrap();
+        let picture = simulation.gui_rect("Picture").unwrap();
+        assert!(picture.y >= above.y + above.h, "{above:?} {picture:?}");
+        assert!(
+            picture.y + picture.h <= 300.0 && picture.h > 240.0,
+            "{picture:?}"
+        );
+        assert!(picture.w > 380.0, "{picture:?}");
+        let (width, height): (f32, f32) = simulation.eval("size[1], size[2]");
+        assert!((width - picture.w).abs() < 1.0, "{width} {picture:?}");
+        assert!((height - picture.h).abs() < 1.0, "{height} {picture:?}");
+
+        let image = simulation.screenshot().unwrap();
+        let at = |x: f32, y: f32| image.pixel((picture.x + x) as u32, (picture.y + y) as u32);
+        let near = |pixel: [u8; 4], color: [u8; 3]| {
+            pixel[..3]
+                .iter()
+                .zip(color)
+                .all(|(&a, b)| a.abs_diff(b) <= 8)
+        };
+        assert!(near(at(20.0, 20.0), [255, 0, 0]), "{:?}", at(20.0, 20.0));
+        assert!(near(at(70.0, 20.0), [0, 0, 255]), "{:?}", at(70.0, 20.0));
+        // An outline, inside its edges, with nothing in its middle.
+        assert!(near(at(101.0, 25.0), [0, 255, 0]), "{:?}", at(101.0, 25.0));
+        assert!(!near(at(115.0, 25.0), [0, 255, 0]), "{:?}", at(115.0, 25.0));
+        assert!(
+            near(at(170.0, 20.0), [255, 255, 0]),
+            "{:?}",
+            at(170.0, 20.0)
+        );
+        assert!(
+            near(at(270.0, 25.0), [0, 255, 255]),
+            "{:?}",
+            at(270.0, 25.0)
+        );
+        assert!(
+            !near(at(320.0, 25.0), [255, 255, 255]),
+            "{:?}",
+            at(320.0, 25.0)
+        );
+        // Clipped to the canvas: white in it, and none over the panel.
+        assert!(
+            near(at(200.0, 2.0), [255, 255, 255]),
+            "{:?}",
+            at(200.0, 2.0)
+        );
+        assert!(
+            !near(at(200.0, -4.0), [255, 255, 255]),
+            "{:?}",
+            at(200.0, -4.0)
+        );
+
+        // Text says how big it is, as measuring it does, centered on where it's painted.
+        let measured: (f32, f32) = simulation.eval("measured[1], measured[2]");
+        let painted: (f32, f32) = simulation.eval("painted[1], painted[2]");
+        assert_eq!(measured, painted);
+        assert!(measured.0 > 60.0 && measured.1 >= 20.0, "{measured:?}");
+        let lit = |from: f32, to: f32| {
+            (from as u32..to as u32).any(|x| {
+                (100..100 + measured.1 as u32)
+                    .any(|y| near(at(x as f32, y as f32), [255, 255, 255]))
+            })
+        };
+        assert!(lit(200.0 - measured.0 / 2.0, 200.0));
+        assert!(lit(200.0, 200.0 + measured.0 / 2.0));
+        assert!(!lit(200.0 + measured.0 / 2.0 + 2.0, 380.0));
+    }
+
+    #[test]
+    fn a_canvas_says_what_the_pointer_did_to_it() {
+        let mut simulation = interface(
+            "gui_canvas_input",
+            "seen = nil
+            clicks = 0
+            dragged = { 0, 0 }
+            scrolled = 0",
+            "ui:panel({ side = 'left', size = 100 }, function(ui)
+                ui:label('Beside')
+            end)
+            ui:canvas({ label = 'Board', width = 200, height = 150 }, function(paint, input)
+                seen = input
+                if input.clicked then
+                    clicks += 1
+                end
+                dragged[1] += input.dragged_x
+                dragged[2] += input.dragged_y
+                scrolled += input.scrolled_y
+            end)",
+        );
+        let board = simulation.gui_rect("Board").unwrap();
+        assert!(
+            (board.w - 200.0).abs() < 1.0 && (board.h - 150.0).abs() < 1.0,
+            "{board:?}"
+        );
+
+        // Where the pointer is, from the canvas's corner, while it's over it, and nowhere once
+        // it's off it.
+        simulation.move_mouse(board.x + 30.0, board.y + 40.0);
+        simulation.run_frames(2);
+        assert!(simulation.eval::<bool>("seen.hovered"));
+        let (x, y): (f32, f32) = simulation.eval("seen.x, seen.y");
+        assert!((x - 30.0).abs() < 1.0 && (y - 40.0).abs() < 1.0, "{x} {y}");
+        simulation.move_mouse(board.x + 250.0, board.y + 40.0);
+        simulation.run_frames(2);
+        assert!(simulation.eval::<bool>("not seen.hovered and seen.x == nil"));
+
+        simulation.click(MouseButton::Left, board.x + 50.0, board.y + 50.0);
+        simulation.run_frames(2);
+        assert_eq!(simulation.eval::<u32>("clicks"), 1);
+        assert!(simulation.eval::<bool>("not seen.clicked"));
+
+        // Dragged, from when the pointer has moved far enough for a drag, which isn't a click.
+        simulation.move_mouse(board.x + 50.0, board.y + 50.0);
+        simulation.mouse_down(MouseButton::Left);
+        simulation.step();
+        for step in 1..=8 {
+            let step = step as f32;
+            simulation.move_mouse(board.x + 50.0 + 5.0 * step, board.y + 50.0 + 2.0 * step);
+            simulation.step();
+        }
+        // Still where it is while it drags, past the canvas's edge.
+        simulation.move_mouse(board.x + 250.0, board.y + 66.0);
+        simulation.step();
+        assert!(simulation.eval::<bool>("seen.x ~= nil"));
+        simulation.mouse_up(MouseButton::Left);
+        simulation.run_frames(2);
+        let (dx, dy): (f32, f32) = simulation.eval("dragged[1], dragged[2]");
+        assert!(dx > 180.0 && dx <= 200.0, "{dx}");
+        assert!(dy > 8.0 && dy <= 16.0, "{dy}");
+        assert_eq!(simulation.eval::<u32>("clicks"), 1);
+
+        // The wheel, turned away over it, scrolls up; turned off it, nothing.
+        simulation.move_mouse(board.x + 100.0, board.y + 100.0);
+        simulation.step();
+        simulation.scroll(0.0, 1.0);
+        simulation.run_frames(30);
+        let up: f32 = simulation.eval("scrolled");
+        assert!(up > 0.0, "{up}");
+        simulation.move_mouse(board.x + 250.0, board.y + 100.0);
+        simulation.step();
+        simulation.scroll(0.0, 1.0);
+        simulation.run_frames(30);
+        assert_eq!(simulation.eval::<f32>("scrolled"), up);
+        assert!(simulation.eval::<bool>("seen.zoom == 1"));
+    }
+
+    #[test]
+    fn a_paint_kept_after_its_canvas_returns_fails() {
+        let folder = game(
+            "gui_canvas_kept",
+            &[
+                ("conf.luau", WINDOW),
+                (
+                    "main.luau",
+                    "local kept = nil
+                    function gui(ui: Ui)
+                        ui:canvas('Kept', function(paint)
+                            kept = paint
+                        end)
+                        kept:fill_rect(0, 0, 10, 10, '#ffffff')
+                    end",
+                ),
+            ],
+        );
+        let mut simulation = simulation(&folder);
+        simulation.run_frames(2);
+        let err = stopped_with(&simulation);
+        assert!(err.contains("destructed"), "{err}");
+    }
+
+    #[test]
+    fn a_canvas_says_what_it_was_given_wrong() {
+        for (test, canvas, said) in [
+            (
+                "gui_canvas_option",
+                "ui:canvas({ label = 'Wrong', colour = 'red' }, function() end)",
+                "not `colour`",
+            ),
+            (
+                "gui_canvas_label",
+                "ui:canvas({ width = 10 }, function() end)",
+                "need its `label`",
+            ),
+            (
+                "gui_canvas_path",
+                "ui:canvas('Wrong', function(paint) paint:path({ 1, 2, 3 }, '#ffffff') end)",
+                "not 3 numbers",
+            ),
+            (
+                "gui_canvas_align",
+                "ui:canvas('Wrong', function(paint)
+                    paint:text('Hi', 0, 0, '#ffffff', { align = 'middle' })
+                end)",
+                r#"not "middle""#,
+            ),
+        ] {
+            let main = format!("function gui(ui: Ui)\n{canvas}\nend");
+            let folder = game(test, &[("conf.luau", WINDOW), ("main.luau", &main)]);
+            let mut simulation = simulation(&folder);
+            simulation.run_frames(2);
+            let err = stopped_with(&simulation);
+            assert!(err.contains(said), "{test}: {err}");
+        }
+    }
 }
 
 /// Games reloading in place, as they do watching their folders when a file changes.

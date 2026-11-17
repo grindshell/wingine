@@ -241,7 +241,9 @@ so a button has been pressed when it returns.
 sim.gui_rect(label: string): Rect?
 ```
 
-Returns where the widget labelled `label` was in the last frame, in canvas pixels, or `nil`.
+Returns where the widget labelled `label` was in the last frame, in canvas pixels, or `nil`. A
+[canvas](gui.md#uicanvas) is found by its label too: to click a place on one, add where it is in
+the canvas to where the canvas is, and [`sim.click`](#the-mouse) there.
 
 ### The window
 

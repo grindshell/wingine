@@ -436,6 +436,99 @@ end
 Tests find it by its `text`, as [`sim.click_gui`](testing.md#simclick_gui) finds other widgets by
 their labels.
 
+## Canvases
+
+### `ui:canvas`
+
+```lua
+ui:canvas(canvas: string | CanvasOptions, paint: (Paint, CanvasInput) -> ())
+```
+
+A space in the interface to paint lines, shapes and text on, as an application paints a graph, a
+chart or a timeline, which widgets can't show. `paint` is called with a [`Paint`](#paint) to
+paint it with and what the pointer did to it this frame, and paints it afresh each frame, as
+everything in an interface is laid out afresh:
+
+```lua
+local points = {}
+
+function gui(ui: Ui)
+    ui:panel("top", function(ui)
+        ui:label("Click to add a point")
+    end)
+    ui:canvas("Sketch", function(paint, input)
+        if input.clicked then
+            table.insert(points, input.x)
+            table.insert(points, input.y)
+        end
+        if #points >= 4 then
+            paint:path(points, "#8fb8de", 2)
+        end
+        for i = 1, #points, 2 do
+            paint:fill_circle(points[i], points[i + 1], 4, "#f2c14e")
+        end
+    end)
+end
+```
+
+`canvas` is its label, or a table of options:
+
+| Option | What it does | Default |
+|---|---|---|
+| `label` | What [tests](testing.md#the-interface) and screen readers find it by. Required. Nothing shows it. | |
+| `width`, `height` | Its size, in points. | All the room its container has left that way |
+
+So a canvas with no size takes all the room left, as a [text edit](#uitext_edit) that fills does:
+add it last. A `Paint` works only until `paint` returns.
+
+The input is a table, in points from the canvas's top-left corner:
+
+| Field | What it is |
+|---|---|
+| `hovered` | Whether the pointer is over the canvas, with nothing else in the way. |
+| `x`, `y` | Where the pointer is, while it's over the canvas or dragging it; nil otherwise. |
+| `clicked` | Whether the canvas was clicked: the primary button pressed on it and let go without dragging. |
+| `dragged_x`, `dragged_y` | How far it was dragged this frame with the primary button held, as to pan, or 0. A press becomes a drag once the pointer has moved a few points, which isn't a click. |
+| `scrolled_x`, `scrolled_y` | How far the wheel scrolled this frame while the pointer was over it, in points, smoothed over a few frames: positive `y` as the wheel turns away, to scroll up. |
+| `zoom` | How much a scroll with Ctrl held, or a pinch, zoomed this frame while the pointer was over it: above 1 in, below 1 out, 1 for neither. |
+
+Panning and zooming are the script's: it keeps where its view is and how large, and moves them
+by what the input says.
+
+### `Paint`
+
+What a canvas is painted with. Positions are in points from the canvas's top-left corner, and
+nothing painted shows outside it. What's painted later is over what was painted before. Colors are
+[`Color`](README.md#color)s, as everywhere.
+
+| Method | What it paints |
+|---|---|
+| `paint:size(): (number, number)` | Nothing: returns the canvas's width and height. |
+| `paint:line(x1, y1, x2, y2, color, thickness?)` | A line from one point to the other, `thickness` wide, by default 1. |
+| `paint:path(points, color, thickness?)` | Lines through `points`, `{ x1, y1, x2, y2, ... }`, two or more. |
+| `paint:fill_polygon(points, color)` | The convex polygon whose corners are `points`, three or more, such as an arrow's head. |
+| `paint:fill_rect(x, y, width, height, color, rounding?)` | A rectangle with its top-left corner at `x`, `y`, its corners rounded `rounding` points. |
+| `paint:outline_rect(x, y, width, height, color, thickness?, rounding?)` | The outline of that rectangle, `thickness` wide inside its edges. |
+| `paint:fill_circle(x, y, radius, color)` | A circle of `radius` about `x`, `y`. |
+| `paint:outline_circle(x, y, radius, color, thickness?)` | The outline of that circle, `thickness` wide inside its edge. |
+| `paint:text(text, x, y, color, options?): (number, number)` | Text on one line, its top at `y`; returns its width and height. |
+| `paint:measure(text, options?): (number, number)` | Nothing: returns the width and height `text` would take. |
+
+Text is in the interface's font, and `options` is a table with any of:
+
+| Option | What it does | Default |
+|---|---|---|
+| `size` | Its size, in points. | The interface's text's |
+| `monospace` | Whether it's in the monospace font. | `false` |
+| `align` | Which of its edges is at `x`: `"left"`, `"right"`, or its middle, `"center"`. | `"left"` |
+
+```lua
+-- A box with a name in its middle, as wide as the name.
+local width, height = paint:measure(name)
+paint:fill_rect(x - width / 2 - 6, y - 4, width + 12, height + 8, "#2a2e36", 4)
+paint:text(name, x, y, "#e8e8e8", { align = "center" })
+```
+
 ## Spacing
 
 ### `ui:separator`
