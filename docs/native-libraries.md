@@ -138,7 +138,8 @@ errors.
 
 ## Safety
 
-Scripts run in a sandbox: they can't write files, run programs or reach the network. Native
+Scripts run in a sandbox: they can't write files, but their saves and those in folders the player
+picks, run programs or reach the network. Native
 libraries don't: a library is a program like any other,
 and a game that loads one runs it with the player's full permissions. Only load libraries you
 trust, and tell players when a game includes them.

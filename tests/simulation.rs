@@ -413,6 +413,59 @@ impl Game for TextProbe {
     fn draw(&mut self, _canvas: &mut Canvas) {}
 }
 
+/// Asks for a folder as it starts, and reads its `draft.md` into `read` once it's answered:
+/// `Some(None)` if none was picked.
+struct FolderReader {
+    ticket: u64,
+    read: Rc<RefCell<Option<Option<String>>>>,
+}
+
+impl Game for FolderReader {
+    fn update(&mut self, ctx: &mut Context, _dt: f32) {
+        if let Some(folder) = ctx.folders().answer_to(self.ticket) {
+            let text = folder.map(|folder| {
+                let contents = folder.read("draft.md").unwrap().unwrap();
+                String::from_utf8(contents).unwrap()
+            });
+            self.read.borrow_mut().get_or_insert(text);
+        }
+    }
+
+    fn draw(&mut self, _canvas: &mut Canvas) {}
+}
+
+#[test]
+fn a_script_answers_the_dialog_for_picking_a_folder() {
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("simulation-pick");
+    let _ = fs::remove_dir_all(&directory);
+    fs::create_dir_all(directory.join("my drafts")).unwrap();
+    fs::write(directory.join("my drafts/draft.md"), "# Draft\n").unwrap();
+    let script = directory.join("pick.txt");
+    let run = |source: &str| {
+        fs::write(&script, source).unwrap();
+        let read = Rc::new(RefCell::new(None));
+        let ran = wingine::script::run(
+            &config(),
+            |ctx| {
+                Ok(FolderReader {
+                    ticket: ctx.folders().pick()?,
+                    read: Rc::clone(&read),
+                })
+            },
+            &script,
+        );
+        ran.map(|()| read.take())
+    };
+    assert_eq!(
+        run("wait 2\npick my drafts\nwait 1\n").unwrap(),
+        Some(Some("# Draft\n".to_owned()))
+    );
+    assert_eq!(run("wait 2\n").unwrap(), None, "unanswered, it stays open");
+    assert_eq!(run("pick\nwait 1\n").unwrap(), Some(None), "cancelled");
+    let err = run("wait 1\npick nowhere\n").unwrap_err().to_string();
+    assert!(err.contains("line 2") && err.contains("nowhere"), "{err}");
+}
+
 /// Writes the save `progress` each update.
 struct Saver;
 

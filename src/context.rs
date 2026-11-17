@@ -8,6 +8,7 @@ use crate::{
     Error, Fullscreen, Result, Waker,
     app::Redraws,
     audio::Audio,
+    folders::Folders,
     graphics::{
         Font, FontSettings, Mesh, MeshData, Resolution, Scaling, Texture,
         gpu::{Gpu, texture_size_problem},
@@ -24,14 +25,15 @@ use crate::{
     math::Rect,
 };
 
-/// Engine services available to a game: input, audio, saves, the canvas size, the built-in font,
-/// loading textures, fonts and models, and how long frames take.
+/// Engine services available to a game: input, audio, saves, folders the player picks, the canvas
+/// size, the built-in font, loading textures, fonts and models, and how long frames take.
 pub struct Context {
     pub(crate) gpu: Gpu,
     pub(crate) renderer: Renderer,
     pub(crate) input: Input,
     pub(crate) audio: Audio,
     pub(crate) saves: Saves,
+    pub(crate) folders: Folders,
     pub(crate) canvas_size: [f32; 2],
     /// Draws the canvas onto the window, or a headless frame, at its resolution and scaling.
     pub(crate) screen: Screen,
@@ -105,6 +107,7 @@ impl Context {
             input: Input::new(),
             audio,
             saves: Saves::default(),
+            folders: Folders::default(),
             canvas_size: [0.0, 0.0],
             screen: Screen::new(Resolution::Window),
             fullscreen: Fullscreen::Off,
@@ -190,6 +193,14 @@ impl Context {
     /// config names one: see [`save`](crate::save).
     pub fn saves(&self) -> &Saves {
         &self.saves
+    }
+
+    /// The folders the player has picked, and the dialog for picking another, which a window
+    /// opens once the frame that asks for it is done. A
+    /// [`Simulation`](crate::headless::Simulation) opens none: its dialogs are answered by
+    /// [`Simulation::pick`](crate::headless::Simulation::pick). See [`folders`](crate::folders).
+    pub fn folders(&self) -> &Folders {
+        &self.folders
     }
 
     /// The built-in pixel font: printable ASCII and a little typographic punctuation, with

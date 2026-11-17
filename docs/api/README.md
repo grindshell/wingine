@@ -1,6 +1,6 @@
 # API reference
 
-Scripts reach the engine through one module, which they require: twelve tables and a few built-in
+Scripts reach the engine through one module, which they require: thirteen tables and a few built-in
 functions, the objects those hand out, and the `Ui` a game's `gui` lays its interface out with.
 
 ```lua
@@ -25,6 +25,7 @@ that requires it. Pages are named for the module's tables, and functions for the
 | [`scene`](scene.md) | Scenes loaded from scene files, and their nodes |
 | [`ui`](ui.md) | Menus over a scene's nodes, which the keys and the mouse choose from |
 | [`save`](save.md) | Data kept between runs of the game, such as progress |
+| [`files`](files.md) | Folders the player picks, and reading and writing the files in them, as an application's documents |
 | [`exact`](exact.md) | Math that gives the same bits on every platform, for games that replay |
 | [`rect`](rect.md) | Whether rectangles overlap, and whether one holds a point |
 | [`window`](window.md) | Quitting the game, asking before its window closes, covering the screen, scaling a fixed resolution, and what it kept as it reloaded |
@@ -36,7 +37,8 @@ The module and its tables are read-only. Luau's standard library is there too, a
 sandboxed form:
 `math`, `string`, `table`, `coroutine`, `bit32`, `utf8`, `buffer`, `vector`, `debug`, and `os`
 with `clock`, `date`, `difftime` and `time`, but nothing that reads or writes files: games keep
-data with [`save`](save.md).
+data with [`save`](save.md), and reach the player's files only in folders the player picks, with
+[`files`](files.md).
 [luau.org](https://luau.org/library) documents it.
 
 ## Conventions
@@ -88,12 +90,14 @@ time raises an error saying when it works.
   of them work in `close_requested` and `reloading` too. `graphics.project` and `graphics.ray` work then and in
   `draw`.
 - **Interfaces** are laid out only in `gui`, with the `Ui` it's passed.
+- **Waiting** works only in tasks: `wait`, `wait_until`, and `files.pick_folder`, which waits for
+  the player to pick a folder.
 - **Everything else** works any time: `graphics.size`, `graphics.color`,
   `graphics.default_font`, `graphics.frame_stats`, `graphics.new_animation`,
   `graphics.new_particles`,
   `graphics.hit_box`, `audio.load`, `audio.make`,
-  `tilemap`, `grid`, `physics`, `save`, `ui.menu`, `window.reloaded`, and the methods of every
-  object, scene nodes,
+  `tilemap`, `grid`, `physics`, `save`, the rest of `files`, `ui.menu`, `window.reloaded`, and the
+  methods of every object, scene nodes, folders,
   physics worlds and menus included, but `menu:update` and voices'.
 
 ## Values

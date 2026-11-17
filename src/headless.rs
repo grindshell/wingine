@@ -14,6 +14,7 @@ use crate::{
     Context, Error, Game, Result, WindowConfig,
     app::{Timestep, run_frame},
     audio::Audio,
+    folders::{Folder, copy_folder},
     graphics::{Canvas, Resolution, gpu::Gpu, renderer::Renderer},
     input::{Axis, Control, GamepadButton, Key, MouseButton, Stick},
     lua::mlua::FromLuaMulti,
@@ -274,6 +275,8 @@ pub struct Simulation<G> {
     /// Where the game's saves go, unless its config gave a folder. Declared after `game`, so the
     /// game has finished with it first.
     _saves: Option<TemporaryFolder>,
+    /// Where the copies of folders [picked](Simulation::pick) are, which go with the simulation.
+    picked: Vec<TemporaryFolder>,
 }
 
 impl<G> Simulation<G> {
@@ -345,6 +348,7 @@ impl<G: Game> Simulation<G> {
             #[cfg(feature = "egui")]
             mouse_captured: false,
             _saves: temporary,
+            picked: Vec::new(),
         })
     }
 
@@ -378,6 +382,36 @@ impl<G: Game> Simulation<G> {
     /// Whether the game has called [`Context::quit`], which would have closed its window.
     pub fn has_quit(&self) -> bool {
         self.headless.ctx.quit
+    }
+
+    /// Answers the game's dialog for picking a folder as the player would: with a copy of the
+    /// folder at `folder`, or with none for `None`, as when the player cancels it. It answers the
+    /// dialog that's open, or if none is, the next the game asks for. The copy has the folder's
+    /// name, in a temporary folder of the simulation's own that goes with it, so the game never
+    /// changes the folder itself. Returns the copy, as the game gets it.
+    ///
+    /// A simulation opens no dialog of its own, and remembers the folders picked only while it
+    /// runs: see [`folders`](crate::folders).
+    pub fn pick(&mut self, folder: Option<&Path>) -> Result<Option<Folder>> {
+        let picked = match folder {
+            Some(folder) => {
+                let read_error = |source| Error::ReadFile {
+                    path: folder.to_owned(),
+                    source,
+                };
+                let from = std::fs::canonicalize(folder).map_err(read_error)?;
+                let name = from.file_name().unwrap_or("folder".as_ref());
+                let temporary = TemporaryFolder::named("picked");
+                let copy = temporary.path().join(name);
+                copy_folder(&from, &copy).map_err(read_error)?;
+                self.picked.push(temporary);
+                Some(Folder::at(&copy).map_err(read_error)?)
+            }
+            None => None,
+        };
+        self.headless.ctx.folders.answer(picked.clone());
+        self.wake();
+        Ok(picked)
     }
 
     /// Presses the window's close button, as [`Game::close_requested`] hears it, and tells

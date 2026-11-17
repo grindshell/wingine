@@ -29,7 +29,8 @@ my-game/
 
 The folder's name is the window's title, unless `conf.luau` gives one. What the game
 [saves](api/save.md) is kept elsewhere, in a folder of the game's own among the player's
-applications' data.
+applications' data. A game reaches the player's own files only in folders the player picks, with
+[`files`](api/files.md).
 
 ## `main.luau`
 
@@ -108,7 +109,8 @@ another time raises an error saying so:
 | Playing sound and music: `audio` (apart from `audio.load` and `audio.make`), and voices' methods | ✓ | ✓ | ✓ | |
 | Quitting: `window.quit` | ✓ | ✓ | ✓ | |
 | `graphics.size` | ✓ | ✓ | ✓ | ✓ |
-| Everything else: `audio.load`, `audio.make`, `tilemap`, `grid`, `save`, `window.reloaded`, fonts, animations, `graphics.color`, `graphics.frame_stats` | ✓ | ✓ | ✓ | ✓ |
+| Waiting: `wait`, `wait_until`, and picking a folder, `files.pick_folder` | | tasks only | | |
+| Everything else: `audio.load`, `audio.make`, `tilemap`, `grid`, `save`, the rest of `files` and folders' methods, `window.reloaded`, fonts, animations, `graphics.color`, `graphics.frame_stats` | ✓ | ✓ | ✓ | ✓ |
 
 So read input and change the game's state in `update`, and only draw in `draw`. By the time `gui`
 runs, the frame's updates have seen its key presses, so `input.pressed` is false there.
@@ -173,7 +175,9 @@ through it. None of it is a global. See [the API reference](api/README.md).
 
 ### Globals and the sandbox
 
-Scripts run in Luau's sandbox. The standard library (`math`, `string`, `table` and the rest) and
+Scripts run in Luau's sandbox, which reads and writes no files: the engine reads the game's own
+for it, writes its [saves](api/save.md), and reaches the player's only in folders the player
+picks, through [`files`](api/files.md). The standard library (`math`, `string`, `table` and the rest) and
 the engine's module and its tables are read-only, so a script can't add to them or replace their
 functions. Globals a script defines, such as `update`, are seen by every script loaded after it.
 

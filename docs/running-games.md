@@ -178,7 +178,9 @@ Instead of opening a window, the engine runs the game in a virtual window the si
 second of game time, however long they take to compute, so a run behaves the same every time if
 the game does. Audio is silent, but sounds still start and finish on time. The game's
 [saves](api/save.md) go in a temporary folder, which starts empty unless the script's `saves` fills
-it, and goes when the run ends, so a run never changes the player's saves. Screenshots are saved relative to the script's
+it, and goes when the run ends, so a run never changes the player's saves. A run opens no dialog
+for [picking a folder](api/files.md): its `pick` answers the game's with a copy of a folder, so it
+never changes the player's files either. Screenshots are saved relative to the script's
 folder, and each is reported on standard output.
 
 The script has one command per line. `#` starts a comment.
@@ -209,6 +211,8 @@ The script has one command per line. `#` starts a comment.
 | `key-repeat 0.25s 20` | Repeats keys held down after a quarter of a second (or a number of frames), 20 times a second. |
 | `key-repeat off` | Stops repeating keys held down. |
 | `resize 640 360` | Resizes the virtual window, in physical pixels. |
+| `pick projects/drafts` | Answers the game's dialog for [picking a folder](api/files.md), the one open or else the next, with a copy of the folder, relative to the script's, which goes when the run ends. |
+| `pick` | Answers it with none, as when the player cancels it. |
 | `screenshot shots/walk.png` | Saves the latest frame as a PNG. |
 | `benchmark 10s` | Runs for 10 seconds (or a number of frames), rendering every frame, and reports how long they took. See below. |
 | `benchmark 600 run.csv` | The same, also saving each frame's stats as CSV. |

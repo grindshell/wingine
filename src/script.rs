@@ -32,6 +32,8 @@
 //! key-repeat 0.25s 20    # repeat held keys after 0.25 seconds (or frames), 20 times a second
 //! key-repeat off         # don't repeat held keys
 //! resize 640 360         # resize the virtual window, in physical pixels
+//! pick drafts            # answer the dialog for picking a folder with a copy of this one
+//! pick                   # answer it with none, as when the player cancels
 //! screenshot walk.png    # save the latest frame, relative to the script's directory
 //! benchmark 10s          # run 10 seconds, rendering every frame, and report how long they took
 //! benchmark 600 run.csv  # the same, also saving each frame's stats to a CSV file
@@ -44,6 +46,11 @@
 //! starts with `saves` and a folder, relative to the script's (the folder a window keeps them in,
 //! or one a run before kept): then it starts with copies of the files in that folder, so the run
 //! never changes them. Either way, the folder goes when the run ends.
+//!
+//! `pick` answers the game's dialog for picking a [folder](crate::folders) as
+//! [`Simulation::pick`] does: the dialog that's open, or if none is, the next the game asks for.
+//! The game gets a copy of the folder, relative to the script's, which goes when the run ends,
+//! so the run never changes the folder itself.
 //!
 //! `mouse-by` moves the mouse as [`Simulation::move_mouse_by`] does, in the units of
 //! [`Input::mouse_motion`]: the game sees it only while it has captured the mouse, as a game that
@@ -113,6 +120,7 @@ enum Command {
     Stick(u32, Stick, [f32; 2]),
     KeyRepeat(Option<KeyRepeat>),
     Resize(u32, u32),
+    Pick(Option<PathBuf>),
     Screenshot(PathBuf),
     Benchmark(u32, Option<PathBuf>),
 }
@@ -206,6 +214,12 @@ pub fn run<G: Game>(
             Command::Stick(gamepad, stick, [x, y]) => simulation.move_stick(gamepad, stick, x, y),
             Command::KeyRepeat(repeat) => simulation.set_key_repeat(repeat),
             Command::Resize(width, height) => simulation.resize(width, height),
+            Command::Pick(folder) => {
+                let folder = folder.map(|folder| directory.join(folder));
+                simulation
+                    .pick(folder.as_deref())
+                    .map_err(|err| fail(format!("line {line}: {err}")))?;
+            }
             Command::Screenshot(file) => {
                 let file = output_file(directory, &file).map_err(fail)?;
                 simulation.screenshot()?.save_png(&file)?;
@@ -354,6 +368,8 @@ fn parse(source: &str) -> Result<Vec<(usize, Command)>, String> {
                 Err("`saves` must come before every other command".to_owned())
             }
             ("saves", folder) => Ok(Command::Saves(PathBuf::from(folder))),
+            ("pick", "") => Ok(Command::Pick(None)),
+            ("pick", folder) => Ok(Command::Pick(Some(PathBuf::from(folder)))),
             ("type", text) => Ok(Command::Type(text.to_owned())),
             ("click-gui", label) => click_gui(label),
             _ => parse_command(name, args),
@@ -518,6 +534,8 @@ mod tests {
             key-repeat 15 2.5
             key-repeat off
             resize 640 360
+            pick my drafts
+            pick
             screenshot shots/a.png
             benchmark 2s
             benchmark 10 stats/run.csv
@@ -558,6 +576,8 @@ mod tests {
                 })),
                 Command::KeyRepeat(None),
                 Command::Resize(640, 360),
+                Command::Pick(Some(PathBuf::from("my drafts"))),
+                Command::Pick(None),
                 Command::Screenshot(PathBuf::from("shots/a.png")),
                 Command::Benchmark(120, None),
                 Command::Benchmark(10, Some(PathBuf::from("stats/run.csv"))),

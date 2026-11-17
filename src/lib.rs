@@ -5,6 +5,7 @@ pub mod audio;
 mod context;
 mod error;
 pub mod files;
+pub mod folders;
 mod gamepads;
 pub mod graphics;
 pub mod grid;

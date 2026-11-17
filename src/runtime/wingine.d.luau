@@ -608,6 +608,38 @@ export type MenuOptions = {
 --- What happened to a menu in an update.
 export type MenuEvent = "moved" | "picked" | "cancelled"
 
+--- A file or folder in a folder the player picked, as `folder:list` finds it.
+export type FolderEntry = {
+    --- Its path in the folder picked, which the folder's methods take.
+    path: string,
+    kind: "file" | "folder",
+    --- Its size in bytes, or 0 for a folder.
+    size: number,
+    --- When it last changed, in seconds since 1970 began, UTC, or 0 where the system can't tell.
+    modified: number,
+}
+
+--- A folder the player picked, from `files.pick_folder` or `files.folders`, which reaches the
+--- files in it and in the folders inside it, and nothing else. Paths are relative to it, names
+--- joined by `/`, and can't leave it. Its methods work at any time. Two are equal when they're
+--- the same folder.
+declare extern type Folder with
+    --- Returns the folder's name, the last of its path's.
+    function name(self): string
+    --- Returns the files and folders in the folder at `path`, or in this one without it, in order
+    --- of their paths, or nil if there's no such folder.
+    function list(self, path: string?): { FolderEntry }?
+    --- Returns what the file at `path` holds, or nil if there's no such file.
+    function read(self, path: string): string?
+    --- Writes `contents` to the file at `path`, replacing any, and making the folders it's in. It's
+    --- written in full first, so stopping partway through leaves the old file as it was.
+    function write(self, path: string, contents: string): ()
+    --- Moves the file or folder at `from` to `to`, which mustn't be there already.
+    function rename(self, from: string, to: string): ()
+    --- Removes the file at `path`, if there is one. Folders are never removed.
+    function remove(self, path: string): ()
+end
+
 --- A rectangle of an image, to draw, from a sprite sheet.
 declare extern type Sprite with
     --- Returns the sprite's width and height in texels.
@@ -1482,6 +1514,21 @@ export type SaveApi = {
     list: () -> { string },
 }
 
+--- Folders the player picks, whose files the game reads and writes, as an application's
+--- documents.
+export type FilesApi = {
+    --- Opens the system's dialog for picking a folder once the frame is done, waits until the
+    --- player has picked one, and returns it, or nil if they picked none. It waits, so it works
+    --- only in tasks, and fails while a dialog is open already.
+    pick_folder: () -> Folder?,
+    --- Returns the folders the player has picked and the game hasn't forgotten, most recently
+    --- first, as the engine remembers them between runs. Works at any time.
+    folders: () -> { Folder },
+    --- Leaves `folder` out of `files.folders` from now on, until it's picked again. Works at any
+    --- time.
+    forget: (folder: Folder) -> (),
+}
+
 --- The game's window.
 export type WindowApi = {
     --- Closes the window once the frame has drawn, which ends the game. Works while the game
@@ -1560,6 +1607,8 @@ export type Wingine = {
     ui: UiApi,
     --- Data kept between runs of the game.
     save: SaveApi,
+    --- Folders the player picks, whose files the game reads and writes.
+    files: FilesApi,
     --- The game's window.
     window: WindowApi,
     --- Math functions that give the same bits on every platform, unlike `math`'s.
@@ -1678,4 +1727,8 @@ declare sim: {
     pixel: (x: number, y: number) -> (number, number, number, number),
     --- Returns what the file at `path`, relative to the test file, holds.
     read_file: (path: string) -> string,
+    --- Answers the game's dialog for picking a folder, the one open or else the next, with a copy
+    --- of the folder at `path`, relative to the test file, or with none for nil, as when the
+    --- player cancels. Returns the copy, which goes when the test ends.
+    pick: (path: string?) -> Folder?,
 }

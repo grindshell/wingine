@@ -12,7 +12,8 @@ models in 3D views picked by boxes, lit by a sun and by lights at places that ca
 glowing, and fading into fog,
 sprite animation, particles, a camera, keyboard, mouse and gamepad input bound to
 actions, grid movement, physics with Rapier (bodies and characters, in 2D and in 3D views),
-text in the built-in font, bitmap fonts and TrueType fonts, audio, saves, Luau scripting with
+text in the built-in font, bitmap fonts and TrueType fonts, audio, saves, folders the player
+picks, Luau scripting with
 tasks, native libraries written in Rust, scenes (levels, screens and rigged characters), menus
 over scenes' nodes, egui interfaces, and an editor built on the engine. Each feature is finished
 with a game or example that uses it, with tests.
@@ -41,6 +42,7 @@ networking or 3D pipelines.
 | Models | `gltf` | glTF 2.0 files, behind the default `models` feature |
 | Physics | `rapier2d`, `rapier3d` | Behind the default `physics` feature |
 | Fonts | `ab_glyph` | TrueType and OpenType fonts, rasterized as text needs their glyphs |
+| Folder dialogs | `rfd` | The system's dialog for picking a folder, off the web; on Linux, the desktop's portal, not GTK |
 
 - Rust edition 2024. Licensed under MIT or Apache 2.0 (`LICENSE-MIT`, `LICENSE-APACHE`); every
   crate's manifest says `license = "MIT OR Apache-2.0"`, and new crates say so too.
@@ -275,6 +277,17 @@ own right.
 - `src/save.rs`: `Saves`, files of plain values in `Wingine/<identity>` among the system's
   applications' data, each written to a file of its own then renamed over the old. Simulations
   keep theirs in a temporary folder, so tests never touch the player's.
+- `src/folders.rs`: `Folder`, a folder the player picked, reached by paths relative to it that
+  can't leave it (`resolve` follows every link on the way and checks where it led), and
+  `Folders`, those picked and the dialog for picking another, shared by clones. Scripts are
+  sandboxed, so a `Folder` never tells them its path. A dialog asked for (`Folders::pick`, a
+  ticket) is opened by the window after the frame (`State::pick_folder`, `rfd`'s
+  `AsyncFileDialog` over the window, polled each frame, waking it when it closes), and its
+  answer waits for the ticket's owner; a simulation opens none, and `Simulation::pick` answers
+  with a copy of a folder, so tests never touch the player's files. The folders picked are
+  remembered in `.folders.luau` beside the saves, which isn't a save; simulations remember them
+  only in memory, so a scripted run started from copies of a player's saves never reaches their
+  folders.
 - `src/icon.rs`: `WindowIcon`, scaled up by whole numbers so systems only shrink it.
 - Also: `tilemap.rs` (`Tilemap` and `Tileset`; outside the map is solid; `solid_rects` merges
   solid cells into boxes for physics), `grid.rs` (`GridMover`,
@@ -286,7 +299,8 @@ own right.
 - `src/runtime/`: games written entirely in Luau, from a folder with `main.luau` and an optional
   `conf.luau`. `LuauGame` runs one; its API is a module, `require("@wingine")`, not globals:
   `Scripts::api`'s built-ins, and the tables `graphics`, `input`, `audio`, `tilemap`, `grid`,
-  `physics`, `scene`, `ui`, `save` and `window`, a file each, frozen as the first script loads.
+  `physics`, `scene`, `ui`, `save`, `files` and `window`, a file each, frozen as the first script
+  loads. `files.pick_folder` waits in Luau, over a ticket, as a function that waits does.
   Requirers answer `@wingine` first (`lua::ApiModule`, through `to_alias_override`), so a game's
   `.luaurc` alias of it, for luau-lsp, is never followed. The module docs are the reference for
   script authors, and `wingine.d.luau` declares the API's types for luau-lsp, every one exported,

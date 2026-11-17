@@ -292,6 +292,7 @@ use mlua::{
 use crate::{
     Error, Fullscreen, Result,
     audio::{PlaySettings, Sound},
+    folders::{Entry, EntryKind, Folder},
     graphics::{
         Animation, Blend, Camera3d, Color, Fog, Font, Light, Lighting, Mesh, Model, Projection,
         Scaling, Sprite, SpriteSheet, TextLayout,
@@ -1120,6 +1121,65 @@ impl mlua::UserData for TextLayout {
 impl mlua::UserData for Sound {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("duration", |_, sound, ()| Ok(sound.duration()));
+    }
+}
+
+/// A folder the player picked, whose methods work at any time. Its path isn't among them: a
+/// script names what's in it by paths relative to it.
+impl mlua::UserData for Folder {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("name", |_, folder, ()| Ok(folder.name()));
+        methods.add_method("list", |_, folder, path: Option<String>| {
+            folder
+                .list(path.as_deref().unwrap_or_default())
+                .map_err(mlua::Error::external)
+        });
+        methods.add_method("read", |lua, folder, path: String| {
+            match folder.read(&path).map_err(mlua::Error::external)? {
+                Some(contents) => Ok(mlua::Value::String(lua.create_string(contents)?)),
+                None => Ok(mlua::Value::Nil),
+            }
+        });
+        methods.add_method(
+            "write",
+            |_, folder, (path, contents): (String, mlua::LuaString)| {
+                folder
+                    .write(&path, &contents.as_bytes())
+                    .map_err(mlua::Error::external)
+            },
+        );
+        methods.add_method("rename", |_, folder, (from, to): (String, String)| {
+            folder.rename(&from, &to).map_err(mlua::Error::external)
+        });
+        methods.add_method("remove", |_, folder, path: String| {
+            folder.remove(&path).map_err(mlua::Error::external)
+        });
+        methods.add_meta_method(
+            mlua::MetaMethod::Eq,
+            |_, folder, other: mlua::AnyUserData| {
+                Ok(other
+                    .borrow::<Folder>()
+                    .is_ok_and(|other| *other == *folder))
+            },
+        );
+        methods.add_meta_method(mlua::MetaMethod::ToString, |_, folder, ()| {
+            Ok(format!("Folder({})", folder.name()))
+        });
+    }
+}
+
+impl IntoLua for Entry {
+    fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
+        let table = lua.create_table()?;
+        table.set("path", self.path)?;
+        let kind = match self.kind {
+            EntryKind::File => "file",
+            EntryKind::Folder => "folder",
+        };
+        table.set("kind", kind)?;
+        table.set("size", self.size)?;
+        table.set("modified", self.modified)?;
+        Ok(mlua::Value::Table(table))
     }
 }
 

@@ -74,6 +74,9 @@ egui-winit = { version = "0.37.0", optional = true, default-features = false, fe
 libloading = "0.8.9"
 # Luau's native code generation, which WebAssembly can't run.
 mlua = { version = "0.12.2", features = ["luau-jit"] }
+# The system's dialog for picking a folder, over the window. On Linux it asks the desktop's
+# portal, so it needs no GTK.
+rfd = "0.18.0"
 
 # On the web: a canvas in the page, WebGPU, and saves in the browser's local storage. The page
 # has one thread, so wgpu's types may claim to be `Send` and `Sync` there, as the engine's

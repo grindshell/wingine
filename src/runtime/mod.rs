@@ -72,7 +72,7 @@
 //! the game's folder.
 //!
 //! The module holds the built-ins `wait`, `wait_until`, `spawn`, `exact`, `rect` and `approach`,
-//! and ten tables:
+//! and eleven tables:
 //!
 //! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.color`, `graphics.default_font`,
 //! `graphics.frame_stats`, `graphics.new_animation`, `graphics.new_particles` and
@@ -371,6 +371,30 @@
 //! - `save.remove(name)` removes the save `name`, if there is one.
 //! - `save.list()` returns the names of the game's saves, in order.
 //!
+//! `files`, for folders the player picks and the files in them, as an application's documents.
+//! A script reaches the player's files only through a `Folder` the player picked, by paths
+//! relative to it, which can't leave it: see [`folders`](crate::folders) for what a path may be.
+//!
+//! - `files.pick_folder()`, only in a task, since it waits, opens the system's dialog for picking
+//!   a folder once the frame is done, waits until the player has picked one, and returns it, or
+//!   nil if they picked none. A dialog asked for while one is open is an error. The engine
+//!   remembers the folder.
+//! - `files.folders()`, at any time, returns the folders picked and not forgotten, most recently
+//!   first, which the engine remembers between runs, and `files.forget(folder)` leaves one out.
+//! - A folder's methods work at any time. `folder:name()` returns its name, never its path.
+//!   `folder:list(path)` returns the files and folders in the folder at `path`, or in this one
+//!   without it, in order of their paths, each `{ path, kind, size, modified }`, `kind` being
+//!   `"file"` or `"folder"` and `modified` seconds since 1970 began, or nil if there's no such
+//!   folder. `folder:read(path)` returns what a file holds, or nil if there's no such file.
+//!   `folder:write(path, contents)` writes a file in full before it replaces any, making the
+//!   folders it's in. `folder:rename(from, to)` moves a file or folder, never over anything, and
+//!   `folder:remove(path)` removes a file, if there is one, but never a folder. Two folders are
+//!   equal when they're the same folder.
+//!
+//! A [`Simulation`](crate::headless::Simulation) opens no dialog: it answers the game's with
+//! [`Simulation::pick`](crate::headless::Simulation::pick), handing it a copy of a folder, and
+//! remembers the folders picked only while it runs. On the web, there are no folders to pick yet.
+//!
 //! `window`, for the game's window:
 //!
 //! - `window.quit()`, while the game loads, in `update`, `gui` and `close_requested`, closes the
@@ -452,6 +476,7 @@
 mod audio;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod export;
+mod files;
 #[cfg(not(target_arch = "wasm32"))]
 mod fs_require;
 mod graphics;
@@ -988,6 +1013,7 @@ impl LuauGame {
         api.set("scene", scene)?;
         api.set("ui", ui::module(lua, &lent)?)?;
         api.set("save", save::module(lua, ctx.saves())?)?;
+        api.set("files", files::module(lua, ctx.folders())?)?;
         api.set("window", window::module(lua, &lent, kept)?)?;
         #[cfg(feature = "egui")]
         gui::register(lua, &lent)?;

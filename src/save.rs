@@ -49,16 +49,20 @@ pub(crate) fn name_problem(name: &str) -> Option<&'static str> {
     if name.is_empty() || !name.chars().all(allowed) {
         return Some("use only letters, digits, `_` and `-`");
     }
-    let lower = name.to_ascii_lowercase();
+    is_device(name).then_some("Windows keeps that name for a device: use another")
+}
+
+/// Whether Windows takes a file named `name` for a device, such as `con`, in any case, with or
+/// without an extension: `con.txt` is the console too.
+pub(crate) fn is_device(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default().trim_end();
+    let lower = stem.to_ascii_lowercase();
     let numbered = |prefix: &str| {
         lower
             .strip_prefix(prefix)
             .is_some_and(|digit| digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit())
     };
-    let device = matches!(lower.as_str(), "con" | "prn" | "aux" | "nul")
-        || numbered("com")
-        || numbered("lpt");
-    device.then_some("Windows keeps that name for a device: use another")
+    matches!(lower.as_str(), "con" | "prn" | "aux" | "nul") || numbered("com") || numbered("lpt")
 }
 
 /// A game's saves, in a folder of its own. See the [module docs](self).
@@ -145,7 +149,7 @@ impl Saves {
             path: folder.to_owned(),
             source,
         })?;
-        write_replacing(&path, &text)
+        write_replacing(&path, text.as_bytes())
     }
 
     /// The data in the save `name`, or `None` if there's no such save.
@@ -251,13 +255,14 @@ impl Saves {
     }
 }
 
-/// Writes `text` to the file at `path`, replacing any: in full to `<path>.partial` first, which
-/// then takes the old file's place, so stopping partway through leaves the old one as it was.
-pub(crate) fn write_replacing(path: &Path, text: &str) -> Result<()> {
+/// Writes `contents` to the file at `path`, replacing any: in full to `<path>.partial` first,
+/// which then takes the old file's place, so stopping partway through leaves the old one as it
+/// was.
+pub(crate) fn write_replacing(path: &Path, contents: &[u8]) -> Result<()> {
     let mut partial = path.as_os_str().to_owned();
     partial.push(".partial");
     let partial = PathBuf::from(partial);
-    write_synced(&partial, text)
+    write_synced(&partial, contents)
         .and_then(|()| fs::rename(&partial, path))
         .map_err(|source| {
             let _ = fs::remove_file(&partial);
@@ -268,10 +273,10 @@ pub(crate) fn write_replacing(path: &Path, text: &str) -> Result<()> {
         })
 }
 
-/// Writes `text` to a new file at `path`, and waits until it's on the disk.
-fn write_synced(path: &Path, text: &str) -> io::Result<()> {
+/// Writes `contents` to a new file at `path`, and waits until it's on the disk.
+fn write_synced(path: &Path, contents: &[u8]) -> io::Result<()> {
     let mut file = File::create(path)?;
-    file.write_all(text.as_bytes())?;
+    file.write_all(contents)?;
     file.sync_all()
 }
 
@@ -390,9 +395,15 @@ impl TemporaryFolder {
     /// A new folder's path, in the system's folder for temporary files, which isn't made until a
     /// save is written.
     pub fn new() -> Self {
+        Self::named("saves")
+    }
+
+    /// A new folder's path for `what`, which names it, in the system's folder for temporary
+    /// files. It isn't made until something is written in it.
+    pub fn named(what: &str) -> Self {
         static COUNT: AtomicU64 = AtomicU64::new(0);
         let count = COUNT.fetch_add(1, Ordering::Relaxed);
-        let name = format!("wingine-saves-{}-{count}", process::id());
+        let name = format!("wingine-{what}-{}-{count}", process::id());
         let folder = env::temp_dir().join(name);
         // Left behind by a process that had the same ID and didn't finish.
         let _ = fs::remove_dir_all(&folder);
@@ -485,14 +496,14 @@ mod tests {
         let folder = TemporaryFolder::new();
         fs::create_dir(folder.path()).unwrap();
         let path = folder.path().join("level.scene.luau");
-        write_replacing(&path, "return 1\n").unwrap();
-        write_replacing(&path, "return 2\n").unwrap();
+        write_replacing(&path, b"return 1\n").unwrap();
+        write_replacing(&path, b"return 2\n").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "return 2\n");
         assert!(!folder.path().join("level.scene.luau.partial").exists());
 
         // Something in the way of the new file.
         fs::create_dir(folder.path().join("level.scene.luau.partial")).unwrap();
-        let err = write_replacing(&path, "return 3\n").unwrap_err();
+        let err = write_replacing(&path, b"return 3\n").unwrap_err();
         assert!(err.to_string().contains("level.scene.luau"), "{err}");
         assert_eq!(fs::read_to_string(&path).unwrap(), "return 2\n");
     }

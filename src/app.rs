@@ -18,6 +18,7 @@ use winit::{
 use crate::{
     Context, Error, FrameStats, Result, WindowIcon,
     audio::Audio,
+    folders::Folders,
     gamepads::Gamepads,
     graphics::{
         Canvas, Resolution, Scaling,
@@ -642,6 +643,8 @@ where
                     state.set_fullscreen(state.ctx.fullscreen);
                 }
                 state.capture_mouse();
+                #[cfg(not(target_arch = "wasm32"))]
+                state.pick_folder();
             }
             _ => {}
         }
@@ -756,6 +759,25 @@ struct State<G> {
     /// Turns window events into egui's input, and acts on what egui asks of the window.
     #[cfg(feature = "egui")]
     gui_window: egui_winit::State,
+    /// The system's dialog for picking a folder, while it's open over the window.
+    #[cfg(not(target_arch = "wasm32"))]
+    picking: Option<PickingFolder>,
+}
+
+/// The system's dialog for picking a folder, open, which is done once the player has picked one,
+/// or none.
+#[cfg(not(target_arch = "wasm32"))]
+type PickingFolder = std::pin::Pin<Box<dyn Future<Output = Option<rfd::FileHandle>>>>;
+
+/// Wakes the window when the dialog for picking a folder closes.
+#[cfg(not(target_arch = "wasm32"))]
+struct WakeWindow(Waker);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::task::Wake for WakeWindow {
+    fn wake(self: Arc<Self>) {
+        self.0.wake();
+    }
 }
 
 /// `icon` as winit takes it, scaled up by whole numbers so that the system only ever shrinks it.
@@ -940,6 +962,7 @@ impl<G: Game> State<G> {
         let renderer = Renderer::new(&gpu.device, &gpu.queue, surface.view_format());
         let mut ctx = Context::new(gpu, renderer, Audio::new());
         ctx.saves = Saves::for_window(config);
+        ctx.folders = Folders::kept_with(&ctx.saves);
         // Before the game is built, so it can see the gamepads already connected.
         let gamepads = Gamepads::new(&mut ctx.input);
         // Frames that come one after another needn't be asked for.
@@ -992,7 +1015,36 @@ impl<G: Game> State<G> {
             input_method: None,
             #[cfg(feature = "egui")]
             gui_window,
+            #[cfg(not(target_arch = "wasm32"))]
+            picking: None,
         })
+    }
+
+    /// Opens the system's dialog for picking a folder over the window, if the game has asked for
+    /// one, and once it closes, answers the game with the folder picked, or none. The dialog
+    /// runs alongside the window, which it wakes when it closes.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn pick_folder(&mut self) {
+        use std::task::{Context as TaskContext, Poll};
+
+        if self.picking.is_none() && self.ctx.folders.open_asked() {
+            let dialog = rfd::AsyncFileDialog::new().set_parent(&*self.window);
+            self.picking = Some(Box::pin(dialog.pick_folder()));
+        }
+        let Some(picking) = &mut self.picking else {
+            return;
+        };
+        let waker = std::task::Waker::from(Arc::new(WakeWindow(self.ctx.waker())));
+        if let Poll::Ready(picked) = picking.as_mut().poll(&mut TaskContext::from_waker(&waker)) {
+            self.picking = None;
+            let folder = picked.and_then(|picked| {
+                crate::folders::Folder::at(picked.path())
+                    .inspect_err(|err| log::warn!("the folder picked can't be opened: {err}"))
+                    .ok()
+            });
+            self.ctx.folders.answer(folder);
+            self.window.request_redraw();
+        }
     }
 
     /// Passes a key event to the game, and what it types, unless egui wanted it (`to_gui`) or

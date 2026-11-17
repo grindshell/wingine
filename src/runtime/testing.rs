@@ -91,7 +91,11 @@
 //!   returns the red, green, blue and alpha of the latest frame's pixel at `x`, `y`, each from 0
 //!   to 255, counting the window's pixels from 0 at the top-left, as a screenshot has them.
 //! - Files: `sim.read_file(path)` returns what the file at `path`, relative to the test file, holds,
-//!   as a string, such as data the game was made from to check it against.
+//!   as a string, such as data the game was made from to check it against. `sim.pick(path)`
+//!   answers the game's dialog for picking a folder, the one open or else the next, with a copy
+//!   of the folder at `path`, relative to the test file, and returns the copy, a `Folder` the test
+//!   reads as the game does; `sim.pick()` answers it with none, as when the player cancels. The
+//!   copy goes when the test ends, so the game never changes the folder.
 //!
 //! A function that can't do what it's asked, such as pressing an action the game hasn't bound,
 //! raises an error where the test called it.
@@ -162,6 +166,7 @@ const REQUESTS: &[&str] = &[
     "matches_screenshot",
     "pixel",
     "read_file",
+    "pick",
 ];
 
 /// The requests about the game's interface, with the `egui` feature.
@@ -1075,6 +1080,12 @@ impl Runner<'_> {
                     .map_err(|err| Refusal::Raise(format!("can't read {path}: {err}")))?;
                 let text = self.lua.create_string(bytes).map_err(raise)?;
                 Ok(vec![mlua::Value::String(text)])
+            }
+            "pick" => {
+                let path = args.optional::<String>(0)?;
+                let folder = path.map(|path| self.test_folder.join(path));
+                let picked = simulation.pick(folder.as_deref()).map_err(raise)?;
+                args.results((picked,))
             }
             _ => unreachable!("every request is carried out"),
         }

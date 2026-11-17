@@ -333,6 +333,31 @@ Returns what the file at `path`, relative to the test file, holds, as a string o
 game reads only its scripts, assets and saves, but a test may check the game against what it was
 made from, such as a data file it was written from by hand.
 
+#### `sim.pick`
+
+```lua
+sim.pick(path: string?): Folder?
+```
+
+Answers the game's dialog for [picking a folder](files.md#filespick_folder) as the player would:
+with a copy of the folder at `path`, relative to the test file, or with none for `nil`, as when the
+player cancels. It answers the dialog that's open, or if none is, the next the game asks for, so a
+test may answer before the click that opens it. Returns the copy, a [`Folder`](files.md#folder)
+the test reads as the game does.
+
+The copy has the folder's name, and goes when the test ends, so the game never changes the folder
+itself: keep folders of files for tests beside them, and check what the game wrote through the
+copy.
+
+```lua
+test("opening a folder lists its drafts", function()
+    sim.pick("projects/two-drafts")
+    sim.click_gui("Open folder")
+    sim.step()
+    assert_equal(#editor.drafts, 2)
+end)
+```
+
 ## `assert_equal`
 
 ```lua

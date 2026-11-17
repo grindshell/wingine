@@ -47,6 +47,8 @@ The browser needs WebGPU and Wasm exception handling with `exnref`.
   before it starts, and scripts, scenes, images, models and sounds are read from those. Luau's
   `require` finds modules among them as it finds files off the web.
 - Saves are kept in the browser's local storage, under `Wingine/<identity>/<name>.luau`.
+- There are no folders to pick yet: [`files.pick_folder`](api/files.md#filespick_folder) is an
+  error, and `files.folders` returns none.
 - kira can't stream there, so music is decoded into memory when it starts, as a sound effect is.
 - Native library files can't be loaded: games have only libraries linked into the program with
   `runtime::link_library`.

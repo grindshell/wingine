@@ -75,6 +75,18 @@ pub enum Error {
     /// name isn't one, its data isn't plain, or there's nowhere to keep it.
     #[error("save `{name}`: {message}")]
     Save { name: String, message: String },
+    /// A path in a [folder the player picked](crate::folders) can't be used: it isn't a path
+    /// there, a link on the way leads out of the folder, or it names something other than what
+    /// was asked for, such as a folder where a file was wanted.
+    #[error("folder `{folder}`, path `{path}`: {message}")]
+    Folder {
+        folder: String,
+        path: String,
+        message: String,
+    },
+    /// A dialog to pick a folder can't open: one already is, or there's no such dialog.
+    #[error("can't pick a folder: {0}")]
+    PickFolder(String),
     /// A mesh's data couldn't be drawn.
     #[error("invalid mesh: {0}")]
     Mesh(String),

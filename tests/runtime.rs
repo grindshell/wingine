@@ -1061,6 +1061,7 @@ fn the_definitions_declare_every_function_of_the_engine() {
         ("physics", "PhysicsApi"),
         ("scene", "SceneApi"),
         ("save", "SaveApi"),
+        ("files", "FilesApi"),
         ("exact", "ExactApi"),
         ("rect", "RectApi"),
         ("window", "WindowApi"),
@@ -1315,6 +1316,184 @@ fn simulations_keep_saves_of_their_own() {
     assert!(saves.join("slot.luau").is_file());
     drop(first);
     assert!(!saves.exists());
+}
+
+/// A game that picks a folder in a task when `open()` is called, as `picked`, or `false` if none
+/// was picked.
+const PICKER: &str = "local wg = require('@wingine')
+picked = nil
+function open()
+    picked = nil
+    wg.spawn(function()
+        picked = wg.files.pick_folder() or false
+    end)
+end
+-- What `list` finds at `path`, as `kind path size` lines.
+function listed(path)
+    local found = {}
+    for _, entry in picked:list(path) do
+        table.insert(found, `{entry.kind} {entry.path} {entry.size}`)
+    end
+    return found
+end
+-- The names of the folders picked, as `files.folders` has them.
+function names_picked()
+    local names = {}
+    for _, folder in wg.files.folders() do
+        table.insert(names, folder:name())
+    end
+    return names
+end
+-- The error calling `f` raises.
+function error_of(f, ...)
+    local ok, err = pcall(f, ...)
+    assert(not ok, 'it fails')
+    return tostring(err)
+end";
+
+#[test]
+fn folders_are_picked_in_a_task_and_their_files_read_and_written() {
+    let folder = game("pick_folder", &[("main.luau", PICKER)]);
+    let project = game(
+        "pick_folder_project",
+        &[("wanderer.md", "# Hello\r\n"), ("notes/old.md", "old")],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.exec("open()");
+    simulation.run_frames(3);
+    assert!(simulation.context().folders().is_picking());
+    assert!(simulation.eval::<bool>("picked == nil"), "it waits");
+    let copy = simulation.pick(Some(&project)).unwrap().unwrap();
+    assert_ne!(copy.path(), project, "the game gets a copy");
+    simulation.step();
+    assert!(!simulation.context().folders().is_picking());
+    assert_eq!(
+        simulation.eval::<String>("picked:name()"),
+        "pick_folder_project"
+    );
+    assert_eq!(
+        simulation.eval::<String>("tostring(picked)"),
+        "Folder(pick_folder_project)"
+    );
+    assert_eq!(
+        simulation.eval::<String>("picked:read('wanderer.md')"),
+        "# Hello\r\n"
+    );
+    assert!(simulation.eval::<bool>("picked:read('missing.md') == nil"));
+    assert_eq!(
+        simulation.eval::<Vec<String>>("listed()"),
+        ["folder notes 0", "file wanderer.md 9"]
+    );
+    assert_eq!(
+        simulation.eval::<Vec<String>>("listed('notes')"),
+        ["file notes/old.md 3"]
+    );
+    assert!(simulation.eval::<bool>("picked:list('nowhere') == nil"));
+    assert!(simulation.eval::<f64>("picked:list()[1].modified") > 1.0e9);
+
+    simulation.exec(
+        "picked:write('wanderer.md', '# Changed\\n')
+        picked:write('drafts/new.md', 'new\\0bytes')
+        picked:rename('notes/old.md', 'notes/older.md')
+        picked:remove('notes/older.md')",
+    );
+    assert_eq!(
+        fs::read(copy.path().join("wanderer.md")).unwrap(),
+        b"# Changed\n"
+    );
+    assert_eq!(
+        fs::read(copy.path().join("drafts/new.md")).unwrap(),
+        b"new\0bytes"
+    );
+    assert_eq!(
+        simulation.eval::<Vec<String>>("listed()"),
+        ["folder drafts 0", "folder notes 0", "file wanderer.md 10"]
+    );
+    assert!(simulation.eval::<bool>("#picked:list('notes') == 0"));
+    assert_eq!(
+        fs::read_to_string(project.join("wanderer.md")).unwrap(),
+        "# Hello\r\n",
+        "the folder picked never changes"
+    );
+    assert!(project.join("notes/old.md").is_file());
+
+    // Paths stay in the folder, and errors name the folder and the path.
+    let err =
+        simulation.eval::<String>("error_of(picked.read, picked, '../pick_folder/main.luau')");
+    assert!(
+        err.contains("folder `pick_folder_project`, path `../pick_folder/main.luau`")
+            && err.contains("a path stays in its folder"),
+        "{err}"
+    );
+    let err = simulation
+        .eval::<String>("error_of(picked.rename, picked, 'wanderer.md', 'drafts/new.md')");
+    assert!(err.contains("renaming never replaces"), "{err}");
+    let err = simulation.eval::<String>("error_of(picked.remove, picked, 'drafts')");
+    assert!(err.contains("is a folder"), "{err}");
+}
+
+#[test]
+fn folders_picked_are_remembered_until_forgotten() {
+    let folder = game("picked_folders", &[("main.luau", PICKER)]);
+    let first = game("picked_folders_first", &[("a.md", "")]);
+    let second = game("picked_folders_second", &[("b.md", "")]);
+    let mut simulation = simulation(&folder);
+    assert!(simulation.eval::<Vec<String>>("names_picked()").is_empty());
+    for project in [&first, &second] {
+        simulation.exec("open()");
+        simulation.pick(Some(project)).unwrap();
+        simulation.step();
+    }
+    assert_eq!(
+        simulation.eval::<Vec<String>>("names_picked()"),
+        ["picked_folders_second", "picked_folders_first"]
+    );
+    let files = "require('@wingine').files";
+    assert!(simulation.eval::<bool>(&format!("{files}.folders()[1] == picked")));
+    assert!(simulation.eval::<bool>(&format!("{files}.folders()[2] ~= picked")));
+    simulation.exec(&format!("{files}.forget(picked)"));
+    assert_eq!(
+        simulation.eval::<Vec<String>>("names_picked()"),
+        ["picked_folders_first"]
+    );
+    assert!(
+        simulation.eval::<bool>("picked:read('nothing.md') == nil"),
+        "a folder forgotten still works"
+    );
+}
+
+#[test]
+fn picking_a_folder_waits_so_works_only_in_tasks() {
+    let folder = game("pick_folder_outside", &[("main.luau", PICKER)]);
+    let mut simulation = simulation(&folder);
+    let err = simulation.eval::<String>("error_of(require('@wingine').files.pick_folder)");
+    assert!(err.contains("works only in a task"), "{err}");
+    assert!(!simulation.context().folders().is_picking());
+
+    // Cancelled, in a dialog open and in one answered before it opens.
+    simulation.exec("open()");
+    simulation.step();
+    simulation.pick(None).unwrap();
+    simulation.step();
+    assert!(simulation.eval::<bool>("picked == false"));
+    simulation.pick(None).unwrap();
+    simulation.exec("open()");
+    assert!(
+        simulation.eval::<bool>("picked == false"),
+        "answered at once"
+    );
+
+    // A second dialog while one is open fails its task, and the first is still answered.
+    simulation.exec("open() open()");
+    simulation.step();
+    assert!(
+        simulation.game().error().is_none(),
+        "a task's error stops only it"
+    );
+    let project = game("pick_folder_outside_project", &[("a.md", "")]);
+    simulation.pick(Some(&project)).unwrap();
+    simulation.step();
+    assert!(simulation.eval::<bool>("picked ~= false and picked ~= nil"));
 }
 
 #[test]

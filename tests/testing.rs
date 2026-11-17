@@ -584,6 +584,51 @@ fn tests_read_the_frames_pixels_and_files() {
 }
 
 #[test]
+fn tests_answer_the_dialog_for_picking_a_folder() {
+    let folder = game(
+        "picking",
+        &[
+            (
+                "main.luau",
+                "local wg = require('@wingine')
+                opened = nil
+                function open()
+                    wg.spawn(function()
+                        opened = wg.files.pick_folder() or false
+                    end)
+                end",
+            ),
+            ("projects/drafts/wanderer.md", "# Wanderer\n"),
+            (
+                "tests/picking.test.luau",
+                "test('picked', function()
+                    open()
+                    sim.step(3)
+                    assert_equal(opened, nil, 'the dialog waits for its answer')
+                    local copy = sim.pick('../projects/drafts')
+                    sim.step()
+                    assert(opened == copy, 'the game gets the copy')
+                    assert_equal(copy:name(), 'drafts')
+                    opened:write('wanderer.md', '# Changed\\n')
+                    assert_equal(copy:read('wanderer.md'), '# Changed\\n')
+                    assert_equal(sim.read_file('../projects/drafts/wanderer.md'), '# Wanderer\\n')
+                end)
+                test('cancelled before it opened', function()
+                    assert_equal(sim.pick(), nil)
+                    open()
+                    assert_equal(opened, false)
+                end)
+                test('missing', function()
+                    local ok, err = pcall(sim.pick, 'nowhere')
+                    assert(not ok and string.find(err, 'nowhere'), err)
+                end)",
+            ),
+        ],
+    );
+    assert_passed(&run(&folder));
+}
+
+#[test]
 fn screenshots_match_their_references() {
     let shade = |color: &str| {
         format!("local wg = require('@wingine') function draw() wg.graphics.clear('{color}') end")

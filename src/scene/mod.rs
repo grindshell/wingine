@@ -484,7 +484,7 @@ impl SceneFile {
     /// written in full to a file of its own first, then takes the old one's place, so stopping
     /// partway through leaves the old one as it was.
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
-        save::write_replacing(path.as_ref(), &self.to_luau()?)
+        save::write_replacing(path.as_ref(), self.to_luau()?.as_bytes())
     }
 }
 
@@ -498,7 +498,7 @@ impl TilesetFile {
     /// Writes the tileset to the file at `path`, as [`TilesetFile::to_luau`] gives it, replacing
     /// the old one as [`SceneFile::write`] does.
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
-        save::write_replacing(path.as_ref(), &self.to_luau()?)
+        save::write_replacing(path.as_ref(), self.to_luau()?.as_bytes())
     }
 }
 
