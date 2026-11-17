@@ -21,11 +21,13 @@ functions work only in `draw`.
   [`SpriteSheet`](#spritesheet), [`Sprite`](#sprite)
 - [Animation](#animation): [`new_animation`](#graphicsnew_animation), [`Animation`](#animation-1)
 - [Particles](#particles): [settings](#particle-settings),
-  [`new_particles`](#graphicsnew_particles), [`draw_particles`](#graphicsdraw_particles),
-  [`Particles`](#particles-1)
+  [in a 3D view](#particles-in-a-3d-view), [`new_particles`](#graphicsnew_particles),
+  [`draw_particles`](#graphicsdraw_particles), [`Particles`](#particles-1),
+  [`Particles3d`](#particles3d)
 - [Text](#text): [`default_font`](#graphicsdefault_font), [`load_font`](#graphicsload_font),
   [font files](#font-files), [`Font`](#font), [`TextLayout`](#textlayout)
-- [3D views](#3d-views): [`begin_3d`](#graphicsbegin_3d), [`draw_mesh`](#graphicsdraw_mesh),
+- [3D views](#3d-views): [`begin_3d`](#graphicsbegin_3d) ([lights](#lights),
+  [shadows](#shadows), [fog](#fog), [sky](#sky), [glow](#glow)), [`draw_mesh`](#graphicsdraw_mesh),
   [`draw_model`](#graphicsdraw_model), [`draw_billboard`](#graphicsdraw_billboard),
   [`draw_text_3d`](#graphicsdraw_text_3d),
   [`project`](#graphicsproject), [`ray`](#graphicsray), [`hit_box`](#graphicshit_box)
@@ -373,8 +375,8 @@ end
 Drawing in one mode after another starts a new draw call, as switching images does, so drawing
 everything in a mode together is cheaper than alternating. A scene's nodes draw in the modes their
 [`blend`](../scenes.md#nodes) fields give them, whatever `set_blend` set, and leave it as it was;
-[particles](#particles) draw in their own mode too. 3D views don't blend: meshes and billboards are
-drawn opaque.
+[particles](#particles) draw in their own mode too. In 3D views, meshes, models and billboards are
+drawn opaque: only [particles](#particles-in-a-3d-view) blend.
 
 ## The canvas and frames
 
@@ -443,10 +445,10 @@ seconds, measured on the CPU:
 | `render` | Rendering what was drawn: uploading it to the GPU and submitting draw calls. Not the GPU's own work. |
 | `quads` | How many quads the frame drew: sprites, rectangles and glyphs of text. |
 | `triangles` | How many triangles of meshes and billboards the frame drew in [3D views](#3d-views). |
-| `draw_calls` | How many draw calls those took: one for each run of quads with the same texture, and one for each kind of mesh, or billboard, each 3D view drew: the same mesh showing the same texture. |
-| `lights` | How many [lights at places](#graphicsbegin_3d) lit the frame's 3D views. |
+| `draw_calls` | How many draw calls those took: one for each run of quads with the same texture and blend mode, one for each kind of mesh, or billboard, each 3D view drew: the same mesh showing the same texture, and one for each view's sky. |
+| `lights` | How many [lights at places](#lights) lit the frame's 3D views. |
 | `lights_left_out` | How many lights reached what a 3D view saw but didn't light it, there being more than the 32 that light a view at once. |
-| `shadow_maps` | How many [shadow maps](#graphicsbegin_3d) those lights took. Each draws its view's meshes that cast shadows again, from a light, in draw calls `draw_calls` doesn't count. |
+| `shadow_maps` | How many [shadow maps](#shadows) those lights took. Each draws its view's meshes that cast shadows again, from a light, in draw calls `draw_calls` doesn't count. |
 | `shadows_left_out` | How many lights with `shadows` lit a 3D view without them, there being more than the 24 shadow maps a view has. |
 
 Before the first frame has finished, everything is 0. To see what a frame really costs, turn
@@ -760,7 +762,7 @@ wg.graphics.draw_particles(particles: Particles | Particles3d)
 ```
 
 Draws the emitter's particles, oldest first, in its blend mode, then goes back to the mode drawing
-was in. With a [camera](#graphicsset_camera) set, particles are in the world, as everything else
+was in; in a 3D view, those blended normally are drawn the farthest from the camera first. With a [camera](#graphicsset_camera) set, particles are in the world, as everything else
 drawn is. A 3D emitter's draw in the [3D view](#3d-views) begun last, and a 2D one's can't: drawing
 either where the other goes is an error saying so.
 
@@ -874,7 +876,8 @@ Changes what its particles show, or with `nil`, white squares.
 
 ### `Particles3d`
 
-An emitter for a 3D view, from `new_particles` with settings that say how its particles `look`.
+An emitter for a 3D view, from `new_particles` with settings that say how its particles `look`,
+or give `gravity` three numbers.
 It has `emit`, `advance`, `count`, `clear`, `is_emitting`, `set_emitting`, `settings`,
 `set_settings` and `set_sprite`, as a 2D one's, with [3D settings](#particles-in-a-3d-view), and:
 
@@ -974,7 +977,7 @@ glyphs are drawn in a PNG divided into cells, as a sprite sheet is:
 
 ```lua
 return {
-    format = 3,
+    format = 4,
     image = "title.png",
     cell = { 14, 14 },
     characters = {
@@ -994,7 +997,8 @@ return {
 - `characters`: which character each cell draws, a string for each row of cells, or one string
   read cell by cell, on to the next row at the image's right edge. A space skips a cell.
 - `spacing`: the texels of space after each glyph, 1 by default.
-- `space`: how far a space moves the pen, half a cell by default (rounded up).
+- `space`: how far a space moves the pen, half a cell by default (rounded up), or a whole cell and
+  its `spacing` if `monospace`.
 - `line_height`: from the top of one line to the top of the next, a cell's height and 1 by
   default.
 - `monospace`: true keeps every glyph a whole cell wide. By default, each is as wide as its ink,
@@ -1011,7 +1015,7 @@ A TrueType or OpenType font file names the font and how it's drawn, as `graphics
 
 ```lua
 return {
-    format = 3,
+    format = 4,
     file = "Hack-Regular.ttf",
     size = 13,
     smooth = false,
@@ -1134,7 +1138,8 @@ end
 wg.graphics.begin_3d(view: View3d)
 ```
 
-Begins a 3D view over what's been drawn so far. The meshes and billboards drawn after it go in it,
+Begins a 3D view over what's been drawn so far. The meshes, models, billboards, text and particles
+drawn in 3D after it go in it,
 until anything else is drawn, which ends it and goes over it. Each view has its own depth: things
 in one hide each other by how near they are, but a later view draws over an earlier one.
 
@@ -1171,6 +1176,8 @@ The lighting's table:
 White light shows a surface as it is, and all of a view's light together lights it no brighter
 than that. For no shading at all, light everything with ambient light alone:
 `{ color = "#000000", ambient = "#ffffff" }`.
+
+#### Lights
 
 Each of the `lights` is a table:
 
@@ -1232,8 +1239,10 @@ ceiling, keeps the room's light in it for nothing, where shadows take maps.
 { position = vector.create(4, 3.5, 4), range = 6, bounds = { 0.25, -0.25, 0.25, 7.75, 4.25, 7.75 } }
 ```
 
-With `shadows`, the view's
-meshes and models shade what's behind them from the light, billboards too. The shadows have hard
+#### Shadows
+
+With `shadows`, the view's meshes and models shade what's behind them from the light, billboards
+too. The shadows have hard
 edges: a place is in one or it isn't. Some things cast none: billboards, which face the camera,
 not the light; the pixels of a mesh's sprite less than half opaque, which aren't drawn either; a
 mesh or model drawn with [`casts_shadow`](#graphicsdraw_mesh) `false`; and anything nearer the
@@ -1262,6 +1271,8 @@ light. A view has 24 shadow maps, which the lights nearest its camera take first
 are none left for lights the view without shadows: the engine logs a warning the first time, and
 [`graphics.frame_stats`](#graphicsframe_stats) counts such lights as `shadows_left_out`, and the
 maps taken as `shadow_maps`.
+
+#### Fog
 
 The fog's table:
 
@@ -1298,6 +1309,8 @@ end
 A light none of whose reach is nearer the camera than the fog's `far` lights nothing that
 shows. It isn't one of the view's 32 lights, takes no shadow maps, and isn't counted as left
 out.
+
+#### Sky
 
 The sky's table:
 
@@ -1337,6 +1350,8 @@ wg.graphics.begin_3d({
 wg.graphics.draw_mesh(ground, vector.zero)
 ```
 
+#### Glow
+
 Meshes, models and billboards can glow: show a color whatever lights them, or doesn't, such as a
 window lit from inside, a screen, or a candle's flame. A model's parts give off what their
 file's materials emit ([`load_model`](#graphicsload_model)); and anything drawn with a `glow`
@@ -1371,8 +1386,8 @@ colors it:
 | `scale` | How much to scale it: a number, along every axis, or a vector, along each. A negative scale mirrors it. |
 | `sprite` | The sprite it shows. A mesh's corners show points of the sprite from 0 to 1 across it, so each side of a [cube](#graphicsnew_cube) shows the whole sprite. By default, none: the mesh is white. |
 | `tint` | A color its colors are multiplied by. By default, white. |
-| `casts_shadow` | Whether it shades what's behind it from [lights with `shadows`](#graphicsbegin_3d). By default, `true`. |
-| `glow` | How much of its own colors it shows whatever lights it, a [`Color`](README.md#color): white, as full light would show them, black, as by default, none. See [glow](#graphicsbegin_3d). |
+| `casts_shadow` | Whether it shades what's behind it from [lights with `shadows`](#shadows). By default, `true`. |
+| `glow` | How much of its own colors it shows whatever lights it, a [`Color`](README.md#color): white, as full light would show them, black, as by default, none. See [glow](#glow). |
 
 The mesh is scaled, rolled, pitched and turned, in that order, about its origin, then moved to
 `position`. Pixels of the sprite less than half opaque aren't drawn, so what's behind shows through
@@ -1422,11 +1437,11 @@ upright however far down the camera looks. It's `height` world units tall, 1 by 
 it, as [`sprite:flipped_x`](#spriteflipped_x) does.
 
 A billboard is lit as the ground is, whichever way it faces, so it matches what it stands on. A
-[light at a place](#graphicsbegin_3d) gives it its whole level wherever the light is from it,
+[light at a place](#lights) gives it its whole level wherever the light is from it,
 since a billboard has no side to turn away. Meshes shade it from lights with `shadows`, but it
 casts no shadow itself. It hides what's behind it as meshes do, its pixels less than half opaque
 left out, and its colors are multiplied by `tint`, white by default. It shows `glow` of its own
-colors whatever lights it, black, none, by default, as a mesh's [`glow`](#graphicsbegin_3d)
+colors whatever lights it, black, none, by default, as a mesh's [`glow`](#glow)
 does. Drawing one when no view is open is an error.
 
 ```lua
@@ -1688,7 +1703,7 @@ too, lit as though it faced that way; the rest show only from the side their tri
 meshes do. In Blender, a material is double-sided unless its Backface Culling is on. Parts that
 share a mesh in the file share it on the GPU.
 
-A material's emission is what its parts [glow](#graphicsbegin_3d) with, whatever lights them: its
+A material's emission is what its parts [glow](#glow) with, whatever lights them: its
 emissive color, times its emission texture, if it has one, which must be a PNG on the same
 texture coordinates as its base color's, times its `KHR_materials_emissive_strength`. In
 Blender, that's the Principled BSDF's Emission Color, its texture, and its Strength. Nothing is

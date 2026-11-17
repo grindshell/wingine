@@ -18,13 +18,10 @@ cargo run -p wingine-editor -- examples/garden
 Without a folder, it starts with a choice of the repository's examples, and **Project > Open
 Folder…** opens any game.
 
-The editor is new, and grows with each part of the current milestone. It edits scenes' nodes, the
-scene's sheets and props, tilemaps' tiles, instances' overrides, screens' layouts, clips, 3D
-views, scripts and songs now.
-
 ## The layout
 
-- **The top bar**: the menus on the left; the main screens in the middle, the **2D** view of the
+- **The top bar**: the **Scene**, **Edit**, **Project** and **Help** menus on the left; the main
+  screens in the middle, the **2D** view of the
   open scene, the **Script** screen of the open scripts and the **Music** screen of the open songs;
   and **Play** and **Stop** on the right.
 - **The Scene dock**, at the top left: the open scene's tree of nodes.
@@ -106,7 +103,7 @@ Select the scene itself, at the top of the Scene dock, to change its sheets and 
 
 ## Laying out screens
 
-Screens, such as menus and HUDs, are laid out with [anchors](scenes.md): a node with an `anchor` is
+Screens, such as menus and HUDs, are laid out with [anchors](scenes.md#laying-out-screens): a node with an `anchor` is
 placed from that point of its parent's rectangle, the canvas's for the nodes at the top of a scene,
 so it stays in its corner or middle on a canvas of any size, and a node with a `stretch` grows and
 shrinks with its parent.
@@ -222,7 +219,7 @@ While the Animation panel shows a clip, **♦** keys a node's `z`, `yaw`,
 
 ## Animating rigs
 
-A scene's [clips](scenes.md) animate its nodes, as a character's walk turns its limbs. The
+A scene's [clips](scenes.md#clips) animate its nodes, as a character's walk turns its limbs. The
 **Animation** panel shows one at a time, chosen at its left; **New Clip** adds one a second long,
 and **Rename Clip** and **Delete Clip** do what they say. Beside them are the clip's length, which
 can't be shorter than its last key, and **Loop**, whether it starts over at its end.
@@ -256,7 +253,8 @@ instance places, open that scene and give it clips of its own.
 ## Editing scripts
 
 Double-click a script in the FileSystem dock to open it in the **Script** screen, which lists the
-open scripts on its left and edits the one chosen. **File > New Script…** makes a script, at a path
+open scripts on its left and edits the one chosen. Its own **File** and **Edit** menus are along
+its top: **File > New Script…** makes a script, at a path
 in the game's folder, and opens it. Scripts are colored as Godot colors its own: keywords, names
 of the engine's tables, functions called, strings, numbers and comments each in a color of their
 own.
@@ -339,7 +337,8 @@ editor turns that warning off, and a `.luaurc` can too, with `"FunctionUnused": 
 ## Writing songs
 
 Double-click a [song](music.md) in the FileSystem dock to open it in the **Music** screen, which
-shows the open songs as tabs. **File > New Song…** makes one, at a path in the game's folder: a
+shows the open songs as tabs, under **File** and **Edit** menus of its own. **File > New Song…**
+makes one, at a path in the game's folder: a
 section of four bars that loops, with a track playing a square-wave lead in an empty pattern.
 
 - **The transport**, along the top: **▶ Song** plays the song from its start, **▶ Section** from the
@@ -359,13 +358,15 @@ section of four bars that loops, with a track playing a square-wave lead in an e
   for each step of the grid, the bars and beats marked. Click to add a note a step long, drag a
   note to move it, drag its right end to lengthen it, and right-click it, or select it and press
   Delete, to remove it. Each note plays as it's added or moved, on the instrument of a track that
-  plays the pattern. **Snap** sets the grid's step, from a beat down to a sixteenth, and **Zoom** its
+  plays the pattern. **Snap** sets the grid's step, from a beat down to a sixteenth of one, thirds
+  and sixths among them, and **Zoom** its
   width. While the song plays a section that plays the pattern, a line shows where it is.
 
 Renaming an instrument, track, pattern or section renames it wherever the song names it. Changing a
 song while it plays plays the changed song from where it was, once the change is made. **File >
 Bake to WAV** renders the song once through to a WAV file beside it, as
 [`wingine bake`](music.md#baking) does.
+
 ## Saving, undo and playing
 
 - **Ctrl+Z** undoes a change and **Ctrl+Y** (or Ctrl+Shift+Z) redoes it. A drag, or typing in a
@@ -381,8 +382,8 @@ Bake to WAV** renders the song once through to a WAV file beside it, as
   script while it plays and the game starts again with it. What it prints shows in Output. **F8**,
   or **Stop**, ends it.
 
-The editor writes scene files in the canonical layout, as
-[`SceneFile::to_luau`](scenes.md) does. A file already in it changes only where the scene did, but
+The editor writes scene files in the [canonical layout](scenes.md#files-that-tools-write). A file
+already in it changes only where the scene did, but
 the layout has no comments: saving a scene written by hand drops its comments.
 
 The editor looks at the game's folder every second, and reads what's changed elsewhere, such as an

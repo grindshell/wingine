@@ -214,11 +214,9 @@ that's posed, or anything else with no body at it or in it; moving a node that h
 level looks at every body in it.
 
 Adding bodies costs by how many models there are, not by how many copies of them: copies of a
-model share their bodies' shape. A world makes a model's shape once for each way a body is
-shaped by it, stretched, and turned by quarter turns, keeps it as long as the world lasts, and
-places a copy's body where its node is. So a level built of a kit's pieces loads at what a few
-dozen of them cost, where making a shape of a few hundred triangles takes a few tenths of a
-millisecond. Pieces turned by quarter turns meet edge to edge exactly, with no crack between
+model shaped and stretched alike, however they're turned by quarter turns, share their bodies'
+shape, so a level built of a kit's pieces loads at what a few dozen of them cost. Pieces turned
+by quarter turns meet edge to edge exactly, with no crack between
 them, however far from the middle of the world. The one exception is a node that something it's
 in stretches along other axes than it's turned by, such as a node turned inside a group
 stretched along `x`: its body's shape is made for it alone, where it is.
@@ -411,8 +409,8 @@ world:step(dt: number)
 Moves the world on by `dt` seconds, a frame's `update` time: dynamic bodies fall, roll, push
 each other and come to rest, moving and turning their nodes, and kinematic bodies move to where
 their nodes are. Colliders first follow their nodes, if scripts have moved them or the nodes
-they're in. Steps are taken as in 3D: those more than a twentieth longer than a sixtieth of a
-second in equal parts, and the same every update with an `update_rate` of 60.
+they're in. Steps are taken [as in 3D](#worldstep-1): those more than a twentieth longer than a
+sixtieth of a second in equal parts, and the same every update with an `update_rate` of 60.
 
 ### `world:walk`
 
@@ -513,7 +511,7 @@ hits a collider, or `nil` if it hits nothing:
 
 A ray that starts inside a node solid all over hits it at once, at a `distance` of 0, with a
 normal of zero, and edges are hit from either side, so a ray inside a fence hits it. `options` are
-the 3D world's: `distance`, how far it goes; `except`, a node or a list of them whose colliders it
+[the 3D world's](#worldray-1): `distance`, how far it goes; `except`, a node or a list of them whose colliders it
 goes through; and `except_tagged`, tags whose nodes' colliders it goes through. The direction
 can't be zero. Sensors are never hit.
 
@@ -597,8 +595,8 @@ world:step(dt: number)
 Moves the world on by `dt` seconds, a frame's `update` time: dynamic bodies fall, tumble, push
 each other and come to rest, moving their nodes, and kinematic bodies move to where their nodes
 are. Bodies first follow their nodes, if scripts have moved them or the nodes they're in. Steps
-more than a twentieth longer than a sixtieth of a second are taken in equal parts, so bodies
-don't pass through each other, and kinematic bodies go an equal part of the way in each, while a
+more than a twentieth longer than a sixtieth of a second are taken in equal parts, at most 16, so
+bodies don't pass through each other, and kinematic bodies go an equal part of the way in each, while a
 59.94 Hz display's frames, or vsync's jitter, take one each; a game whose
 `conf.luau` sets an `update_rate` of 60 steps the same each update, so a run replays exactly.
 
@@ -684,10 +682,7 @@ ball anywhere on or inside it, so a ray that starts inside one hits it at once, 
 
 `except` costs what it's long, for each body a query comes to: a ray past a crowd of characters
 is quicker by `except_tagged`, which costs the same however many are tagged. It goes by the tags
-of the node a body is of, not of the nodes that's in, as `hit.node:has_tag` asks. A world gives
-each tag it's asked about a bit of each of its bodies, as many as 128, the first time a query
-names it, and a body its node's bits as it's added; a tag named after those is asked of each
-body's node by name, which is slower but the same answer.
+of the node a body is of, not of the nodes that's in, as `hit.node:has_tag` asks.
 
 ```lua
 -- An enemy's look at the player, past every enemy and its own body.

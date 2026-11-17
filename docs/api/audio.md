@@ -12,9 +12,9 @@ volume.
 
 Volumes are linear: 1 plays a sound as recorded, 0.5 at half its amplitude, and 0 is silent.
 
-Everything in `audio`, and voices' and performances' methods, work while the game loads and in
-`update` and its tasks, apart from `audio.load`, `audio.make` and `audio.load_song`, which work
-any time. Without a sound device, and when a game runs
+Everything in `audio`, and voices' and performances' methods, work while the game loads, in
+`update` and its tasks, and in `gui`, apart from `audio.load`, `audio.make` and
+`audio.load_song`, which work any time: see [when functions work](README.md#when-functions-work). Without a sound device, and when a game runs
 without a window, audio is silent, but sounds still start, play and finish on time.
 
 ```lua
@@ -289,7 +289,9 @@ Returns whether music is playing.
 A song plays live: the engine works out its notes as it plays, from a [song file](../music.md), so
 the game can change its tempo, move between its sections, fade its tracks in and out, and hear its
 beats, sections, markers and notes as they pass. Songs play on the music track, alongside any music
-and one another, so `audio.set_music_volume` sets their volume.
+and one another, so `audio.set_music_volume` sets their volume, but they aren't music to
+`audio.stop_music` and `audio.music_playing`: [`audio.stop_songs`](#audiostop_songs) and
+[`audio.songs_playing`](#audiosongs_playing) are theirs.
 
 ```lua
 local wg = require("@wingine")
@@ -410,8 +412,8 @@ performance:set_tempo(tempo: number, settings: TempoSettings?)
 
 Changes the tempo to `tempo` beats a minute, kept from 1 to 999. `settings` is a table of `at`, the
 time it starts to change (by default, now), and `over`, how many beats it slides there over (by
-default, 0: at once). Notes are as long in beats whatever the tempo, so a song goes faster as a
-whole; instruments' envelopes are in seconds, so a note's attack lasts as long.
+default, 0: at once). A song goes faster as a whole, but its instruments' times don't change: see
+[what's in a song](../music.md#whats-in-a-song).
 
 ```lua
 -- Faster each lap, sliding over a bar from the start of the next one.

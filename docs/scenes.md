@@ -171,7 +171,8 @@ Menus and HUDs sit against the canvas's edges, or in its middle, whatever its si
 says which point of the parent's rectangle a node is placed from: `{ 0, 0 }` is its top-left
 corner, `{ 0.5, 0.5 }` its middle and `{ 1, 1 }` its bottom-right. `x` and `y` are then measured
 from there, so a node `anchor = { 1, 0 }` with `x = -8` stays 8 in from its parent's right edge.
-`stretch` makes a sprite, rect, area, stack or panel grow with its parent: it adds those fractions of the
+`stretch` makes a sprite, rect, area, stack, panel, 3D view or particles node grow with its
+parent: it adds those fractions of the
 parent's width and height to its own, so `width = 0` with `stretch = { 1, 0 }` is as wide as the
 parent, and `width = -16` 16 narrower.
 
@@ -607,7 +608,7 @@ The world is right-handed with `y` up, as glTF's is. The kinds of node in it:
   and `cell`, shown on each face; a `tint`; `casts_shadow`, whether it shades what's behind it
   from lights with `shadows` (`true`); and `glow` (`"#000000"`), how much of its own colors it
   shows whatever lights it, white as full light would show them (see
-  [glow](api/graphics.md#graphicsbegin_3d)).
+  [glow](api/graphics.md#glow)).
 - **`model`**: the parts of a model file, `model`, a `.glb` or `.gltf` file's path from the
   game's folder, as [`graphics.load_model`](api/graphics.md#graphicsload_model) loads it, a
   `tint`, `casts_shadow` and `glow`, as a mesh's. Its parts give off what their file's
@@ -644,14 +645,13 @@ once instances have placed their scenes, so a prop's own file can hold a model a
 placed in a view. Plain nodes there are placed in 3D too, at the defaults if their file doesn't
 say.
 
-A view's lights add to its sun and ambient light, as the lights of
-[`graphics.begin_3d`](api/graphics.md#graphicsbegin_3d) do, which says how a light lights a
-surface. A light lights everything in its view within its range, wherever it is in the view's
-tree. The example's lamp is a spot light over the crate, turned a quarter turn by its `pitch` to
-shine straight down. A light that isn't `visible`, or is inside a node that isn't, is out, and a
-[clip](#clips) that moves or turns a node moves or turns its light, so a lamp can swing. A view is
-lit by 32 lights at once: of those that reach what its camera sees, the nearest to the camera.
-Scripts read and change a light with [`node:light`](api/scene.md#nodelight) and
+A view's lights add to its sun and ambient light, as the [lights](api/graphics.md#lights) of
+`graphics.begin_3d` do, which says how a light lights a surface and how many light a view at
+once. A light lights everything in its view within its range, wherever it is in the view's tree.
+The example's lamp is a spot light over the crate, turned a quarter turn by its `pitch` to shine
+straight down. A light that isn't `visible`, or is inside a node that isn't, is out, and a
+[clip](#clips) that moves or turns a node moves or turns its light, so a lamp can swing. Scripts
+read and change a light with [`node:light`](api/scene.md#nodelight) and
 [`node:set_light`](api/scene.md#nodeset_light).
 
 A light without `shadows` shines through walls, unless it keeps to a box whose sides are in them.
@@ -675,11 +675,8 @@ it, and nothing fades at its faces. With `shadows`, as the example's lamp has, t
 meshes and models shade what's behind them from it, with hard edges: the crate shades the floor
 around it. Billboards are shaded but shade nothing, and a mesh or model whose `casts_shadow` is
 `false` doesn't either, which a lamp's own model wants, if its light is inside it. Shadows cost
-drawing the view's meshes again from each light, into shadow maps, of which a view has 24: a spot
-light whose `cone` is no more than a sixth of a turn (about 1.05) takes one, and any other light
-six. The lights nearest the camera take them first, and a light there are none left for lights the
-view without shadows. The sun casts none. See
-[`graphics.begin_3d`](api/graphics.md#graphicsbegin_3d) for the rest.
+drawing the view's meshes again from each light, into a view's few shadow maps: see
+[shadows](api/graphics.md#shadows) for how many each light takes, and which go without.
 
 Meshes and models hide what's behind them, whatever order they're drawn in; the view draws over
 what was drawn before it, and nodes after it draw over it. Scripts move nodes in views with
@@ -792,7 +789,7 @@ Each track changes one property of one node:
 | Field | What it is | Default |
 |---|---|---|
 | `node` | The node's path from the node the clip poses. | that node itself |
-| `property` | Required. `"x"`, `"y"`, `"rotation"`, `"scale_x"`, `"scale_y"`, `"visible"` or `"cell"` (a sprite's, a billboard's or a mesh's), and for nodes in 3D views, `"z"`, `"yaw"`, `"pitch"`, `"roll"` and `"scale_z"`, but not `"rotation"`. | |
+| `property` | Required. `"x"`, `"y"`, `"rotation"`, `"scale_x"`, `"scale_y"`, `"visible"` or `"cell"` (a sprite's, a billboard's, a mesh's or a particles node's), and for nodes in 3D views, `"z"`, `"yaw"`, `"pitch"`, `"roll"` and `"scale_z"`, but not `"rotation"`. | |
 | `interpolation` | How a number gets from one key to the next: `"linear"`, in a straight line, or `"step"`, jumping at each key. `visible` and `cell` always step. | `"linear"` |
 | `keys` | Required. Pairs of a time, in seconds from 0 to the duration, and the value then, `{ time, value }`, in order of time. | |
 
@@ -821,17 +818,9 @@ Tracks find their nodes by path from the node posed, so one clip poses each inst
 here, `hero` is an instance of `hero.scene.luau` in the level.
 
 A clip sets only the properties it has tracks for; the others keep whatever they had. Games
-layer clips by posing with one after another: a pose with a weight below 1 moves numbers only that
-fraction of the way to the clip's, and changes `visible` and `cell` only from a weight of a half.
-So a game that poses with `idle`, then with `walk` at a weight rising from 0 to 1, crossfades from
-standing to walking. Pose first with a clip that has tracks for everything the others change, so
-nothing keeps a pose from an earlier frame:
-
-```lua
-hero:pose(clips.idle, time)
-hero:pose(clips.walk, walk_time, walking) -- `walking` eases between 0 and 1
-hero:pose(clips.blink, time)
-```
+layer clips by posing with one after another, each with a weight, so posing with `idle`, then
+with `walk` at a weight rising from 0 to 1, crossfades from standing to walking:
+[`node:pose`](api/scene.md#nodepose) says how.
 
 The picker in [`examples/orchard`](../examples/orchard) is a rig like this, with clips for
 standing, walking, blinking, catching and missing apples, and giving up, which
@@ -839,16 +828,15 @@ standing, walking, blinking, catching and missing apples, and giving up, which
 
 ## Files that tools write
 
-The engine can write scenes and tilesets too, from Rust: `SceneFile::write` and
-`TilesetFile::write` write one in a single, fixed layout, every field of a node on a line of its
-own, in the same order, with fields at their defaults left out, as the examples above are, and a
+The engine writes scenes and tilesets, as the editor saves them, in a single, fixed layout, every
+field of a node on a line of its own, in the same order, with fields at their defaults left out, as the examples above are, and a
 tile layer's rows one to a line, lined up as the map is. Writing the same scene always gives the
 same text, so a change to a scene changes few lines of its file, and version control shows what
 changed. Reading what it writes gives back the same scene. It doesn't keep comments.
 
 Every example's scene files are in that layout, as [the editor](editor.md) leaves them, and each
-game's tests check they stay so. A clip's keys go one to a line, and a camera's and lighting's
-fields too. Files are written at the newest format, 4.
+game's tests check they stay so. A clip's keys go one to a line, and a camera's, lighting's, fog's
+and sky's fields too. Files are written at the newest format, 4.
 
 ## Using a scene
 
@@ -899,17 +887,7 @@ local x, y = map:tile_to_world(column, row)
 ```
 
 Nodes come and go with [`node:add`](api/scene.md#nodeadd), which adds a copy of a node, or of a
-whole scene, and [`node:remove`](api/scene.md#noderemove):
-
-```lua
--- A bat, from a scene of its own, at the cave's mouth.
-local bat = level:find("creatures"):add(wg.scene.load("bat.scene.luau"), "bat_1")
-bat:set_position(cave_x, cave_y)
-
--- Later, beaten.
-bat:remove()
-```
-
+whole scene, and [`node:remove`](api/scene.md#noderemove).
 [`examples/garden`](../examples/garden) plants flowers this way, and picks them.
 
 A scene drawn without a camera is in canvas pixels, which is where
@@ -938,22 +916,7 @@ end
 ```
 
 For a menu the keys move through as well as the mouse, [`ui.menu`](api/ui.md) makes one of a
-node's children, such as a stack's rows, or the nodes inside it with a tag. It moves the selection
-by where the items are drawn, wraps, passes over items that can't be picked, and says each update
-what the player did, while the game shows the selection however it likes:
-
-```lua
-local wg = require("@wingine")
-local menu = wg.ui.menu(screen:find("buttons"))
-
-function update(dt: number)
-    local happened, item = menu:update()
-    if happened == "picked" then
-        start(menu:items()[item]:props().action)
-    end
-end
-```
-
-The RPG's title screen and questions, and the shmup's title menu, are picked this way.
+node's children, such as a stack's rows, or the nodes inside it with a tag, as the RPG's title
+screen and questions, and the shmup's title menu, are.
 
 See [the `scene` reference](api/scene.md) for everything a node can do.

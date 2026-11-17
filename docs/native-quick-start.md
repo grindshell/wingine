@@ -310,8 +310,9 @@ a chunk that runs as the library loads, receiving the library's table as `...`:
 registry.luau(
     "wait",
     "local stars = ...
+    local wg = require('@wingine')
     function stars.wait_for(count)
-        wait_until(function() return stars.count() >= count end)
+        wg.wait_until(function() return stars.count() >= count end)
     end",
 );
 ```

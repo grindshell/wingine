@@ -99,18 +99,16 @@ tapped and let go between two updates counts as both pressed and released.
 ### What works when
 
 The engine lends scripts its services at the times they make sense, and a function used at
-another time raises an error saying so:
+another time raises an error saying so. In short:
 
 | | Top level | `update` and tasks | `gui` | `draw` |
 |---|:---:|:---:|:---:|:---:|
-| Drawing: `graphics.clear`, `graphics.draw_*`, `graphics.fill_*`, `graphics.outline_*`, `graphics.set_camera` | | | | ✓ |
-| Loading sprite sheets: `graphics.load_sprite_sheet` | ✓ | ✓ | ✓ | |
-| The keyboard, mouse and gamepads: `input` | ✓ | ✓ | ✓ | |
-| Playing sound and music: `audio` (apart from `audio.load` and `audio.make`), and voices' methods | ✓ | ✓ | ✓ | |
-| Quitting: `window.quit` | ✓ | ✓ | ✓ | |
-| `graphics.size` | ✓ | ✓ | ✓ | ✓ |
+| Drawing: `graphics.clear`, `graphics.draw_*`, `graphics.fill_*`, `graphics.outline_*`, `graphics.set_camera`, `graphics.set_blend` and `graphics.begin_3d` | | | | ✓ |
+| Input, playing sound, `window`, and loading sprite sheets, fonts, models, meshes and scenes | ✓ | ✓ | ✓ | |
 | Waiting: `wait`, `wait_until`, and picking a folder, `files.pick_folder` | | tasks only | | |
-| Everything else: `audio.load`, `audio.make`, `tilemap`, `grid`, `save`, the rest of `files` and folders' methods, `window.reloaded`, fonts, animations, `graphics.color`, `graphics.frame_stats` | ✓ | ✓ | ✓ | ✓ |
+| Most of the rest, such as `graphics.size`, `graphics.color`, `tilemap`, `grid` and `save` | ✓ | ✓ | ✓ | ✓ |
+
+[When functions work](api/README.md#when-functions-work) says which each function is.
 
 So read input and change the game's state in `update`, and only draw in `draw`. By the time `gui`
 runs, the frame's updates have seen its key presses, so `input.pressed` is false there.
@@ -394,27 +392,8 @@ named as its platform names libraries:
 
 So a game that runs everywhere ships each library three times, built on each platform. Names may
 hold letters, digits, `_` and `-`, and can't be a name Windows keeps for a device, such as `con`,
-`nul` or `com1`, on any system.
-
-The engine loads the listed libraries in order, before `main.luau` runs, so their tables are
-there from the script's first line:
-
-```lua
--- main.luau
-local sparks = particles.new_emitter("#f2c14e")
-```
-
-A library that's listed but missing is an error that stops the game, unless it's marked
-`optional`. An optional library that's missing is skipped, and its table is `nil`, so the game
-can check for it and do without:
-
-```lua
--- main.luau: bullets in Rust if the library is there, in Luau if not.
-local bullets = if danmaku then danmaku else require("./bullets")
-```
-
-A library that's there but fails to load, such as one built for another version of the engine,
-is an error either way.
+`nul` or `com1`, on any system. [How a game loads one](native-libraries.md#how-a-game-loads-one)
+says when they load, and what happens when one is missing.
 
 Unlike scripts, native libraries aren't sandboxed: a game that loads one runs it with the
 player's full permissions. Only load libraries you trust.

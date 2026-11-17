@@ -23,8 +23,7 @@ Luau is fast for a scripting language, and most games never need a native librar
 when measuring shows a script can't keep up, typically because it does the same work for
 thousands of things every frame:
 
-- **Many objects moving each frame**, such as bullets or particles. Rust moves a bullet in about
-  a third of the time Luau does.
+- **Many objects moving each frame**, such as bullets or particles.
 - **Drawing many sprites.** Each call from Luau into the engine costs more than the engine takes
   to record the sprite, so a script drawing 100,000 bullets spends most of its time calling. A
   library hands the engine every sprite of a kind in one call.
@@ -32,8 +31,8 @@ thousands of things every frame:
 
 The [shmup example](../examples/shmup) has both: its bullets are in [`bullets.luau`](../examples/shmup/bullets.luau)
 and in the [`danmaku`](../examples/native-danmaku/src/lib.rs) library, behind one interface, and
-the library fits about 3.4 times as many bullets in a frame. The
-[README](../README.md#luau-and-rust-compared) compares the two.
+the library fits several times as many bullets in a frame, most of the difference in drawing
+them. The [README](../README.md#luau-and-rust-compared) compares the two.
 
 What a library doesn't speed up is calling it. A call from Luau into a library costs more than
 drawing a sprite, so a library pays off when each call does a lot of work: "move every bullet",
@@ -69,9 +68,17 @@ When the game starts, before `main.luau` runs, the engine loads each library in 
 3. It adds the library's table to the game's globals, under the name the library gives it, then
    runs the library's Luau, if it has any.
 
-A library that's listed but not there stops the game with an error, unless it's `optional`: then
-the game runs without it, and its table is `nil`. A library that's there but fails to load is an
-error either way.
+So a library's table is there from the first line of `main.luau`. A library that's listed but not
+there stops the game with an error, unless it's `optional`: then the game runs without it, and
+its table is `nil`, so the game can check for it and do without:
+
+```lua
+-- main.luau: bullets in Rust if the library is there, in Luau if not.
+local bullets = if danmaku then danmaku else require("./bullets")
+```
+
+A library that's there but fails to load, such as one built for another version of the engine,
+is an error either way.
 
 When the game ends, the engine frees each library's state for it, in the reverse of the order the
 libraries loaded.

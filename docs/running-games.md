@@ -27,7 +27,10 @@ cargo install --path .
 wingine path/to/game
 ```
 
-To ship a game to players, export it: see [Shipping a game](#shipping-a-game).
+The [release archives](https://github.com/grindshell/wingine/releases) have `wingine` built for
+Windows and Linux too. To ship a game to players, export it: see
+[Shipping a game](#shipping-a-game). `wingine bake` renders a song to a WAV file: see
+[Baking](music.md#baking).
 
 The window closes, and the game ends, when the player closes it, unless the game's
 [`close_requested`](api/globals.md#close_requested) asks first, or when a script calls
@@ -256,7 +259,7 @@ find the canvas pixel to click.
 ## Testing a game in Luau
 
 For checks worth keeping, write tests in Luau, in files named `*.test.luau` anywhere in the game's
-folder, such as `pong.test.luau` beside `main.luau` or in a `tests` folder. Each declares its
+folder but hidden folders, such as `pong.test.luau` beside `main.luau` or in a `tests` folder. Each declares its
 tests with [`test`](api/testing.md#test), drives the game with [`sim`](api/testing.md#sim), and
 checks its state with [`assert_equal`](api/testing.md#assert_equal), as Pong's do:
 
@@ -303,48 +306,28 @@ game's folder runs only the tests whose files and names contain it:
 benchmark, is left out and counted as ignored, and `--ignored` runs only those:
 `cargo run --release -- test --ignored path/to/game`.
 
-**Each test starts afresh.** Every test runs against a new copy of the game, as it is once its
-`main.luau` has run, before its first frame: its saves start empty and its audio is silent, and
-nothing one test changes reaches another. Test files run in the order of their paths, and their
-tests in the order they're declared. A run reads each script once, keeping where its modules are
-and what each script compiles to for every test after, so don't change the game's files while its
-tests run; every script still runs again for every test.
+Every test runs against a fresh copy of the game, in the game's own VM, so it reads and changes
+the game's globals as they are: keep the game's state in a global, such as Pong's `pong`, so tests
+can reach it. Frames run only when a test asks, at a fixed 60 a second. [`test`](api/testing.md#test)
+says what each test starts with and when it fails, and [`sim`](api/testing.md#sim) how it drives
+the game.
 
-**Tests read the game as it is.** A test file runs in the game's own VM, so it reads and changes
-the game's globals directly, as they are at the time: `pong.ball.vx`, after any number of frames.
-Keep the game's state in a global, such as Pong's `pong`, so tests can reach it. Tests call the
-engine's functions too, such as `input.bind` or `scene.load`, and `require` the game's modules
-by their paths from the test file, getting the same ones the game has.
-
-**Time passes only when a test asks.** `sim.step` and `sim.run_for` run frames, at a fixed 60 a
-second, as do `sim.tap` and the rest that press and let go, and `wait` and `wait_until`, which work
-in tests as in tasks. A test that waits for what never happens fails at its time limit, 60 seconds
-of game time unless it says otherwise.
-
-**Failing.** A test fails when it raises an error, as a failed assertion does, with the line it
-failed at; when the game stops with an error; or past its time limit. A game or test file that
-fails to load fails once, for the file.
+Test files run in the order of their paths, and their tests in the order they're declared. A run
+reads each script once, keeping where its modules are and what each script compiles to for every
+test after, so don't change the game's files while its tests run; every script still runs again
+for every test. A game or test file that fails to load fails once, for the file.
 
 **Screenshots.** [`sim.matches_screenshot`](api/testing.md#simmatches_screenshot) compares the
-latest frame with a PNG saved before, and returns `false` and what differs if it doesn't match:
-
-```lua
-test("the court before the first serve", function()
-    sim.step()
-    assert(sim.matches_screenshot("screenshots/ready.png"))
-end)
-```
-
-The first run fails, as there's nothing to compare with yet. `--update` saves the frame as the
-reference instead, and saves frames that don't match over theirs:
+latest frame with a PNG saved before. The first run fails, as there's nothing to compare with yet.
+`--update` saves the frame as the reference instead, and saves frames that don't match over
+theirs:
 
 ```bash
 cargo run -- test --update path/to/game
 ```
 
-Look at each one it saves before keeping it. A frame that doesn't match goes in the game's
-`.test-output` folder, wherever its reference is, with a picture of where it differs in magenta;
-leave that folder out of version control. Pixels may differ by 2 in each channel by default, so frames match on any GPU.
+Look at each one it saves before keeping it. Frames that don't match go in the game's
+`.test-output` folder: leave it out of version control.
 
 From Rust, `wingine::runtime::testing::run` runs a game's tests and returns how they went, so
 `cargo test` can run them as Pong's are, in [`tests/pong.rs`](../tests/pong.rs).
@@ -376,8 +359,9 @@ fn serving_starts_a_rally() {
 }
 ```
 
-- `tap`, `hold`, `key_down` and `key_up` press keys, as the script commands of the same names do,
-  and `click`, `move_mouse`, `move_mouse_by`, `connect_gamepad` and `button_down` the rest.
+- `tap`, `hold`, `key_down` and `key_up` press keys, as the script commands `tap`, `hold`, `press`
+  and `release` do, and `click`, `move_mouse`, `move_mouse_by`, `connect_gamepad` and
+  `button_down` the rest.
 - `tap_action`, `hold_action`, `action_down` and `action_up` press what an action is bound to:
   its first key, or if it has none, its first mouse button, or else its first gamepad button. So
   a test presses `"serve"` and keeps working when the game binds it to another key.

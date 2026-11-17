@@ -160,8 +160,9 @@ the chunk in errors.
 registry.luau(
     "wait",
     "local particles = ...
+    local wg = require('@wingine')
     function particles.wait_until_gone()
-        wait_until(function() return particles.count() == 0 end)
+        wg.wait_until(function() return particles.count() == 0 end)
     end",
 );
 ```
@@ -568,7 +569,7 @@ takes. The view's `rect` is where it shows, in the coordinates drawing uses when
 pixels in a hook after `draw`. `View3d::new(camera, rect)` is lit by `Lighting::DEFAULT`, the
 engine's default sun and ambient light; `Lighting::UNLIT` shows every surface as it is. A
 `Lighting` has no `lights`, and a `View3d` no `fog` or `sky`: a library can't add lights at
-places to a view yet, or fog, or a sky. What it draws in a
+places to a view, or fog, or a sky. What it draws in a
 view a script began is lit by that view's lights, as the rest of the view is, and shaded from
 those with `shadows`. Its meshes always cast shadows from them, and never glow: a
 [`MeshDraw`](#meshdraw) has no `casts_shadow` and no `glow`, nor a billboard's draw a `glow`.

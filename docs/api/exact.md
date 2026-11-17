@@ -35,8 +35,8 @@ fighter.vy = -wg.exact.sin(radians) * speed
 
 Use `exact` for what the game's state depends on, and `math` for what's only for show, such as a
 shake, a bob or a particle's wobble. `math`'s are quicker: Luau calls them without leaving its VM,
-while each call to one of `exact`'s costs about five times as much, some 30 nanoseconds more. That
-only matters in code that calls them thousands of times a frame.
+while each call to one of `exact`'s costs about five times as much. That only matters in code that
+calls them thousands of times a frame.
 
 The rest of Luau's arithmetic is the same on every platform already, because IEEE 754 defines it
 exactly: `+`, `-`, `*`, `/`, `math.sqrt`, `math.floor`, `math.ceil`, `math.round`, `math.abs`,

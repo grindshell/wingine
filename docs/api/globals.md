@@ -7,6 +7,9 @@ The functions a game defines for the engine to call, the engine's built-in funct
 
 ## The game's functions
 
+An error in `update`, `gui`, `draw` or `close_requested` stops the game and shows the error in the
+window. A stopped game's window closes when asked.
+
 ### `update`
 
 ```lua
@@ -50,9 +53,6 @@ Defined by the game, and called by the engine when the player presses the window
 The window closes unless it returns `false`, as a game does to ask the player first, then calling
 [`window.quit`](window.md#windowquit) once they've answered. What works in `update` works here too.
 Optional: without it, the close button closes the window.
-
-An error in any of these functions stops the game and shows the error in the window. A stopped
-game's window closes when asked.
 
 ### `reloading`
 

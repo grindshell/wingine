@@ -7,15 +7,7 @@ systems, and don't build more 3D features unless asked.
 
 ## Scope
 
-Wingine has what its examples need: tilemaps and batched sprites in blend modes, meshes and glTF
-models in 3D views picked by boxes, lit by a sun and by lights at places that cast shadows,
-glowing, and fading into fog under a sky,
-sprite animation, particles, a camera, keyboard, mouse and gamepad input bound to
-actions, grid movement, physics with Rapier (bodies and characters, in 2D and in 3D views),
-text in the built-in font, bitmap fonts and TrueType fonts, audio, songs of the engine's own
-instruments baked or played live, saves, folders the player picks, Luau scripting with
-tasks, native libraries written in Rust, scenes (levels, screens and rigged characters), menus
-over scenes' nodes, egui interfaces, and an editor built on the engine. Each feature is finished
+Wingine has what its examples need, which the README's features list. Each feature is finished
 with a game or example that uses it, with tests.
 
 - Scenes are data: files of plain Luau values, with no calls or expressions, so tools write back
@@ -43,6 +35,7 @@ networking or 3D pipelines.
 | Physics | `rapier2d`, `rapier3d` | Behind the default `physics` feature |
 | Fonts | `ab_glyph` | TrueType and OpenType fonts, rasterized as text needs their glyphs |
 | Folder dialogs | `rfd` | The system's dialog for picking a folder, off the web; on Linux, the desktop's portal, not GTK |
+| Exact math | `libm` | The same bits on every platform, for what must replay: `exact`, particles, songs, nodes' 2D placement |
 
 - Rust edition 2024. Licensed under MIT or Apache 2.0 (`LICENSE-MIT`, `LICENSE-APACHE`); every
   crate's manifest says `license = "MIT OR Apache-2.0"`, and new crates say so too.
@@ -53,9 +46,8 @@ networking or 3D pipelines.
   through `crate::files`, never `std::fs`.
 - `wgpu`, `winit`, `mlua`, `kira` and `egui` change their APIs substantially between releases:
   check the version pinned in `Cargo.toml` and its docs on docs.rs rather than memory. egui's
-  crates must target the engine's wgpu and winit, so they're upgraded together; egui crates from
-  outside its repository, such as `egui_dock`, often lag a release behind.
-- Default features, each of which CI also lints without:
+  crates must target the engine's wgpu and winit, so they're upgraded together.
+- Default features, which CI also lints without:
   - `egui` brings egui in. Its icon fonts are left out unless `monochrome_emoji_fonts` is on, as
     the editor turns it on.
   - `models` reads glTF with `gltf` built without its default features (whose `import` brings a
@@ -81,8 +73,8 @@ networking or 3D pipelines.
 
 A map of where things are and the rules that aren't obvious from the code. Module and item docs
 hold the rest; the module docs of `src/runtime/mod.rs`, `src/lua.rs`, `src/scene/mod.rs`,
-`src/runtime/testing.rs`, `src/script.rs` and `crates/wingine-native` are references in their
-own right.
+`src/music/mod.rs`, `src/runtime/testing.rs`, `src/script.rs` and `crates/wingine-native` are
+references in their own right.
 
 ### Engine
 
@@ -96,85 +88,30 @@ own right.
   loading textures, fonts and models, `FrameStats`, and redraw requests.
 - `src/graphics/`: `Canvas` records quads, all through one textured shader (fills use a white
   texture), batched by texture and `Blend` into draw calls, a pipeline for each blend mode, all
-  blending premultiplied colors (normal is premultiplied alpha blending, which renders as straight
-  alpha did); rotation, transforms, slicing, outlines, lines
-  and circles are worked out on the CPU as quads are recorded. Vertices are 20 bytes, colors
-  sRGB bytes made linear in the shader. A fixed resolution renders offscreen, its target cleared
-  opaque since drawing it onto the output premultiplies again, then onto the output as its
-  `Scaling` says. Sprites aren't instanced: rendering is a fifth of the shmup's
-  frame, so it isn't the limit. An `Animation` doesn't keep time; games ask it for the frame at a
-  time. Shaders are WGSL files beside the code that loads them.
-- 3D (`camera3d.rs`, `mesh.rs`, `view3d.rs`, `model.rs`, `model_file.rs`): `Canvas::begin_3d`
-  records a `View3d` and starts the next batch of quads empty, so 2D never joins across a view;
-  `Renderer::render` draws each view in a pass of its own with a depth buffer. Right-handed, `y`
-  up, as glTF. Texels under half opaque are discarded and no mesh blends, so billboards need no
-  sorting, and a view's draws of the same mesh and texture are one instanced draw wherever they
-  were drawn, each kind in the order it was first drawn (`MeshOrder`). Only particles blend: a
-  draw's `blend`, part of its kind, puts it after every opaque draw, drawn by a pipeline of its
-  mode that tests depth and doesn't write it, through `mesh.wgsl`'s `fs_blended`, whose
-  `fades_to` constant fogs what adds or screens to black and what multiplies to white; those
-  blended normally sort far to near by `MeshDraw::depth`, each run of a kind a draw call. `model_file::read` reads
-  glTF without a GPU into `ModelData`. Picking is by boxes (`Bounds3`, `Ray::hit_box`), not
-  triangles. Luau's points are native `vector`s; `draw_mesh` and `draw_billboard` add to the view
-  begun last only while nothing else has been drawn since (`Canvas::open_view`).
-- Lights (`Light`, in `view3d.rs`): `Canvas3d::add_light` records point and spot lights for a
-  view, whose uniform carries up to `Light::MAX` of them, chosen by `lights_of` (those reaching
-  what the camera sees, the nearest first, for the frame's stats and the renderer alike), and
-  `mesh.wgsl` loops over them for every pixel. Light falls off in a straight line to a light's
-  range, adds, and stops at white. `Light::level_at` is the same rule on the CPU, which knows
-  nothing of shadows. The shader knows a billboard, which takes a light's whole level, by the
-  normal matrix only billboards have. In scenes a light is a `light` node (`LightDef`), a spot
-  shining along its node's `+z`. `Lighting` and `View3d` stay `Copy`, and native libraries can't
-  add lights: the ABI's lighting is unchanged.
-- Bounds: a light may keep to a box (`Light::bounds`, an `Affine3` taking the world onto the cube
-  from -1 to 1, made by `Light::within`), lighting nothing outside it, faces inclusive, so one
-  without shadows doesn't light through walls. The uniform carries the affine's three rows, and
-  `shadow.w` says a light has one; `mesh.wgsl` skips a light for a pixel outside it, `level_at`
-  gives 0 there, and `lights_of` leaves out a light whose box's corners are all outside one side
-  of what the camera sees. In scenes it's a light node's `bounds`, six numbers in its parent's
-  coordinates (`LightDef::bounds`, a `Bounds3`), so the box moves, turns and stretches with the
-  parent; `draw_3d` hands `LightDef::light` the parent's placement, and a box placed with no room
-  in it lights nothing.
-- Shadows: a light with `Light::shadows` takes one shadow map, or six (`Light::shadow_maps`), of
-  the `Light::SHADOW_MAPS` a view has, handed out by `shadows_of`, the nearest the camera first;
-  a light left without lights the view without shadows, and the sun casts none. The maps are the
-  layers of one depth texture, made when a light first has shadows and the same ones for every
-  view, so the renderer draws a view's just before the view (`draw_shadows`, through
-  `shadow.wgsl`, culling nothing). `mesh.wgsl` reads a map once for a pixel, so shadows' edges
-  are hard, after moving the surface off itself by a few of the map's texels, which keeps it from
-  shading itself. Whether a mesh casts is each draw's (`MeshDraw::casts_shadow`, part of its
-  kind, as `Canvas3d::set_casts_shadow` had it when it was drawn); billboards never do. In
-  scenes it's a mesh or model node's `casts_shadow`, and a light node's `shadows`.
-- Glow: a model's parts give off their file's emission (`ModelPart::emission`, times its
-  `emission_sprite`), and what's drawn shows `Canvas3d::set_glow` of its own colors, both added
-  to what light shows of a pixel in `mesh.wgsl`, unshaded, before fog, and capped at white with
-  it. Each rides its draw's `Instance` (112 bytes), so glow never splits a draw call; an
-  emission texture is part of a draw's kind, bound as the mesh pipeline's group 2 (white for
-  none). `model_file` reads `emissiveFactor`, `KHR_materials_emissive_strength` and an emission
-  texture on the base color's coordinates. In scenes it's a mesh, model or billboard node's
-  `glow`, written only if it isn't black. Native libraries' draws never glow: `native.rs` sets
-  it black before them.
-- Fog (`Fog`, a `View3d`'s `fog`): `mesh.wgsl` mixes what a pixel shows, lit and shaded, with the
-  fog's color by its distance from the camera, in a straight line from `near` to `far`, in linear
-  light; from where the camera is (`View3d::distance`), or ahead of an orthographic one. A view
-  without a sky draws no background, so a game clears the canvas to the fog's color itself.
-  `lights_of` leaves out a light all of whose reach is `far` or more away, uncounted, so
-  `shadows_of` gives it no maps. Fog that can't be (`Fog::problem`) is none. In scenes it's a
-  view's `fog` (`View3dDef::fog`), written only if it has one. Native libraries can't give a view
-  fog: the ABI's view is unchanged.
-- Sky (`Sky`, a `View3d`'s `sky`): a gradient by the height of the way each pixel looks, from
-  `horizon` to `zenith` or `ground` over `band` radians, in a straight line in the height, in
-  linear light (`Sky::color_at`); `Sky::flat` is one color. It's one triangle over the view
-  (`mesh.wgsl`'s `vs_sky`, placed through the view's crop, `sky_crop`), at the far depth, drawn
-  by its own pipeline, which reads only the view's group, after the view's opaque runs and before
-  its blended ones (`MeshRenderer::draw`), passing only where the depth is as cleared; so a view
-  with a sky covers its rect, and is drawn with nothing in it. The uniform carries its colors,
-  `1 / sin(band)` (`Sky::steepness`), and the camera's right and up scaled by its angle, from
-  which each corner carries the way it looks; an orthographic camera's sky is one color. Fog fades
-  into it (`fades_into`), the way each surface is seen, instead of into its color. It's a draw
-  call of its own in `draw_call_count`. A sky that can't be (`Sky::problem`, a band not above 0)
-  is none. In scenes it's a view's `sky` (`View3dDef::sky`), written with its horizon, and the
-  rest unless it's the horizon's or a quarter turn. Native libraries can't give a view one.
+  blending premultiplied colors; rotation, transforms, slicing, outlines, lines and circles are
+  worked out on the CPU as quads are recorded. Vertices are 20 bytes, colors sRGB bytes made
+  linear in the shader. A fixed resolution renders offscreen, its target cleared opaque since
+  drawing it onto the output premultiplies again, then onto the output as its `Scaling` says.
+  Sprites aren't instanced: rendering is a fifth of the shmup's frame, so it isn't the limit. An
+  `Animation` doesn't keep time; games ask it for the frame at a time. Shaders are WGSL files
+  beside the code that loads them.
+- 3D (`camera3d.rs`, `mesh.rs`, `view3d.rs`, `model.rs`, `model_file.rs`, `mesh.wgsl`,
+  `shadow.wgsl`): `Canvas::begin_3d` records a `View3d` and starts the next batch of quads empty,
+  so 2D never joins across a view; `Renderer::render` draws each view in a pass of its own with a
+  depth buffer, and its shadow maps, the same ones for every view, just before it. Right-handed,
+  `y` up, as glTF. Texels under half opaque are discarded and only particles blend, so billboards
+  need no sorting; a view's draws of a kind are one instanced draw, in the order `MeshOrder`
+  gives. `model_file::read` reads glTF without a GPU into `ModelData`. Picking is by boxes
+  (`Bounds3`, `Ray::hit_box`), not triangles. Luau's points are native `vector`s; `draw_mesh` and
+  `draw_billboard` add to the view begun last only while nothing else has been drawn since
+  (`Canvas::open_view`).
+- A view's lights (`Light`: points and spots, kept to boxes, casting shadows), glow, fog and sky
+  are worked out for each pixel in `mesh.wgsl`, and on the CPU by `Light::level_at`,
+  `Fog::amount_at` and `Sky::color_at`, which follow the shader: change them together.
+  `lights_of` and `shadows_of` choose a view's lights and shadow maps for the renderer and the
+  frame's stats alike. Glow rides each draw's `Instance`, so it never splits a draw call.
+  `Lighting` and `View3d` stay `Copy`, and the ABI's view is unchanged, so native libraries can't
+  add lights, fog or a sky, and their draws never glow (`native.rs` sets it black).
 - `src/graphics/font.rs`: `Font` and `TextLayout`. Built-in and bitmap fonts have their glyphs in
   one texture (`Metrics`; bitmap glyphs cut from a font file's PNG, as wide as their ink).
   TrueType and OpenType fonts (`Face`, `FaceSize`) rasterize a glyph with `ab_glyph` the first time
@@ -190,14 +127,13 @@ own right.
   Events egui wants don't reach `Input`. Tab reaches egui only while one of its widgets has focus
   (`Gui::hears_key`), since egui focuses its first widget on Tab even when none has focus, which
   would take Tab, and the keys after it, from a game showing an interface. `GuiCanvas` renders a
-  `Canvas` into a texture egui shows. Simulations turn on AccessKit, so tests find widgets by
-  label.
+  `Canvas` into a texture egui shows.
 - `src/audio.rs`: `Audio`, `Sound` and `Voice`. kira's state catches up only when its mixer
   renders, so `Audio` keeps what the game asked of each voice (`Playing`), and a voice is over as
   soon as it's stopped. A `Sound` is a file's, or made of samples a game works out
   (`Sound::from_samples`, Luau's `audio.make`, which takes a `buffer` of 32-bit floats),
-  checked to be numbers, since one NaN would fill the mix. Headless, and without a sound device, audio plays to a silent mixer
-  advanced by game time, so tests can check what's playing.
+  checked to be numbers, since one NaN would fill the mix. Headless, and without a sound device,
+  audio plays to a silent mixer advanced by game time, so tests can check what's playing.
 - `src/music/`: songs (`*.song.luau`), whose module docs are the format's reference.
   - `SongFile` (`file.rs`) is the plain data the editor edits, read through `scene::file`'s
     helpers and written canonically by `scene::writer`'s `Writer`, with a format version of its
@@ -227,72 +163,36 @@ own right.
   and goes with the window's focus. Its motion is winit's `DeviceEvent::MouseMotion`, counted
   only while it's captured, when egui hears nothing of the mouse but its buttons' releases.
 - `src/particles.rs`: `Particles`, an emitter with `ParticleSettings` that keeps no time:
-  `advance` steps it in parts of at most 1/60 s, spreading particles started as its origin moved
-  along the way. Each emitter has a xorshift seeded by its settings or its owner (a scene node's
-  path, a game's count of emitters), and starting particles uses `libm`, so a hash pinned in its
-  tests checks Windows and Linux agree. `Canvas::draw_particles` draws them, culling each, taking
-  `sin_cos` only for turned ones. Attached particles are in the emitter's coordinates.
-  `particles/view.rs`'s `Particles3d` is the same in a 3D view, sharing the 2D one's steps,
-  generator and colors and scales over a life, and nothing of the 2D one changes for it: it sends
-  particles along its origin's `+z` within a cone, evenly over a sphere's cap, and with `bounce`
-  sends them back off the plane each started on. `Canvas3d::draw_particles` pushes an instance
-  for each, a billboard facing the camera, a streak along its velocity or a mesh turned about
-  its own axis; an unlit one's colors ride its emission, its tint keeping only its alpha, so no
-  shader knows it's a particle.
+  `advance` steps it in parts of at most 1/60 s. Each emitter has a xorshift seeded by its
+  settings or its owner (a scene node's path, a game's count of emitters), and starting
+  particles uses `libm`, so a hash pinned in its tests checks Windows and Linux agree.
+  `Canvas::draw_particles` culls each, taking `sin_cos` only for turned ones. Attached particles
+  are in the emitter's coordinates. `particles/view.rs`'s `Particles3d` is the same in a 3D
+  view, sharing the 2D one's steps, generator and colors and scales over a life, and nothing of
+  the 2D one changes for it. `Canvas3d::draw_particles` pushes an instance for each, an unlit
+  one's colors riding its emission, so no shader knows it's a particle.
 - `src/menu.rs`: `Menu`, a selection that holds no items: each `update` takes them as they are.
   Directions go by where items are, so lists, rows and ragged grids move as they look.
 - `src/physics.rs`, `physics/world2d.rs` and `physics/world3d.rs`: `World` and `World3d`, by
-  Rapier, sharing `BodyKind` and `Material`.
-  - Both have fixed, dynamic and kinematic bodies (kinematic ones never asleep, since Rapier
-    doesn't wake one a body leaves) and `walk` for characters, flat-footed boxes in 2D and
-    cylinders in 3D, that step and slope. `step` splits long steps and moves kinematic bodies a
-    share each. Rapier forgets new bodies in the step after `detect_collisions`, so `refresh`
-    puts them in the query tree itself, and queries skip disabled colliders it leaves there.
-  - 2D also has fixed rects without bodies, solid, edges or sensors, and tiles (a compound of
-    boxes); every collider is one `ColliderId`. `slide` casts the box itself rather than using
-    Rapier's `KinematicCharacterController`, whose rounded box turns normals so a box pushed at
-    a wall creeps along it; `true_normal` snaps GJK's normals to the sides. A 2D character is
-    carried by what it stands on as far as that moved in the last step (3D's only follows it
-    down). Its units are pixels, so `set_length_unit` tunes Rapier, and Luau's densities are of
-    square metres.
-  - A query goes through what its `Passing` says: colliders or bodies by id, and by tags, bits
-    each collider holds as its `user_data` (`set_tags`), which 3D's `set_shape` carries over
-    as it makes a body a new collider. Luau's worlds give a tag a bit the first time a query's
-    `except_tagged` names it, once they've followed their nodes, and every body or collider of
-    a node with it that bit, and a body its node's bits as it's added (`Tags`); a tag past the
-    128th is asked of each body's node by name, the same answer, slower.
-  - Queries never find sensors. Unit tests pin hashes so CI checks Windows and Linux agree;
-    scene nodes' 2D transforms take their sines from `libm` (`Affine::from_parts_exact`) so
-    colliders placed by them do too.
-  - Luau's worlds (`src/lua/physics.rs`, and `physics/world2d.rs` beside it) are of scene nodes,
-    followed before each move, walk, step or query to where scripts moved them, unless the
-    scene's `revision` (bumped by every `get_mut`, but not by particles) hasn't changed; they give
-    nodes back in the order they were added. Tile maps are solid by `Tilemap::solid_rects`,
-    reshaped only when the map's `solid_revision` changes and the boxes differ.
-  - The 2D world then reads every collider's node again, placed as they are by layout. The 3D
-    world reads only the bodies of nodes placed anew and of what's inside them: its scene keeps
-    which nodes change (`Scene::keep_changes`, a list of the last few thousand, which a world
-    left further behind than that makes up for by reading every body), and the world keeps a
-    `Holder` for each node with bodies inside, with how it was placed and its parent, so a
-    change where no body is costs a lookup and a body that goes is counted out though its node
-    is gone. Both ways tell Rapier the same things in the same order, bodies in the order added,
-    which `tests/runtime.rs` pins; debug builds check after each follow that reading every body
-    would find nothing more (`check_followed`). `walk` and `step` follow what they moved before
-    they return (`follow_moved`), which `is_resting` and `velocity`, following nothing, show.
-  - The 3D world makes each model's or mesh's shape once for each way it's shaped and stretched
-    (`Shapes`, keyed by its `Arc`, held), a `Shape3d::Made` that every body of a copy shares,
-    posed where its node is: a fixed body too, its node's whole transform split into a pose and
-    a shaping (`split`), unless a parent stretches it across how it's turned, when its shape is
-    made where it is in the world, as every fixed body's once was. One turned by quarter turns
-    is only moved, its shaping turning its shape, since a ray turned into each of two pieces'
-    coordinates rounds otherwise in each, and slipped through the seam between them. Only
-    dynamic bodies are weighed (`weighed`): weighing a mesh costs a twentieth of making it, and
-    was done twice. Posing changed fixed bodies' answers in their last bits, and where a falling
-    body lands by up to millimetres:
-    `worlds_of_copies_of_models_end_the_same_to_the_bit_on_every_platform` says what it was
-    measured against.
-  - A step up to 5% past a sixtieth is taken whole (`physics::parts`), so a 59.94 Hz display
-    doesn't double Rapier's work.
+  Rapier, sharing `BodyKind` and `Material`: fixed, dynamic and kinematic bodies, and `walk` for
+  characters, flat-footed boxes in 2D and cylinders in 3D, that step and slope. 2D also has fixed
+  rects without bodies and tiles, every collider one `ColliderId`, in pixels (`set_length_unit`
+  tunes Rapier); its characters cast their box itself (`slide`), since Rapier's
+  `KinematicCharacterController` rounds it and creeps along walls. Where Rapier's own behavior
+  bites, item docs say how it's worked around (`true_normal`, `refresh`, kinematic bodies never
+  asleep). A step up to 5% past a sixtieth is taken whole (`physics::parts`). Queries never find
+  sensors, and pass over what `Passing` says, tags among it (bits in each collider's
+  `user_data`). Rapier's `enhanced-determinism` and nodes' 2D placement by `libm`
+  (`Affine::from_parts_exact`) keep results the same to the bit; hashes pinned in unit tests and
+  `tests/runtime.rs` check Windows and Linux agree.
+- Luau's worlds (`src/lua/physics.rs`, and `lua/physics/world2d.rs` beside it) are of scene
+  nodes, followed before each move, walk, step or query to where scripts moved them, unless the
+  scene's `revision` (bumped by every `get_mut`, but not by particles) hasn't changed; tile maps
+  are solid by `Tilemap::solid_rects`. The 2D world reads every collider's node again; the 3D
+  world reads only the nodes that changed (`Scene::keep_changes`, `Holder`), telling Rapier what
+  reading every body would, in the same order, which `tests/runtime.rs` pins and debug builds
+  check after each follow (`check_followed`). It makes each model's or mesh's shape once for each
+  way it's shaped and stretched (`Shapes`, `split`), shared by every copy.
 - `src/headless.rs`: `Headless` renders a canvas to an image; `Simulation` runs a whole `Game` at
   60 fps with simulated input, egui included, and screenshots. Key repeats run in game time, and
   typing is as on a US keyboard. All simulations in a process share one GPU device, held by one
@@ -301,25 +201,21 @@ own right.
   compares frames (`compare`, `diff`), as screenshot tests and games' tests do.
 - `src/lua.rs`: `Scripts`, a sandboxed Luau VM with tasks (`wait`, `wait_until`, `spawn`), and
   the conversions and userdata of engine types. Its built-ins are the start of the API module
-  (`Scripts::api`), which its own `require` answers when a game gives it no other. `wait` tells the scheduler its seconds before it
-  yields, and the scheduler counts them down in `f64`, as `wait` once did in Luau, resuming the
-  task only once they've passed; Luau tests' runner does the same. `exact` holds `libm`'s math,
-  the same bits on every platform, for what must replay; `math`'s are builtins about five times
-  quicker, for show. Scripts compile at optimization level 2.
+  (`Scripts::api`), which its own `require` answers when a game gives it no other. `wait` tells
+  the scheduler its seconds before it yields, and the scheduler counts them down in `f64`,
+  resuming the task only once they've passed; Luau tests' runner does the same. `exact` holds
+  `libm`'s math, for what must replay; `math`'s are builtins about five times quicker, for show.
+  Scripts compile at optimization level 2.
 - `src/save.rs`: `Saves`, files of plain values in `Wingine/<identity>` among the system's
   applications' data, each written to a file of its own then renamed over the old. Simulations
   keep theirs in a temporary folder, so tests never touch the player's.
 - `src/folders.rs`: `Folder`, a folder the player picked, reached by paths relative to it that
-  can't leave it (`resolve` follows every link on the way and checks where it led), and
-  `Folders`, those picked and the dialog for picking another, shared by clones. Scripts are
-  sandboxed, so a `Folder` never tells them its path. A dialog asked for (`Folders::pick`, a
-  ticket) is opened by the window after the frame (`State::pick_folder`, `rfd`'s
-  `AsyncFileDialog` over the window, polled each frame, waking it when it closes), and its
-  answer waits for the ticket's owner; a simulation opens none, and `Simulation::pick` answers
-  with a copy of a folder, so tests never touch the player's files. The folders picked are
-  remembered in `.folders.luau` beside the saves, which isn't a save; simulations remember them
-  only in memory, so a scripted run started from copies of a player's saves never reaches their
-  folders.
+  can't leave it (`resolve` follows every link on the way and checks where it led), which never
+  tells scripts its path; and `Folders`, those picked and the dialog for picking another, which
+  the window opens after the frame (`State::pick_folder`). The folders picked are remembered in
+  `.folders.luau` beside the saves, which isn't a save. Simulations open no dialog
+  (`Simulation::pick` answers with a copy of a folder) and remember folders only in memory, so
+  neither tests nor a scripted run from copies of a player's saves reach the player's files.
 - `src/icon.rs`: `WindowIcon`, scaled up by whole numbers so systems only shrink it.
 - Also: `tilemap.rs` (`Tilemap` and `Tileset`; outside the map is solid; `solid_rects` merges
   solid cells into boxes for physics), `grid.rs` (`GridMover`,
@@ -332,8 +228,7 @@ own right.
   `conf.luau`. `LuauGame` runs one; its API is a module, `require("@wingine")`, not globals:
   `Scripts::api`'s built-ins, and the tables `graphics`, `input`, `audio`, `tilemap`, `grid`,
   `physics`, `scene`, `ui`, `save`, `files` and `window`, a file each, frozen as the first script
-  loads. `files.pick_folder` waits in Luau, over a ticket, as a function that waits does.
-  Requirers answer `@wingine` first (`lua::ApiModule`, through `to_alias_override`), so a game's
+  loads. Requirers answer `@wingine` first (`lua::ApiModule`, through `to_alias_override`), so a game's
   `.luaurc` alias of it, for luau-lsp, is never followed. The module docs are the reference for
   script authors, and `wingine.d.luau` declares the API's types for luau-lsp, every one exported,
   the module as `Wingine`, which `wingine.luau` returns for luau-lsp to read through that alias;
@@ -341,19 +236,11 @@ own right.
 - `Textures` caches images, fonts and models by path, so each is read once.
 - `ui.menu`, `audio.play` and `audio.play_song` hand out userdata holding the `Lent`, so they're
   documented with their tables. A performance's `on`, `off` and `wait_for` are Luau
-  (`SONG_LISTENERS`, in `runtime/audio.rs`) over its `events`, reached through field getters from
-  a table in the VM's app data; a listener is a task reading each update's events, starting each
-  call as a task of its own. A game's `gui(ui)` gets egui's `Ui` borrowed through `Lua::scope`, so a `Ui` kept
-  past its call fails rather than dangle. `Ui`'s methods are functions that borrow the `Ui`
-  they're called on, not mlua mutable methods, which refuse to run inside themselves, so a
-  container can hold another of its kind. A canvas (`ui:canvas`) lends its function a `Paint`
-  the same way: egui's painter clipped to it, which takes positions from its corner, and a table
-  of what the pointer did, read from its `Response` before it's painted. `paint:bounds()` is its
-  rect mapped to canvas pixels through the `Screen`, as a simulation's `gui_rects` are, so
-  `draw`, after `gui`, can draw behind it.
-- Text in a 3D view (`Canvas3d::draw_text`, Luau's `graphics.draw_text_3d`) is laid out by the
-  font as 2D text is, and each glyph pushed as a billboard of the font's page, all with the
-  facing the first would have (`billboard_axes_at`), so a sign turns as one.
+  (`SONG_LISTENERS`, in `runtime/audio.rs`) over its `events`. A game's `gui(ui)` gets egui's
+  `Ui` borrowed through `Lua::scope`, so a `Ui` kept past its call fails rather than dangle, and
+  `ui:canvas` lends its function a `Paint` the same way. `Ui`'s methods are functions that borrow
+  the `Ui` they're called on, not mlua mutable methods, which refuse to run inside themselves, so
+  a container can hold another of its kind.
 - `LuauGame::reload` loads a whole new game in place, after the old one's `reloading` returns
   plain data for the new one's `window.reloaded()`. A game that fails to load becomes a stopped
   game holding that data for the next reload. `--watch` reloads on changes.
@@ -368,8 +255,8 @@ own right.
   source (`lua::Bytecode`), never anything a script made.
 - `fs_require.rs`: `require` off the web, navigating as mlua's `FsRequirer` does (a test holds it
   to mlua's answers), but remembering whether each path is a file or folder (`Lookups`), once a
-  load in a window and once a run in tests: asking the file system for every `require` was a third
-  of a large game's load. `require.rs` is the web's, over the page's files.
+  load in a window and once a run in tests, since asking the file system each time was a third of
+  a large game's load. `require.rs` is the web's, over the page's files.
 - `src/main.rs`: the `wingine` executable: run a game, `--watch`, `test`, `export`, `bake`, and
   with no arguments, the `game` folder beside it.
 
@@ -404,9 +291,7 @@ own right.
   `advance_particles`, which lays emitters out in one walk down through the nodes holding them.
   Particle settings are read by the file reader for files and for Luau alike
   (`file::particle_settings`, through `plain`), so both take the same fields with the same errors.
-  A particles node in a view holds an `Emitter::View`, a `Particles3d` placed by
-  `transform_3d`; its file's fields only a view's emitter has are a `ViewParticlesDef`, whose
-  `gravity_z` is a third number of the node's `gravity`, and `check_3d` refuses them outside one.
+  A particles node in a view holds an `Emitter::View`, a `Particles3d` placed by `transform_3d`.
 - Scripts hold nodes as `lua::SceneNode`, an `Rc<RefCell<Scene>>` and a `NodeId`.
 
 ### Editor
@@ -475,14 +360,8 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
 - `tests/`: a file per area (`runtime`, `scene`, `screenshots`, `simulation`, `testing`, `gui`,
   `export`, `native`) and per example game. Games' tests check their Luau state through
   `Simulation::eval` and `exec`, and run their own Luau tests through `runtime::testing::run`.
-- `benches/drawing.rs`: what drawing sprites and text costs from Rust, Luau and native libraries;
-  `physics.rs`, what Luau worlds' steps, tiles, queries and walks cost, what a 3D world of 2,000
-  bodies costs as nodes without bodies move, rigs are posed and a room comes and goes, what
-  adding a hundred copies of a model costs, and Rust steps of a sixtieth and a 59.94 Hz frame; `scenes.rs`, what posing, adding, loading instanced scenes and
-  moving particles in stacks cost; `scripts.rs`, what waiting tasks cost; `music.rs`, what a second
-  of a song costs to render at 48 kHz, the bandstand's and songs of 64 notes at once of each
-  wave, as the audio thread renders one played live. CI doesn't run them.
-  Their numbers shift by a third with unrelated changes, and by a quarter between runs of one
+- `benches/` (`drawing`, `physics`, `scenes`, `scripts`, `music`): each file's module docs say
+  what it measures. CI doesn't run them. Their numbers shift by a third with unrelated changes, and by a quarter between runs of one
   build, so run each a few times, and compare builds by running them in turn. A build started
   before an edit is newer than it, so touch the sources before rebuilding to measure.
 - `docs/`: the user docs, restating the module docs for game authors, with `docs/api/` the API
@@ -520,8 +399,8 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
   in canvas pixels; `Camera::canvas_to_world` converts it. A captured mouse's motion is in the
   mouse's own units, which differ between mice and systems, so games scale it by a sensitivity.
 - egui draws over the whole frame at the output's resolution, in logical window pixels. Tests find
-  widgets by label, so give one whose label egui doesn't know a label of its own
-  (`Response::widget_info`). egui sizes a new window or menu in its first frame and shows it in
+  widgets by label, through the AccessKit tree simulations turn on, so give one whose label egui
+  doesn't know a label of its own (`Response::widget_info`). egui sizes a new window or menu in its first frame and shows it in
   the next, so tests run frames before looking for them.
 - wgpu and winit types stay `pub(crate)`. `wingine::lua` re-exports mlua and `wingine::gui` egui,
   whose types are their APIs. Engine types scripts use implement `FromLua`/`IntoLua` or
@@ -535,8 +414,7 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
 - Luau resolves a global's fields named in a chunk when it loads, if the global exists then, so a
   chunk that changes a field and reads it back sees the old value. Games create their global table
   after requiring their modules, and tests read state back in a chunk of its own
-  (`Simulation::eval`). The API being a module costs a script a lookup or two where a global's
-  field cost none, some 2.7 nanoseconds each, which no game measured has shown.
+  (`Simulation::eval`).
 - Native libraries reach the engine only through the ABI, getting the same lent services scripts
   do. Hooks run in the order libraries are listed. Drawing many sprites goes through one
   `draw_sprites` call, since each call from Luau into a library costs far more than a sprite.
@@ -569,10 +447,11 @@ cargo fmt --manifest-path web/Cargo.toml --all
 The README's examples table lists how to run each example.
 
 Run `cargo fmt` and `cargo clippy --all-targets` before considering a change finished, and keep
-both clean with the `egui` feature off too. After changing code that differs on the web, lint it
+clippy clean without default features too. After changing code that differs on the web, lint it
 there too, with `web/wasm-env.sh` sourced:
-`cargo clippy --manifest-path web/Cargo.toml --target wasm32-unknown-unknown`. CI (`.github/workflows/ci.yml`) runs fmt, clippy with
-`-D warnings` with and without default features, and `cargo test` on Linux and Windows.
+`cargo clippy --manifest-path web/Cargo.toml --target wasm32-unknown-unknown`. CI
+(`.github/workflows/ci.yml`) runs fmt, clippy with `-D warnings` with and without default
+features, and `cargo test` on Linux and Windows.
 `release.yml` builds the runtime and editor for Windows and Linux (on the oldest Ubuntu runner,
 for glibc; Windows links the C runtime statically), and a `v*` tag publishes them. Each archive
 has `THIRD-PARTY-NOTICES.txt`, written by `cargo about` (pinned in `release.yml`) with `about.toml`

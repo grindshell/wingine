@@ -4,8 +4,8 @@ Data kept between runs of the game, such as the player's progress or their setti
 
 A game keeps any number of saves, each with a name of letters, digits, `_` and `-`, such as
 `"progress"` or `"slot-2"`, but not a name Windows keeps for a device, such as `"con"`, `"nul"` or
-`"com1"`, on any system, so saves work on every one. A save holds plain data: a boolean, number, string, or table of them,
-where a table is a list or has strings for keys, nested as deep as needed. That's what a scene's
+`"com1"`, on any system, so saves work on every one. A save holds plain data: a boolean, number,
+string, or table of them, where a table is a list or has strings for keys, nested up to 200 deep. That's what a scene's
 props hold, and saves are files of Luau like scene files, written the same way, so they're easy to
 read.
 
@@ -33,6 +33,7 @@ in:
 | Windows | `%APPDATA%\Wingine\<identity>` |
 | macOS | `~/Library/Application Support/Wingine/<identity>` |
 | Linux | `$XDG_DATA_HOME/Wingine/<identity>`, or `~/.local/share/Wingine/<identity>` |
+| [The web](../web.md) | The browser's local storage, under `Wingine/<identity>/` |
 
 Each save is a file there named for it, `<name>.luau`. The folder is made when the first save is
 written.
@@ -55,8 +56,8 @@ a file of its own, then takes the old one's place, so a game that stops partway 
 leaves the old save as it was.
 
 Anything that isn't plain data is an error, naming where it is: a function, a sprite or other
-engine object, a number that isn't finite, a table with both numbers and strings for keys, or a
-list with a gap, such as `{ 1, nil, 3 }`. Nothing is written then.
+engine object, a number that isn't finite, a table with both numbers and strings for keys, a
+list with a gap, such as `{ 1, nil, 3 }`, or a table that holds itself. Nothing is written then.
 
 ```lua
 wg.save.write("progress", { level = 3, player = { name = "Pat", items = { "key", "lamp" } } })

@@ -31,8 +31,8 @@ serves it at <http://localhost:8737>. On Windows, run `build.sh` from Git Bash. 
 
 It needs:
 
-- [WASI SDK](https://github.com/WebAssembly/wasi-sdk/releases) 34 or later, in `~/.local/wasi-sdk`
-  or wherever `WASI_SDK_PATH` says, at a path without spaces;
+- [WASI SDK](https://github.com/WebAssembly/wasi-sdk/releases) 34 or later, in a `wasi-sdk-*`
+  folder in `~/.local/wasi-sdk` or wherever `WASI_SDK_PATH` says, at a path without spaces;
 - the target: `rustup target add wasm32-unknown-unknown`;
 - wasm-bindgen's CLI, at the version of `wasm-bindgen` the build locks:
   `cargo install wasm-bindgen-cli --version 0.2.129`. `build.sh` checks.
@@ -49,32 +49,20 @@ errors: see mlua's
 compilers, flags and libraries to link are set through environment variables, as
 `web/wasm-env.sh` sets them; source it to run Cargo by hand.
 
-No release of mlua does this yet, and Cargo can't take a dependency from crates.io for one target
-and from git for another, nor hold two copies of mlua, since `mlua-sys` links `lua`. So the
+No release of mlua does this, and Cargo can't take mlua from two places in one workspace, so the
 engine depends on mlua's release, and the `web` workspace, with a `Cargo.lock` of its own, patches
-in its master branch:
-
-```toml
-[patch.crates-io]
-mlua = { git = "https://github.com/mlua-rs/mlua", rev = "6308bb38dd8b15b72cf28335bb9abf024aeb1c34" }
-```
-
-A patch counts only in the root of the workspace being built, so building in the repository's
-root keeps the release, and building in `web` takes master. Once a release builds for the web,
-the engine can require it and the patch can go.
+in its master branch, in the `[patch.crates-io]` of `web/Cargo.toml`. A patch counts only in the
+root of the workspace being built, so building in the repository's root keeps the release, and
+building in `web` takes master.
 
 Luau's native code generation (mlua's `luau-jit`) is only built off the web.
 
 The workspace has two crates:
 
-- `wingine-web`: what a module needs beside the engine. The module imports WASI's functions
-  (`wasi_snapshot_preview1`), which the page's `wasi.js` provides; linking the crate makes WASI
-  libc's allocator (`posix_memalign` and `free`) Rust's, so the two don't both manage the same
-  memory, and calls `__wasm_call_ctors` once, from the module's start function, so the linker
-  doesn't treat the module as a command, running the C++ constructors again at the start of every
-  exported function, where Luau loops forever through its list of flags. Its `start` hands the
-  engine a game's files and runs it, logging to the browser's console; `embed_game`, for build
-  scripts, embeds a game's folder, which its `game!` gives.
+- `wingine-web`: what a module needs beside the engine, which imports WASI's functions from the
+  page's `wasi.js`. Its `start` hands the engine a game's files and runs it, logging to the
+  browser's console; `embed_game`, for build scripts, embeds a game's folder, which its `game!`
+  gives.
 - `player`: the module of a game without native libraries of its own, the RPG unless
   `WINGINE_GAME` names another folder.
 
@@ -85,7 +73,8 @@ The browser needs WebGPU and Wasm exception handling with `exnref`.
 The web can't load native library files, so a game that lists libraries of its own needs a module
 that links them in. That's a crate of its own, a `cdylib`, in a workspace whose root has the same
 patch as `web/Cargo.toml`. It depends on `wingine-web` (also among its build dependencies),
-`wingine`, `wasm-bindgen` and `js-sys` from the same checkout, and on its libraries' crates,
+`wingine`, `wingine-native`, `wasm-bindgen` and `js-sys` from the same checkout, and on its
+libraries' crates,
 built as `rlib`s too, and its `start` links each in before starting the game:
 
 ```toml
@@ -137,7 +126,7 @@ patched the same way.
   before it starts, and scripts, scenes, images, models and sounds are read from those. Luau's
   `require` finds modules among them as it finds files off the web.
 - Saves are kept in the browser's local storage, under `Wingine/<identity>/<name>.luau`.
-- There are no folders to pick yet: [`files.pick_folder`](api/files.md#filespick_folder) is an
+- There are no folders to pick: [`files.pick_folder`](api/files.md#filespick_folder) is an
   error, and `files.folders` returns none.
 - kira can't stream there, so music is decoded into memory when it starts, as a sound effect is.
 - Native library files can't be loaded: games have only libraries linked into the program with

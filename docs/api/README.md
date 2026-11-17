@@ -16,7 +16,7 @@ that requires it. Pages are named for the module's tables, and functions for the
 | Page | What it covers |
 |---|---|
 | [Built-ins](globals.md) | The game's `update`, `gui`, `draw`, `close_requested` and `reloading`, tasks (`spawn`, `wait`, `wait_until`), `print`, `require` and `approach` |
-| [`graphics`](graphics.md) | Drawing, the camera, blend modes, sprite sheets, sprites, animations, particles, fonts and text, frame stats, and 3D views of meshes, models and billboards, lit by a sun and by lights at places, which can cast shadows, with picking by boxes |
+| [`graphics`](graphics.md) | Drawing, the camera, blend modes, sprite sheets, sprites, animations, particles, fonts and text, frame stats, and 3D views of meshes, models, billboards, text and particles, lit by a sun and by lights at places, which can cast shadows, glowing, and fading into fog under a sky, with picking by boxes |
 | [`input`](input.md) | The keyboard, mouse and gamepads, and actions bound to keys and buttons |
 | [`audio`](audio.md) | Sound effects, music, songs of the engine's own instruments played live, and volume |
 | [`tilemap`](tilemap.md) | Tilesets and maps of tiles in layers |
@@ -29,7 +29,7 @@ that requires it. Pages are named for the module's tables, and functions for the
 | [`exact`](exact.md) | Math that gives the same bits on every platform, for games that replay |
 | [`rect`](rect.md) | Whether rectangles overlap, and whether one holds a point |
 | [`window`](window.md) | Quitting the game, asking before its window closes, covering the screen, scaling a fixed resolution, and what it kept as it reloaded |
-| [`gui`](gui.md) | Interfaces over the game, such as debug tools, laid out with egui in the game's `gui` |
+| [Interfaces](gui.md) | Interfaces over the game, such as debug tools, laid out with egui in the game's own `gui` function: the `Ui` it's passed, which isn't one of the module's tables |
 | [Tests](testing.md) | What only tests have: `test`, `sim` to drive the game and run its frames, `assert_equal` and `assert_near` |
 | [`wingine-native`](native.md) | The Rust crate native libraries are written with |
 
@@ -75,10 +75,10 @@ time raises an error saying when it works.
 - **Drawing** works only in `draw`: `graphics.clear`, `graphics.fill_rect`,
   `graphics.outline_rect`, `graphics.draw_line`, `graphics.fill_circle`,
   `graphics.outline_circle`, `graphics.draw_sprite`, `graphics.draw_sprite_rotated`,
-  `graphics.draw_text`, `graphics.draw_text_layout`, `graphics.draw_tilemap`,
-  `graphics.draw_scene`, `graphics.set_camera`, `graphics.set_blend`,
-  `graphics.draw_particles`, `graphics.begin_3d`, `graphics.draw_mesh`, `graphics.draw_model` and
-  `graphics.draw_billboard`.
+  `graphics.draw_sprite_sliced`, `graphics.draw_text`, `graphics.draw_text_layout`,
+  `graphics.draw_tilemap`, `graphics.draw_scene`, `graphics.set_camera`, `graphics.set_blend`,
+  `graphics.draw_particles`, `graphics.begin_3d`, `graphics.draw_mesh`, `graphics.draw_model`,
+  `graphics.draw_billboard` and `graphics.draw_text_3d`.
 - **The keyboard, mouse, gamepads and sound** work while the game loads (the top level of
   `main.luau` and the modules it requires), in `update` and the tasks it resumes, and in `gui`:
   everything in `input`, everything in `audio` but `audio.load`, `audio.make` and
@@ -172,6 +172,10 @@ of `emitting`, `rate`, `limit`, `warmup`, `seed`, `lifetime`, `speed`, `directio
 `gravity`, `drag`, `angle`, `spin`, `scales`, `colors`, `blend` and `attached`. See
 [particle settings](graphics.md#particle-settings).
 
+`ParticleSettings3d` is an emitter's in a 3D view: the same, without `direction`, with `gravity`
+three numbers, and with `look`, `streak`, `lit`, `glow` and `bounce`. See
+[particles in a 3D view](graphics.md#particles-in-a-3d-view).
+
 ### `PlaySettings`
 
 How [`audio.play`](audio.md#audioplay) plays a sound: a table with any of `volume`, `speed`,
@@ -202,7 +206,7 @@ See [`graphics.begin_3d`](graphics.md#graphicsbegin_3d).
 
 A light at a place in a 3D view, one of a `Lighting`'s `lights`: a table of a `position`, and
 any of `color`, `range`, `energy`, `shadows`, `bounds`, and for a spot light, `cone`,
-`direction` and `edge`. See [`graphics.begin_3d`](graphics.md#graphicsbegin_3d).
+`direction` and `edge`. See [lights](graphics.md#lights).
 
 `LightSettings` is a scene's light node's: a table with any of `color`, `range`, `energy`, `cone`,
 `edge`, `shadows` and `bounds`, a light's fields but its `position` and `direction`, which are its
@@ -214,6 +218,11 @@ and [`node:set_light`](scene.md#nodeset_light).
 How [`graphics.draw_mesh`](graphics.md#graphicsdraw_mesh) places and colors a mesh, and
 [`graphics.draw_model`](graphics.md#graphicsdraw_model) a model: a table with any of `yaw`,
 `pitch`, `roll`, `scale`, `sprite` (for a mesh), `tint`, `casts_shadow` and `glow`.
+
+### `Text3dOptions`
+
+How [`graphics.draw_text_3d`](graphics.md#graphicsdraw_text_3d) sets text in a 3D view: a table
+with any of `height`, `align`, `color` and `glow`.
 
 ### `MeshData`
 

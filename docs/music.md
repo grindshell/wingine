@@ -35,7 +35,8 @@ faster as a whole; instruments' times are in seconds, so a note's attack lasts a
 ## Song files
 
 A song file, `name.song.luau` by convention, holds plain Luau values as a scene file does: it runs
-with nothing in scope and returns a table. Fields at their defaults can be left out.
+with nothing in scope and returns a table. Fields at their defaults can be left out. The editor's
+[Music screen](editor.md#writing-songs) writes them, playing a song as it's changed.
 
 ```lua
 return {
@@ -144,7 +145,7 @@ names an instrument, pattern or section it doesn't have can't be played.
 | `vibrato` | A wobble in the pitch: `{ rate, depth, delay }`, `rate` times a second, `depth` semitones either way, starting `delay` seconds into each note (0). | none |
 | `filter` | `{ kind, cutoff, resonance, sweep, sweep_time }`: `kind` is `"low"`, `"high"` or `"band"`, which frequencies it lets through around `cutoff` Hz; `resonance`, from 0 to 1, how much it rings there; `sweep`, octaves the cutoff starts each note away, sliding over `sweep_time` seconds. All but `cutoff` are 0 if left out, and `kind` is `"low"`. | none |
 
-Envelope times and sweeps are at most 60 seconds. Attacks and releases take at least 2
+Envelope times and sweep times are at most 60 seconds. Attacks and releases take at least 2
 milliseconds, so notes never click as they start or end.
 
 A song plays at most 64 notes at once; past that, a new note takes the place of the oldest one
@@ -169,10 +170,8 @@ A bake is the same, sample for sample, on every platform, and the same as the so
 that rate: only a game's changes as it plays make live music differ.
 
 Baking suits music that doesn't change: it costs nothing to play but streaming a file. Playing live
-costs a little of the audio thread's time for each note playing, and lets the game change it. On
-one core of a recent server CPU, the bandstand example's song takes about 0.3% of the core's time,
-and a song as dense as one can be, 64 notes at once, 2 to 4%, sines the most;
-`cargo bench --bench music` measures it.
+costs a little of the audio thread's time for each note playing, a few percent of a core at most,
+and lets the game change it.
 
 ## Playing live
 
@@ -207,18 +206,8 @@ function hit_on_the_beat()
         band:go_to("chorus", "bar")
     end
 end
-
-band:on("marker:drop", function()
-    stage.confetti = true
-end)
 ```
 
 The [bandstand example](../examples/bandstand) is a rhythm game made this way, its presses judged
-by the song's beats and position.
-
-What happens in a song is heard the update after the mixer plays it, a few milliseconds after the
-speakers do. Without a sound device, and when a game runs without a window, songs are silent but
-keep time in game time, so what happens in them lands on the same updates every run.
-
-In Rust, `Audio::play_song` plays a `music::Song`, and `Audio::song` gives the `PlayingSong` to
-change and hear it; `Song::render` and `Song::bake` render one ahead of time.
+by the song's beats and position. [`audio`](api/audio.md#songs) says when a game hears what
+happens in a song, and how songs keep time without a sound device.

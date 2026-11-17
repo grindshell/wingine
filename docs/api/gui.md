@@ -47,8 +47,9 @@ and key presses have already been seen by `update`, which is where to read them.
 stops the game, as one in `update` does. Without the engine's `egui` feature, which is on by
 default, `gui` isn't called.
 
-A game that doesn't define `gui` when it loads skips egui altogether, apart from the window of
-frame stats on its [`debug_key`](../project-structure.md#debug_key).
+While a game has no `gui`, its frames skip egui altogether, apart from the window of frame stats
+on its [`debug_key`](../project-structure.md#debug_key); one it defines as it plays is called from
+the next frame.
 
 ## Containers
 

@@ -1,9 +1,12 @@
 # Making games with Wingine
 
-Wingine is a 2D game engine for desktops: Windows, macOS and Linux. You write a game as a folder
-of [Luau](https://luau.org) scripts and assets, and the `wingine` executable runs it. The engine
-draws sprites, tilemaps and text with the GPU, plays sound effects and music, reads the keyboard,
-mouse and gamepads, keeps saves between runs, and runs your scripts once a frame or at a fixed rate.
+Wingine is a 2D game engine for desktops: Windows, macOS and Linux, and experimentally the web.
+You write a game as a folder of [Luau](https://luau.org) scripts and assets, and the `wingine`
+executable runs it. The engine draws sprites, tilemaps, text and particles with the GPU, with 3D
+views among them, lays levels and screens out in scenes, makes them solid with physics, plays
+sound effects, music and songs of its own instruments, reads the keyboard, mouse and gamepads,
+shows interfaces, keeps saves between runs, and runs your scripts once a frame or at a fixed rate.
+The [README](../README.md#features) lists its features.
 
 Luau is a fast, sandboxed language derived from Lua 5.1, with type annotations, compound
 assignment (`x += 1`), `continue` and a few other additions. If you know Lua, you know most of it;
@@ -12,7 +15,8 @@ assignment (`x += 1`), `continue` and a few other additions. If you know Lua, yo
 When a script isn't fast enough, part of a game can be written in Rust as a native library: a
 compiled library the engine loads at runtime from the game's folder, which adds functions and
 objects for the scripts to use. The [shmup example](../examples/shmup) runs its bullets either
-way, and fits about 3.4 times as many in a frame when they're in Rust.
+way, and fits [several times as many](../README.md#luau-and-rust-compared) in a frame when
+they're in Rust.
 
 The engine is a Rust crate too, and games can be written against it in Rust. These docs cover
 games written in Luau; the crate's own docs (`cargo doc --open`) and
@@ -26,8 +30,8 @@ Read these in order the first time:
 2. [Project structure](project-structure.md): what goes in a game's folder, how `main.luau` runs,
    the settings in `conf.luau`, and where native libraries go.
 3. [Running games](running-games.md): running a game, reloading it as you work, reading its errors
-   and output, checking it without a window, testing it in Luau or Rust, and measuring how fast it
-   runs.
+   and output, checking it without a window, testing it in Luau or Rust, measuring how fast it
+   runs, and exporting it to ship.
 
 When a game's levels, screens or characters are laid out rather than coded:
 
@@ -71,8 +75,14 @@ The repository's examples are complete games, and the best place to see how the 
 | [`examples/shmup`](../examples/shmup) | A bullet hell at a fixed update rate, with an optional native library for its bullets, and a HUD laid out in a scene, whose menu takes the mouse |
 | [`examples/garden`](../examples/garden) | A garden laid out in a scene file: nodes found by path and tag, turned together, solid in a physics world the player walks in, and areas for notes, which F1 outlines |
 | [`examples/orchard`](../examples/orchard) | A character rigged from sprites and animated by clips, layered and crossfaded each frame, catching apples |
-| [`examples/course`](../examples/course) | A course in a 3D view of models: fixed bodies shaped by their triangles, crates that fall and tumble, and a character that walks up stairs and slopes, jumps and pushes crates |
+| [`examples/cellar`](../examples/cellar) | A 2.5D cellar in a 3D view of models and billboards, lit by candles that glow and cast shadows, or keep to a box, with props named under the mouse |
+| [`examples/course`](../examples/course) | A course in a 3D view of models: fixed bodies shaped by their triangles, crates that fall and tumble, a character that walks up stairs and slopes, jumps and pushes crates, and fog fading into a sky |
+| [`examples/quarry`](../examples/quarry) | A level seen from the side in a 2D physics world: a tile map solid where its tiles are, crates that fall and stack, a boulder that rolls and a lift that carries what's on it |
+| [`examples/bonfire`](../examples/bonfire) | A night of particles nodes and blend modes, with fireworks |
+| [`examples/lettering`](../examples/lettering) | The built-in font, a bitmap font and a TrueType font, in a scene's text nodes |
+| [`examples/bandstand`](../examples/bandstand) | A rhythm game played to a song played live, which the game changes as it plays and whose beats and markers it hears |
 | [`examples/native-particles`](../examples/native-particles/src/lib.rs) | A small native library: functions, a class and hooks |
 | [`examples/native-danmaku`](../examples/native-danmaku/src/lib.rs) | The shmup's bullets in Rust, drawn with one call per kind of bullet |
 
-Run any of them from the repository with `cargo run -- examples/pong`.
+Run any of them from the repository with `cargo run -- examples/pong`. The
+[README](../README.md#examples) shows each, with how to play it.

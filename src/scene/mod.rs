@@ -325,9 +325,9 @@
 //! Tracks change `x`, `y`, `rotation`, `scale_x` and `scale_y`, or for nodes in 3D views, `z`,
 //! `yaw`, `pitch`, `roll` and `scale_z` but not `rotation`, which move from key to key in a
 //! straight line, or with `interpolation = "step"` jump at each key; and `visible` and the `cell`
-//! of a sprite, billboard or mesh, which always step. `keys` are a time in seconds, from 0 to the
-//! duration, and the value then, in order of time; before the first key a property has the first
-//! key's value, and after the last, the last key's. A loop that should come back to where it
+//! of a sprite, billboard, mesh or particles node, which always step. `keys` are a time in
+//! seconds, from 0 to the duration, and the value then, in order of time; before the first key a
+//! property has the first key's value, and after the last, the last key's. A loop that should come back to where it
 //! started has its first key's value again at its end.
 //!
 //! ```lua

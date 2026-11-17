@@ -64,7 +64,8 @@ independently, such as two of the same enemy. Each file is read once, however ma
 loaded or placed, and each image once, however many scenes and sprite sheets use it.
 
 A file that can't be read, or that isn't a scene, is an error naming the file and the node where
-the problem is. Works while the game loads and in `update`.
+the problem is. Works while the game loads, in `update` and in `gui`, as
+[the context does](README.md#when-functions-work).
 
 ### `scene.clips`
 
@@ -276,9 +277,8 @@ Positions, anchors, rotations and scales must be finite numbers.
 
 ## What nodes cover
 
-A sprite, rect, text, area or 3D view covers a rectangle, with its pivot at the node's origin, as
-the rectangle particles start in does,
-and a tilemap, or a layer of one, covers its map. A plain node covers nothing, and nor do nodes in
+A sprite, rect, text, area, stack, panel or 3D view covers a rectangle, with its pivot at the
+node's origin, as the rectangle particles start in does, and a tilemap, or a layer of one, covers its map. A plain node covers nothing, and nor do nodes in
 3D views, which have [boxes](#nodebounds_3d) instead.
 
 ### `node:size`
@@ -498,7 +498,8 @@ lives, so a torch put out dies down.
 node:particle_settings(): ParticleSettings
 ```
 
-Returns a particles node's [settings](graphics.md#particle-settings), every one of them.
+Returns a particles node's [settings](graphics.md#particle-settings), every one of them, or for a
+node in a 3D view, its [3D settings](graphics.md#particles-in-a-3d-view).
 
 ### `node:set_particle_settings`
 
@@ -664,7 +665,7 @@ node:set_glow(glow: Color)
 
 Changes how much of its own colors a mesh, model or billboard node shows whatever lights it:
 white as full light would show them, black for none. A model's parts give off what their file's
-materials emit besides. See [glow](graphics.md#graphicsbegin_3d). An error for a node of another
+materials emit besides. See [glow](graphics.md#glow). An error for a node of another
 kind.
 
 ```lua
@@ -849,8 +850,8 @@ hero:pose(clips.walk, walk_time, walking)
 hero:pose(clips.blink, time)
 ```
 
-A track whose node isn't there, a `cell` track of a node that isn't a sprite, billboard or mesh
-from a sheet with those cells, a `rotation` track of a node in a 3D view, or a `z`, `yaw`,
+A track whose node isn't there, a `cell` track of a node that isn't a sprite, billboard, mesh or
+particles node from a sheet with those cells, a `rotation` track of a node in a 3D view, or a `z`, `yaw`,
 `pitch`, `roll` or `scale_z` track of one that isn't, is an error, and the pose changes nothing.
 `time` and `weight` must be finite.
 
