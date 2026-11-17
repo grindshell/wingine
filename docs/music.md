@@ -169,7 +169,10 @@ A bake is the same, sample for sample, on every platform, and the same as the so
 that rate: only a game's changes as it plays make live music differ.
 
 Baking suits music that doesn't change: it costs nothing to play but streaming a file. Playing live
-costs a little of the audio thread's time for each note playing, and lets the game change it.
+costs a little of the audio thread's time for each note playing, and lets the game change it. On
+one core of a recent server CPU, the bandstand example's song takes about 0.3% of the core's time,
+and a song as dense as one can be, 64 notes at once, 2 to 4%, sines the most;
+`cargo bench --bench music` measures it.
 
 ## Playing live
 

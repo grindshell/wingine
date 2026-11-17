@@ -479,7 +479,9 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
   `physics.rs`, what Luau worlds' steps, tiles, queries and walks cost, what a 3D world of 2,000
   bodies costs as nodes without bodies move, rigs are posed and a room comes and goes, what
   adding a hundred copies of a model costs, and Rust steps of a sixtieth and a 59.94 Hz frame; `scenes.rs`, what posing, adding, loading instanced scenes and
-  moving particles in stacks cost; `scripts.rs`, what waiting tasks cost. CI doesn't run them.
+  moving particles in stacks cost; `scripts.rs`, what waiting tasks cost; `music.rs`, what a second
+  of a song costs to render at 48 kHz, the bandstand's and songs of 64 notes at once of each
+  wave, as the audio thread renders one played live. CI doesn't run them.
   Their numbers shift by a third with unrelated changes, and by a quarter between runs of one
   build, so run each a few times, and compare builds by running them in turn. A build started
   before an edit is newer than it, so touch the sources before rebuilding to measure.
