@@ -99,8 +99,10 @@ fn make(bytes: &[u8], rate: f64, channels: f64) -> Result<Sound, String> {
         return Err(format!("a sound has 1 channel or 2, not {channels}"));
     }
     let samples: Vec<f32> = bytes
-        .chunks_exact(4)
-        .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&bytes| f32::from_le_bytes(bytes))
         .collect();
     Sound::from_samples(&samples, whole(rate), whole(channels)).map_err(|err| err.to_string())
 }

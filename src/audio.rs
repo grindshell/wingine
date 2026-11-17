@@ -546,8 +546,10 @@ impl Sound {
                 .collect()
         } else {
             samples
-                .chunks_exact(2)
-                .map(|pair| Frame::new(pair[0], pair[1]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&[left, right]| Frame::new(left, right))
                 .collect()
         };
         Ok(Self {

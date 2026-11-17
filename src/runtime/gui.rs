@@ -688,8 +688,10 @@ impl Paint {
             )));
         }
         Ok(numbers
-            .chunks_exact(2)
-            .map(|point| self.at(point[0], point[1]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&[x, y]| self.at(x, y))
             .collect())
     }
 
