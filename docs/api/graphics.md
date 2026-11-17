@@ -27,6 +27,7 @@ functions work only in `draw`.
   [font files](#font-files), [`Font`](#font), [`TextLayout`](#textlayout)
 - [3D views](#3d-views): [`begin_3d`](#graphicsbegin_3d), [`draw_mesh`](#graphicsdraw_mesh),
   [`draw_model`](#graphicsdraw_model), [`draw_billboard`](#graphicsdraw_billboard),
+  [`draw_text_3d`](#graphicsdraw_text_3d),
   [`project`](#graphicsproject), [`ray`](#graphicsray), [`hit_box`](#graphicshit_box)
 - [Meshes](#meshes): [`new_cube`](#graphicsnew_cube), [`new_cuboid`](#graphicsnew_cuboid),
   [`new_plane`](#graphicsnew_plane), [`new_sphere`](#graphicsnew_sphere),
@@ -1433,6 +1434,43 @@ does. Drawing one when no view is open is an error.
 local sprite = if player.facing == "left" then hero:flipped_x() else hero
 wg.graphics.draw_billboard(sprite, player.position)
 ```
+
+### `graphics.draw_text_3d`
+
+```lua
+wg.graphics.draw_text_3d(font: Font, text: string, position: vector, options: Text3dOptions?)
+```
+
+Draws `text` in `font` standing upright in the 3D view begun last, as a sign: turned to face the
+camera across the ground as a [billboard](#graphicsdraw_billboard) is, with the middle of its
+bottom edge at `position`. `"\n"` starts a new line. Each glyph is a billboard showing the font's
+own texture, so the text is where it is in the view: it's hidden by what's in front of it, hides
+what's behind it, and is smaller farther off. `options` is a table of any of:
+
+| Field | What it is | Default |
+|---|---|---|
+| `height` | How far apart its lines are, in world units: a line's height. | 1 |
+| `align` | Which of its ends, `"left"` or `"right"`, or its middle, `"center"`, is at `position`, which lines its lines up the same way. | `"center"` |
+| `color` | What its glyphs' colors are multiplied by, as a billboard's tint. | White |
+| `glow` | How much of its own colors it shows whatever lights it, as a billboard's. White shows it as it is, unshaded. | Black: none |
+
+```lua
+local wg = require("@wingine")
+local font = wg.graphics.load_font("fonts/Hack-Regular.ttf", { size = 32 })
+
+-- In draw, in a view: a sign over the well, lit by nothing but itself.
+wg.graphics.draw_text_3d(font, "The old well", vector.create(2, 1.5, -3), {
+    height = 0.3,
+    color = "#f2c14e",
+    glow = "#ffffff",
+})
+```
+
+It's lit as billboards are, as the ground is, unless it glows. Like a billboard's, a glyph's pixels
+less than half opaque aren't drawn, so text in a font drawn `smooth`, as TrueType fonts are by
+default, loses the soft edges of its letters: draw it at a size whose pixels are small on screen,
+or use a pixel font, which has none to lose. A font's pixels are a texel of its glyphs, so
+loading one at a larger size makes sharper text, not larger.
 
 ### `graphics.project`
 

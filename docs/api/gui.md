@@ -504,6 +504,7 @@ nothing painted shows outside it. What's painted later is over what was painted 
 | Method | What it paints |
 |---|---|
 | `paint:size(): (number, number)` | Nothing: returns the canvas's width and height. |
+| `paint:bounds(): Rect` | Nothing: returns where the canvas is on the game's canvas, in canvas pixels, as below. |
 | `paint:line(x1, y1, x2, y2, color, thickness?)` | A line from one point to the other, `thickness` wide, by default 1. |
 | `paint:path(points, color, thickness?)` | Lines through `points`, `{ x1, y1, x2, y2, ... }`, two or more. |
 | `paint:fill_polygon(points, color)` | The convex polygon whose corners are `points`, three or more, such as an arrow's head. |
@@ -528,6 +529,41 @@ local width, height = paint:measure(name)
 paint:fill_rect(x - width / 2 - 6, y - 4, width + 12, height + 8, "#2a2e36", 4)
 paint:text(name, x, y, "#e8e8e8", { align = "center" })
 ```
+
+#### Drawing behind a canvas
+
+What a canvas leaves unpainted shows what's under the interface: what the game drew in `draw`.
+`paint:bounds()` says where the canvas is there, in [canvas pixels](graphics.md#graphicssize), as
+the mouse's position is, so `draw` can fill it, such as with a [3D view](graphics.md#3d-views)
+whose `rect` it is, wherever panels round it have left it, while the canvas takes the pointer:
+
+```lua
+local wg = require("@wingine")
+local cube = wg.graphics.new_cube(1)
+local bounds = nil
+local turn = 0
+
+function gui(ui: Ui)
+    ui:panel("left", function(ui)
+        ui:label("Drag the room to turn it")
+    end)
+    ui:canvas("Room", function(paint, input)
+        bounds = paint:bounds()
+        turn += input.dragged_x / 100
+    end)
+end
+
+function draw()
+    wg.graphics.clear("#1b1d22")
+    if bounds then
+        local camera = { position = vector.create(math.sin(turn) * 6, 3, math.cos(turn) * 6), target = vector.zero }
+        wg.graphics.begin_3d({ camera = camera, rect = bounds })
+        wg.graphics.draw_mesh(cube, vector.zero)
+    end
+end
+```
+
+`gui` runs before `draw` each frame, so `draw` has the canvas's bounds of the same frame.
 
 ## Spacing
 

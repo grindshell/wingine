@@ -3467,6 +3467,122 @@ fn luau_games_draw_meshes_and_billboards_in_3d_views() {
 }
 
 #[test]
+fn luau_games_draw_text_standing_in_3d_views() {
+    let folder = game(
+        "text_3d",
+        &[
+            ("conf.luau", "return { width = 200, height = 100 }"),
+            (
+                "main.luau",
+                "local wg = require('@wingine')
+                -- 4 units tall, so 25 pixels a unit, the origin in the middle, without shading.
+                view = {
+                    camera = { position = vector.create(0, 0, 5), target = vector.zero, height = 4 },
+                    lighting = { color = '#000000', ambient = '#ffffff' },
+                }
+                font = wg.graphics.default_font()
+                cube = wg.graphics.new_cube(0.5)
+                seen = {}
+                function update()
+                    table.insert(seen, wg.graphics.frame_stats())
+                end
+                function draw()
+                    wg.graphics.begin_3d(view)
+                    -- Centred on the middle, its bottom a unit up: the top quarter.
+                    wg.graphics.draw_text_3d(font, 'HI', vector.create(0, 1, 0), { color = '#ff0000' })
+                    -- Its left end at the middle, below it, a cube in front of its middle.
+                    wg.graphics.draw_text_3d(font, 'HI', vector.create(0, -1.5, 0), {
+                        color = '#00ff00',
+                        align = 'left',
+                    })
+                    wg.graphics.draw_mesh(cube, vector.create(0.6, -1, 2), { tint = '#0000ff' })
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.run_frames(2);
+    assert_eq!(simulation.game().error().map(ToString::to_string), None);
+    // Two glyphs a sign, each a billboard of two triangles, and the cube's 12.
+    assert_eq!(simulation.eval::<u32>("seen[2].triangles"), 4 * 2 + 12);
+
+    let frame = simulation.screenshot().unwrap();
+    let all = |wanted: fn([u8; 4]) -> bool| {
+        (0..200)
+            .flat_map(|x| (0..100).map(move |y| (x, y)))
+            .filter(|&(x, y)| wanted(frame.pixel(x, y)))
+            .collect::<Vec<(u32, u32)>>()
+    };
+    let span = |pixels: &[(u32, u32)]| {
+        let xs = pixels.iter().map(|&(x, _)| x);
+        let ys = pixels.iter().map(|&(_, y)| y);
+        (
+            xs.clone().min().unwrap(),
+            xs.max().unwrap(),
+            ys.clone().min().unwrap(),
+            ys.max().unwrap(),
+        )
+    };
+    let red = all(|[r, g, b, _]| r > 200 && g < 50 && b < 50);
+    assert!(!red.is_empty(), "the red sign");
+    let (left, right, top, bottom) = span(&red);
+    // Within its line, a unit tall above y = 1: rows 0 to 25. Centred across the middle.
+    assert!(top < 25 && bottom < 25, "{red:?}");
+    assert!(left < 100 && right > 100, "{left} {right}");
+    assert!(((left + right) as i32 - 200).abs() <= 4, "{left} {right}");
+
+    let green = all(|[r, g, b, _]| g > 200 && r < 50 && b < 50);
+    assert!(!green.is_empty(), "the green sign");
+    let (left, _, top, bottom) = span(&green);
+    // From the middle rightward, between y = -1.5 and -0.5: rows 62 to 88.
+    assert!(left >= 99, "{left}");
+    assert!(top >= 62 && bottom <= 88, "{top} {bottom}");
+    // The cube is in front of it, and hides what's behind it.
+    assert_eq!(
+        frame.pixel(115, 75),
+        [0, 0, 255, 255],
+        "the cube over the sign"
+    );
+}
+
+#[test]
+fn text_in_3d_views_says_what_it_was_given_wrong() {
+    for (test, call, said) in [
+        (
+            "text_3d_no_view",
+            "wg.graphics.draw_text_3d(font, 'Hi', vector.zero)",
+            "draw_text_3d draws in a 3D view",
+        ),
+        (
+            "text_3d_align",
+            "wg.graphics.begin_3d(view)
+            wg.graphics.draw_text_3d(font, 'Hi', vector.zero, { align = 'middle' })",
+            r#"not "middle""#,
+        ),
+        (
+            "text_3d_height",
+            "wg.graphics.begin_3d(view)
+            wg.graphics.draw_text_3d(font, 'Hi', vector.zero, { height = 0 })",
+            "above 0, not 0",
+        ),
+    ] {
+        let main = format!(
+            "local wg = require('@wingine')
+            {FLAT_VIEW}
+            font = wg.graphics.default_font()
+            function draw()
+                {call}
+            end"
+        );
+        let folder = game(test, &[("conf.luau", SMALL_WINDOW), ("main.luau", &main)]);
+        let mut simulation = simulation(&folder);
+        simulation.run_frames(2);
+        let err = stopped_with(&simulation);
+        assert!(err.contains(said), "{test}: {err}");
+    }
+}
+
+#[test]
 fn meshes_draw_only_in_an_open_3d_view() {
     let draw = |test: &str, body: &str| {
         let main = format!(
@@ -8435,6 +8551,44 @@ mod gui {
         simulation.run_frames(30);
         assert_eq!(simulation.eval::<f32>("scrolled"), up);
         assert!(simulation.eval::<bool>("seen.zoom == 1"));
+    }
+
+    #[test]
+    fn a_canvas_says_where_it_is_for_drawing_behind_it() {
+        let mut simulation = interface(
+            "gui_canvas_bounds",
+            "local wg = require('@wingine')
+            bounds = nil
+            function draw()
+                wg.graphics.clear('#000000')
+                if bounds then
+                    wg.graphics.fill_rect(bounds.x, bounds.y, bounds.width, bounds.height, '#ff0000')
+                end
+            end",
+            "ui:panel('top', function(ui)
+                ui:label('Above')
+            end)
+            ui:panel({ side = 'left', size = 120 }, function(ui)
+                ui:label('Beside')
+            end)
+            ui:canvas('Stage', function(paint)
+                bounds = paint:bounds()
+            end)",
+        );
+        let stage = simulation.gui_rect("Stage").unwrap();
+        let bounds: (f32, f32, f32, f32) =
+            simulation.eval("bounds.x, bounds.y, bounds.width, bounds.height");
+        assert_eq!(bounds, (stage.x, stage.y, stage.w, stage.h));
+        // Right of the panel beside it, which shrinks to its label, and under the one above.
+        assert!(stage.x > 50.0 && stage.y > 10.0, "{stage:?}");
+        // What's drawn there shows through the canvas, and the panels cover the rest.
+        let frame = simulation.screenshot().unwrap();
+        let (x, y) = (
+            (stage.x + stage.w / 2.0) as u32,
+            (stage.y + stage.h / 2.0) as u32,
+        );
+        assert_eq!(frame.pixel(x, y), [255, 0, 0, 255]);
+        assert_ne!(frame.pixel(20, (stage.y + 20.0) as u32), [255, 0, 0, 255]);
     }
 
     #[test]

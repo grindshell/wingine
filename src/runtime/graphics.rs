@@ -8,8 +8,8 @@ use super::{Lent, Textures};
 use crate::{
     Context,
     graphics::{
-        Animation, Blend, Camera, Camera3d, Canvas, Color, Font, FontSettings, Light, Lighting,
-        Mesh, MeshData, MeshVertex, Model, Ray, Sprite, SpriteSheet, TextLayout, View3d,
+        Align, Animation, Blend, Camera, Camera3d, Canvas, Color, Font, FontSettings, Light,
+        Lighting, Mesh, MeshData, MeshVertex, Model, Ray, Sprite, SpriteSheet, TextLayout, View3d,
     },
     lua::{SceneNode, check_layer, packed_color, vector3},
     math::{Affine3, Bounds3, Rect},
@@ -601,6 +601,36 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
             },
         )?
     })?;
+    graphics.set("draw_text_3d", {
+        let lent = lent.clone();
+        lua.create_function(
+            move |_,
+                  (font, text, position, options): (
+                UserDataRef<Font>,
+                mlua::LuaString,
+                Vector,
+                Option<Table>,
+            )| {
+                let text = text.to_str()?;
+                let options = Text3dOptions::read(options)?;
+                lent.canvas(|canvas| {
+                    let mut view = canvas.open_view()?;
+                    view.set_glow(options.glow);
+                    let position = vector3(position);
+                    view.draw_text(
+                        &font,
+                        &text,
+                        position,
+                        options.height,
+                        options.align,
+                        options.color,
+                    );
+                    Some(())
+                })?
+                .ok_or_else(|| no_view("draw_text_3d"))
+            },
+        )?
+    })?;
     graphics.set("project", {
         let lent = lent.clone();
         lua.create_function(move |_, (view, point): (Table, Vector)| {
@@ -714,6 +744,50 @@ fn view_rect(lent: &Lent, rect: Option<Rect>) -> mlua::Result<Rect> {
 }
 
 /// The error for drawing in a 3D view when none is open.
+/// How `graphics.draw_text_3d` sizes, lines up and colors its text.
+struct Text3dOptions {
+    height: f32,
+    align: Align,
+    color: Color,
+    glow: Color,
+}
+
+impl Text3dOptions {
+    fn read(options: Option<Table>) -> mlua::Result<Self> {
+        let mut read = Self {
+            height: 1.0,
+            align: Align::Center,
+            color: Color::WHITE,
+            glow: Color::BLACK,
+        };
+        let Some(options) = options else {
+            return Ok(read);
+        };
+        if let Some(height) = options.get::<Option<f32>>("height")? {
+            if !(height.is_finite() && height > 0.0) {
+                return Err(mlua::Error::runtime(format!(
+                    "text's height is a number of world units above 0, not {height}"
+                )));
+            }
+            read.height = height;
+        }
+        if let Some(name) = options.get::<Option<String>>("align")? {
+            read.align = Align::from_name(&name).ok_or_else(|| {
+                mlua::Error::runtime(format!(
+                    r#"text is aligned "left", "center" or "right", not "{name}""#
+                ))
+            })?;
+        }
+        if let Some(color) = options.get::<Option<Color>>("color")? {
+            read.color = color;
+        }
+        if let Some(glow) = options.get::<Option<Color>>("glow")? {
+            read.glow = glow;
+        }
+        Ok(read)
+    }
+}
+
 fn no_view(function: &str) -> mlua::Error {
     mlua::Error::runtime(format!(
         "{function} draws in a 3D view: call graphics.begin_3d first, then draw what's in the view \

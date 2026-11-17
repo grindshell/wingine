@@ -154,40 +154,59 @@ fn add_methods(methods: &mut Methods<'_, '_>, lent: &Lent) {
             Ok(clicked)
         }
     });
-    methods.add("canvas", |lua, ui, (canvas, f): (Value, Function)| {
-        let (label, options) = named(canvas, "canvas", "label")?;
-        // All the room its container has left, each way it isn't given a size.
-        let mut size = ui.available_size();
-        if let Some(options) = &options {
-            check_options(options, "canvas", &["label", "width", "height"])?;
-            if let Some(width) = options.get::<Option<f32>>("width")? {
-                size.x = width;
+    methods.add("canvas", {
+        let lent = lent.clone();
+        move |lua, ui, (canvas, f): (Value, Function)| {
+            let (label, options) = named(canvas, "canvas", "label")?;
+            // All the room its container has left, each way it isn't given a size.
+            let mut size = ui.available_size();
+            if let Some(options) = &options {
+                check_options(options, "canvas", &["label", "width", "height"])?;
+                if let Some(width) = options.get::<Option<f32>>("width")? {
+                    size.x = width;
+                }
+                if let Some(height) = options.get::<Option<f32>>("height")? {
+                    size.y = height;
+                }
             }
-            if let Some(height) = options.get::<Option<f32>>("height")? {
-                size.y = height;
+            if !(size.x.is_finite() && size.y.is_finite()) {
+                return Err(mlua::Error::runtime(format!(
+                    "a canvas's size is a number of points each way, not {} by {}",
+                    size.x, size.y
+                )));
             }
+            let (response, painter) =
+                ui.allocate_painter(size.max(egui::Vec2::ZERO), egui::Sense::click_and_drag());
+            // Named by its label, which nothing shows on screen, as tests and screen readers find it.
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Canvas, response.enabled(), label.as_str())
+            });
+            let input = canvas_input(lua, ui, &response)?;
+            // Where it is on the game's canvas, where `draw` draws, as the mouse's position is.
+            let gui = ui.ctx();
+            let pixels_per_point = gui.pixels_per_point();
+            let scale_factor = gui.native_pixels_per_point().unwrap_or(pixels_per_point);
+            let viewport = gui.viewport_rect();
+            let output = [viewport.width(), viewport.height()]
+                .map(|points| (points * pixels_per_point).round() as u32);
+            let bounds = lent.context(|ctx| {
+                let to_canvas = |pos: egui::Pos2| {
+                    let pos = pos * pixels_per_point;
+                    ctx.screen
+                        .to_canvas([pos.x.into(), pos.y.into()], output, scale_factor.into())
+                };
+                crate::gui::rect_to_canvas(response.rect, to_canvas)
+            })?;
+            let paint = Paint {
+                origin: response.rect.min,
+                size: response.rect.size(),
+                bounds,
+                body: egui::TextStyle::Body.resolve(ui.style()),
+                monospace: egui::TextStyle::Monospace.resolve(ui.style()),
+                painter,
+            };
+            lua.scope(|scope| f.call::<()>((scope.create_any_userdata_ref(&paint)?, input)))
         }
-        if !(size.x.is_finite() && size.y.is_finite()) {
-            return Err(mlua::Error::runtime(format!(
-                "a canvas's size is a number of points each way, not {} by {}",
-                size.x, size.y
-            )));
-        }
-        let (response, painter) =
-            ui.allocate_painter(size.max(egui::Vec2::ZERO), egui::Sense::click_and_drag());
-        // Named by its label, which nothing shows on screen, as tests and screen readers find it.
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::Canvas, response.enabled(), label.as_str())
-        });
-        let input = canvas_input(lua, ui, &response)?;
-        let paint = Paint {
-            origin: response.rect.min,
-            size: response.rect.size(),
-            body: egui::TextStyle::Body.resolve(ui.style()),
-            monospace: egui::TextStyle::Monospace.resolve(ui.style()),
-            painter,
-        };
-        lua.scope(|scope| f.call::<()>((scope.create_any_userdata_ref(&paint)?, input)))
     });
     methods.add("separator", |_, ui, ()| {
         ui.separator();
@@ -641,6 +660,8 @@ struct Paint {
     painter: egui::Painter,
     origin: egui::Pos2,
     size: egui::Vec2,
+    /// Where the canvas is on the game's canvas, in canvas pixels.
+    bounds: crate::math::Rect,
     /// The interface's text, and its monospace text, which text is painted in unless it's given a
     /// size.
     body: egui::FontId,
@@ -752,6 +773,7 @@ fn stroke(color: Color, thickness: Option<f32>) -> egui::Stroke {
 
 fn add_paint_methods(methods: &mut PaintMethods<'_, '_>) {
     methods.add("size", |paint, ()| Ok((paint.size.x, paint.size.y)));
+    methods.add("bounds", |paint, ()| Ok(paint.bounds));
     methods.add(
         "line",
         |paint, (x1, y1, x2, y2, color, thickness): (f32, f32, f32, f32, Color, Option<f32>)| {

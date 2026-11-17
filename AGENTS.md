@@ -326,7 +326,12 @@ own right.
   they're called on, not mlua mutable methods, which refuse to run inside themselves, so a
   container can hold another of its kind. A canvas (`ui:canvas`) lends its function a `Paint`
   the same way: egui's painter clipped to it, which takes positions from its corner, and a table
-  of what the pointer did, read from its `Response` before it's painted.
+  of what the pointer did, read from its `Response` before it's painted. `paint:bounds()` is its
+  rect mapped to canvas pixels through the `Screen`, as a simulation's `gui_rects` are, so
+  `draw`, after `gui`, can draw behind it.
+- Text in a 3D view (`Canvas3d::draw_text`, Luau's `graphics.draw_text_3d`) is laid out by the
+  font as 2D text is, and each glyph pushed as a billboard of the font's page, all with the
+  facing the first would have (`billboard_axes_at`), so a sign turns as one.
 - `LuauGame::reload` loads a whole new game in place, after the old one's `reloading` returns
   plain data for the new one's `window.reloaded()`. A game that fails to load becomes a stopped
   game holding that data for the next reload. `--watch` reloads on changes.

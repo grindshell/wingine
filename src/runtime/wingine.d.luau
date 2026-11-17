@@ -343,6 +343,20 @@ export type View3d = {
     sky: Sky?,
 }
 
+--- How `graphics.draw_text_3d` sizes, lines up and colors its text.
+export type Text3dOptions = {
+    --- How far apart its lines are, in world units: a line's height. By default, 1.
+    height: number?,
+    --- Which of its ends, or its middle, is at its position, which lines its lines up the same
+    --- way. By default, `"center"`.
+    align: ("left" | "center" | "right")?,
+    --- What its colors are multiplied by, as a billboard's tint. By default, white.
+    color: Color?,
+    --- How much of its own colors it shows whatever lights it, as a billboard's glow. By
+    --- default, black: none.
+    glow: Color?,
+}
+
 --- How `graphics.draw_mesh` places and colors a mesh: scaled, rolled, pitched and turned, in that
 --- order, about its origin.
 export type MeshOptions = {
@@ -1320,6 +1334,9 @@ end
 declare extern type Paint with
     --- Returns the canvas's width and height in points.
     function size(self): (number, number)
+    --- Returns where the canvas is on the game's canvas, in canvas pixels, where `draw` draws and
+    --- the mouse is: to draw behind it, as a 3D view whose rect it is.
+    function bounds(self): Rect
     --- A line from `x1`, `y1` to `x2`, `y2`, `thickness` wide (by default, 1).
     function line(self, x1: number, y1: number, x2: number, y2: number, color: Color, thickness: number?): ()
     --- Lines through `points`, `{ x1, y1, x2, y2, ... }`: two points or more.
@@ -1420,6 +1437,10 @@ export type GraphicsApi = {
     --- `width` wide (by default, as its shape makes it). A negative `width` mirrors it. It shows
     --- `glow` of its own colors whatever lights it, by default black: none.
     draw_billboard: (sprite: Sprite, position: vector, tint: Color?, width: number?, height: number?, glow: Color?) -> (),
+    --- Draws `text` in `font` standing upright in the 3D view begun last as a sign, facing the
+    --- camera as a billboard does, with the middle of its bottom edge at `position`, or an end
+    --- as `options.align` says. Each glyph is a billboard, hiding what's behind it.
+    draw_text_3d: (font: Font, text: string, position: vector, options: Text3dOptions?) -> (),
     --- Returns where `point` shows on the canvas through `view`, or nothing if it's nearer than
     --- the camera's near plane, such as behind it, or beyond its far plane.
     project: (view: View3d, point: vector) -> (number?, number?),

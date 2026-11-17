@@ -6,7 +6,7 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 
 use super::{
-    Blend, Camera3d, Canvas, Color, Mesh, Model, Projection, Ray, Sprite, Texture,
+    Align, Blend, Camera3d, Canvas, Color, Font, Mesh, Model, Projection, Ray, Sprite, Texture,
     camera3d::{Basis, Mat4},
 };
 use crate::{
@@ -688,17 +688,98 @@ impl Canvas3d<'_> {
         if size[0] == 0.0 || size[1] == 0.0 {
             return;
         }
+        let axes = self.billboard_axes_at(position);
+        self.push_billboard(sprite, position, axes, size, tint);
+    }
+
+    /// Draws `text` in `font` standing upright as a sign, facing the camera across the ground as
+    /// a billboard does: its lines `height` world units apart, with the middle of its bottom edge
+    /// at `position`, or its left or right end as `align` says, which lines its lines up too.
+    /// `\n` starts a new line. Each glyph is a billboard showing the font's own texture,
+    /// multiplied by `tint`, so the text hides what's behind it and is hidden by what's in front,
+    /// its pixels less than half opaque left out, and is lit as billboards are.
+    pub fn draw_text(
+        &mut self,
+        font: &Font,
+        text: &str,
+        position: [f32; 3],
+        height: f32,
+        align: Align,
+        tint: Color,
+    ) {
+        let line_height = font.line_height();
+        if !(height > 0.0 && line_height > 0.0) {
+            return;
+        }
+        // World units to a pixel of the font's.
+        let scale = height / line_height;
+        let layout = font.layout_aligned(text, None, align);
+        let [width, tall] = layout.size();
+        let from_left = match align {
+            Align::Left => 0.0,
+            Align::Center => width / 2.0,
+            Align::Right => width,
+        };
+        let (right, facing) = self.billboard_axes_at(position);
+        // The texture of the page the last glyph was on, which the next is likely on too.
+        let mut page: Option<(u32, Texture)> = None;
+        for glyph in layout.glyphs() {
+            let rect = glyph.rect;
+            if rect.w <= 0.0 || rect.h <= 0.0 {
+                continue;
+            }
+            if page
+                .as_ref()
+                .is_none_or(|(number, _)| *number != glyph.page)
+            {
+                page = Some((glyph.page, font.page(glyph.page)));
+            }
+            let (_, texture) = page.as_ref().expect("the glyph's page was just found");
+            // The texels the glyph shows, as a sprite of the page.
+            let ([u0, v0], [u1, v1]) = glyph.uv;
+            let size = [texture.width() as f32, texture.height() as f32];
+            let region = Rect::new(
+                u0 * size[0],
+                v0 * size[1],
+                (u1 - u0) * size[0],
+                (v1 - v0) * size[1],
+            );
+            let sprite = Sprite::new(texture.clone(), region);
+            // The middle of its bottom edge, along the sign from where it's placed, and up from
+            // the sign's bottom.
+            let along = (rect.x + rect.w / 2.0 - from_left) * scale;
+            let up = (tall - rect.y - rect.h) * scale;
+            let at = add3(add3(position, scale3(right, along)), [0.0, up, 0.0]);
+            let quad = [rect.w * scale, rect.h * scale];
+            self.push_billboard(&sprite, at, (right, facing), quad, tint);
+        }
+    }
+
+    /// The ways a billboard at `position` has its right and its front point: the view's, turned
+    /// about if a camera in perspective would see it from behind, as when it looks steeply down
+    /// on one below it.
+    fn billboard_axes_at(&self, position: [f32; 3]) -> ([f32; 3], [f32; 3]) {
         let segment = self.canvas.segments.last().expect("begin_3d adds one");
-        let (mut right, mut facing) = segment.billboard_axes;
-        // A camera in perspective sees one behind it across the ground from behind, as when it
-        // looks steeply down on one below it, so that one turns around to face it.
+        let (right, facing) = segment.billboard_axes;
         let camera = &segment.view.camera;
         if let Projection::Perspective { .. } = camera.projection
             && dot3(sub3(camera.position, position), facing) < 0.0
         {
-            right = scale3(right, -1.0);
-            facing = scale3(facing, -1.0);
+            return (scale3(right, -1.0), scale3(facing, -1.0));
         }
+        (right, facing)
+    }
+
+    /// Records `sprite` as a billboard `size` wide and tall with the middle of its bottom edge at
+    /// `position`, its right and front pointing as `axes` say.
+    fn push_billboard(
+        &mut self,
+        sprite: &Sprite,
+        position: [f32; 3],
+        (right, facing): ([f32; 3], [f32; 3]),
+        size: [f32; 2],
+        tint: Color,
+    ) {
         let transform = Affine3 {
             x_axis: scale3(right, size[0]),
             y_axis: [0.0, size[1], 0.0],
@@ -711,6 +792,7 @@ impl Canvas3d<'_> {
             emission: Color::BLACK,
             emission_sprite: None,
         };
+        let segment = self.canvas.segments.last().expect("begin_3d adds one");
         let how = How::of(segment);
         self.push(
             None,

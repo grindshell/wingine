@@ -187,6 +187,10 @@
 //!   upright in the view begun last, the middle of its bottom edge at `position`, turned to face
 //!   the camera across the ground: `height` tall (1 by default) and `width` wide (by default, as
 //!   its shape makes it).
+//! - `graphics.draw_text_3d(font, text, position, { height, align, color, glow })` draws text in
+//!   the view begun last as a sign, standing upright and facing the camera as a billboard does,
+//!   its lines `height` apart (1 by default), with the middle of its bottom edge at `position`,
+//!   or its left or right end as `align` says. Each glyph is a billboard of the font's texture.
 //! - `graphics.project(view, point)` returns where `point` shows on the canvas through `view`, or
 //!   nothing if it's nearer than the near plane or beyond the far one. `graphics.ray(view, x, y)`
 //!   returns the ray through `x`, `y` into the view: its origin, on the near plane, and its
@@ -451,7 +455,8 @@
 //!   `paint:outline_circle(x, y, radius, color, thickness)`, and `paint:text(text, x, y, color,
 //!   { size, monospace, align })` and `paint:measure(text, options)`, which return its size; and
 //!   `input` is what the pointer did to it this frame (`{ hovered, x, y, clicked, dragged_x,
-//!   dragged_y, scrolled_x, scrolled_y, zoom }`).
+//!   dragged_y, scrolled_x, scrolled_y, zoom }`). `paint:bounds()` returns where the canvas is
+//!   on the game's canvas, in canvas pixels, so `draw` can draw behind it, as a 3D view in it.
 //! - `ui:separator()` and `ui:space(amount)`.
 //!
 //! A `Ui` works only until the function it was passed to returns, and inside a container's
