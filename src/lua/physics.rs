@@ -171,8 +171,7 @@ fn followed(
 /// turned, and is only moved, so that pieces of a kit meet exactly ([`split`]).
 ///
 /// Its arithmetic gives the same bits on every platform, as Rapier's does: where it places a
-/// fixed body, it turns its node's yaw, pitch and roll into a transform with `libm`, not as the
-/// scene does for drawing, whose sines come from the platform's C library.
+/// fixed body, it turns its node's yaw, pitch and roll into a transform with `libm`.
 #[derive(Default)]
 pub struct PhysicsWorld3d {
     world: World3d,
@@ -395,8 +394,8 @@ impl Local {
         [self.yaw, self.pitch, self.roll] == [0.0; 3] && self.scale == [1.0; 3]
     }
 
-    /// From the node's coordinates to its parent's, as [`Node::local_3d`] has it, but with its
-    /// sines from `libm`: stretched, rolled, pitched, turned, then moved.
+    /// From the node's coordinates to its parent's, as [`Node::local_3d`] has it, with its sines
+    /// from `libm`: stretched, rolled, pitched, turned, then moved.
     fn transform(&self) -> Affine3 {
         let (sy, cy) = (libm::sinf(self.yaw), libm::cosf(self.yaw));
         let (sx, cx) = (libm::sinf(self.pitch), libm::cosf(self.pitch));
@@ -416,7 +415,7 @@ impl Local {
 }
 
 /// From the coordinates of `id`, a node in a 3D view, to the view's world's, as
-/// [`Scene::transform_3d`] has it, but with [`Local::transform`]'s sines.
+/// [`Scene::transform_3d`] has it, by [`Local::transform`].
 fn exact_transform(scene: &Scene, id: NodeId) -> Affine3 {
     let node = scene.node(id);
     let Some(local) = Local::of(node) else {

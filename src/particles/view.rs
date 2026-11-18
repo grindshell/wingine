@@ -745,8 +745,9 @@ mod tests {
                 particles.emit(12);
             }
         }
-        // `libm` for the sines, roots and drag makes this the same on Windows and Linux, debug
-        // and release. A change to how particles start or move changes it.
+        // `libm` for the sines, roots and drag, the emitter's turns' among them, makes this the
+        // same on Windows and Linux, debug and release. A change to how particles start or move
+        // changes it.
         assert_eq!(
             (particles.count(), hash(&particles)),
             (99, 0x3c08_6352_a037_3635)

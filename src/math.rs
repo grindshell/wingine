@@ -187,6 +187,8 @@ impl Mul for Affine {
 ///
 /// Composing transforms with `*` applies the right-hand one first, as with [`Affine`]: `parent *
 /// child` places what `child` places, then moves it as `parent` does.
+///
+/// Its turns take their sines from `libm`, so they're the same to the bit on every platform.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Affine3 {
     /// Where a step of 1 along `x` goes.
@@ -400,12 +402,15 @@ impl Bounds3 {
     }
 }
 
-/// The sine and cosine of `angle`, without calling into the math library for an angle of 0.
+/// The sine and cosine of `angle`, from `libm`, as [`Affine::from_parts_exact`] has them, so
+/// what's turned in 3D, such as emitters and the nodes that place them, is the same to the bit on
+/// every platform, where the platform's C library's may differ in the last. Nothing is turned in
+/// 3D many times a frame, so there's no quicker way, as [`Affine::from_parts`] is in 2D.
 fn sin_cos(angle: f32) -> (f32, f32) {
     if angle == 0.0 {
         (0.0, 1.0)
     } else {
-        angle.sin_cos()
+        libm::sincosf(angle)
     }
 }
 

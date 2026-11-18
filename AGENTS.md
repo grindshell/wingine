@@ -35,7 +35,7 @@ networking or 3D pipelines.
 | Physics | `rapier2d`, `rapier3d` | Behind the default `physics` feature |
 | Fonts | `ab_glyph` | TrueType and OpenType fonts, rasterized as text needs their glyphs |
 | Folder dialogs | `rfd` | The system's dialog for picking a folder, off the web; on Linux, the desktop's portal, not GTK |
-| Exact math | `libm` | The same bits on every platform, for what must replay: `exact`, particles, songs, nodes' 2D placement |
+| Exact math | `libm` | The same bits on every platform, for what must replay: `exact`, particles, songs, nodes' 2D placement, turns in 3D (`Affine3`) |
 
 - Rust edition 2024. Licensed under MIT or Apache 2.0 (`LICENSE-MIT`, `LICENSE-APACHE`); every
   crate's manifest says `license = "MIT OR Apache-2.0"`, and new crates say so too.
