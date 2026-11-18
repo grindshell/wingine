@@ -1231,7 +1231,9 @@ light the view. Any more are left out: the engine logs a warning the first time,
 
 A light without `shadows` shines through a wall onto what's behind it, unless it keeps to a box
 that the wall is the side of: a box round a room, its faces inside the room's walls, floor and
-ceiling, keeps the room's light in it for nothing, where shadows take maps.
+ceiling, keeps the room's light in it for nothing, where shadows take maps. Faces of the box
+are included with a small allowance for floating-point roundoff, so a wall or ceiling exactly
+on a face stays lit as the camera moves, including in translated or turned rooms.
 
 ```lua
 -- A lamp in a room 8 wide and 4 high, whose walls are a metre thick: it lights the room, and

@@ -2339,6 +2339,78 @@ fn dark_view(camera: Camera3d, [width, height]: [f32; 2]) -> View3d {
     }
 }
 
+// Light bounds on a room's walls and ceiling must light the same pixels as bounds a little
+// inside those surfaces. World interpolation must not turn their faces into stippled cutouts.
+#[test]
+fn light_box_faces_survive_world_roundoff() {
+    let mut headless = headless();
+    let room = Bounds3 {
+        min: [0.7, -0.25, 2.4],
+        max: [5.3, 3.2, 13.6],
+    };
+    let mut data = MeshData::cuboid(room.size());
+    for vertex in &mut data.vertices {
+        for n in &mut vertex.normal {
+            *n = -*n;
+        }
+    }
+    for triangle in data.indices.chunks_exact_mut(3) {
+        triangle.swap(1, 2);
+    }
+    let mesh = headless.context().create_mesh(&data).unwrap();
+    for placed in [
+        Affine3::IDENTITY,
+        Affine3::from_translation([-16.0, 0.0, -80.0]),
+        Affine3::from_translation([128.0, -18.0, -256.0])
+            * Affine3::from_rotation_y(0.71)
+            * Affine3::from_scale([1.5, 0.8, 2.0]),
+    ] {
+        let light = Light::point(placed.apply([3.0, 2.9, 8.0]), Color::WHITE, 30.0);
+        for target in [[2.7, 1.9, 2.4], [3.2, 2.8, 8.0], [5.3, 1.5, 8.0]] {
+            let camera =
+                Camera3d::perspective(placed.apply([3.0, 1.72, 12.0]), placed.apply(target), 1.1);
+            let mut render = |margin: f32| {
+                let bounds = Bounds3 {
+                    min: room.min.map(|x| x - margin),
+                    max: room.max.map(|x| x + margin),
+                };
+                headless
+                    .render(128, 96, |canvas| {
+                        canvas.clear(Color::BLACK);
+                        let mut view = canvas.begin_3d(dark_view(camera, [128.0, 96.0]));
+                        view.add_light(light.within(bounds, placed).unwrap());
+                        view.draw_mesh(
+                            &mesh,
+                            placed * Affine3::from_translation(room.center()),
+                            None,
+                            Color::WHITE,
+                        );
+                    })
+                    .unwrap()
+            };
+            let padded = render(0.01);
+            let faces = render(0.0);
+            assert!(
+                padded
+                    .pixels()
+                    .chunks_exact(4)
+                    .filter(|p| p[0] > 40)
+                    .count()
+                    > 1000
+            );
+            assert_alike(&padded, &faces, 0, "walls and ceiling on light bounds");
+            // A smaller box excludes every wall: fixing the faces must not disable clipping.
+            let outside = render(-0.01);
+            assert!(
+                outside
+                    .pixels()
+                    .chunks_exact(4)
+                    .all(|p| p == [0, 0, 0, 255])
+            );
+        }
+    }
+}
+
 /// A slab between two storeys, two pillars standing on it, and a light without shadows under
 /// the slab, reaching past it: unkept, it lights the pillars' sides that face it, through the
 /// slab, as a room's light lit the room over it; kept to the storey under the slab, it lights

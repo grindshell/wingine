@@ -172,8 +172,9 @@
 //!   `cone` is no more than a sixth of a turn takes one, and any other light six. A light there
 //!   are none left for lights without shadows. With `bounds`, six numbers `{ x0, y0, z0, x1, y1,
 //!   z1 }`, a box's least corner and then its most, a light lights only within that box, faces
-//!   and all, so one without shadows can be kept from lighting through walls and floors; a
-//!   light whose box is wholly out of what the camera sees doesn't count toward the 32.
+//!   and all, allowing for floating-point roundoff at a face. So one without shadows can be
+//!   kept from lighting through walls and floors. A light whose box is wholly out of what the
+//!   camera sees doesn't count toward the 32.
 //! - `graphics.draw_mesh(mesh, position, options)` draws a mesh in the view begun last, its origin
 //!   at `position`, a vector, scaled by `options.scale` (a number, or a vector for each axis),
 //!   turned by `roll` about `z`, `pitch` about `x` and `yaw` about `y`, in that order, showing

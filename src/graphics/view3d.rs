@@ -321,13 +321,21 @@ impl Light {
         })
     }
 
-    /// Whether `point` is in its box, faces and all, or it has none.
+    /// Whether `point` is in its box, faces and all, or it has none. A small allowance for
+    /// world-to-box roundoff keeps points on a face inside, as the shader does.
     pub fn bounds_hold(&self, point: [f32; 3]) -> bool {
         self.bounds.is_none_or(|onto_cube| {
-            onto_cube
-                .apply(point)
-                .iter()
-                .all(|&along| along.abs() <= 1.0)
+            let along = onto_cube.apply(point);
+            (0..3).all(|axis| {
+                // Match mesh.wgsl: allow the roundoff of the world-to-box calculation, not
+                // a fixed world-space margin that would fail when a room moves or stretches.
+                let terms = (onto_cube.x_axis[axis] * point[0]).abs()
+                    + (onto_cube.y_axis[axis] * point[1]).abs()
+                    + (onto_cube.z_axis[axis] * point[2]).abs()
+                    + onto_cube.translation[axis].abs();
+                let rounding = terms.max(1.0) * (16.0 * f32::EPSILON);
+                along[axis].abs() <= 1.0 + rounding
+            })
         })
     }
 
@@ -1451,6 +1459,53 @@ mod tests {
         assert_eq!(chosen, (8..40).collect::<Vec<u32>>());
         assert_eq!(lights_of(&view, &row, &mut chosen), 8);
         assert_eq!(chosen, (0..32).collect::<Vec<u32>>());
+    }
+
+    #[test]
+    fn a_light_box_includes_its_faces_after_world_roundoff() {
+        // Qwine's row homes put their walls exactly on their ceiling light's box.
+        let room = Bounds3 {
+            min: [0.7, -0.25, 2.4],
+            max: [5.3, 3.2, 13.6],
+        };
+        for placed in [
+            Affine3::IDENTITY,
+            Affine3::from_translation([-16.0, 0.0, -80.0]),
+            Affine3::from_translation([128.0, -18.0, -256.0])
+                * Affine3::from_rotation_y(0.71)
+                * Affine3::from_scale([-1.5, 0.8, 2.0]),
+        ] {
+            let lamp = Light::point(placed.apply(room.center()), Color::WHITE, 100.0)
+                .within(room, placed)
+                .unwrap();
+            for axis in 0..3 {
+                for face in [room.min[axis], room.max[axis]] {
+                    for a in 0..=10 {
+                        for b in 0..=10 {
+                            let mut point = room.center();
+                            point[axis] = face;
+                            for (other, step) in [((axis + 1) % 3, a), ((axis + 2) % 3, b)] {
+                                point[other] = room.min[other]
+                                    + (room.max[other] - room.min[other]) * step as f32 / 10.0;
+                            }
+                            assert!(
+                                lamp.bounds_hold(placed.apply(point)),
+                                "face {point:?}, {placed:?}"
+                            );
+                            assert!(lamp.level_at(placed.apply(point)) > 0.0);
+                        }
+                    }
+                    // Roundoff allowance must still reject a point a centimetre outside.
+                    let mut outside = room.center();
+                    outside[axis] = face + if face == room.min[axis] { -0.01 } else { 0.01 };
+                    assert!(
+                        !lamp.bounds_hold(placed.apply(outside)),
+                        "outside {outside:?}"
+                    );
+                    assert_eq!(lamp.level_at(placed.apply(outside)), 0.0);
+                }
+            }
+        }
     }
 
     #[test]

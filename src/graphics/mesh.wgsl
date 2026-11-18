@@ -309,7 +309,14 @@ fn shade(in: VertexOut, front_facing: bool, color: vec3<f32>, emitted: vec3<f32>
             let bounds = view.lights[i].bounds;
             let place = vec4<f32>(in.world.xyz, 1.0);
             let along = vec3<f32>(dot(bounds[0], place), dot(bounds[1], place), dot(bounds[2], place));
-            if any(abs(along) > vec3<f32>(1.0)) {
+            // The world position is interpolated, and mapping it onto a box can cancel large
+            // translated coordinates. Keep faces inside despite that roundoff, with allowance
+            // scaled by the terms of each dot product, as Light::bounds_hold does on the CPU.
+            let magnitude = abs(place);
+            let terms = vec3<f32>(dot(abs(bounds[0]), magnitude),
+                dot(abs(bounds[1]), magnitude), dot(abs(bounds[2]), magnitude));
+            let rounding = max(terms, vec3<f32>(1.0)) * 0.0000019073486328125;
+            if any(abs(along) > vec3<f32>(1.0) + rounding) {
                 continue;
             }
         }

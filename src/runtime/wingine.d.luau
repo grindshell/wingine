@@ -322,7 +322,8 @@ export type LightSettings = {
     --- and any other light six. A light there are none left for lights without shadows. By
     --- default, `false`.
     shadows: boolean?,
-    --- The box it lights within, faces and all, if it keeps to one: six numbers, its least
+    --- The box it lights within, faces and all (allowing for floating-point roundoff at a face),
+    --- if it keeps to one: six numbers, its least
     --- corner and then its most, `{ x0, y0, z0, x1, y1, z1 }`, each less than the other every
     --- way. A light node's is in the coordinates its node's place is in, its parent's, and moves,
     --- turns and stretches with that; one for `graphics.begin_3d` is in the world's. Outside it,
