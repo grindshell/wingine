@@ -676,7 +676,16 @@ where
         let Some(state) = &self.state else {
             return;
         };
-        if state.redraw != Redraw::OnDemand {
+        if state.redraw == Redraw::Continuously {
+            // The Windows title-bar menu can consume a pending paint. Request the next frame
+            // here, once native menus have returned to winit and before it waits for messages.
+            #[cfg(windows)]
+            if state.window.is_minimized() == Some(false) {
+                let size = state.window.inner_size();
+                if size.width > 0 && size.height > 0 {
+                    state.window.request_redraw();
+                }
+            }
             return;
         }
         // A frame that's due is requested until one begins. If the window can't show one, as
@@ -1314,7 +1323,8 @@ impl<G: Game> State<G> {
             // spin. `WindowEvent::Occluded(false)` asks for it instead.
             Acquired::Occluded => return,
         }
-        if self.redraw == Redraw::Continuously {
+        // Windows requests continuous frames in `about_to_wait`.
+        if !cfg!(windows) && self.redraw == Redraw::Continuously {
             self.window.request_redraw();
         }
     }

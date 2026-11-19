@@ -495,6 +495,10 @@ window: a simulation only notes that the mouse is captured, and takes its motion
 runs is silent; `cargo test -- --ignored` runs a check that plays (muted) through the real sound
 device.
 
+To check Windows redraws, run `cargo run -- examples/pong`, press Space to serve, and
+right-click the title bar while the ball is moving. Dismiss the menu with Escape and leave the
+pointer still. The ball should move again immediately. Repeat with Alt+Space to open the menu.
+
 ## Screenshot tests
 
 Rendering changes are covered by screenshot tests: each renders a scene with `Headless` and
