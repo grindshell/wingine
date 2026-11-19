@@ -51,6 +51,26 @@ While a game has no `gui`, its frames skip egui altogether, apart from the windo
 on its [`debug_key`](../project-structure.md#debug_key); one it defines as it plays is called from
 the next frame.
 
+## Scale and appearance
+
+`ui:scale()` returns the current game-wide zoom relative to the display's own scale.
+`ui:scale(1.5)` requests 150% starting on the next pass and returns the factor for the current
+pass. The default is 1 and supported factors range from 0.25 to 4. Canvas drawing and pointer
+coordinates remain in points. Use `paint:bounds()` when placing game graphics under a canvas.
+
+Call `ui:set_theme(palette)` once when choosing a palette. Panels, text fields, buttons,
+selection highlights and popup windows share it. Colors take the usual engine color values.
+`dark` defaults to true and `radius` defaults to three points.
+
+```lua
+ui:set_theme({
+    panel = "#172526", window = "#213031", field = "#101919",
+    control = "#30423f", hover = "#405751", active = "#51694f",
+    text = "#f2e9d4", muted = "#b8c5b9", border = "#546865", accent = "#e6b55e",
+    radius = 2,
+})
+```
+
 ## Containers
 
 ### `ui:window`
@@ -128,6 +148,7 @@ Scrolls what `contents` adds up and down, when there's more than fits. `options`
 
 | Option | What it does | Default |
 |---|---|---|
+| `height` | Maximum height in points, leaving room below the scroll area for other controls. | Available height |
 | `stick_to_bottom` | Whether it keeps to its end as more is added, as a log or a chat does. It does while it's scrolled to its end: scrolled back to read, it stays where it's put. | `false` |
 
 ```lua
@@ -527,6 +548,7 @@ nothing painted shows outside it. What's painted later is over what was painted 
 |---|---|
 | `paint:size(): (number, number)` | Nothing: returns the canvas's width and height. |
 | `paint:bounds(): Rect` | Nothing: returns where the canvas is on the game's canvas, in canvas pixels, as below. |
+| `paint:scene(width, height, draw)` | Fills the paint area with a separate game canvas of `width` by `height` pixels. Use `wingine.graphics` in `draw()` to draw into it. The image scales with nearest-neighbor sampling, and later paint calls overlay it in UI points. |
 | `paint:line(x1, y1, x2, y2, color, thickness?)` | A line from one point to the other, `thickness` wide, by default 1. |
 | `paint:path(points, color, thickness?)` | Lines through `points`, `{ x1, y1, x2, y2, ... }`, two or more. |
 | `paint:fill_polygon(points, color)` | The convex polygon whose corners are `points`, three or more, such as an arrow's head. |

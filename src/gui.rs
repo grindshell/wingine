@@ -33,7 +33,10 @@ use egui::load::SizedTexture;
 
 use crate::{
     Context, Game,
-    graphics::{Canvas, Color, Texture, WeakTexture, renderer::RenderTarget},
+    graphics::{
+        Canvas, Color, Texture, WeakTexture,
+        renderer::{RenderTarget, Renderer},
+    },
     input::{Key, MouseButton},
     math::Rect,
 };
@@ -65,6 +68,9 @@ pub(crate) struct Gui {
     free_rect: Option<egui::Rect>,
     /// The widgets the last pass laid out, by label, in points, when labels are enabled.
     labels: Vec<(String, egui::Rect)>,
+    /// Offscreen scenes recorded in paint order for the current pass, reusing last frame's targets.
+    scenes: Vec<GuiCanvas>,
+    scene_count: usize,
     /// Engine textures shown in egui, and the IDs they're shown with.
     shown: Vec<Shown>,
     /// The IDs of dropped [`GuiCanvas`]es, to free.
@@ -93,6 +99,8 @@ impl Gui {
             platform_output: egui::PlatformOutput::default(),
             free_rect: None,
             labels: Vec::new(),
+            scenes: Vec::new(),
+            scene_count: 0,
             shown: Vec::new(),
             dropped: Rc::default(),
             debug_key: None,
@@ -220,8 +228,33 @@ impl Gui {
         }
     }
 
+    pub(crate) fn scene_canvases(&self) -> impl Iterator<Item = &Canvas> {
+        self.scenes.iter().map(|scene| &scene.canvas)
+    }
+
+    /// Reserves a distinct scene for this call, releasing the context while Luau draws into it.
+    pub(crate) fn take_scene(&mut self, previous: crate::FrameStats) -> (usize, GuiCanvas) {
+        let slot = self.scene_count;
+        self.scene_count += 1;
+        if slot == self.scenes.len() {
+            self.scenes.push(GuiCanvas::new());
+        }
+        let mut scene = mem::take(&mut self.scenes[slot]);
+        scene.canvas.frame_stats = previous;
+        (slot, scene)
+    }
+
     /// Draws what the last pass drew over `target`, which holds a finished frame.
-    pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Texture) {
+    pub fn render(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        graphics: &mut Renderer,
+        target: &wgpu::Texture,
+    ) {
+        for scene in &self.scenes {
+            scene.render_prepared(device, queue, graphics);
+        }
         if self.renderer.is_none() && self.primitives.is_empty() {
             return;
         }
@@ -325,7 +358,9 @@ pub(crate) fn run_pass(ctx: &mut Context, game: &mut impl Game) {
     let egui = ctx.gui.egui.clone();
     let mut free_rect = None;
     let output = egui.run_ui(input, |ui| {
+        ctx.gui.scene_count = 0;
         game.gui(ctx, ui);
+        ctx.gui.scenes.truncate(ctx.gui.scene_count);
         // Panels the game added have taken their space by now.
         free_rect = Some(ui.available_rect_before_wrap());
         show_overlay(ctx, ui.ctx());
@@ -469,6 +504,13 @@ impl GuiCanvas {
     /// wider or taller than the GPU's largest texture renders at that size, and is stretched to
     /// its own.
     pub fn render(&mut self, ctx: &mut Context) -> SizedTexture {
+        let texture = self.prepare(ctx);
+        self.render_prepared(&ctx.gpu.device, &ctx.gpu.queue, &mut ctx.renderer);
+        texture
+    }
+
+    /// Registers the target so egui can record its image before the frame reaches the GPU.
+    fn prepare(&mut self, ctx: &mut Context) -> SizedTexture {
         let size = [self.canvas.width(), self.canvas.height()].map(|v| v as u32);
         let Context {
             gpu, renderer, gui, ..
@@ -511,13 +553,29 @@ impl GuiCanvas {
             }
         }
         let target = self.target.as_ref().expect("created above");
-        let view = &target.render.view;
-        renderer.render(device, &gpu.queue, &self.canvas, view, texture_size);
         SizedTexture::new(target.id, egui::vec2(size[0] as f32, size[1] as f32))
+    }
+
+    fn render_prepared(&self, device: &wgpu::Device, queue: &wgpu::Queue, renderer: &mut Renderer) {
+        if let Some(target) = &self.target {
+            renderer.render(
+                device,
+                queue,
+                &self.canvas,
+                &target.render.view,
+                target.size,
+            );
+        }
     }
 }
 
 impl Context {
+    pub(crate) fn queue_gui_scene(&mut self, slot: usize, mut scene: GuiCanvas) -> egui::TextureId {
+        let id = scene.prepare(self).id;
+        self.gui.scenes[slot] = scene;
+        id
+    }
+
     /// `texture`, for egui to show, sized in texels. Showing the same texture again reuses its
     /// ID, until the texture is dropped.
     ///

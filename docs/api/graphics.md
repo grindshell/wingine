@@ -4,7 +4,7 @@ Drawing, the camera, blend modes, sprites, animations, particles, text, and 3D v
 
 Everything drawn in a frame is drawn in order, later things on top of earlier ones, onto a canvas
 that starts the frame cleared to black. 3D views take their place in that order too. Drawing
-functions work only in `draw`.
+functions work in `draw` and inside a [`paint:scene` callback](gui.md#paint).
 
 - [Drawing](#drawing): [`clear`](#graphicsclear), [`fill_rect`](#graphicsfill_rect),
   [`outline_rect`](#graphicsoutline_rect), [`draw_line`](#graphicsdraw_line),

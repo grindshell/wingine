@@ -74,7 +74,7 @@
 //! The module holds the built-ins `wait`, `wait_until`, `spawn`, `exact`, `rect` and `approach`,
 //! and eleven tables:
 //!
-//! `graphics`, for drawing in `draw`. `graphics.size`, `graphics.color`, `graphics.default_font`,
+//! `graphics`, for drawing in `draw` or in a `paint:scene` callback. `graphics.size`, `graphics.color`, `graphics.default_font`,
 //! `graphics.frame_stats`, `graphics.new_animation`, `graphics.new_particles` and
 //! `graphics.hit_box` work anywhere,
 //! `graphics.load_sprite_sheet`, `graphics.load_model` and the functions that make meshes while
@@ -493,7 +493,8 @@
 //!   { size, monospace, align })` and `paint:measure(text, options)`, which return its size; and
 //!   `input` is what the pointer did to it this frame (`{ hovered, x, y, clicked, dragged_x,
 //!   dragged_y, scrolled_x, scrolled_y, zoom }`). `paint:bounds()` returns where the canvas is
-//!   on the game's canvas, in canvas pixels, so `draw` can draw behind it, as a 3D view in it.
+//!   on the game's canvas, in canvas pixels, so `draw` can draw behind it. For a view with its
+//!   own resolution, `paint:scene(width, height, draw)` paints what `draw` draws with `graphics`.
 //! - `ui:separator()` and `ui:space(amount)`.
 //!
 //! A `Ui` works only until the function it was passed to returns, and inside a container's

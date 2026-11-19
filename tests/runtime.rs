@@ -7799,6 +7799,32 @@ mod gui {
     }
 
     #[test]
+    fn a_zoomed_themed_canvas_still_matches_its_widget_and_pointer() {
+        let mut sim = interface(
+            "gui_theme_scale",
+            "pressed = false",
+            "zoom = ui:scale(1.5)
+             ui:set_theme({panel='#192625', window='#25342f', field='#15201e',
+                control='#40514c', hover='#50605a', active='#62725e', text='#efeedd',
+                muted='#aaada0', border='#768377', accent='#e5bc77'})
+             ui:panel('top', function(bar) bar:label('Watch') end)
+             ui:canvas({label='Meter', width=100, height=40}, function(p, input)
+                bounds = p:bounds()
+                if input.clicked then pressed = true end
+             end)",
+        );
+        sim.run_frames(3);
+        assert_eq!(sim.eval::<f32>("zoom"), 1.5);
+        let rect = sim.gui_rect("Meter").unwrap();
+        assert_eq!((rect.w, rect.h), (150.0, 60.0));
+        assert_eq!(sim.eval::<f32>("bounds.width"), rect.w);
+        let pixel = sim.screenshot().unwrap().pixel(350, 8);
+        assert_eq!(pixel, [0x19, 0x26, 0x25, 255]);
+        sim.click_gui("Meter");
+        assert!(sim.eval::<bool>("pressed"));
+    }
+
+    #[test]
     fn tab_is_the_games_unless_a_field_has_focus() {
         // In a panel, whose first widget that takes focus is a field, as an editor's might be.
         let mut simulation = interface(
@@ -8711,6 +8737,59 @@ mod gui {
         simulation.run_frames(2);
         let err = stopped_with(&simulation);
         assert!(err.contains("destructed"), "{err}");
+    }
+
+    #[test]
+    fn a_canvas_scene_enlarges_its_own_pixels_under_gui_ink() {
+        let mut sim = interface(
+            "gui_canvas_scene",
+            "g = require('@wingine').graphics
+             resolution = 4
+             show = true",
+            "if show then
+                ui:canvas({label='Scene', width=80, height=40}, function(p)
+                    p:scene(resolution, 2, function()
+                        local w, h = g.size()
+                        assert(w == resolution and h == 2)
+                        previous_quads = g.frame_stats().quads
+                        g.clear('#0000ff')
+                        g.fill_rect(1, 0, 1, h, '#ff0000')
+                    end)
+                    p:fill_rect(5, 4, 1, 16, '#00ff00')
+                end)
+             end
+             ui:canvas({label='Other', width=20, height=20}, function(p)
+                 p:scene(1, 1, function() g.clear('#ffff00') end)
+             end)",
+        );
+        for width in [4, 8] {
+            sim.exec(&format!("resolution = {width}"));
+            sim.step();
+            assert_eq!(sim.eval::<u32>("previous_quads"), 1);
+            let r = sim.gui_rect("Scene").unwrap();
+            let other = sim.gui_rect("Other").unwrap();
+            let image = sim.screenshot().unwrap();
+            let at = |x, y| image.pixel(r.x as u32 + x, r.y as u32 + y);
+            let cell = 80 / width;
+            assert_eq!(at(cell - 1, 22), [0, 0, 255, 255]);
+            assert_eq!(at(cell, 22), [255, 0, 0, 255]);
+            assert_eq!(at(2 * cell - 1, 22), [255, 0, 0, 255]);
+            assert_eq!(at(2 * cell, 22), [0, 0, 255, 255]);
+            assert_eq!(at(5, 10), [0, 255, 0, 255]);
+            assert_eq!(
+                image.pixel(other.x as u32 + 1, other.y as u32 + 1),
+                [255, 255, 0, 255]
+            );
+        }
+        sim.exec("show = false");
+        sim.step();
+        let other = sim.gui_rect("Other").unwrap();
+        assert_eq!(
+            sim.screenshot()
+                .unwrap()
+                .pixel(other.x as u32 + 1, other.y as u32 + 1),
+            [255, 255, 0, 255]
+        );
     }
 
     #[test]

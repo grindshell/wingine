@@ -341,19 +341,25 @@ pub(crate) fn run_frame(
     canvas.begin(canvas_size[0], canvas_size[1]);
     canvas.frame_stats = ctx.frame_stats;
     game.draw(canvas);
-    let [lights, lights_left_out, shadow_maps, shadows_left_out] = canvas.light_counts();
-    FrameStats {
+    let mut stats = FrameStats {
         update,
         draw: start.elapsed().as_secs_f32(),
-        quads: canvas.quad_count(),
-        triangles: canvas.triangle_count(),
-        draw_calls: canvas.draw_call_count(),
-        lights,
-        lights_left_out,
-        shadow_maps,
-        shadows_left_out,
         ..Default::default()
+    };
+    let canvases = std::iter::once(&*canvas);
+    #[cfg(feature = "egui")]
+    let canvases = canvases.chain(ctx.gui.scene_canvases());
+    for canvas in canvases {
+        stats.quads += canvas.quad_count();
+        stats.triangles += canvas.triangle_count();
+        stats.draw_calls += canvas.draw_call_count();
+        let [lights, left_out, maps, shadows_left_out] = canvas.light_counts();
+        stats.lights += lights;
+        stats.lights_left_out += left_out;
+        stats.shadow_maps += maps;
+        stats.shadows_left_out += shadows_left_out;
     }
+    stats
 }
 
 /// Turns the time frames take into updates: one a frame by the frame's time, or a fixed number a
@@ -1295,7 +1301,7 @@ impl<G: Game> State<G> {
                     output_size,
                 );
                 #[cfg(feature = "egui")]
-                gui.render(&gpu.device, &gpu.queue, &frame.texture);
+                gui.render(&gpu.device, &gpu.queue, renderer, &frame.texture);
                 self.stats.render = start.elapsed().as_secs_f32();
                 self.surface.present(gpu, frame);
             }

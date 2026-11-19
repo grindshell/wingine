@@ -672,6 +672,16 @@ export type ScrollOptions = {
     --- Whether it keeps to its end as more is added, while it's scrolled there. By default,
     --- false.
     stick_to_bottom: boolean?,
+    --- Maximum height in interface points.
+    height: number?,
+}
+
+--- Colors shared by the game's egui widgets, panels and popups.
+export type GuiTheme = {
+    dark: boolean?,
+    panel: Color, window: Color, field: Color, control: Color, hover: Color, active: Color,
+    text: Color, muted: Color, border: Color, accent: Color,
+    radius: number?,
 }
 
 --- A canvas of an interface, for `ui:canvas`.
@@ -1378,6 +1388,10 @@ end
 --- only until the function it was passed to returns, and inside a container, use the `Ui` the
 --- container passes to its function.
 declare extern type Ui with
+    --- The current zoom relative to the display's logical pixels. A new factor takes effect next pass.
+    function scale(self, factor: number?): number
+    --- Applies the palette to this interface and to subsequent panels, menus and windows.
+    function set_theme(self, palette: GuiTheme): ()
     --- A window over the game, named by its title or with options, which `contents` fills.
     function window(self, window: string | WindowOptions, contents: (Ui) -> ()): ()
     --- A panel along an edge of the window, by its side or with options, which `contents` fills.
@@ -1459,6 +1473,9 @@ declare extern type Paint with
     --- Returns where the canvas is on the game's canvas, in canvas pixels, where `draw` draws and
     --- the mouse is: to draw behind it, as a 3D view whose rect it is.
     function bounds(self): Rect
+    --- Draws with wingine.graphics on a separate canvas of this many pixels, then fills the
+    --- paint area with it using nearest-neighbor sampling.
+    function scene(self, width: number, height: number, draw: () -> ()): ()
     --- A line from `x1`, `y1` to `x2`, `y2`, `thickness` wide (by default, 1).
     function line(self, x1: number, y1: number, x2: number, y2: number, color: Color, thickness: number?): ()
     --- Lines through `points`, `{ x1, y1, x2, y2, ... }`: two points or more.
@@ -1484,7 +1501,7 @@ declare extern type Paint with
 end
 
 --- Drawing, the camera, blend modes, sprites, animations, particles, text and 3D views. Drawing
---- works only in `draw`.
+--- works in `draw` and in a `paint:scene` callback.
 export type GraphicsApi = {
     --- Fills the canvas with `color`, discarding anything drawn so far this frame.
     clear: (color: Color) -> (),

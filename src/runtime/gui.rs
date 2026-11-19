@@ -49,7 +49,7 @@ pub(super) fn register(lua: &Lua, lent: &Lent) -> mlua::Result<Vec<&'static str>
         };
         add_methods(&mut methods, lent);
     })?;
-    register_paint(lua)?;
+    register_paint(lua, lent)?;
     Ok(names)
 }
 
@@ -81,6 +81,16 @@ impl Methods<'_, '_> {
 }
 
 fn add_methods(methods: &mut Methods<'_, '_>, lent: &Lent) {
+    methods.add("scale", |_, ui, factor: Option<f32>| {
+        if let Some(factor) = factor {
+            if !(0.25..=4.0).contains(&factor) {
+                return Err(mlua::Error::runtime("UI scale must be between 0.25 and 4"));
+            }
+            ui.ctx().set_zoom_factor(factor);
+        }
+        Ok(ui.ctx().zoom_factor())
+    });
+    methods.add("set_theme", |_, ui, palette: Table| set_theme(ui, palette));
     add_containers(methods);
     add_text(methods);
     add_widgets(methods);
@@ -219,6 +229,65 @@ fn add_methods(methods: &mut Methods<'_, '_>, lent: &Lent) {
     });
 }
 
+/// Installs a game's palette for this UI and subsequent panels, windows, and popups.
+fn set_theme(ui: &mut egui::Ui, palette: Table) -> mlua::Result<()> {
+    check_options(
+        &palette,
+        "theme",
+        &[
+            "dark", "panel", "window", "field", "control", "hover", "active", "text", "muted",
+            "border", "accent", "radius",
+        ],
+    )?;
+    let color = |name: &str| palette.get::<Color>(name).map(color32);
+    let theme = if palette.get::<Option<bool>>("dark")?.unwrap_or(true) {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    };
+    let mut visuals = theme.default_visuals();
+    let panel = color("panel")?;
+    let field = color("field")?;
+    let control = color("control")?;
+    let hover = color("hover")?;
+    let active = color("active")?;
+    let ink = color("text")?;
+    let border = color("border")?;
+    let accent = color("accent")?;
+    let radius = egui::CornerRadius::same(palette.get::<Option<u8>>("radius")?.unwrap_or(3));
+
+    visuals.panel_fill = panel;
+    visuals.window_fill = color("window")?;
+    visuals.window_stroke = egui::Stroke::new(1.0, border);
+    visuals.window_corner_radius = radius;
+    visuals.menu_corner_radius = radius;
+    visuals.faint_bg_color = control;
+    visuals.extreme_bg_color = field;
+    visuals.text_edit_bg_color = Some(field);
+    visuals.weak_text_color = Some(color("muted")?);
+    visuals.hyperlink_color = accent;
+    visuals.selection.bg_fill = active;
+    visuals.selection.stroke = egui::Stroke::new(1.0, accent);
+    visuals.text_cursor.stroke.color = accent;
+    for (widget, fill, outline) in [
+        (&mut visuals.widgets.noninteractive, panel, border),
+        (&mut visuals.widgets.inactive, control, border),
+        (&mut visuals.widgets.hovered, hover, accent),
+        (&mut visuals.widgets.active, active, accent),
+        (&mut visuals.widgets.open, active, accent),
+    ] {
+        widget.bg_fill = fill;
+        widget.weak_bg_fill = fill;
+        widget.bg_stroke = egui::Stroke::new(1.0, outline);
+        widget.fg_stroke.color = ink;
+        widget.corner_radius = radius;
+    }
+    ui.ctx().set_theme(theme);
+    ui.ctx().set_visuals(visuals);
+    ui.set_style(ui.ctx().global_style());
+    Ok(())
+}
+
 fn add_containers(methods: &mut Methods<'_, '_>) {
     methods.add("window", |lua, ui, (window, f): (Value, Function)| {
         let (title, options) = named(window, "window", "title")?;
@@ -314,7 +383,15 @@ fn add_containers(methods: &mut Methods<'_, '_>) {
             let id = ui.next_auto_id();
             let mut area = egui::ScrollArea::vertical().id_salt(id);
             if let Some(options) = &options {
-                check_options(options, "scroll", &["stick_to_bottom"])?;
+                check_options(options, "scroll", &["stick_to_bottom", "height"])?;
+                if let Some(height) = options.get::<Option<f32>>("height")? {
+                    if !height.is_finite() || height <= 0.0 {
+                        return Err(mlua::Error::runtime(
+                            "scroll height must be finite and positive",
+                        ));
+                    }
+                    area = area.min_scrolled_height(0.0).max_height(height);
+                }
                 if let Some(stick) = options.get::<Option<bool>>("stick_to_bottom")? {
                     area = area.stick_to_bottom(stick);
                 }
@@ -907,7 +984,7 @@ impl Paint {
 }
 
 /// Registers `Paint`'s methods in `lua`, and returns their names.
-fn register_paint(lua: &Lua) -> mlua::Result<Vec<&'static str>> {
+fn register_paint(lua: &Lua, lent: &Lent) -> mlua::Result<Vec<&'static str>> {
     let mut names = Vec::new();
     lua.register_userdata_type::<Paint>(|registry| {
         let mut methods = PaintMethods {
@@ -915,6 +992,28 @@ fn register_paint(lua: &Lua) -> mlua::Result<Vec<&'static str>> {
             names: &mut names,
         };
         add_paint_methods(&mut methods);
+        let lent = lent.clone();
+        methods.add(
+            "scene",
+            move |paint, (width, height, draw): (u32, u32, Function)| {
+                if width == 0 || height == 0 {
+                    return Err(mlua::Error::runtime(
+                        "a scene needs a positive width and height in pixels",
+                    ));
+                }
+                let (slot, mut scene) = lent.context(|ctx| ctx.gui.take_scene(ctx.frame_stats))?;
+                lent.lend(scene.begin(width, height), || Ok(draw.call::<()>(())?))
+                    .map_err(mlua::Error::external)?;
+                let id = lent.context(|ctx| ctx.queue_gui_scene(slot, scene))?;
+                paint.painter.image(
+                    id,
+                    egui::Rect::from_min_size(paint.origin, paint.size),
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+                Ok(())
+            },
+        );
     })?;
     Ok(names)
 }
@@ -1130,7 +1229,7 @@ mod tests {
 
     #[test]
     fn the_definitions_declare_every_method_of_paint() {
-        let mut registered = register_paint(&Lua::new()).unwrap();
+        let mut registered = register_paint(&Lua::new(), &Lent::default()).unwrap();
         registered.sort_unstable();
         let mut declared = declared_methods("Paint");
         declared.sort_unstable();

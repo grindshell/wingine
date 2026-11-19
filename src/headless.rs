@@ -131,7 +131,7 @@ impl Headless {
             output,
         );
         #[cfg(feature = "egui")]
-        gui.render(&gpu.device, &gpu.queue, &texture);
+        gui.render(&gpu.device, &gpu.queue, renderer, &texture);
         read_texture(gpu, &texture)
     }
 
@@ -165,7 +165,7 @@ impl Headless {
             output,
         );
         #[cfg(feature = "egui")]
-        gui.render(&gpu.device, &gpu.queue, texture);
+        gui.render(&gpu.device, &gpu.queue, renderer, texture);
         #[cfg(not(feature = "egui"))]
         let _ = texture;
         let render = start.elapsed().as_secs_f32();
@@ -1012,6 +1012,13 @@ impl<G: Game> Simulation<G> {
             time: Some(time),
             ..Default::default()
         };
+        // The simulated display has one physical pixel per logical pixel, independently
+        // of the game's egui zoom. A real window supplies this in its viewport input.
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .native_pixels_per_point = Some(1.0);
         if events {
             input.events = self.gui_input.take_events();
         }
