@@ -40,7 +40,10 @@ end
 
 test("the bandstand starts as it's drawn", function()
     sim.step()
-    assert(sim.matches_screenshot("screenshots/start.png"))
+    -- Each lamp's beams are faint lines added over one another, each blend rounded into the
+    -- frame's 8-bit sRGB, and GPUs round differently: where five overlap, an RTX 3080 differs
+    -- from WARP by 3.
+    assert(sim.matches_screenshot("screenshots/start.png", { tolerance = 4 }))
 end)
 
 test("presses on the beat hit cues, and the streak brings the bass in, then the lead", function()

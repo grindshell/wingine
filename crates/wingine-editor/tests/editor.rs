@@ -2261,7 +2261,7 @@ fn luau_lsp_checks_scripts_as_they_are_typed() {
     simulation.run_frames(2);
     assert_eq!(
         simulation.game().scripts().completions(),
-        ["draw_text", "draw_text_layout"]
+        ["draw_text", "draw_text_3d", "draw_text_layout"]
     );
     simulation.tap(Key::Enter);
     simulation.run_frames(2);
