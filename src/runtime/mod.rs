@@ -498,7 +498,11 @@
 //! - `ui:separator()` and `ui:space(amount)`.
 //! - `ui:scale(factor)` returns the interface's zoom, having set it to `factor` from the next
 //!   pass if it's given. Players change it too, with egui's shortcuts: Ctrl and plus, minus or 0.
-//!   `ui:set_theme(palette)` colors the interface.
+//!   `ui:set_theme(palette)` colors the interface, and `ui:set_fonts({ body, heading,
+//!   monospace })` sets its text in fonts of the game's, each the path of a TrueType or OpenType
+//!   file in its folder or `{ file, size }`, a size in points, the rest in egui's own fonts and
+//!   sizes. Headings, and windows' titles, are in the heading's font, else the body's. Fonts set
+//!   once text has been laid out in a frame show from the next; a reloaded game starts in egui's.
 //!
 //! A `Ui` works only until the function it was passed to returns, and inside a container's
 //! function, only the `Ui` it's passed works, as a canvas's `Paint` works only in its function.
@@ -1077,7 +1081,11 @@ impl LuauGame {
         api.set("files", files::module(lua, ctx.folders())?)?;
         api.set("window", window::module(lua, &lent, kept)?)?;
         #[cfg(feature = "egui")]
-        gui::register(lua, &lent)?;
+        {
+            gui::register(lua, &lent, folder)?;
+            // A game reloaded in place starts in egui's fonts, as it would in a new window.
+            gui::reset_fonts(&ctx.gui.egui);
+        }
         let main = folder.join("main.luau");
         #[cfg(not(target_arch = "wasm32"))]
         let files = FileRequirer::new(reuse.lookups.clone(), reuse.bytecode.clone());

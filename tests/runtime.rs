@@ -7780,7 +7780,7 @@ mod physics {
 #[cfg(feature = "egui")]
 mod gui {
     use super::*;
-    use wingine::input::MouseButton;
+    use wingine::{input::MouseButton, math::Rect};
 
     /// A 400x300 window whose canvas is the window, so canvas pixels are points.
     const WINDOW: &str = "return { width = 400, height = 300 }";
@@ -7822,6 +7822,116 @@ mod gui {
         assert_eq!(pixel, [0x19, 0x26, 0x25, 255]);
         sim.click_gui("Meter");
         assert!(sim.eval::<bool>("pressed"));
+    }
+
+    #[test]
+    fn text_is_drawn_in_the_fonts_the_game_sets() {
+        // A label laid out before the fonts are set, so they show from the frame after.
+        let main = "fonts = nil
+            function gui(ui: Ui)
+                ui:label('Before')
+                if fonts then
+                    ui:set_fonts(fonts)
+                end
+                ui:heading('Wingine')
+                ui:label('Wingine')
+                ui:monospace('Wingine')
+            end";
+        let folder = game("gui_fonts", &[("conf.luau", WINDOW), ("main.luau", main)]);
+        copy_hack(&folder);
+        let mut sim = simulation(&folder);
+        sim.run_frames(2);
+        // The heading, the label and the monospace text, in that order down the panel.
+        let rows = |sim: &Simulation<LuauGame>| -> [Rect; 3] {
+            sim.gui_rects("Wingine")
+                .try_into()
+                .expect("three rows of text")
+        };
+        // In egui's fonts, a label is narrower than monospace text, at the same size.
+        let [_, label, monospace] = rows(&sim);
+        assert!(label.w < monospace.w, "{label:?}, {monospace:?}");
+        let hack_width = monospace.w;
+
+        // Hack, which is egui's monospace font too, for the body and headings, at its size.
+        sim.exec(
+            "fonts = { body = 'Hack-Regular.ttf', heading = { file = 'Hack-Regular.ttf', size = 13 } }",
+        );
+        sim.run_frames(2);
+        assert!(sim.game().error().is_none(), "{:?}", sim.game().error());
+        let [heading, label, monospace] = rows(&sim);
+        assert_eq!((heading.w, heading.h), (monospace.w, monospace.h));
+        assert_eq!((label.w, label.h), (monospace.w, monospace.h));
+        // And drawn as egui draws its own monospace text, to the pixel.
+        let image = sim.screenshot().unwrap();
+        let pixels = |rect: Rect| -> Vec<[u8; 4]> {
+            let (x, y) = (rect.x.round() as u32, rect.y.round() as u32);
+            (0..rect.h as u32)
+                .flat_map(|dy| (0..rect.w as u32).map(move |dx| (x + dx, y + dy)))
+                .map(|(x, y)| image.pixel(x, y))
+                .collect()
+        };
+        let drawn = pixels(monospace);
+        assert!(
+            drawn.iter().any(|&pixel| pixel != drawn[0]),
+            "no text drawn"
+        );
+        assert_eq!(pixels(heading), drawn);
+        assert_eq!(pixels(label), drawn);
+
+        // Sizes change without fonts, and `{}` goes back to egui's.
+        sim.exec("fonts = { monospace = { size = 26 } }");
+        sim.run_frames(2);
+        let [heading, label, monospace] = rows(&sim);
+        assert!(
+            heading.h > label.h && label.w < heading.w,
+            "{heading:?}, {label:?}"
+        );
+        assert!(
+            (monospace.w - 2.0 * hack_width).abs() <= 3.0,
+            "{monospace:?}, {hack_width}"
+        );
+
+        // A reloaded game starts in egui's fonts again.
+        sim.exec("fonts = { body = 'Hack-Regular.ttf' }");
+        sim.run_frames(2);
+        let [_, label, monospace] = rows(&sim);
+        assert_eq!(label.w, monospace.w);
+        sim.reload();
+        sim.run_frames(2);
+        let [_, label, monospace] = rows(&sim);
+        assert!(label.w < monospace.w, "{label:?}, {monospace:?}");
+    }
+
+    #[test]
+    fn fonts_that_cant_be_set_stop_the_game_saying_why() {
+        for (fonts, problem) in [
+            ("{ title = 'Hack-Regular.ttf' }", "not `title`"),
+            (
+                "{ body = { file = 'Hack-Regular.ttf', sise = 12 } }",
+                "not `sise`",
+            ),
+            ("{ heading = { size = 0 } }", "above 0, not 0"),
+            (
+                "{ monospace = true }",
+                "its file or a table of options, not boolean",
+            ),
+            ("{ body = 'Missing.ttf' }", "Missing.ttf"),
+            (
+                "{ body = 'main.luau' }",
+                "isn't a TrueType or OpenType font",
+            ),
+        ] {
+            let main = format!("function gui(ui: Ui) ui:set_fonts({fonts}) end");
+            let folder = game(
+                "gui_fonts_wrong",
+                &[("conf.luau", WINDOW), ("main.luau", &main)],
+            );
+            copy_hack(&folder);
+            let mut sim = simulation(&folder);
+            sim.run_frames(2);
+            let error = stopped_with(&sim);
+            assert!(error.contains(problem), "{fonts}: {error}");
+        }
     }
 
     #[test]

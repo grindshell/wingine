@@ -55,7 +55,8 @@ way too, so saving a scene in the editor shows it in the game playing. The engin
 folder's files four times a second, but not at hidden ones, whose names start with `.`.
 
 A reload starts the game afresh: sound effects and music stop, volumes go back to 1, actions are
-unbound, and tasks end. Saves stay, since they're files outside the game's folder. `conf.luau` is
+unbound, its interface's [fonts](api/gui.md#scale-and-appearance) go back to egui's, and tasks
+end. Saves stay, since they're files outside the game's folder. `conf.luau` is
 read again for its [`libraries`](project-structure.md#libraries), but the window's settings, its
 size, resolution, update rate and the rest, change only when the game starts again, and the
 window stays covering the screen, or not, and scaled as the game left it.

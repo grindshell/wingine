@@ -684,6 +684,23 @@ export type GuiTheme = {
     radius: number?,
 }
 
+--- The font of one role text plays in an interface: the path of a TrueType or OpenType file in
+--- the game's folder, or a table of it and a size in points. What's left out is egui's.
+export type GuiFont = string | {
+    file: string?,
+    size: number?,
+}
+
+--- The fonts of an interface, for `ui:set_fonts`. Those left out are egui's own.
+export type GuiFonts = {
+    --- Labels, buttons, fields, small text and what canvases paint.
+    body: GuiFont?,
+    --- Headings and windows' titles. By default, the body's font, at 18 points.
+    heading: GuiFont?,
+    --- Monospace text.
+    monospace: GuiFont?,
+}
+
 --- A canvas of an interface, for `ui:canvas`.
 export type CanvasOptions = {
     --- What tests and screen readers find it by. Nothing shows it.
@@ -1393,6 +1410,9 @@ declare extern type Ui with
     function scale(self, factor: number?): number
     --- Applies the palette to this interface and to subsequent panels, menus and windows.
     function set_theme(self, palette: GuiTheme): ()
+    --- Sets the interface's text in fonts from the game's folder, and at sizes, or in egui's own
+    --- for those left out, from this pass, or the next once text has been laid out in this one.
+    function set_fonts(self, fonts: GuiFonts): ()
     --- A window over the game, named by its title or with options, which `contents` fills.
     function window(self, window: string | WindowOptions, contents: (Ui) -> ()): ()
     --- A panel along an edge of the window, by its side or with options, which `contents` fills.
@@ -1421,7 +1441,7 @@ declare extern type Ui with
     function enabled(self, enabled: boolean, contents: (Ui) -> ()): ()
     --- Text, in `color` if given.
     function label(self, text: string, color: Color?): ()
-    --- Large text.
+    --- Large text, in the heading's font.
     function heading(self, text: string): ()
     --- Text in a monospace font.
     function monospace(self, text: string): ()

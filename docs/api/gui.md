@@ -76,6 +76,33 @@ ui:set_theme({
 })
 ```
 
+`ui:set_fonts(fonts)` sets the interface's text in fonts of the game's own, TrueType or OpenType
+files in its folder, read as images are, so they're in a web build too. `fonts` gives a font for
+any of three roles text plays:
+
+| Role | Its text | egui's size |
+|---|---|---|
+| `body` | Labels, buttons, fields, [small text](#uiheading-uimonospace-uismall) and what [canvases](#paint) paint. | 13 |
+| `heading` | [Headings](#uiheading-uimonospace-uismall) and windows' titles. Without a font of their own, they're in the body's. | 18 |
+| `monospace` | [Monospace text](#uiheading-uimonospace-uismall), as in a [text edit](#uitext_edit) with `monospace`. | 13 |
+
+Each is the path of its file, or a table of its `file`, its `size` in points, or both. A role left
+out, or a table's `file` or `size` left out, is egui's own. Small text is in the body's font,
+smaller than it by as much as egui's is.
+
+```lua
+ui:set_fonts({
+    body = "fonts/body.ttf",
+    heading = { file = "fonts/title.otf", size = 22 },
+    monospace = { size = 12 },
+})
+```
+
+A character a font lacks is drawn in the next that has it, egui's own last, as for symbols. Call
+it before laying anything out, as with `set_theme`: fonts set once text has been laid out in a
+frame show from the next, though sizes change at once. Setting the fonts it already has does
+nothing, so it can be called every frame, and `ui:set_fonts({})` goes back to egui's.
+
 ## Containers
 
 ### `ui:window`
@@ -244,7 +271,8 @@ ui:monospace(text: string)
 ui:small(text: string)
 ```
 
-Large text, text in a monospace font, as for numbers in columns, and small text.
+Large text, text in a monospace font, as for numbers in columns, and small text, each in its
+[font](#scale-and-appearance).
 
 ## Widgets
 

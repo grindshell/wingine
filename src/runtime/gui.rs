@@ -8,6 +8,18 @@
 //!
 //! A canvas (`ui:canvas`) hands its function a `Paint` the same way, borrowed for the call: egui's
 //! painter, clipped to the canvas, with positions from the canvas's top-left corner.
+//!
+//! Headings are always in a family of fonts of their own, [`HEADING`], which holds the body's
+//! fonts unless `ui:set_fonts` puts another first: so their text style never names a family the
+//! fonts of the pass lack, though egui changes fonts only between passes once text has been laid
+//! out in one.
+
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashMap},
+    path::Path,
+    sync::Arc,
+};
 
 use mlua::{
     AnyUserData, FromLuaMulti, Function, IntoLuaMulti, Lua, Table, UserDataRef, UserDataRegistry,
@@ -16,9 +28,17 @@ use mlua::{
 
 use super::Lent;
 use crate::{
+    Error,
     graphics::{Color, Sprite},
     gui::egui,
 };
+
+/// The family of fonts headings, and windows' titles, are in.
+const HEADING: &str = "heading";
+
+/// What a game's fonts are named among egui's, before their paths, so none is taken for one of
+/// egui's own.
+const GAME_FONT: &str = "game:";
 
 /// The points between a sprite button's sprite and the edges of its frame.
 const SPRITE_BUTTON_MARGIN: f32 = 2.0;
@@ -38,16 +58,16 @@ pub(super) fn call<R: FromLuaMulti>(lua: &Lua, ui: &mut egui::Ui, f: &Function) 
     lua.scope(|scope| f.call(scope.create_any_userdata_ref_mut(ui)?))
 }
 
-/// Registers `Ui`'s methods in `lua`, showing sprites through what `lent` lends, and `Paint`'s,
-/// and returns the names of `Ui`'s.
-pub(super) fn register(lua: &Lua, lent: &Lent) -> mlua::Result<Vec<&'static str>> {
+/// Registers `Ui`'s methods in `lua`, showing sprites through what `lent` lends and reading fonts
+/// from the game's `folder`, and `Paint`'s, and returns the names of `Ui`'s.
+pub(super) fn register(lua: &Lua, lent: &Lent, folder: &Path) -> mlua::Result<Vec<&'static str>> {
     let mut names = Vec::new();
     lua.register_userdata_type::<egui::Ui>(|registry| {
         let mut methods = Methods {
             registry,
             names: &mut names,
         };
-        add_methods(&mut methods, lent);
+        add_methods(&mut methods, lent, folder);
     })?;
     register_paint(lua, lent)?;
     Ok(names)
@@ -80,7 +100,7 @@ impl Methods<'_, '_> {
     }
 }
 
-fn add_methods(methods: &mut Methods<'_, '_>, lent: &Lent) {
+fn add_methods(methods: &mut Methods<'_, '_>, lent: &Lent, folder: &Path) {
     methods.add("scale", |_, ui, factor: Option<f32>| {
         if let Some(factor) = factor {
             if !(0.25..=4.0).contains(&factor) {
@@ -91,6 +111,23 @@ fn add_methods(methods: &mut Methods<'_, '_>, lent: &Lent) {
         Ok(ui.ctx().zoom_factor())
     });
     methods.add("set_theme", |_, ui, palette: Table| set_theme(ui, palette));
+    methods.add("set_fonts", {
+        let folder = folder.to_owned();
+        // The fonts set last, so a game setting the same ones each frame doesn't read their files
+        // again, nor have egui compare them byte by byte with those it has.
+        let set = RefCell::new(None);
+        move |_, ui, fonts: Table| {
+            let fonts = Fonts::read(&fonts)?;
+            if set.borrow().as_ref() == Some(&fonts) {
+                return Ok(());
+            }
+            fonts.install(ui.ctx(), &folder)?;
+            // This `Ui` was made in the styles before; those made from now on are in these.
+            ui.style_mut().text_styles = ui.ctx().global_style().text_styles.clone();
+            *set.borrow_mut() = Some(fonts);
+            Ok(())
+        }
+    });
     add_containers(methods);
     add_text(methods);
     add_widgets(methods);
@@ -286,6 +323,203 @@ fn set_theme(ui: &mut egui::Ui, palette: Table) -> mlua::Result<()> {
     ui.ctx().set_visuals(visuals);
     ui.set_style(ui.ctx().global_style());
     Ok(())
+}
+
+/// Sets `gui` in egui's own fonts, at its own sizes, as a game starts: headings in a family of
+/// their own, holding the body's fonts.
+pub(super) fn reset_fonts(gui: &egui::Context) {
+    Fonts::default().apply(gui, font_definitions(None, None, None));
+}
+
+/// The fonts a game's interface is in, as `ui:set_fonts` takes them: for each role text plays, a
+/// font file in the game's folder, a size in points, or both, each left to egui unless it's given.
+#[derive(Clone, Default, PartialEq, Debug)]
+struct Fonts {
+    /// Labels, buttons, fields, small text and what canvases paint.
+    body: FontChoice,
+    /// Headings, and windows' titles.
+    heading: FontChoice,
+    /// Monospace text.
+    monospace: FontChoice,
+}
+
+/// The font of one role in [`Fonts`].
+#[derive(Clone, Default, PartialEq, Debug)]
+struct FontChoice {
+    /// The font's file, a path from the game's folder.
+    file: Option<String>,
+    /// The size its text is, in points.
+    size: Option<f32>,
+}
+
+/// A font file read for an interface: its name among egui's fonts, and what it holds.
+type FontFile = (String, Arc<egui::FontData>);
+
+impl Fonts {
+    /// The roles text plays, which `ui:set_fonts` takes fonts for.
+    const ROLES: [&str; 3] = ["body", "heading", "monospace"];
+
+    fn read(fonts: &Table) -> mlua::Result<Self> {
+        for pair in fonts.pairs::<Value, Value>() {
+            let key = pair?.0.to_string()?;
+            if !Self::ROLES.contains(&key.as_str()) {
+                return Err(mlua::Error::runtime(format!(
+                    "an interface's fonts are its `body`, `heading` and `monospace`, not `{key}`"
+                )));
+            }
+        }
+        let [body, heading, monospace] =
+            Self::ROLES.map(|role| FontChoice::read(fonts.get(role)?, role));
+        Ok(Self {
+            body: body?,
+            heading: heading?,
+            monospace: monospace?,
+        })
+    }
+
+    /// Sets `gui` in these fonts, read from `folder`: from this pass, unless text has been laid
+    /// out in it, when they show from the next, though their sizes change now.
+    fn install<'a>(&'a self, gui: &egui::Context, folder: &Path) -> mlua::Result<()> {
+        // Each file once, though it's the font of several roles.
+        let mut read: HashMap<&str, FontFile> = HashMap::new();
+        let mut file = |choice: &'a FontChoice| -> mlua::Result<Option<FontFile>> {
+            let Some(file) = choice.file.as_deref() else {
+                return Ok(None);
+            };
+            if let Some(font) = read.get(file) {
+                return Ok(Some(font.clone()));
+            }
+            let path = folder.join(file);
+            let bytes = crate::files::read(&path).map_err(|source| {
+                mlua::Error::external(Error::ReadFile {
+                    path: path.clone(),
+                    source,
+                })
+            })?;
+            // Here, since egui panics on a font it can't read, and only once it lays text out.
+            if ab_glyph::FontRef::try_from_slice(&bytes).is_err() {
+                return Err(mlua::Error::external(Error::Font {
+                    path,
+                    message: "this isn't a TrueType or OpenType font".to_owned(),
+                }));
+            }
+            let font = (
+                format!("{GAME_FONT}{file}"),
+                Arc::new(egui::FontData::from_owned(bytes)),
+            );
+            read.insert(file, font.clone());
+            Ok(Some(font))
+        };
+        let definitions = font_definitions(
+            file(&self.body)?,
+            file(&self.heading)?,
+            file(&self.monospace)?,
+        );
+        self.apply(gui, definitions);
+        Ok(())
+    }
+
+    /// Sets `gui` in the fonts `definitions` holds, at these sizes, in its dark and light styles
+    /// alike.
+    fn apply(&self, gui: &egui::Context, definitions: egui::FontDefinitions) {
+        gui.set_fonts(definitions);
+        let styles = self.text_styles();
+        gui.all_styles_mut(|style| style.text_styles.clone_from(&styles));
+    }
+
+    /// egui's text styles at these sizes, headings in their own family. Small text is in the
+    /// body's font, smaller than the body by as much as egui's own is.
+    fn text_styles(&self) -> BTreeMap<egui::TextStyle, egui::FontId> {
+        use egui::{FontFamily, FontId, TextStyle};
+        let mut styles = egui::style::default_text_styles();
+        let default = |style: TextStyle| styles[&style].size;
+        let body = self.body.size.unwrap_or(default(TextStyle::Body));
+        let small = default(TextStyle::Small) * body / default(TextStyle::Body);
+        let heading = self.heading.size.unwrap_or(default(TextStyle::Heading));
+        let monospace = self.monospace.size.unwrap_or(default(TextStyle::Monospace));
+        for (style, font) in [
+            (TextStyle::Small, FontId::proportional(small)),
+            (TextStyle::Body, FontId::proportional(body)),
+            (TextStyle::Button, FontId::proportional(body)),
+            (
+                TextStyle::Heading,
+                FontId::new(heading, FontFamily::Name(HEADING.into())),
+            ),
+            (TextStyle::Monospace, FontId::monospace(monospace)),
+        ] {
+            styles.insert(style, font);
+        }
+        styles
+    }
+}
+
+impl FontChoice {
+    /// The font of `role`: nothing, its file, or a table of its `file` and `size`.
+    fn read(value: Value, role: &str) -> mlua::Result<Self> {
+        match value {
+            Value::Nil => Ok(Self::default()),
+            Value::String(file) => Ok(Self {
+                file: Some(file.to_str()?.to_owned()),
+                size: None,
+            }),
+            Value::Table(options) => {
+                check_options(&options, &format!("{role} font"), &["file", "size"])?;
+                let size = options.get::<Option<f32>>("size")?;
+                if let Some(size) = size
+                    && !(size.is_finite() && size > 0.0)
+                {
+                    return Err(mlua::Error::runtime(format!(
+                        "a {role} font's size is a number of points above 0, not {size}"
+                    )));
+                }
+                Ok(Self {
+                    file: options.get("file")?,
+                    size,
+                })
+            }
+            other => Err(mlua::Error::runtime(format!(
+                "a {role} font is its file or a table of options, not {}",
+                other.type_name()
+            ))),
+        }
+    }
+}
+
+/// egui's fonts, with a game's put first: `body` for text, `monospace` for monospace text, and for
+/// headings, `heading` and then the body's fonts. A character a font lacks is drawn in the next
+/// font of its family that has it, so egui's own fonts are the last of each.
+fn font_definitions(
+    body: Option<FontFile>,
+    heading: Option<FontFile>,
+    monospace: Option<FontFile>,
+) -> egui::FontDefinitions {
+    use egui::FontFamily;
+    let mut definitions = egui::FontDefinitions::default();
+    put_first(&mut definitions, FontFamily::Proportional, body);
+    put_first(&mut definitions, FontFamily::Monospace, monospace);
+    let body_fonts = definitions.families[&FontFamily::Proportional].clone();
+    let heading_family = FontFamily::Name(HEADING.into());
+    definitions
+        .families
+        .insert(heading_family.clone(), body_fonts);
+    put_first(&mut definitions, heading_family, heading);
+    definitions
+}
+
+/// Puts `font`, if there's one, first among `family`'s fonts in `definitions`.
+fn put_first(
+    definitions: &mut egui::FontDefinitions,
+    family: egui::FontFamily,
+    font: Option<FontFile>,
+) {
+    if let Some((name, data)) = font {
+        definitions.font_data.insert(name.clone(), data);
+        definitions
+            .families
+            .entry(family)
+            .or_default()
+            .insert(0, name);
+    }
 }
 
 fn add_containers(methods: &mut Methods<'_, '_>) {
@@ -1220,7 +1454,7 @@ mod tests {
 
     #[test]
     fn the_definitions_declare_every_method_of_ui() {
-        let mut registered = register(&Lua::new(), &Lent::default()).unwrap();
+        let mut registered = register(&Lua::new(), &Lent::default(), Path::new("")).unwrap();
         registered.sort_unstable();
         let mut declared = declared_methods("Ui");
         declared.sort_unstable();
@@ -1264,6 +1498,33 @@ mod tests {
         let mut text = String::from("é\nü");
         assert_eq!(indent(&mut text, 0..3, 2), 7);
         assert_eq!(text, "  é\n  ü");
+    }
+
+    #[test]
+    fn headings_are_in_their_own_font_then_the_bodys() {
+        use egui::FontFamily;
+        let font = |name: &str| {
+            let data = Arc::new(egui::FontData::from_static(&[]));
+            Some((format!("{GAME_FONT}{name}"), data))
+        };
+        let heading = FontFamily::Name(HEADING.into());
+        // With none of a game's, headings are in the body's fonts, egui's.
+        let definitions = font_definitions(None, None, None);
+        let egui = egui::FontDefinitions::default();
+        assert_eq!(
+            definitions.families[&heading],
+            egui.families[&FontFamily::Proportional]
+        );
+        // A game's go first, headings' before the body's, and egui's after them all.
+        let definitions = font_definitions(font("body.ttf"), font("title.otf"), font("code.ttf"));
+        let family = |family: &FontFamily| &definitions.families[family][..3];
+        assert_eq!(family(&heading)[..2], ["game:title.otf", "game:body.ttf"]);
+        assert_eq!(family(&FontFamily::Proportional)[0], "game:body.ttf");
+        assert_eq!(family(&FontFamily::Monospace)[0], "game:code.ttf");
+        assert_eq!(
+            definitions.families[&FontFamily::Proportional][1..],
+            egui.families[&FontFamily::Proportional][..]
+        );
     }
 
     #[test]
