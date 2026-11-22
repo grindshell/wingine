@@ -496,6 +496,9 @@
 //!   on the game's canvas, in canvas pixels, so `draw` can draw behind it. For a view with its
 //!   own resolution, `paint:scene(width, height, draw)` paints what `draw` draws with `graphics`.
 //! - `ui:separator()` and `ui:space(amount)`.
+//! - `ui:scale(factor)` returns the interface's zoom, having set it to `factor` from the next
+//!   pass if it's given. Players change it too, with egui's shortcuts: Ctrl and plus, minus or 0.
+//!   `ui:set_theme(palette)` colors the interface.
 //!
 //! A `Ui` works only until the function it was passed to returns, and inside a container's
 //! function, only the `Ui` it's passed works, as a canvas's `Paint` works only in its function.

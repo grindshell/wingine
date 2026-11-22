@@ -58,6 +58,11 @@ the next frame.
 pass. The default is 1 and supported factors range from 0.25 to 4. Canvas drawing and pointer
 coordinates remain in points. Use `paint:bounds()` when placing game graphics under a canvas.
 
+Players change it too, with egui's own shortcuts: Ctrl and plus (or equals) zooms in by a tenth,
+Ctrl and minus zooms out, and Ctrl and 0 goes back to 1 (Command for Ctrl on macOS).
+`ui:scale()` returns what they chose. Nothing keeps it between runs, so a game that should
+remember it saves `ui:scale()` and sets it again as it starts.
+
 Call `ui:set_theme(palette)` once when choosing a palette. Panels, text fields, buttons,
 selection highlights and popup windows share it. Colors take the usual engine color values.
 `dark` defaults to true and `radius` defaults to three points.

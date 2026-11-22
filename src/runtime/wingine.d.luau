@@ -1388,7 +1388,8 @@ end
 --- only until the function it was passed to returns, and inside a container, use the `Ui` the
 --- container passes to its function.
 declare extern type Ui with
-    --- The current zoom relative to the display's logical pixels. A new factor takes effect next pass.
+    --- The current zoom relative to the display's logical pixels, which players change with Ctrl and
+    --- plus, minus or 0. A new factor takes effect next pass.
     function scale(self, factor: number?): number
     --- Applies the palette to this interface and to subsequent panels, menus and windows.
     function set_theme(self, palette: GuiTheme): ()

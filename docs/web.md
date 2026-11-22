@@ -133,3 +133,7 @@ patched the same way.
   `runtime::link_library`.
 - Browsers start audio only after the player has interacted with the page, so a page starts the
   game from a click, or sounds stay silent.
+- The browser doesn't act on keys pressed while the game's canvas has focus, so Ctrl and plus
+  zoom the game's interface, as [`ui:scale`](api/gui.md#scale-and-appearance) says, not the page.
+  Zooming from the browser's menu changes the display's scale, which the game follows, as it does
+  a window moved to another screen.
