@@ -8684,6 +8684,83 @@ mod gui {
     }
 
     #[test]
+    fn buttons_are_as_big_as_asked_and_share_a_row_evenly() {
+        let mut simulation = interface(
+            "gui_button_size",
+            "clicks = 0
+            across = 0
+            down = 0",
+            "ui:horizontal(function(ui)
+                across = ui:available_size()
+                local width = (across - 8) / 2
+                if ui:button('Left', { width = width, height = 40 }) then
+                    clicks += 1
+                end
+                ui:button('Right', { width = width, height = 40 })
+            end)
+            ui:button('Plain')
+            ui:button('A label far too long for the width it is given', { width = 80 })
+            ui:button('Tall', { height = 30 })
+            local _, room = ui:available_size()
+            down = room",
+        );
+        let across = simulation.eval::<f32>("across");
+        let left = simulation.gui_rect("Left").unwrap();
+        let right = simulation.gui_rect("Right").unwrap();
+        // Half the row each, less the space between them, filling it.
+        assert!((left.w - (across - 8.0) / 2.0).abs() < 1.0, "{left:?}");
+        assert!((left.h - 40.0).abs() < 1.0, "{left:?}");
+        assert!((right.w - left.w).abs() < 1.0, "{right:?}");
+        assert!(
+            (right.x + right.w - (left.x + across)).abs() < 1.0,
+            "{left:?} {right:?} across {across}"
+        );
+        // Without options, as big as its text; a long label wraps to the width, and is taller.
+        let plain = simulation.gui_rect("Plain").unwrap();
+        assert!(plain.w < left.w && plain.h < 30.0, "{plain:?}");
+        let long = simulation
+            .gui_rect("A label far too long for the width it is given")
+            .unwrap();
+        assert!(
+            (long.w - 80.0).abs() < 1.0 && long.h > plain.h * 2.0,
+            "{long:?}"
+        );
+        let tall = simulation.gui_rect("Tall").unwrap();
+        assert!((tall.h - 30.0).abs() < 1.0 && tall.w < left.w, "{tall:?}");
+        // Down, what's left of the window under the last button.
+        let down = simulation.eval::<f32>("down");
+        assert!(
+            (tall.y + tall.h + down - 300.0).abs() < 12.0,
+            "{tall:?} down {down}"
+        );
+
+        simulation.click_gui("Left");
+        assert_eq!(simulation.eval::<u32>("clicks"), 1);
+    }
+
+    #[test]
+    fn a_button_refuses_sizes_that_arent_points() {
+        for (options, message) in [
+            ("{ width = -1 }", "a button's width is a number of points"),
+            (
+                "{ height = math.huge }",
+                "a button's height is a number of points",
+            ),
+            ("{ size = 3 }", "a button's options are"),
+        ] {
+            let main = format!("function gui(ui: Ui)\nui:button('Sized', {options})\nend");
+            let folder = game(
+                "gui_button_option",
+                &[("conf.luau", WINDOW), ("main.luau", &main)],
+            );
+            let mut simulation = simulation(&folder);
+            simulation.run_frames(2);
+            let error = simulation.game().error().expect("the game stopped");
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
+
+    #[test]
     fn containers_lay_out_what_their_functions_add() {
         let simulation = interface(
             "gui_containers",

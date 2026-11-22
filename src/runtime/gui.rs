@@ -264,6 +264,10 @@ fn add_methods(methods: &mut Methods<'_, '_>, lent: &Lent, folder: &Path) {
         ui.add_space(amount);
         Ok(())
     });
+    methods.add("available_size", |_, ui, ()| {
+        let size = ui.available_size();
+        Ok((size.x, size.y))
+    });
 }
 
 /// Installs a game's palette for this UI and subsequent panels, windows, and popups.
@@ -678,9 +682,25 @@ fn add_text(methods: &mut Methods<'_, '_>) {
 }
 
 fn add_widgets(methods: &mut Methods<'_, '_>) {
-    methods.add("button", |_, ui, text: String| {
-        Ok(ui.button(text).clicked())
-    });
+    methods.add(
+        "button",
+        |_, ui, (text, options): (String, Option<Table>)| {
+            let Some(options) = options else {
+                return Ok(ui.button(text).clicked());
+            };
+            check_options(&options, "button", &["width", "height"])?;
+            let width = size_option(&options, "button", "width")?;
+            let height = size_option(&options, "button", "height")?;
+            let button = egui::Button::new(text)
+                .min_size(egui::vec2(width.unwrap_or(0.0), height.unwrap_or(0.0)));
+            // In room as wide as it's given, so its text wraps to that rather than widening it.
+            let room = egui::vec2(
+                width.unwrap_or(ui.available_width()),
+                height.unwrap_or(ui.available_height()),
+            );
+            Ok(ui.allocate_ui(room, |ui| ui.add(button)).inner.clicked())
+        },
+    );
     methods.add("checkbox", |_, ui, (text, mut checked): (String, bool)| {
         ui.checkbox(&mut checked, text);
         Ok(checked)
@@ -1418,6 +1438,16 @@ fn check_options(options: &Table, what: &str, known: &[&str]) -> mlua::Result<()
         }
     }
     Ok(())
+}
+
+/// The size in points `options`, the options of a `what`, give along `key`, if they give one.
+fn size_option(options: &Table, what: &str, key: &str) -> mlua::Result<Option<f32>> {
+    match options.get::<Option<f32>>(key)? {
+        Some(size) if !(size.is_finite() && size >= 0.0) => Err(mlua::Error::runtime(format!(
+            "a {what}'s {key} is a number of points, not {size}"
+        ))),
+        size => Ok(size),
+    }
 }
 
 fn color32(color: Color) -> egui::Color32 {

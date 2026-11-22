@@ -471,9 +471,9 @@
 //!   `ui:enabled(enabled, fn)`, and `ui:modal(name, fn)`, a box over everything that must be
 //!   answered, which returns whether the player asked to be rid of it.
 //! - Text: `ui:label(text, color)`, `ui:heading(text)`, `ui:monospace(text)` and `ui:small(text)`.
-//! - Widgets: `ui:button(text)` and `ui:sprite_button(sprite, text, selected, tint, width,
-//!   height)`, a sprite in a frame, named `text` and framed as chosen when `selected`, return
-//!   whether they were clicked; `ui:checkbox(text, checked)`,
+//! - Widgets: `ui:button(text, { width, height })`, at least that size with its text wrapped to
+//!   its width, and `ui:sprite_button(sprite, text, selected, tint, width, height)`, a sprite in a
+//!   frame, named `text` and framed as chosen when `selected`, return whether they were clicked; `ui:checkbox(text, checked)`,
 //!   `ui:radio(current, value, text)`, `ui:combo(text, current, choices)`,
 //!   `ui:slider(text, value, min, max, step)`, `ui:drag(text, value, speed, min, max)` and
 //!   `ui:text_input(text, hint or { id, label, hint })` (which also returns whether Enter was
@@ -495,7 +495,8 @@
 //!   dragged_y, scrolled_x, scrolled_y, zoom }`). `paint:bounds()` returns where the canvas is
 //!   on the game's canvas, in canvas pixels, so `draw` can draw behind it. For a view with its
 //!   own resolution, `paint:scene(width, height, draw)` paints what `draw` draws with `graphics`.
-//! - `ui:separator()` and `ui:space(amount)`.
+//! - `ui:separator()` and `ui:space(amount)`, and `ui:available_size()`, the room left across and
+//!   down, in points.
 //! - `ui:scale(factor)` returns the interface's zoom, having set it to `factor` from the next
 //!   pass if it's given. Players change it too, with egui's shortcuts: Ctrl and plus, minus or 0.
 //!   `ui:set_theme(palette)` colors the interface, and `ui:set_fonts({ body, heading,

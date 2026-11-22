@@ -150,7 +150,7 @@ ui:vertical(contents: (Ui) -> ())
 ```
 
 Lay out what `contents` adds from left to right, or from top to bottom, as is usual outside
-`horizontal`.
+`horizontal`. Widgets are 8 points apart side by side, and 3 above one another.
 
 ### `ui:group`
 
@@ -279,10 +279,24 @@ Large text, text in a monospace font, as for numbers in columns, and small text,
 ### `ui:button`
 
 ```lua
-ui:button(text: string): boolean
+ui:button(text: string, options: ButtonOptions?): boolean
 ```
 
-Returns whether the button was clicked.
+Returns whether the button was clicked. It's as big as its text, or with `options`, a table of
+its `width` and `height` in points, either or both, at least that big, its text in its middle and
+wrapped to its width. A label too long for it makes it taller, not wider.
+
+With [`ui:available_size`](#uiavailable_size), buttons share a row evenly, as large buttons for
+the player's choices do. Widgets side by side are 8 points apart, so two fill a row each half of
+what's left after that:
+
+```lua
+ui:horizontal(function(ui)
+    local width = (ui:available_size() - 8) / 2
+    ui:button("Go north", { width = width, height = 32 })
+    ui:button("Go south", { width = width, height = 32 })
+end)
+```
 
 ### `ui:checkbox`
 
@@ -659,3 +673,12 @@ ui:space(amount: number?)
 ```
 
 Empty space, `amount` points of it, or the usual space between widgets.
+
+### `ui:available_size`
+
+```lua
+ui:available_size(): (number, number)
+```
+
+Returns how much room is left in the `Ui`, across and down, in points, after what's been added:
+in a [`ui:horizontal`](#uihorizontal-uivertical), the rest of the row.

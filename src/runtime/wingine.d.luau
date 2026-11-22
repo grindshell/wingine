@@ -623,6 +623,13 @@ export type PanelOptions = {
     resizable: boolean?,
 }
 
+--- A button's size, for `ui:button`, in points: at least this wide and tall, its text wrapping to
+--- its width. By default, its text's size.
+export type ButtonOptions = {
+    width: number?,
+    height: number?,
+}
+
 --- A field of many lines of text, for `ui:text_edit`.
 export type TextEditOptions = {
     --- Which text it holds, when a field in one place holds one text then another: its cursor,
@@ -1447,8 +1454,9 @@ declare extern type Ui with
     function monospace(self, text: string): ()
     --- Small text.
     function small(self, text: string): ()
-    --- Returns whether the button was clicked.
-    function button(self, text: string): boolean
+    --- Returns whether the button was clicked. It's as big as its text, or with options, at least
+    --- as big as they say.
+    function button(self, text: string, options: ButtonOptions?): boolean
     --- Returns whether the box is checked, after any click.
     function checkbox(self, text: string, checked: boolean): boolean
     --- One of a set of buttons choosing between values: returns `value` if it was clicked, and
@@ -1483,6 +1491,9 @@ declare extern type Ui with
     function separator(self): ()
     --- Empty space, `amount` points of it, or the usual space between widgets.
     function space(self, amount: number?): ()
+    --- Returns the room left in this `Ui`, across and down, in points: in a row, the rest of the
+    --- row.
+    function available_size(self): (number, number)
 end
 
 --- What a `ui:canvas` is painted with, in the function it's passed to, which it works only
