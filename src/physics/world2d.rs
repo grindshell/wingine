@@ -616,7 +616,8 @@ impl World {
     /// On the ground, and not rising, it's first carried along with what it stands on, by as far
     /// as that moved where it stands in the last step, across, up or down, as a lift or a moving
     /// platform carries it, then walks across by the motion's `x`: up steps no higher than its
-    /// [`Character::step`], up and down slopes no steeper than its [`Character::slope`], sliding
+    /// [`Character::step`], even under a ceiling low over the step, so long as it fits there once
+    /// it's up, up and down slopes no steeper than its [`Character::slope`], sliding
     /// along walls and steeper slopes, and staying on the ground as it goes down steps, unless it
     /// walks off a ledge, where it falls by the motion's `y`. Off the ground, or rising, it moves
     /// as `motion` says, landing on what it can stand on, sliding down what's too steep, and
@@ -1064,9 +1065,23 @@ impl Walk<'_> {
         // Something was in the way: over it, if it's low enough, and that goes farther.
         if slid.hit {
             self.middle = start;
-            let high = self.step_over(across);
+            let rise = self.rise(self.character.step);
+            let high = self.step_over(across, rise);
             if high.is_some_and(|middle| gone(middle) > gone(low.0)) {
                 return true;
+            }
+            // Rising a whole step, its head may have met a ceiling low over the step: so again,
+            // rising only as high as what stopped it.
+            let lower = slid
+                .stopped
+                .and_then(|stopped| self.rise_onto(start, stopped));
+            if let Some(lower) = lower.filter(|&lower| lower < rise) {
+                self.middle = start;
+                self.pushes.clear();
+                let high = self.step_over(across, lower);
+                if high.is_some_and(|middle| gone(middle) > gone(low.0)) {
+                    return true;
+                }
             }
         }
         (self.middle, self.pushes) = low;
@@ -1090,14 +1105,46 @@ impl Walk<'_> {
         }
     }
 
-    /// Steps up as high as a step, or a ceiling, lets it, across by `across` sliding along
-    /// whatever's still in the way, and down onto what it can stand on, and returns where its
-    /// middle ends up, or `None` if there's nothing there to stand on within a step down.
-    fn step_over(&mut self, across: f32) -> Option<Vector> {
-        let rise = match self.cast(UP, self.character.step) {
+    /// How high it can rise from where it is, up to `most`: as high as a ceiling lets it.
+    fn rise(&self, most: f32) -> f32 {
+        match self.cast(UP, most) {
             Some(hit) => (hit.distance - GAP).max(0.0),
-            None => self.character.step,
+            None => most,
+        }
+    }
+
+    /// How high a character with its middle at `middle` must rise to step onto what it touched
+    /// at `point`, whose normal there is `normal`: a gap over the top of it there, if that's
+    /// something to stand on, over its feet and no higher than a step. Found by a ray down, a gap
+    /// inside its side, from a step over its feet.
+    fn rise_onto(&self, middle: Vector, (point, normal): (Vector, Vector)) -> Option<f32> {
+        if normal.x.abs() < 1.0e-6 {
+            return None;
+        }
+        let feet = middle.y + self.shape.half_extents.y;
+        let step = self.character.step;
+        let inside = point.x - normal.x.signum() * GAP;
+        let ray = Ray::new(Vector::new(inside, feet - step), DOWN);
+        let own = self.own;
+        let usable = |handle: ColliderHandle, collider: &Collider| {
+            collider.is_enabled() && own != Some(handle)
         };
+        let filter = QueryFilter::default().exclude_sensors().predicate(&usable);
+        let queries = self.world.query_pipeline_with_filter(filter);
+        let (handle, hit) = queries.cast_ray_and_get_normal(&ray, step, true)?;
+        // A ray from inside what it hit says nothing of its top. Edges face either way.
+        let up = true_normal(hit.normal, &queries.colliders[handle]).y.abs();
+        if hit.time_of_impact <= 0.0 || up < self.walkable {
+            return None;
+        }
+        let rise = step - hit.time_of_impact + GAP;
+        (rise > 2.0 * GAP).then_some(rise)
+    }
+
+    /// Steps up by `rise`, across by `across` sliding along whatever's still in the way, and
+    /// down onto what it can stand on, and returns where its middle ends up, or `None` if there's
+    /// nothing there to stand on within a step down.
+    fn step_over(&mut self, across: f32, rise: f32) -> Option<Vector> {
         self.middle.y -= rise;
         self.slide(Vector::new(across, 0.0), Slide::Upright);
         let hit = self
@@ -1127,6 +1174,9 @@ impl Walk<'_> {
             self.middle += direction * hit.distance + hit.normal * GAP;
             left -= direction * hit.distance;
             let standing = self.standing(&hit);
+            if !standing {
+                slid.stopped = Some((hit.point, hit.normal));
+            }
             if how == Slide::Free && standing && left.y > 0.0 {
                 // Landed: the rest of the way is across the ground.
                 slid.landed = true;
@@ -1157,6 +1207,9 @@ struct Slid {
     hit: bool,
     /// Whether it landed on something to stand on.
     landed: bool,
+    /// Where it last touched something it can't stand on, and the normal out of that there:
+    /// what stopped it, if anything did.
+    stopped: Option<(Vector, Vector)>,
 }
 
 /// How a character slides along what it hits.
@@ -2132,6 +2185,37 @@ mod tests {
         let (feet, grounded) = walk_for(&mut world, feet, [-1.0, 0.2], 60);
         assert!(grounded);
         assert_within(feet, [feet[0], -GAP], 1.0e-2);
+    }
+
+    /// A world with a ledge `top` high from `x` 40 to 80, and none over the ground before it, but
+    /// a ceiling over the ledge whose underside is `room` over the head of a character on it, and
+    /// whose edge is half a gap past the ledge's side: where a character rising from against the
+    /// side doesn't touch it, and one going over the ledge does.
+    fn roofed_ledge(top: f32, room: f32) -> World {
+        let mut world = ground();
+        let ledge = Rect::new(40.0, -top, 40.0, top);
+        world.add(Affine::IDENTITY, ledge, Solid::Whole);
+        let underside = -top - WALKER.height - room;
+        let edge = 40.0 + GAP / 2.0;
+        let ceiling = Rect::new(edge, underside - 20.0, 80.0 - edge, 20.0);
+        world.add(Affine::IDENTITY, ceiling, Solid::Whole);
+        world
+    }
+
+    #[test]
+    fn characters_step_up_under_a_low_ceiling() {
+        // A stair 2 high under a ceiling 1 over a head on it. Rising a whole step, the head would
+        // go into the ceiling's edge, so it rises only as high as the stair.
+        let mut world = roofed_ledge(2.0, 1.0);
+        let (feet, grounded) = walk_for(&mut world, [0.0, -GAP], [1.0, 0.2], 60);
+        assert!(grounded);
+        assert_within(feet, [60.0, -2.0 - GAP], 1.0e-2);
+
+        // With no room for it on the stair, it stops at the stair's side.
+        let mut world = roofed_ledge(2.0, -1.0);
+        let (feet, grounded) = walk_for(&mut world, [0.0, -GAP], [1.0, 0.2], 60);
+        assert!(grounded);
+        assert_within(feet, [40.0 - WALKER.width / 2.0 - GAP, -GAP], 1.0e-2);
     }
 
     #[test]

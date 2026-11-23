@@ -422,9 +422,9 @@ Walks the character `node` by up to `dx`, `dy`, and returns how far it moved and
 the ground. `dy` is down the scene, so a character falls by a `dy` more than 0. On the ground,
 and not rising, it's first carried along with what it stands on, as far as that moved where it
 stands in the last step, across, up or down, as a lift carries it, then walks across by `dx`: up
-steps no higher than its `step`, up and down slopes no steeper than its `slope`, staying on the
-ground as it goes down them, and sliding along walls and steeper slopes; or off a ledge, falling
-by `dy`. Off the ground, or rising, it moves as `dx` and `dy` say, landing on what it can stand
+steps no higher than its `step`, even under a ceiling low over the step, so long as it fits there
+once it's up, up and down slopes no steeper than its `slope`, staying on the ground as it goes
+down them, and sliding along walls and steeper slopes; or off a ledge, falling by `dy`. Off the ground, or rising, it moves as `dx` and `dy` say, landing on what it can stand
 on, sliding down what's too steep, and stopping at ceilings. It stops a hundredth of a unit short
 of what it hits, and its own body isn't in its way.
 
@@ -608,9 +608,11 @@ world:walk(node: SceneNode, motion: vector): (vector, boolean)
 
 Walks the character `node` by up to `motion`, and returns how far it moved and whether it's on
 the ground. On the ground, and not rising, it walks across by `motion.x` and `motion.z`: up stairs
-no higher than its `step`, up and down slopes no steeper than its `slope`, staying on the ground
-as it goes down them, and with what it stands on as that goes down, as a lift does, and sliding
-along walls and steeper slopes; or off a ledge, falling by `motion.y`. Off the ground, or rising, it moves as `motion` says, landing on what it can stand on,
+no higher than its `step`, even under a roof low over the stair, so long as it fits there once
+it's up, up and down slopes no steeper than its `slope`, staying on the ground as it goes down
+them, and with what it stands on as that goes down, as a lift does, and sliding along walls and
+steeper slopes; or off a ledge, falling by `motion.y`. Off the ground, or rising, it moves as
+`motion` says, landing on what it can stand on,
 sliding down what's too steep, and stopping at ceilings. It stops a five-hundredth of a unit
 short of what it hits, and its own body isn't in its way.
 

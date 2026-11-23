@@ -562,13 +562,13 @@ impl World3d {
     /// in its way.
     ///
     /// On the ground, and not rising, it walks across by the motion's `x` and `z`: up stairs no
-    /// higher than its [`Character3d::step`], up and down slopes no steeper than its
-    /// [`Character3d::slope`], sliding along walls and steeper slopes, and staying on the ground as
-    /// it goes down steps, and with what it stands on as that goes down, as a lift does, unless it
-    /// walks off a ledge, where it falls by the motion's `y`. Off
-    /// the ground, or rising, it moves as `motion` says, landing on what it can stand on, sliding
-    /// down what's too steep, and stopping at ceilings. Either way, it stops [`GAP`] short of
-    /// what it hits.
+    /// higher than its [`Character3d::step`], even under a roof low over the stair, so long as it
+    /// fits there once it's up, up and down slopes no steeper than its [`Character3d::slope`],
+    /// sliding along walls and steeper slopes, and staying on the ground as it goes down steps, and
+    /// with what it stands on as that goes down, as a lift does, unless it walks off a ledge, where
+    /// it falls by the motion's `y`. Off the ground, or rising, it moves as `motion` says, landing
+    /// on what it can stand on, sliding down what's too steep, and stopping at ceilings. Either
+    /// way, it stops [`GAP`] short of what it hits.
     ///
     /// Dynamic bodies it walks into are pushed along at the speed it walks, taken over the last
     /// step's time, as hard as its mass and theirs make a collision: a heavy character pushes a
@@ -864,9 +864,23 @@ impl Walk<'_> {
         // Something was in the way: over it, if it's low enough, and that goes farther.
         if slid.hit {
             self.middle = start;
-            let high = self.step_over(across);
+            let rise = self.rise(self.character.step);
+            let high = self.step_over(across, rise);
             if high.is_some_and(|middle| gone(middle) > gone(low.0)) {
                 return true;
+            }
+            // Rising a whole step, its head may have met a roof low over the step: so again,
+            // rising only as high as what stopped it.
+            let lower = slid
+                .stopped
+                .and_then(|stopped| self.rise_onto(start, stopped));
+            if let Some(lower) = lower.filter(|&lower| lower < rise) {
+                self.middle = start;
+                self.pushes.clear();
+                let high = self.step_over(across, lower);
+                if high.is_some_and(|middle| gone(middle) > gone(low.0)) {
+                    return true;
+                }
             }
         }
         (self.middle, self.pushes) = low;
@@ -890,14 +904,46 @@ impl Walk<'_> {
         }
     }
 
-    /// Steps up as high as a step, or a ceiling, lets it, across by `across` sliding along
-    /// whatever's still in the way, and down onto what it can stand on, and returns where its
-    /// middle ends up, or `None` if there's nothing there to stand on within a step down.
-    fn step_over(&mut self, across: Vector) -> Option<Vector> {
-        let rise = match self.cast(Vector::Y, self.character.step) {
+    /// How high it can rise from where it is, up to `most`: as high as a ceiling lets it.
+    fn rise(&self, most: f32) -> f32 {
+        match self.cast(Vector::Y, most) {
             Some(hit) => (hit.distance - GAP).max(0.0),
-            None => self.character.step,
-        };
+            None => most,
+        }
+    }
+
+    /// How high a character with its middle at `middle` must rise to step onto what it touched
+    /// at `point`, whose normal there is `normal`: a gap over the top of it there, if that's
+    /// something to stand on, over its feet and no higher than a step. Found by a ray down, a gap
+    /// inside its face, from a step over its feet.
+    fn rise_onto(&self, middle: Vector, (point, normal): (Vector, Vector)) -> Option<f32> {
+        let into = -normal.with_y(0.0).normalize_or_zero();
+        if into == Vector::ZERO {
+            return None;
+        }
+        let feet = middle.y - self.shape.half_height;
+        let step = self.character.step;
+        let ray = Ray::new((point + into * GAP).with_y(feet + step), Vector::NEG_Y);
+        let filter = match self.own {
+            Some(own) => QueryFilter::default().exclude_rigid_body(own),
+            None => QueryFilter::default(),
+        }
+        .exclude_sensors();
+        let queries = self.world.query_pipeline_with_filter(filter);
+        let (_, hit) = queries.cast_ray_and_get_normal(&ray, step, true)?;
+        // A ray from inside what it hit says nothing of its top. Triangles face either way.
+        let up = hit.normal.y.abs();
+        if hit.time_of_impact <= 0.0 || up < self.walkable {
+            return None;
+        }
+        let rise = step - hit.time_of_impact + GAP;
+        (rise > 2.0 * GAP).then_some(rise)
+    }
+
+    /// Steps up by `rise`, across by `across` sliding along whatever's still in the way, and
+    /// down onto what it can stand on, and returns where its middle ends up, or `None` if there's
+    /// nothing there to stand on within a step down.
+    fn step_over(&mut self, across: Vector, rise: f32) -> Option<Vector> {
         self.middle.y += rise;
         self.slide(across, Slide::Upright);
         let hit = self
@@ -927,6 +973,9 @@ impl Walk<'_> {
             self.middle += direction * hit.distance + hit.normal * GAP;
             left -= direction * hit.distance;
             let standing = hit.normal.y >= self.walkable;
+            if !standing {
+                slid.stopped = Some((hit.point, hit.normal));
+            }
             if how == Slide::Free && standing && left.y < 0.0 {
                 // Landed: the rest of the way is across the ground.
                 slid.landed = true;
@@ -959,6 +1008,9 @@ struct Slid {
     hit: bool,
     /// Whether it landed on something to stand on.
     landed: bool,
+    /// Where it last touched something it can't stand on, and the normal out of that there:
+    /// what stopped it, if anything did.
+    stopped: Option<(Vector, Vector)>,
 }
 
 /// How a character slides along what it hits.
@@ -1851,6 +1903,102 @@ mod tests {
         let (feet, grounded) = walk_for(&mut world, feet, [-0.05, -0.01, 0.0], 60);
         assert!(grounded);
         assert_near(feet, [feet[0], GAP, 0.0], 1.0e-3);
+    }
+
+    /// A character a person's size, whose step is a quarter of its height.
+    const PERSON: Character3d = Character3d {
+        radius: 0.35,
+        height: 1.8,
+        step: 0.45,
+        slope: FRAC_PI_4,
+        mass: 80.0,
+    };
+
+    /// A world with a ledge `top` high from `x` 1 to 3, under a roof over it alone, flush with its
+    /// face, whose underside is `room` over the head of a `PERSON` on the ledge, and none over the
+    /// ground before it: both of triangles, as a level's are.
+    fn roofed_ledge(top: f32, room: f32) -> World3d {
+        let mut world = ground();
+        let underside = top + PERSON.height + room;
+        for solid in [
+            bounds([1.0, 0.0, -5.0], [3.0, top, 5.0]),
+            bounds([1.0, underside, -5.0], [3.0, underside + 1.0, 5.0]),
+        ] {
+            world.add(&fixed(triangles(solid))).unwrap();
+        }
+        world
+    }
+
+    /// The faces of `solid` as triangles.
+    fn triangles(solid: Bounds3) -> Shape3d {
+        let ([x0, y0, z0], [x1, y1, z1]) = (solid.min, solid.max);
+        Shape3d::Triangles {
+            points: vec![
+                [x0, y0, z0],
+                [x1, y0, z0],
+                [x1, y0, z1],
+                [x0, y0, z1],
+                [x0, y1, z0],
+                [x1, y1, z0],
+                [x1, y1, z1],
+                [x0, y1, z1],
+            ],
+            triangles: vec![
+                [0, 1, 2],
+                [0, 2, 3],
+                [4, 6, 5],
+                [4, 7, 6],
+                [0, 4, 5],
+                [0, 5, 1],
+                [1, 5, 6],
+                [1, 6, 2],
+                [2, 6, 7],
+                [2, 7, 3],
+                [3, 7, 4],
+                [3, 4, 0],
+            ],
+        }
+    }
+
+    /// Walks `PERSON` from `feet` along `x` at a walk, 3.5 a second, for `frames`, stepping the
+    /// world, and returns where its feet end up and whether it ended on the ground.
+    fn walk_person(world: &mut World3d, mut feet: [f32; 3], frames: u32) -> ([f32; 3], bool) {
+        let mut grounded = false;
+        for _ in 0..frames {
+            let walked = world.walk(&PERSON, feet, [3.5 * FRAME, -0.01, 0.0], None);
+            feet = add(feet, walked.moved);
+            grounded = walked.grounded;
+            world.step(FRAME);
+        }
+        (feet, grounded)
+    }
+
+    #[test]
+    fn characters_step_up_under_a_low_roof() {
+        // A stair 0.12 high under a roof 2 over it. Rising a whole step, the head would go into
+        // the roof's edge, so it rises only as high as the stair, pausing at most a few frames.
+        let mut world = roofed_ledge(0.12, 0.2);
+        let (feet, grounded) = walk_person(&mut world, [0.0, GAP, 0.0], 30);
+        assert!(grounded);
+        assert!(feet[0] > 1.5, "{feet:?}");
+        assert_near(feet, [feet[0], 0.12 + GAP, 0.0], 1.0e-3);
+
+        // With no room for it on the stair, it stops at the stair's face.
+        let mut world = roofed_ledge(0.12, -0.05);
+        let (feet, grounded) = walk_person(&mut world, [0.0, GAP, 0.0], 30);
+        assert!(grounded);
+        assert_near(feet, [1.0 - PERSON.radius - GAP, GAP, 0.0], 1.0e-3);
+    }
+
+    #[test]
+    fn characters_step_up_off_a_slope_under_a_low_roof() {
+        // A slope whose top is a lip 0.12 under a ledge's, under a roof over the ledge.
+        let mut world = roofed_ledge(0.5, 0.2);
+        world.add(&fixed(wedge(0.38))).unwrap();
+        let (feet, grounded) = walk_person(&mut world, [-1.0, GAP, 0.0], 60);
+        assert!(grounded);
+        assert!(feet[0] > 1.5, "{feet:?}");
+        assert_near(feet, [feet[0], 0.5 + GAP, 0.0], 1.0e-3);
     }
 
     /// A wedge rising along `x` from 0 at `x` 0 to `height` at `x` 1, 10 deep.
