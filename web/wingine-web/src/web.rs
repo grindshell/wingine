@@ -6,8 +6,8 @@ use wasm_bindgen::prelude::*;
 use crate::Game;
 
 /// Starts `game` in a canvas added to the page, and returns at once: hands the engine its files,
-/// in `/<its folder's name>`, and runs it with [`wingine::runtime::run`]. A page calls it once
-/// the player has clicked, so the browser lets its audio play.
+/// in `/<its folder's name>`, and runs it with [`wingine::runtime::run`], with no arguments. A
+/// page calls it once the player has clicked, so the browser lets its audio play.
 ///
 /// `on_error` is called with each error the engine or the game logs, such as one that stops the
 /// game, and with a panic's message. Everything logged also goes to the browser's console.
@@ -18,7 +18,7 @@ pub fn start(game: &Game, on_error: js_sys::Function) -> Result<(), JsValue> {
     for (path, contents) in game.files {
         wingine::files::add(format!("{folder}/{path}"), *contents);
     }
-    wingine::runtime::run(&folder).map_err(|err| JsValue::from_str(&err.to_string()))
+    wingine::runtime::run(&folder, Vec::new()).map_err(|err| JsValue::from_str(&err.to_string()))
 }
 
 /// Rust's allocations come from WASI libc's allocator, as the C and C++ code's do, so the two

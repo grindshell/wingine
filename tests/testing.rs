@@ -489,6 +489,59 @@ fn filters_pick_tests_by_file_and_name() {
 }
 
 #[test]
+fn every_test_reads_the_runs_arguments() {
+    let folder = game(
+        "arguments",
+        &[
+            ("main.luau", "started = require('@wingine').arguments()"),
+            (
+                "words.test.luau",
+                "local wg = require('@wingine')
+                test('one', function() assert_equal(wg.arguments(), { 'timing=2', '--' }) end)
+                test('two', function() assert_equal(started, { 'timing=2', '--' }) end)",
+            ),
+        ],
+    );
+    let options = Options {
+        arguments: vec!["timing=2".into(), "--".into()],
+        ..Default::default()
+    };
+    let report = run_with(&folder, &options);
+    assert_eq!(report.outcomes.len(), 2);
+    assert_passed(&report);
+    assert!(!run(&folder).passed(), "none, without any");
+}
+
+#[test]
+fn the_runner_hands_tests_the_words_after_its_double_dash() {
+    let folder = game(
+        "arguments_command",
+        &[
+            ("main.luau", ""),
+            (
+                "words.test.luau",
+                "local wg = require('@wingine')
+                test('red', function() assert_equal(wg.arguments(), { 'timing=2', 'red' }) end)
+                test('blue', function() error('filtered out') end)",
+            ),
+        ],
+    );
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_wingine"))
+        .arg("test")
+        .arg(&folder)
+        .args(["red", "--", "timing=2", "red"])
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&output.stdout).into_owned()
+        + &String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{printed}");
+    assert!(
+        printed.contains("1 passed; 0 failed; 0 ignored; 1 filtered out"),
+        "{printed}"
+    );
+}
+
+#[test]
 fn ignored_tests_run_only_when_asked_for() {
     let folder = game(
         "ignored",

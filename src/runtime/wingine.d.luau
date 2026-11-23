@@ -1925,6 +1925,9 @@ export type Wingine = {
     rect: RectApi,
     --- Returns `value` moved toward `target` by `step`, 0 or more, but no further than `target`.
     approach: (value: number, target: number, step: number) -> number,
+    --- Returns the words the command that ran the game gave it after `--`, in order, as a new
+    --- table each call: empty when there are none. Works at any time.
+    arguments: () -> { string },
     --- Starts `f(...)` as a task, running it until it first waits or finishes. The engine resumes
     --- it every update from then on.
     spawn: <A...>(f: (A...) -> ...any, A...) -> (),

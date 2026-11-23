@@ -51,6 +51,9 @@
 //!   [`Rect::contains`] do.
 //! - `approach(value, target, step)` returns `value` moved toward `target` by `step`, 0 or more,
 //!   but no further than `target`, as when easing a speed toward another a frame at a time.
+//! - `arguments()` returns the words the command that ran the game gave it, in order, as a new
+//!   table each call: those after `--` in `wingine path/to/game -- urban 7`. It's empty unless the
+//!   game sets them with [`Scripts::set_arguments`], as the Luau runtime does.
 //!
 //! `wait`, `wait_until`, `rect` and `approach` are written in Luau, so calling them costs what
 //! calling a script's own function does.
@@ -600,6 +603,7 @@ impl Scripts {
         let spawn = lua.create_function(move |lua, args| spawn(lua, &began, args))?;
         api.set("spawn", spawn)?;
         api.set("exact", exact_math(&lua)?)?;
+        api.set("arguments", arguments(&lua, Vec::new())?)?;
         let require = lua.create_require_function(ApiRequirer(ApiModule::new(api.clone())))?;
         globals.set("require", require)?;
         lua.sandbox(true)?;
@@ -616,6 +620,15 @@ impl Scripts {
     /// its first script loads, when it's frozen.
     pub fn api(&self) -> &mlua::Table {
         &self.api
+    }
+
+    /// Makes `arguments()` return `arguments`, the words the command that ran the game gave it,
+    /// rather than none. Like the rest of the API, it changes only before the first script loads,
+    /// when the API is frozen.
+    pub fn set_arguments(&self, arguments: Vec<String>) -> Result<()> {
+        self.api
+            .set("arguments", self::arguments(&self.lua, arguments)?)?;
+        Ok(())
     }
 
     /// Freezes the API, as a script is about to run, if it isn't already.
@@ -806,6 +819,14 @@ impl Scripts {
 fn spawned(lua: &mlua::Lua) -> mlua::AppDataRefMut<'_, Spawned> {
     lua.app_data_mut::<Spawned>()
         .expect("set when the VM is created")
+}
+
+/// The `arguments` built-in, returning `arguments` as a new table each call, so a script that
+/// changes what it got changes nothing for another.
+fn arguments(lua: &mlua::Lua, arguments: Vec<String>) -> mlua::Result<mlua::Function> {
+    lua.create_function(move |lua, ()| {
+        lua.create_sequence_from(arguments.iter().map(String::as_str))
+    })
 }
 
 /// The `exact` built-in: math functions from `libm`, which give the same bits on every platform.

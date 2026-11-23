@@ -213,6 +213,31 @@ player.vx = wg.approach(player.vx, target, ACCELERATION * dt)
 It's written in Luau, so calling it costs what calling a script's own function does. Functions of
 rectangles are in [`rect`](rect.md).
 
+### `arguments`
+
+```lua
+wg.arguments(): { string }
+```
+
+Returns the words the command that ran the game gave it, after `--`, in order, as a new table each
+call: empty when there are none. They're the game's, whatever they look like, and the engine makes
+nothing of them:
+
+```bash
+wingine path/to/game -- urban 7
+wingine test path/to/game -- timing=2
+```
+
+```lua
+-- Starts in the level the command names, if it names one.
+local level, seed = table.unpack(wg.arguments())
+load_level(level or "town", tonumber(seed) or 1)
+```
+
+Every test of a run gets the same, a game [reloaded](../running-games.md#reloading-as-you-work)
+keeps them, and an [exported](../running-games.md#shipping-a-game) game started from a command
+gets those after its `--` too. Works at any time.
+
 ## Luau
 
 Scripts are [Luau](https://luau.org), with its sandboxed standard library. A few things that

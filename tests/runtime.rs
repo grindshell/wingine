@@ -1076,7 +1076,7 @@ fn the_definitions_declare_every_function_of_the_engine() {
             "the fields of `{table}`"
         );
     }
-    for built_in in ["spawn", "wait", "wait_until", "approach"] {
+    for built_in in ["spawn", "wait", "wait_until", "approach", "arguments"] {
         assert_eq!(
             simulation.eval::<String>(&format!("kinds.{built_in}")),
             "function"
@@ -1128,6 +1128,39 @@ fn the_api_is_a_module_and_not_globals() {
         simulation.eval::<f64>("require('@wingine').approach(0, 1, 0.25)"),
         0.25,
         "and a chunk of its own requires it too"
+    );
+}
+
+#[test]
+fn games_read_the_words_their_run_hands_them() {
+    let folder = game(
+        "arguments",
+        &[(
+            "main.luau",
+            "local wg = require('@wingine')
+            got = wg.arguments()
+            table.insert(got, 'changed')
+            again = wg.arguments()",
+        )],
+    );
+    let config = runtime::Config {
+        arguments: vec!["urban".into(), "7".into(), "--".into(), "-x=1".into()],
+        ..runtime::config(&folder).unwrap()
+    };
+    let mut given = Simulation::new(&config.window, |ctx| {
+        LuauGame::load_with(ctx, &folder, &config)
+    })
+    .unwrap();
+    assert_eq!(
+        given.eval::<Vec<String>>("again"),
+        ["urban", "7", "--", "-x=1"],
+        "in order, whatever they look like, and a new table each call"
+    );
+
+    assert_eq!(
+        simulation(&folder).eval::<Vec<String>>("again"),
+        Vec::<String>::new(),
+        "none, without any"
     );
 }
 
@@ -9289,6 +9322,25 @@ mod reload {
         assert!(simulation.game().error().is_none());
         assert_eq!(simulation.eval::<f64>("value"), 2.0);
         assert_eq!(simulation.eval::<String>("room:props().title"), "New");
+    }
+
+    #[test]
+    fn reloaded_games_keep_their_arguments() {
+        let folder = game(
+            "reload_arguments",
+            &[("main.luau", "got = require('@wingine').arguments()")],
+        );
+        let config = runtime::Config {
+            arguments: vec!["urban".into()],
+            ..runtime::config(&folder).unwrap()
+        };
+        let mut simulation = Simulation::new(&config.window, |ctx| {
+            LuauGame::load_with(ctx, &folder, &config)
+        })
+        .unwrap();
+        simulation.reload();
+        assert!(simulation.game().error().is_none());
+        assert_eq!(simulation.eval::<Vec<String>>("got"), ["urban"]);
     }
 
     #[test]

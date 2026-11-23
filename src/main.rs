@@ -2,21 +2,22 @@
 //! exports it to ship:
 //!
 //! ```text
-//! wingine [--watch] path/to/game
-//! wingine test [--update] [--ignored] path/to/game [filter]
+//! wingine [--watch] path/to/game [-- arguments...]
+//! wingine test [--update] [--ignored] path/to/game [filter] [-- arguments...]
 //! wingine export path/to/game path/to/out
 //! wingine bake path/to/song.song.luau path/to/out.wav [section]
-//! wingine
+//! wingine [-- arguments...]
 //! ```
 //!
 //! With `--watch`, the game reloads whenever a file in its folder changes. `test` runs the tests
 //! in its `*.test.luau` files, or those whose files and names contain `filter`; with `--update`,
 //! it saves screenshots that don't match as their references, and with `--ignored`, it runs only
 //! the tests declared `ignored`, which it otherwise leaves out. `export` makes a folder to
-//! ship, whose executable, a copy of this one, runs the game beside it when it's started with
-//! nothing, as by double-clicking. `bake` renders a song to a WAV file, once through, or one of
-//! its sections as a loop. See the `runtime` module for what the folder holds,
-//! `runtime::testing` for tests, `runtime::export` for exports, and `music` for songs.
+//! ship, whose executable, a copy of this one, runs the game beside it when it's started without
+//! a folder, as by double-clicking. `bake` renders a song to a WAV file, once through, or one of
+//! its sections as a loop. Everything after the first `--` is the game's, which its scripts'
+//! `arguments()` returns. See the `runtime` module for what the folder holds, `runtime::testing`
+//! for tests, `runtime::export` for exports, and `music` for songs.
 
 use std::{ffi::OsString, path::Path, process::ExitCode};
 
@@ -25,8 +26,8 @@ use wingine::{
     runtime::{self, testing},
 };
 
-const USAGE: &str = "usage: wingine [--watch] <game folder>
-       wingine test [--update] [--ignored] <game folder> [filter]
+const USAGE: &str = "usage: wingine [--watch] <game folder> [-- arguments...]
+       wingine test [--update] [--ignored] <game folder> [filter] [-- arguments...]
        wingine export <game folder> <out folder>
        wingine bake <song file> <out wav> [section]";
 
@@ -39,23 +40,34 @@ fn main() -> ExitCode {
     log::set_max_level(log::LevelFilter::Info);
 
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let result = match args.as_slice() {
+    // The game's, after the first `--`, whatever they look like.
+    let (args, arguments) = match args.iter().position(|arg| arg == "--") {
+        Some(at) => (&args[..at], Some(game_arguments(&args[at + 1..]))),
+        None => (&args[..], None),
+    };
+    let result = match (args, arguments) {
         // As a game shipped to players starts, by double-clicking it.
-        [] => match runtime::shipped_game() {
-            Some(game) => runtime::run_shipped(game),
+        ([], arguments) => match runtime::shipped_game() {
+            Some(game) => runtime::run_shipped(game, arguments.unwrap_or_default()),
             None => {
                 eprintln!("{USAGE}");
                 return ExitCode::FAILURE;
             }
         },
         // A game in a folder called `test` or `export` runs as `wingine ./test`.
-        [command, rest @ ..] if command == "test" && !rest.is_empty() => return test(rest),
-        [command, game, out] if command == "export" => return export(game, out),
-        [command, song, out, section @ ..] if command == "bake" && section.len() <= 1 => {
+        ([command, rest @ ..], arguments) if command == "test" && !rest.is_empty() => {
+            return test(rest, arguments.unwrap_or_default());
+        }
+        ([command, game, out], None) if command == "export" => return export(game, out),
+        ([command, song, out, section @ ..], None) if command == "bake" && section.len() <= 1 => {
             return bake(song, out, section.first());
         }
-        [flag, folder] if flag == "--watch" => runtime::run_watching(folder),
-        [folder] if folder != "--watch" => runtime::run(folder),
+        ([flag, folder], arguments) if flag == "--watch" => {
+            runtime::run_watching(folder, arguments.unwrap_or_default())
+        }
+        ([folder], arguments) if folder != "--watch" => {
+            runtime::run(folder, arguments.unwrap_or_default())
+        }
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::FAILURE;
@@ -121,9 +133,18 @@ fn bake(song: &OsString, out: &OsString, section: Option<&OsString>) -> ExitCode
         }
     }
 }
-/// Runs a game's tests, as `wingine test` does with `args`, printing each as it finishes, then
-/// the failures and a summary, as `cargo test` does.
-fn test(mut args: &[OsString]) -> ExitCode {
+/// The words a command gave the game, as strings for its scripts: what isn't Unicode in one
+/// becomes U+FFFD.
+fn game_arguments(args: &[OsString]) -> Vec<String> {
+    args.iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Runs a game's tests, as `wingine test` does with `args`, their games' `arguments()` returning
+/// `arguments`, printing each as it finishes, then the failures and a summary, as `cargo test`
+/// does.
+fn test(mut args: &[OsString], arguments: Vec<String>) -> ExitCode {
     let (mut update_screenshots, mut ignored) = (false, false);
     while let [flag, rest @ ..] = args {
         if flag == "--update" {
@@ -147,6 +168,7 @@ fn test(mut args: &[OsString]) -> ExitCode {
         filter,
         update_screenshots,
         ignored,
+        arguments,
     };
     println!("running the tests of {}", Path::new(folder).display());
     let report = testing::run(folder, &options, |outcome| {

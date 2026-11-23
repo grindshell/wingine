@@ -71,8 +71,15 @@
 //! `require("./opponent")`. Files the engine loads, such as sounds and images, are relative to
 //! the game's folder.
 //!
-//! The module holds the built-ins `wait`, `wait_until`, `spawn`, `exact`, `rect` and `approach`,
-//! and eleven tables:
+//! A run can hand the game words, after `--` in its command: `wingine path/to/game -- urban 7`,
+//! `wingine --watch path/to/game -- urban 7`, `wingine test path/to/game -- timing=2`, and an
+//! exported game's `tiny -- urban 7`. `arguments()` returns them, in order, as a new table each
+//! call, the same in every test of a run and in a game reloaded in place, and empty when there are
+//! none. The engine makes nothing of them; `name=value` is a game's to match. They're in
+//! [`Config::arguments`].
+//!
+//! The module holds the built-ins `wait`, `wait_until`, `spawn`, `exact`, `rect`, `approach` and
+//! `arguments`, and eleven tables:
 //!
 //! `graphics`, for drawing in `draw` or in a `paint:scene` callback. `graphics.size`, `graphics.color`, `graphics.default_font`,
 //! `graphics.frame_stats`, `graphics.new_animation`, `graphics.new_particles` and
@@ -609,13 +616,17 @@ pub const DEFINITIONS: &str = include_str!("wingine.d.luau");
 /// engine never runs it. It's `wingine.luau`, next to this file.
 pub const API_MODULE: &str = include_str!("wingine.luau");
 
-/// Runs the Luau game in `folder` until its window is closed. See the [module docs](self).
+/// Runs the Luau game in `folder` until its window is closed, its scripts' `arguments()` returning
+/// `arguments`. See the [module docs](self).
 ///
 /// On the web, it starts the game in a canvas added to the page and returns at once, and an
 /// error loading the game is logged: see [`crate::run`].
-pub fn run(folder: impl AsRef<Path>) -> Result<()> {
+pub fn run(folder: impl AsRef<Path>, arguments: Vec<String>) -> Result<()> {
     let folder = folder.as_ref().to_owned();
-    let config = config(&folder)?;
+    let config = Config {
+        arguments,
+        ..config(&folder)?
+    };
     crate::run(config.window.clone(), move |ctx| {
         LuauGame::load_with(ctx, &folder, &config)
     })
@@ -626,9 +637,12 @@ pub fn run(folder: impl AsRef<Path>) -> Result<()> {
 /// reading its `conf.luau` as it starts ends it with that error: one loading the game shows in the
 /// window until the next change.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn run_watching(folder: impl AsRef<Path>) -> Result<()> {
+pub fn run_watching(folder: impl AsRef<Path>, arguments: Vec<String>) -> Result<()> {
     let folder = folder.as_ref().to_owned();
-    let config = config(&folder)?;
+    let config = Config {
+        arguments,
+        ..config(&folder)?
+    };
     crate::run(config.window.clone(), move |ctx| {
         LuauGame::load_watching(ctx, &folder, &config)
     })
@@ -655,12 +669,18 @@ fn game_beside(executable: &Path) -> Option<PathBuf> {
 /// Runs the Luau game in `folder` until its window is closed, as a game shipped to players runs,
 /// started without a console to print to: an error loading it shows in its window, as
 /// [`LuauGame::load_showing_errors`] shows it, and so does one reading its `conf.luau`, in a
-/// window with the default settings.
+/// window with the default settings. Its scripts' `arguments()` returns `arguments`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn run_shipped(folder: impl AsRef<Path>) -> Result<()> {
+pub fn run_shipped(folder: impl AsRef<Path>, arguments: Vec<String>) -> Result<()> {
     let folder = folder.as_ref().to_owned();
     let (config, problem) = match config(&folder) {
-        Ok(config) => (config, None),
+        Ok(config) => (
+            Config {
+                arguments,
+                ..config
+            },
+            None,
+        ),
         Err(err) => {
             let mut window = WindowConfig::default();
             if let Some(name) = folder_name(&folder) {
@@ -670,6 +690,7 @@ pub fn run_shipped(folder: impl AsRef<Path>) -> Result<()> {
             let config = Config {
                 window,
                 libraries: Vec::new(),
+                arguments,
             };
             (config, Some(err))
         }
@@ -680,12 +701,15 @@ pub fn run_shipped(folder: impl AsRef<Path>) -> Result<()> {
     })
 }
 
-/// A Luau game's settings, from its `conf.luau`.
+/// A Luau game's settings, from its `conf.luau`, and the words its run hands it.
 #[derive(Clone, Debug)]
 pub struct Config {
     pub window: WindowConfig,
     /// The native libraries to load, in order.
     pub libraries: Vec<LibraryConfig>,
+    /// The words the command that ran the game gave it, after `--`, which its scripts'
+    /// `arguments()` returns. `conf.luau` never sets them, so [`config`] leaves them empty.
+    pub arguments: Vec<String>,
 }
 
 /// A native library a game loads.
@@ -713,6 +737,7 @@ pub fn config(folder: impl AsRef<Path>) -> Result<Config> {
             ..Default::default()
         },
         libraries: Vec::new(),
+        arguments: Vec::new(),
     };
     let path = folder.join("conf.luau");
     if !crate::files::is_file(&path) {
@@ -970,8 +995,9 @@ impl LuauGame {
     /// `reloading`, if it has one, for the data the new game gets from `window.reloaded()`, then
     /// stopping its sounds and music, unbinding its actions, and running its `main.luau` from the
     /// top in a new VM, which reads every script and asset again. `conf.luau` is read again for its
-    /// libraries; its window settings change only when the game starts again. An error loading it
-    /// stops it, showing the error, with an empty VM.
+    /// libraries; its window settings change only when the game starts again, and its
+    /// [arguments](Config::arguments) never do. An error loading it stops it, showing the error,
+    /// with an empty VM.
     pub fn reload(&mut self, ctx: &mut Context) {
         let kept = self.keep(ctx).or_else(|| self.kept.take());
         let config = config(&self.folder).map(|mut config| {
@@ -979,6 +1005,7 @@ impl LuauGame {
                 log::warn!("conf.luau's window settings change when the game starts again");
                 config.window = self.config.window.clone();
             }
+            config.arguments = self.config.arguments.clone();
             config
         });
         ctx.audio.reset();
@@ -1081,6 +1108,7 @@ impl LuauGame {
         api.set("save", save::module(lua, ctx.saves())?)?;
         api.set("files", files::module(lua, ctx.folders())?)?;
         api.set("window", window::module(lua, &lent, kept)?)?;
+        scripts.set_arguments(config.arguments.clone())?;
         #[cfg(feature = "egui")]
         {
             gui::register(lua, &lent, folder)?;

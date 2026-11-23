@@ -38,7 +38,9 @@
 //! - `sim` drives the game, as a player would, and runs frames. Its functions are listed below.
 //!
 //! `wait(seconds)` and `wait_until(condition)` work in tests as they do in tasks, running a frame
-//! at a time: `wait_until(function() return pong.phase == "pause" end)`.
+//! at a time: `wait_until(function() return pong.phase == "pause" end)`. `arguments()` returns
+//! what [`Options::arguments`] holds, the words after `--` in `wingine test path/to/game --
+//! timing=2`, to every test's game alike, as a test run on a slower machine might be told so.
 //!
 //! A test fails if it raises an error, as a failed assertion does, saying where; if the game stops
 //! with an error in a frame it runs; or if it runs past its time limit, as one waiting for
@@ -293,6 +295,9 @@ pub struct Options {
     pub update_screenshots: bool,
     /// Runs only the tests declared `ignored`, which are otherwise left out.
     pub ignored: bool,
+    /// What every test's game gets from `arguments()`, as the words after `--` in
+    /// `wingine test path/to/game -- timing=2`.
+    pub arguments: Vec<String>,
 }
 
 /// How a test went.
@@ -386,7 +391,10 @@ pub fn run(
     mut on_outcome: impl FnMut(&Outcome),
 ) -> Result<Report> {
     let folder = folder.as_ref();
-    let config = config(folder)?;
+    let config = Config {
+        arguments: options.arguments.clone(),
+        ..config(folder)?
+    };
     let output = folder.join(OUTPUT_FOLDER);
     if output.is_dir() {
         fs::remove_dir_all(&output).map_err(|source| crate::Error::WriteFile {

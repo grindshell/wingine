@@ -15,7 +15,7 @@ that requires it. Pages are named for the module's tables, and functions for the
 
 | Page | What it covers |
 |---|---|
-| [Built-ins](globals.md) | The game's `update`, `gui`, `draw`, `close_requested` and `reloading`, tasks (`spawn`, `wait`, `wait_until`), `print`, `require` and `approach` |
+| [Built-ins](globals.md) | The game's `update`, `gui`, `draw`, `close_requested` and `reloading`, tasks (`spawn`, `wait`, `wait_until`), `print`, `require`, `approach` and `arguments` |
 | [`graphics`](graphics.md) | Drawing, the camera, blend modes, sprite sheets, sprites, animations, particles, fonts and text, frame stats, and 3D views of meshes, models, billboards, text and particles, lit by a sun and by lights at places, which can cast shadows, glowing, and fading into fog under a sky, with picking by boxes |
 | [`input`](input.md) | The keyboard, mouse and gamepads, and actions bound to keys and buttons |
 | [`audio`](audio.md) | Sound effects, music, songs of the engine's own instruments played live, and volume |

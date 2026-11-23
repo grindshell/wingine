@@ -23,7 +23,8 @@ fn main() -> ExitCode {
     log::set_max_level(log::LevelFilter::Info);
 
     let result = match args.as_slice() {
-        [flag, folder] if flag == "--run" => wingine::runtime::run_watching(folder),
+        // Play hands the game no arguments.
+        [flag, folder] if flag == "--run" => wingine::runtime::run_watching(folder, Vec::new()),
         [] => run(None),
         [folder] => run(Some(PathBuf::from(folder))),
         _ => {

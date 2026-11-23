@@ -36,6 +36,21 @@ The window closes, and the game ends, when the player closes it, unless the game
 [`close_requested`](api/globals.md#close_requested) asks first, or when a script calls
 [`window.quit`](api/window.md#windowquit).
 
+## Handing a game arguments
+
+Words after `--`, at the end of the command, are the game's, and its scripts read them with
+[`arguments`](api/globals.md#arguments): a level to start in, say, or a seed.
+
+```bash
+wingine path/to/game -- urban 7
+cargo run -- path/to/game -- urban 7
+```
+
+Everything after the first `--` is the game's, even another `--` or a word that looks like a flag,
+and the engine makes nothing of them. `--watch` keeps them through every reload, and
+[`wingine test`](#testing-a-game-in-luau) hands them to every test. A game run without any reads
+an empty table.
+
 ## Reloading as you work
 
 With `--watch` before the game's folder, the game reloads whenever a file in its folder changes,
@@ -305,7 +320,9 @@ It ends with a failing exit code if any test failed, so a CI job can run it. A w
 game's folder runs only the tests whose files and names contain it:
 `cargo run -- test path/to/game serve`. A test declared with `{ ignored = true }`, such as a
 benchmark, is left out and counted as ignored, and `--ignored` runs only those:
-`cargo run --release -- test --ignored path/to/game`.
+`cargo run --release -- test --ignored path/to/game`. Words after `--` are every test's
+[arguments](#handing-a-game-arguments), as for a machine whose tests should allow more time:
+`cargo run -- test path/to/game -- timing=2`.
 
 Every test runs against a fresh copy of the game, in the game's own VM, so it reads and changes
 the game's globals as they are: keep the game's state in a global, such as Pong's `pong`, so tests
@@ -491,7 +508,9 @@ dist/my-game/
 ```
 
 The executable, started without a game's folder, as a double-click starts it, runs the folder
-called `game` beside it. Players see any error loading the game in its window rather than in a
+called `game` beside it; started from a command, as a launcher might start it, it hands the game
+the words after its `--`, as [`wingine` does](#handing-a-game-arguments):
+`my-game -- urban 7`. Players see any error loading the game in its window rather than in a
 console, which they don't have: one in `main.luau`, or in `conf.luau`, shown in a window with the
 default settings. On Windows the exported executable opens no console window behind the game,
 and prints nothing; the `wingine` you run in a terminal still does. And if the game has an

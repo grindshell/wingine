@@ -50,14 +50,20 @@ fn export(folder: &Path) -> Output {
 /// Starts the exported executable in `folder` with no arguments, running a script that takes a
 /// screenshot after a few frames, and returns the screenshot.
 fn play(folder: &Path) -> Image {
-    let script = folder.join("check/play.txt");
-    fs::create_dir_all(script.parent().unwrap()).unwrap();
-    fs::write(&script, "wait 3\nscreenshot shot.png\n").unwrap();
     let executable = folder
         .join("shipped")
         .join(format!("tiny{}", std::env::consts::EXE_SUFFIX));
+    play_with(folder, Command::new(&executable))
+}
+
+/// Runs `command` from `folder`, running a script that takes a screenshot after a few frames, and
+/// returns the screenshot.
+fn play_with(folder: &Path, mut command: Command) -> Image {
+    let script = folder.join("check/play.txt");
+    fs::create_dir_all(script.parent().unwrap()).unwrap();
+    fs::write(&script, "wait 3\nscreenshot shot.png\n").unwrap();
     // From somewhere else, as a double-click starts it, so it finds the game beside itself.
-    let output = Command::new(&executable)
+    let output = command
         .current_dir(folder)
         .env("WINGINE_SCRIPT", &script)
         .output()
@@ -92,6 +98,45 @@ fn exported_games_start_with_nothing_but_a_double_click() {
     let shot = play(&folder);
     assert_eq!(shot.width(), 20);
     assert_eq!(shot.pixel(10, 10), [0x33, 0x66, 0x99, 0xff]);
+}
+
+#[test]
+fn games_get_the_words_after_their_commands_double_dash() {
+    let folder = folder(
+        "arguments",
+        &[
+            ("conf.luau", CONF),
+            (
+                "main.luau",
+                "local wg = require('@wingine')
+                local background = wg.arguments()[1] or '#336699'
+                function draw() wg.graphics.clear(background) end",
+            ),
+        ],
+    );
+    let mut run = Command::new(env!("CARGO_BIN_EXE_wingine"));
+    run.arg(folder.join("source")).args(["--", "#993366"]);
+    assert_eq!(
+        play_with(&folder, run).pixel(10, 10),
+        [0x99, 0x33, 0x66, 0xff]
+    );
+
+    export(&folder);
+    let executable = folder
+        .join("shipped")
+        .join(format!("tiny{}", std::env::consts::EXE_SUFFIX));
+    let mut shipped = Command::new(&executable);
+    shipped.args(["--", "#669933"]);
+    assert_eq!(
+        play_with(&folder, shipped).pixel(10, 10),
+        [0x66, 0x99, 0x33, 0xff],
+        "an exported game started from a command"
+    );
+    assert_eq!(
+        play(&folder).pixel(10, 10),
+        [0x33, 0x66, 0x99, 0xff],
+        "and none, by a double-click"
+    );
 }
 
 #[test]
