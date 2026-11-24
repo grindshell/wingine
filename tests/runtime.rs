@@ -8631,6 +8631,130 @@ mod gui {
     }
 
     #[test]
+    fn a_progress_bar_shows_its_hover_text_while_the_pointer_is_over_it() {
+        let mut simulation = interface(
+            "gui_progress_hover",
+            "",
+            "ui:panel({ side = 'left', size = 250 }, function(ui)
+                ui:progress(0.25, 'Plain')
+                ui:progress(0.5, { label = 'Charge', hover = '50 of 100' })
+                ui:progress(1, { text = 'Full', label = 'Tank' })
+                ui:progress(0.5, { label = 'Narrow', width = 40 })
+            end)",
+        );
+        // Found by its text, or by its label in place of it.
+        assert!(simulation.gui_rect("Plain").is_some());
+        assert!(simulation.gui_rect("Tank").is_some());
+        assert!(simulation.gui_rect("Full").is_none());
+        // As wide as the room left, or as asked, if less than egui's least.
+        let plain = simulation.gui_rect("Plain").unwrap();
+        let narrow = simulation.gui_rect("Narrow").unwrap();
+        assert!(plain.w > 200.0, "{plain:?}");
+        assert!((narrow.w - 40.0).abs() < 1.0, "{narrow:?}");
+        // Its hover text shows once the pointer has been still over it a moment, and goes when
+        // the pointer leaves.
+        let charge = simulation.gui_rect("Charge").unwrap();
+        assert!(simulation.gui_rect("50 of 100").is_none());
+        let [x, y] = [charge.x + charge.w / 2.0, charge.y + charge.h / 2.0];
+        simulation.move_mouse(x, y);
+        simulation.run_frames(60);
+        let hover = simulation
+            .gui_rect("50 of 100")
+            .expect("the hover text shows");
+        let under = hover.y - (charge.y + charge.h);
+        assert!(
+            (0.0..30.0).contains(&under) && hover.x < x,
+            "under the bar: {hover:?} {charge:?}"
+        );
+        simulation.move_mouse(x, y + 200.0);
+        simulation.run_frames(10);
+        assert!(simulation.gui_rect("50 of 100").is_none());
+    }
+
+    #[test]
+    fn a_grid_that_knows_its_columns_gives_its_last_the_rest_of_each_row() {
+        let mut simulation = interface(
+            "gui_grid_columns",
+            "",
+            "ui:panel({ side = 'left', size = 250 }, function(ui)
+                ui:separator()
+                ui:grid({ name = 'filled', columns = 2 }, function(ui)
+                    for _, name in { 'Short', 'A good deal longer' } do
+                        ui:label(name)
+                        ui:progress(0.5, { label = name .. ' bar', width = ui:available_size() })
+                        ui:end_row()
+                    end
+                end)
+                ui:grid('unknown', function(ui)
+                    ui:label('Plain')
+                    ui:label('Narrow')
+                    ui:end_row()
+                end)
+            end)",
+        );
+        // From the frame after the first, which doesn't yet know its columns' widths.
+        simulation.run_frames(2);
+        let short = simulation.gui_rect("Short bar").unwrap();
+        let long = simulation.gui_rect("A good deal longer bar").unwrap();
+        assert_eq!(short.x, long.x, "they line up after the longer name");
+        assert!(
+            (short.x + short.w - 242.0).abs() < 2.0,
+            "to the panel's edge, less its margin: {short:?}"
+        );
+        assert!((long.w - short.w).abs() < 1.0, "{short:?} {long:?}");
+        // A grid told nothing is as before.
+        assert!(simulation.gui_rect("Narrow").unwrap().w < 100.0);
+    }
+
+    #[test]
+    fn a_grid_refuses_columns_that_arent_a_whole_number() {
+        for (grid, message) in [
+            (
+                "{ name = 'g', columns = 0 }",
+                "a grid's columns are a whole number",
+            ),
+            (
+                "{ name = 'g', columns = 1.5 }",
+                "a grid's columns are a whole number",
+            ),
+            ("{ name = 'g', rows = 2 }", "a grid's options are"),
+            ("{ columns = 2 }", "a grid's options need its `name`"),
+        ] {
+            let main = format!("function gui(ui: Ui)\nui:grid({grid}, function() end)\nend");
+            let folder = game(
+                "gui_grid_option",
+                &[("conf.luau", WINDOW), ("main.luau", &main)],
+            );
+            let mut simulation = simulation(&folder);
+            simulation.run_frames(2);
+            let error = simulation.game().error().expect("the game stopped");
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_progress_bar_refuses_what_it_doesnt_take() {
+        for (bar, message) in [
+            ("{ tooltip = 'No' }", "a progress bar's options are"),
+            (
+                "{ width = -1 }",
+                "a progress bar's width is a number of points",
+            ),
+            ("3", "a progress bar takes its text or a table of options"),
+        ] {
+            let main = format!("function gui(ui: Ui)\nui:progress(0.5, {bar})\nend");
+            let folder = game(
+                "gui_progress_option",
+                &[("conf.luau", WINDOW), ("main.luau", &main)],
+            );
+            let mut simulation = simulation(&folder);
+            simulation.run_frames(2);
+            let error = simulation.game().error().expect("the game stopped");
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
+
+    #[test]
     fn sprites_show_in_the_interface() {
         let folder = game(
             "gui_sprite",

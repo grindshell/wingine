@@ -474,7 +474,8 @@
 //! - Containers: `ui:window(title or { title, x, y, width, height, resizable, collapsible }, fn)`,
 //!   `ui:panel(side or { side, size, resizable }, fn)`, `ui:horizontal(fn)`, `ui:vertical(fn)`,
 //!   `ui:group(fn)`, `ui:collapsing(title, fn)`, `ui:scroll(fn)` or
-//!   `ui:scroll({ stick_to_bottom }, fn)`, `ui:grid(name, fn)` with `ui:end_row()`,
+//!   `ui:scroll({ stick_to_bottom }, fn)`, `ui:grid(name or { name, columns }, fn)` with
+//!   `ui:end_row()`, whose last column has the rest of each row once it knows its `columns`,
 //!   `ui:enabled(enabled, fn)`, and `ui:modal(name, fn)`, a box over everything that must be
 //!   answered, which returns whether the player asked to be rid of it.
 //! - Text: `ui:label(text, color)`, `ui:heading(text)`, `ui:monospace(text)` and `ui:small(text)`.
@@ -489,7 +490,8 @@
 //!   as wide as there's room for, its text, whether typing changed it, and where its cursor is
 //!   (`{ line, column, offset, anchor }`); with `tab`, Tab stays in it, typing a tab (`true`) or
 //!   indenting by that many spaces, every line selected a level, and Shift+Tab unindents;
-//!   `ui:progress(fraction, text)` and `ui:sprite(sprite, tint, width, height)` show them.
+//!   `ui:progress(fraction, text or { text, hover, label, width })`, whose `hover` shows under
+//!   the bar while the pointer is over it, and `ui:sprite(sprite, tint, width, height)` show them.
 //! - `ui:canvas(label or { label, width, height }, fn)`, a canvas as big as given or as all the
 //!   room its container has left, calls `fn(paint, input)`: `paint` paints it, in points from its
 //!   top-left corner, clipped to it, with `paint:size()`, `paint:line(x1, y1, x2, y2, color,

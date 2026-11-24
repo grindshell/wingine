@@ -674,6 +674,27 @@ export type TextInputOptions = {
     hint: string?,
 }
 
+--- A bar, for `ui:progress`.
+export type ProgressOptions = {
+    --- Text on the bar.
+    text: string?,
+    --- Text shown under the bar while the pointer is over it.
+    hover: string?,
+    --- What tests and screen readers find it by, in place of its text. Nothing shows it.
+    label: string?,
+    --- Its width in points. By default, all the room left across, at least 96.
+    width: number?,
+}
+
+--- A grid, for `ui:grid`.
+export type GridOptions = {
+    --- Tells it apart from other grids. Required.
+    name: string,
+    --- How many columns it has, so that its last has the rest of each row. By default, it
+    --- doesn't know, and the last is as wide as what it holds.
+    columns: number?,
+}
+
 --- How `ui:scroll` scrolls.
 export type ScrollOptions = {
     --- Whether it keeps to its end as more is added, while it's scrolled there. By default,
@@ -1441,7 +1462,8 @@ declare extern type Ui with
     --- a click outside it.
     function modal(self, name: string, contents: (Ui) -> ()): boolean
     --- Lines what `contents` adds up in columns, a row at a time: `ui:end_row()` ends each.
-    function grid(self, name: string, contents: (Ui) -> ()): ()
+    --- Told how many `columns` it has, its last has the rest of each row.
+    function grid(self, grid: string | GridOptions, contents: (Ui) -> ()): ()
     --- Ends a row of a grid.
     function end_row(self): ()
     --- Greys out what `contents` adds, which can't be used, unless `enabled`.
@@ -1475,8 +1497,9 @@ declare extern type Ui with
     --- A field of many lines of text, as wide as there's room for: returns its text after any
     --- typing, whether that changed it, and where its cursor is, once it has had one.
     function text_edit(self, text: string, options: TextEditOptions?): (string, boolean, TextCursor?)
-    --- A bar filled `fraction` of the way, from 0 to 1, with `text` on it.
-    function progress(self, fraction: number, text: string?): ()
+    --- A bar filled `fraction` of the way, from 0 to 1, with its text on it, or with options:
+    --- text on it, text shown while the pointer is over it, what tests find it by, and its width.
+    function progress(self, fraction: number, bar: (string | ProgressOptions)?): ()
     --- Shows `sprite`, its colors multiplied by `tint`, at `width` by `height` points, or its own
     --- size.
     function sprite(self, sprite: Sprite, tint: Color?, width: number?, height: number?): ()

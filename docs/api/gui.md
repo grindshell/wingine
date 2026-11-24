@@ -227,18 +227,31 @@ end
 ### `ui:grid`
 
 ```lua
-ui:grid(name: string, contents: (Ui) -> ())
+ui:grid(grid: string | GridOptions, contents: (Ui) -> ())
 ui:end_row()
 ```
 
 Lines what `contents` adds up in columns, a row at a time, with `ui:end_row()` after each row.
-`name` tells it apart from other grids.
+`grid` is its name, which tells it apart from other grids, or a table of its `name` and
+`columns`, how many columns it has. A column is as wide as the widest thing in it, but once a grid
+knows how many columns it has, its last has the rest of each row: [`ui:available_size`](#uiavailable_size)
+there says how much, as for a bar that runs to the edge. A grid's first frame doesn't yet know how
+wide its other columns are, so that room is right from the frame after.
 
 ```lua
 ui:grid("stats", function(ui)
     for _, stat in { "attack", "defense" } do
         ui:label(stat)
         ui:monospace(tostring(stats[stat]))
+        ui:end_row()
+    end
+end)
+
+-- Names, and bars that line up after them and run to the edge.
+ui:grid({ name = "skills", columns = 2 }, function(ui)
+    for _, skill in skills do
+        ui:label(skill.name)
+        ui:progress(skill.xp / skill.needed, { width = ui:available_size() })
         ui:end_row()
     end
 end)
@@ -483,10 +496,21 @@ A script reads the cursor and can't move it.
 ### `ui:progress`
 
 ```lua
-ui:progress(fraction: number, text: string?)
+ui:progress(fraction: number, bar: (string | ProgressOptions)?)
 ```
 
-A bar filled `fraction` of the way, from 0 to 1, with `text` on it if given.
+A bar filled `fraction` of the way, from 0 to 1. `bar` is the text on it, or a table with any of:
+
+| Option | What it does | Default |
+|---|---|---|
+| `text` | Text on the bar. | None |
+| `hover` | Text shown under the bar while the pointer is over it, as for the numbers behind it. | None |
+| `label` | What [tests](testing.md#the-interface) and screen readers find it by, in place of its text. Nothing shows it. | Its text |
+| `width` | Its width, in points, as for a bar in a column of a [grid](#uigrid), which has no room left to fill. | All the room left across, at least 96 |
+
+```lua
+ui:progress(xp / needed, { label = "Fishing", hover = `{xp} / {needed}`, width = 60 })
+```
 
 ### `ui:sprite`
 

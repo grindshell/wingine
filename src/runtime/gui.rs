@@ -644,10 +644,22 @@ fn add_containers(methods: &mut Methods<'_, '_>) {
         shown.inner?;
         Ok(dismissed)
     });
-    methods.add("grid", |lua, ui, (name, f): (String, Function)| {
-        egui::Grid::new(name)
-            .show(ui, |ui| call::<()>(lua, ui, &f))
-            .inner
+    methods.add("grid", |lua, ui, (grid, f): (Value, Function)| {
+        let (name, options) = named(grid, "grid", "name")?;
+        let mut grid = egui::Grid::new(name);
+        if let Some(options) = &options {
+            check_options(options, "grid", &["name", "columns"])?;
+            // Knowing how many there are, egui gives the last the rest of each row.
+            if let Some(columns) = options.get::<Option<f64>>("columns")? {
+                if !(columns >= 1.0 && columns.fract() == 0.0 && columns <= f64::from(u16::MAX)) {
+                    return Err(mlua::Error::runtime(format!(
+                        "a grid's columns are a whole number, at least 1, not {columns}"
+                    )));
+                }
+                grid = grid.num_columns(columns as usize);
+            }
+        }
+        grid.show(ui, |ui| call::<()>(lua, ui, &f)).inner
     });
     methods.add("end_row", |_, ui, ()| {
         ui.end_row();
@@ -916,12 +928,57 @@ fn add_widgets(methods: &mut Methods<'_, '_>) {
     );
     methods.add(
         "progress",
-        |_, ui, (fraction, text): (f32, Option<String>)| {
+        |_, ui, (fraction, bar): (f32, Option<Value>)| {
+            // Its text, or a table of options holding it.
+            let mut text = None;
+            let mut hover = None;
+            let mut label = None;
+            let mut width = None;
+            match bar {
+                None | Some(Value::Nil) => {}
+                Some(Value::String(given)) => text = Some(given.to_str()?.to_owned()),
+                Some(Value::Table(options)) => {
+                    check_options(
+                        &options,
+                        "progress bar",
+                        &["text", "hover", "label", "width"],
+                    )?;
+                    text = options.get::<Option<String>>("text")?;
+                    hover = options.get::<Option<String>>("hover")?;
+                    label = options.get::<Option<String>>("label")?;
+                    width = size_option(&options, "progress bar", "width")?;
+                }
+                Some(other) => {
+                    return Err(mlua::Error::runtime(format!(
+                        "a progress bar takes its text or a table of options, not {}",
+                        other.type_name()
+                    )));
+                }
+            }
             let mut bar = egui::ProgressBar::new(fraction);
             if let Some(text) = text {
                 bar = bar.text(text);
             }
-            ui.add(bar);
+            // Otherwise all the room left across, but never less than egui's 96 points.
+            if let Some(width) = width {
+                bar = bar.desired_width(width);
+            }
+            let response = ui.add(bar);
+            // Named by its label in place of its text, as egui names it, with how full it is.
+            if let Some(label) = label {
+                response.widget_info(|| {
+                    let mut info = egui::WidgetInfo::labeled(
+                        egui::Role::ProgressIndicator,
+                        response.enabled(),
+                        label.as_str(),
+                    );
+                    info.value = Some((f64::from(fraction.clamp(0.0, 1.0)) * 100.0).floor());
+                    info
+                });
+            }
+            if let Some(hover) = hover {
+                response.on_hover_text(hover);
+            }
             Ok(())
         },
     );
