@@ -23,9 +23,21 @@
 //! many bursts an emitter made, and `particles.wait_until_gone()`, written in Luau, waits until
 //! none are left. `particles.draw_3d()` draws the sparks as billboards in the 3D view the game
 //! began last.
+//!
+//! Lists cross in one call: `emitter:burst_each({ x1, y1, x2, y2 }, count)` bursts at each
+//! point of an array, and `particles.positions()` returns where every particle is, as a buffer
+//! of `x` and `y` for each, 32-bit floats:
+//!
+//! ```lua
+//! local at = particles.positions()
+//! for offset = 0, buffer.len(at) - 8, 8 do
+//!     local x, y = buffer.readf32(at, offset), buffer.readf32(at, offset + 4)
+//! end
+//! ```
 
 use wingine_native::{
-    BillboardDraw, Class, Color, Context, Library, Rect, Registry, Result, Size, Sprite, Vec3,
+    BillboardDraw, Buffer, Class, Color, Context, Error, Library, Rect, Registry, Result, Size,
+    Sprite, Vec3,
 };
 
 /// How long a particle lives, in seconds.
@@ -174,6 +186,16 @@ impl Library for Particles {
             .function("count", |particles, _, ()| {
                 Ok(particles.live.len() + particles.sparks.len())
             })
+            // Where every particle is: `x` then `y` for each, as 32-bit floats.
+            .function("positions", |particles, _, ()| {
+                let mut bytes = Vec::with_capacity(particles.live.len() * 8);
+                for particle in &particles.live {
+                    for axis in particle.position {
+                        bytes.extend_from_slice(&axis.to_le_bytes());
+                    }
+                }
+                Ok(Buffer(bytes))
+            })
             .function("draw", |particles, call, ()| {
                 let canvas = call.canvas()?;
                 for particle in &particles.live {
@@ -209,6 +231,20 @@ impl Library for Particles {
                 "burst",
                 |particles, emitter, _, (x, y, count): (f32, f32, u32)| {
                     particles.burst([x, y], count, emitter.color);
+                    emitter.bursts += 1;
+                    Ok(())
+                },
+            )
+            // A burst of `count` at each of `points`, an array of `x` then `y` for each.
+            .method(
+                "burst_each",
+                |particles, emitter, _, (points, count): (Vec<f32>, u32)| {
+                    if !points.len().is_multiple_of(2) {
+                        return Err(Error::new("points are an x and a y each"));
+                    }
+                    for point in points.chunks_exact(2) {
+                        particles.burst([point[0], point[1]], count, emitter.color);
+                    }
                     emitter.bursts += 1;
                     Ok(())
                 },

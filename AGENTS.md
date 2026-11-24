@@ -418,6 +418,9 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
 - Native libraries reach the engine only through the ABI, getting the same lent services scripts
   do. Hooks run in the order libraries are listed. Drawing many sprites goes through one
   `draw_sprites` call, since each call from Luau into a library costs far more than a sprite.
+  Lists cross in one call too: arrays, whose values the library reads as arguments of the call at
+  indices past the script's own (`ITEMS`), and buffers, whose bytes are copied, since mlua lends
+  no pointer to them.
   Errors cross as strings (`set_error`, `Status::ERROR`), and panics never unwind into the engine.
   Change the ABI only by adding to the end of `Host` and bumping `ABI_MINOR`; anything else bumps
   `ABI_MAJOR`.

@@ -36,8 +36,9 @@ use core::{
 
 pub const ABI_MAJOR: u16 = 0;
 /// 1: the first version. 2: [`Host::draw_sprites`]. 3: 3D: meshes, vectors, and views drawn
-/// in, from [`Host::create_mesh`] on. 4: [`Host::set_blend`].
-pub const ABI_MINOR: u16 = 4;
+/// in, from [`Host::create_mesh`] on. 4: [`Host::set_blend`]. 5: lists: buffers and arrays, from
+/// [`Host::arg_buffer`] on.
+pub const ABI_MINOR: u16 = 5;
 
 /// The name of the function a library exports, an [`Entry`].
 pub const ENTRY_SYMBOL: &[u8] = b"wingine_library\0";
@@ -740,4 +741,39 @@ pub struct Host {
     /// frame ends, it's set again, or the game's `draw` returns. Fails if `blend` isn't one of
     /// [`Blend`]'s. Since 0.4.
     pub set_blend: unsafe extern "C" fn(canvas: *mut Canvas, blend: Blend) -> Status,
+
+    /// Reads a Luau `buffer`: a copy of its `len` bytes as they are now, at `out` until the call
+    /// returns, which [`Host::write_buffer`] doesn't change. Since 0.5.
+    pub arg_buffer: unsafe extern "C" fn(
+        call: *mut Call,
+        index: usize,
+        out: *mut *const u8,
+        len: *mut usize,
+    ) -> Status,
+    /// Writes the `len` bytes at `bytes` into the `buffer` that's the argument at `index`, from
+    /// its byte `offset` on, for the script to read once the call returns. Fails if they'd reach
+    /// past the buffer's end, since a buffer never grows. Since 0.5.
+    pub write_buffer: unsafe extern "C" fn(
+        call: *mut Call,
+        index: usize,
+        offset: usize,
+        bytes: *const u8,
+        len: usize,
+    ) -> Status,
+    /// Returns a new `buffer` to scripts, holding a copy of the `len` bytes at `bytes`. Since 0.5.
+    pub push_buffer: unsafe extern "C" fn(call: *mut Call, bytes: *const u8, len: usize),
+    /// Reads an array: a table's values from 1 to its length. They become `count` arguments of
+    /// the call, at indices from `first` on, past every index the script's own arguments have,
+    /// to read with the functions that read arguments, this one among them for an array of
+    /// arrays. An error reading one names the argument the array is, and the value's place in
+    /// it. Since 0.5.
+    pub arg_array: unsafe extern "C" fn(
+        call: *mut Call,
+        index: usize,
+        first: *mut usize,
+        count: *mut usize,
+    ) -> Status,
+    /// Makes the last `count` results one result: an array of them, in the order they were
+    /// returned. Fails if there aren't `count` results. Since 0.5.
+    pub push_array: unsafe extern "C" fn(call: *mut Call, count: usize) -> Status,
 }

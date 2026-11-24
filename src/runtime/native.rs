@@ -510,19 +510,38 @@ struct Call<'a> {
     function: &'a str,
     first_position: usize,
     args: &'a [mlua::Value],
+    /// The values of the arrays the library read from the arguments, one array after another,
+    /// which it reads as arguments at indices from [`ITEMS`] on.
+    items: Vec<mlua::Value>,
+    /// Where each of those arrays' values are in `items`.
+    arrays: Vec<Array>,
     context: *mut Context,
     canvas: *mut Canvas,
     results: Vec<mlua::Value>,
-    /// Strings, sprites and objects the library reads from the arguments, borrowed until the call
-    /// returns.
+    /// Strings, buffers, sprites and objects the library reads from the arguments, borrowed until
+    /// the call returns.
     borrowed: Vec<Borrowed>,
     /// The first error from returning a result.
     error: Option<mlua::Error>,
 }
 
+/// The index a library reads the first of a call's `items` at: past any a script's own arguments
+/// have, so an argument the script left out still reads as `nil`.
+const ITEMS: usize = usize::MAX / 2 + 1;
+
+/// An array a library read from a call's arguments.
+struct Array {
+    /// The index of the argument it is, which is among `items` if it's in an array itself.
+    argument: usize,
+    /// Its values' places in the call's `items`.
+    items: std::ops::Range<usize>,
+}
+
 #[allow(dead_code, reason = "held only to keep what they borrow alive")]
 enum Borrowed {
     String(mlua::BorrowedStr),
+    /// A copy of a buffer's bytes: mlua lends no pointer to a buffer's own.
+    Bytes(Vec<u8>),
     Sprite(mlua::UserDataRef<Sprite>),
     Mesh(mlua::UserDataRef<Mesh>),
     Object(mlua::UserDataRef<NativeObject>),
@@ -531,7 +550,11 @@ enum Borrowed {
 
 impl Call<'_> {
     fn arg(&self, index: usize) -> mlua::Value {
-        self.args.get(index).cloned().unwrap_or(mlua::Value::Nil)
+        let value = match index.checked_sub(ITEMS) {
+            Some(item) => self.items.get(item),
+            None => self.args.get(index),
+        };
+        value.cloned().unwrap_or(mlua::Value::Nil)
     }
 
     /// Converts the argument at `index` to `T`, or sets the error saying why it can't.
@@ -542,11 +565,20 @@ impl Call<'_> {
             .ok()
     }
 
-    /// Sets the error for an argument that isn't what the library expects.
-    fn bad_argument(&self, index: usize, cause: mlua::Error) {
+    /// Sets the error for an argument that isn't what the library expects. A value in an array
+    /// is named by its place in it, and the array by the argument it is.
+    fn bad_argument(&self, mut index: usize, mut cause: mlua::Error) {
+        while let Some(item) = index.checked_sub(ITEMS) {
+            let Some(array) = self.arrays.iter().find(|a| a.items.contains(&item)) else {
+                break;
+            };
+            let place = item - array.items.start + 1;
+            cause = mlua::Error::external(format!("item {place}: {cause}"));
+            index = array.argument;
+        }
         let err = mlua::Error::BadArgument {
             to: Some(self.function.to_owned()),
-            pos: self.first_position + index,
+            pos: self.first_position.saturating_add(index),
             name: None,
             cause: Arc::new(cause),
         };
@@ -581,6 +613,8 @@ fn invoke(
             function,
             first_position,
             args,
+            items: Vec::new(),
+            arrays: Vec::new(),
             context,
             canvas,
             results: Vec::new(),
@@ -686,6 +720,11 @@ static HOST: abi::Host = abi::Host {
     draw_meshes: host::draw_meshes,
     draw_billboards: host::draw_billboards,
     set_blend: host::set_blend,
+    arg_buffer: host::arg_buffer,
+    write_buffer: host::write_buffer,
+    push_buffer: host::push_buffer,
+    arg_array: host::arg_array,
+    push_array: host::push_array,
 };
 
 /// The functions in [`HOST`]. Each trusts the library to pass what the ABI says: pointers the
@@ -1529,6 +1568,119 @@ mod host {
         };
         // SAFETY: the library's promise.
         unsafe { canvas_mut(canvas) }.set_blend(blend);
+        abi::Status::OK
+    }
+
+    pub(super) unsafe extern "C" fn arg_buffer(
+        call: *mut abi::Call,
+        index: usize,
+        out: *mut *const u8,
+        len: *mut usize,
+    ) -> abi::Status {
+        // SAFETY: the library's promise.
+        let call = unsafe { call_mut(call) };
+        let Some(buffer) = call.convert::<mlua::Buffer>(index) else {
+            return abi::Status::ERROR;
+        };
+        let bytes = buffer.to_vec();
+        // The bytes stay where they are as the vector moves into what the call keeps.
+        // SAFETY: the library's promise.
+        unsafe {
+            out.write(bytes.as_ptr());
+            len.write(bytes.len());
+        }
+        call.borrowed.push(Borrowed::Bytes(bytes));
+        abi::Status::OK
+    }
+
+    pub(super) unsafe extern "C" fn write_buffer(
+        call: *mut abi::Call,
+        index: usize,
+        offset: usize,
+        bytes: *const u8,
+        len: usize,
+    ) -> abi::Status {
+        // SAFETY: the library's promise.
+        let call = unsafe { call_mut(call) };
+        let Some(buffer) = call.convert::<mlua::Buffer>(index) else {
+            return abi::Status::ERROR;
+        };
+        if offset.checked_add(len).is_none_or(|end| end > buffer.len()) {
+            let message = format!(
+                "{len} bytes from byte {offset} reach past the end of a buffer of {}",
+                buffer.len()
+            );
+            call.bad_argument(index, mlua::Error::external(message));
+            return abi::Status::ERROR;
+        }
+        // SAFETY: the library's promise.
+        buffer.write_bytes(offset, unsafe { slice(bytes, len) });
+        abi::Status::OK
+    }
+
+    pub(super) unsafe extern "C" fn push_buffer(
+        call: *mut abi::Call,
+        bytes: *const u8,
+        len: usize,
+    ) {
+        // SAFETY: the library's promise.
+        let call = unsafe { call_mut(call) };
+        // SAFETY: the library's promise.
+        let buffer = call.lua.create_buffer(unsafe { slice(bytes, len) });
+        call.push(buffer.map(mlua::Value::Buffer));
+    }
+
+    pub(super) unsafe extern "C" fn arg_array(
+        call: *mut abi::Call,
+        index: usize,
+        first: *mut usize,
+        count: *mut usize,
+    ) -> abi::Status {
+        // SAFETY: the library's promise.
+        let call = unsafe { call_mut(call) };
+        let Some(table) = call.convert::<mlua::Table>(index) else {
+            return abi::Status::ERROR;
+        };
+        let start = call.items.len();
+        for place in 1..=table.raw_len() {
+            match table.raw_get(place) {
+                Ok(value) => call.items.push(value),
+                Err(err) => {
+                    call.items.truncate(start);
+                    call.bad_argument(index, err);
+                    return abi::Status::ERROR;
+                }
+            }
+        }
+        let items = start..call.items.len();
+        // SAFETY: the library's promise.
+        unsafe {
+            first.write(ITEMS + start);
+            count.write(items.len());
+        }
+        call.arrays.push(Array {
+            argument: index,
+            items,
+        });
+        abi::Status::OK
+    }
+
+    pub(super) unsafe extern "C" fn push_array(call: *mut abi::Call, count: usize) -> abi::Status {
+        // SAFETY: the library's promise.
+        let call = unsafe { call_mut(call) };
+        if call.error.is_some() {
+            // A result that failed isn't among the results, and its error is the call's.
+            return abi::Status::OK;
+        }
+        let Some(start) = call.results.len().checked_sub(count) else {
+            super::set_error(format!(
+                "an array of {count} results, of which there are {}",
+                call.results.len()
+            ));
+            return abi::Status::ERROR;
+        };
+        let array = call.lua.create_sequence_from(call.results.drain(start..));
+        call.push(array.map(mlua::Value::Table));
         abi::Status::OK
     }
 }

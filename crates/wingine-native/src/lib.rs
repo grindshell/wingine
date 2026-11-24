@@ -70,6 +70,12 @@
 //! than a call from Luau for each. [`Canvas::set_blend`] mixes what it draws next with what's
 //! under it as a [`Blend`] says, as `graphics.set_blend` does.
 //!
+//! Lists cross in one call too, either way. A `Vec` of anything that converts is an array to
+//! scripts, a table of the values from 1. A [`Buffer`] is the bytes of a Luau `buffer`, for
+//! lists packed as the library and its scripts agree, which scripts read with `buffer.readf32`
+//! and the like: [`Call::buffer`] borrows a script's, and [`Call::write_buffer`] writes into
+//! it, so a script can keep one buffer for the library to fill each frame.
+//!
 //! Libraries draw in 3D views as scripts do: [`Canvas::begin_3d`] begins one, and
 //! [`Canvas::draw_meshes`] and [`Canvas::draw_billboards`] draw batches of a mesh or a sprite in
 //! the view begun last, whether the library or the script began it. Meshes come from
@@ -96,7 +102,7 @@ pub use wingine_abi::{
     Rect, Size, SpriteDraw, Vec3, View3d,
 };
 
-pub use call::{Call, FromArg, FromArgs, IntoResult, IntoResults};
+pub use call::{Buffer, Call, FromArg, FromArgs, IntoResult, IntoResults};
 pub use services::{Canvas, Context, Mesh, Sprite};
 
 /// A native library: its state for one game, and how it registers its functions, classes and

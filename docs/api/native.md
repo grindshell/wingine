@@ -17,7 +17,8 @@ Everything below is in the crate's root, `wingine_native`. For its full Rust doc
 
 - [Defining a library](#defining-a-library): [`Library`](#library), [`export!`](#export),
   [`Registry`](#registry), [`Class`](#class), [`ClassRegistry`](#classregistry)
-- [Calls](#calls): [`Call`](#call), [converting arguments and results](#converting-arguments-and-results)
+- [Calls](#calls): [`Call`](#call), [converting arguments and results](#converting-arguments-and-results),
+  [lists](#lists)
 - [The engine's services](#the-engines-services): [`Context`](#context), [`Canvas`](#canvas),
   [`Sprite`](#sprite), [`SpriteDraw`](#spritedraw), [`Color`](#color), [`Rect`](#rect)
 - [3D](#3d): [`Mesh`](#mesh), [`Vec3`](#vec3), [`Affine3`](#affine3),
@@ -275,6 +276,46 @@ registry.function("merge", |_, call, ()| {
 });
 ```
 
+#### `call.buffer` and `call.write_buffer`
+
+```rust
+fn buffer(&self, index: usize) -> Result<&[u8]>;
+fn write_buffer(&mut self, index: usize, offset: usize, bytes: &[u8]) -> Result<()>;
+```
+
+`buffer` is the bytes of the Luau `buffer` at argument `index`, as they are when it's called,
+borrowed until the call returns. `write_buffer` writes `bytes` into that buffer, from its byte
+`offset` on, for the script to read once the call returns; it's an error if they'd reach past the
+buffer's end, since a buffer never grows. What `buffer` returned is a copy, which a later
+`write_buffer` doesn't change.
+
+A script that asks for the same [list](#lists) every frame can keep one buffer and have the
+library fill it, so nothing is allocated:
+
+```rust
+// particles.read_positions(into): writes every particle's x and y into `into`, 32-bit floats,
+// and returns how many particles that is.
+registry.function("read_positions", |particles, call, ()| {
+    particles.bytes.clear();
+    for particle in &particles.live {
+        particles.bytes.extend_from_slice(&particle.x.to_le_bytes());
+        particles.bytes.extend_from_slice(&particle.y.to_le_bytes());
+    }
+    call.write_buffer(0, 0, &particles.bytes)?;
+    Ok(particles.live.len())
+});
+```
+
+```lua
+local at = buffer.create(8 * 1000)
+
+function update()
+    for index = 0, particles.read_positions(at) - 1 do
+        local x, y = buffer.readf32(at, index * 8), buffer.readf32(at, index * 8 + 4)
+    end
+end
+```
+
 #### `call.context`
 
 ```rust
@@ -311,6 +352,8 @@ it, from 1.
 | `Mesh` | A mesh, such as from `graphics.new_cube`. The library gets a handle of its own. |
 | `Vec3` | A vector, `vector.create(x, y, z)`. |
 | `Option<T>` | `nil` or a missing argument as `None`, anything else as `T`. |
+| `Vec<T>` | An array: a table's values from 1 to its length, each converted to `T`. An error in one names its place in the array. |
+| [`Buffer`](#lists) | A `buffer`. The library gets a copy of its bytes. |
 
 Objects of the library's classes are read with [`call.object`](#callobject-and-callobject_mut).
 
@@ -327,6 +370,8 @@ many results, or `()` for none.
 | `Mesh` | A mesh scripts can draw. |
 | `Vec3` | A vector. |
 | `Option<T>` | `nil` for `None`. |
+| `Vec<T>` | An array: a new table of the values, from 1. |
+| [`Buffer`](#lists) | A new `buffer` of its bytes. |
 | A type implementing `Class` | A new object, which scripts own. |
 
 For more than 8 arguments or results, or optional arguments with defaults, implement `FromArgs` or
@@ -360,6 +405,59 @@ impl FromArgs for Fire {
 // In `register`:
 registry.function("fire", |bullets, _, fire: Fire| bullets.fire(fire));
 ```
+
+### Lists
+
+```rust
+pub struct Buffer(pub Vec<u8>);
+```
+
+A call from Luau costs the same however much it carries, so a list crosses in one call, as an
+array or as a buffer, either way.
+
+- **An array** is a `Vec` of anything that converts: numbers, strings, vectors, objects, other
+  arrays. Scripts pass and get a table of the values from 1. It suits short lists, and ones of
+  strings or objects: each value is converted on its way, and a result is a new table.
+- **A `Buffer`** is the bytes of a Luau [`buffer`](https://luau.org/library#buffer-library): a
+  list of anything, packed as the library and its scripts agree, such as 12 bytes for each of a
+  thousand units. It suits long lists of numbers, and ones asked for every frame: the bytes are
+  copied across whole, and scripts read them where they are, with `buffer.readf32` and the like.
+  Luau's buffers hold numbers little-endian, as `to_le_bytes` writes them and `from_le_bytes`
+  reads them. A `Vec<u8>` is an array of numbers, not a buffer.
+
+```rust
+// particles.near(x, y, radius): the ids of the particles within `radius` of a point.
+registry.function("near", |particles, _, (x, y, radius): (f32, f32, f32)| {
+    let near = particles.live.iter().filter(|particle| particle.within(x, y, radius));
+    Ok(near.map(|particle| particle.id).collect::<Vec<u32>>())
+});
+
+// particles.positions(): every particle's x and y, 32-bit floats.
+registry.function("positions", |particles, _, ()| {
+    let mut bytes = Vec::with_capacity(particles.live.len() * 8);
+    for particle in &particles.live {
+        bytes.extend_from_slice(&particle.x.to_le_bytes());
+        bytes.extend_from_slice(&particle.y.to_le_bytes());
+    }
+    Ok(Buffer(bytes))
+});
+```
+
+```lua
+for _, id in particles.near(160, 90, 24) do
+    print(id)
+end
+
+local at = particles.positions()
+for offset = 0, buffer.len(at) - 8, 8 do
+    local x, y = buffer.readf32(at, offset), buffer.readf32(at, offset + 4)
+end
+```
+
+As an argument, a `Buffer` is a copy of the script's; [`call.buffer`](#callbuffer-and-callwrite_buffer)
+borrows the bytes instead, and `call.write_buffer` writes into the script's buffer, which saves
+making a new one each call. Nothing describes a buffer's layout to both sides: the library and
+its scripts each say where every field is, and must agree.
 
 ## The engine's services
 

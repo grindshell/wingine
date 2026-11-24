@@ -36,7 +36,8 @@ them. The [README](../README.md#luau-and-rust-compared) compares the two.
 
 What a library doesn't speed up is calling it. A call from Luau into a library costs more than
 drawing a sprite, so a library pays off when each call does a lot of work: "move every bullet",
-not "move this bullet".
+not "move this bullet". The same goes for what a script reads back: a library hands over a
+[list](api/native.md#lists) in one call, as an array or a `buffer`, rather than a value a call.
 
 ## How a game loads one
 

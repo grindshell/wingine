@@ -66,6 +66,30 @@ impl Call {
         check(status).map(|()| object.cast())
     }
 
+    /// The bytes of the Luau `buffer` at `index`, as they are now, borrowed until the call
+    /// returns. They're a copy, which [`Call::write_buffer`] doesn't change.
+    pub fn buffer(&self, index: usize) -> Result<&[u8]> {
+        let (mut bytes, mut len) = (ptr::null(), 0);
+        // SAFETY: valid for as long as `self` is.
+        let status = unsafe { (host().arg_buffer)(self.raw, index, &mut bytes, &mut len) };
+        check(status)?;
+        if len == 0 {
+            return Ok(&[]);
+        }
+        // SAFETY: the engine keeps the bytes until the call returns, and never changes them.
+        Ok(unsafe { std::slice::from_raw_parts(bytes, len) })
+    }
+
+    /// Writes `bytes` into the Luau `buffer` at `index`, from its byte `offset` on, for the
+    /// script to read once the call returns. It fails if they'd reach past the buffer's end: a
+    /// buffer never grows.
+    pub fn write_buffer(&mut self, index: usize, offset: usize, bytes: &[u8]) -> Result<()> {
+        // SAFETY: valid for as long as `self` is, and the bytes for the call.
+        let status =
+            unsafe { (host().write_buffer)(self.raw, index, offset, bytes.as_ptr(), bytes.len()) };
+        check(status)
+    }
+
     /// The engine's services, lent to scripts while the game loads and in `update`.
     pub fn context(&mut self) -> Result<&mut Context> {
         if self.context.is_none() {
@@ -215,6 +239,43 @@ impl<T: FromArg> FromArg for Option<T> {
     }
 }
 
+/// The bytes of a Luau `buffer`: a list of anything, packed as the library and its scripts
+/// agree, which crosses in one call however long it is. As an argument, it's a copy of the
+/// script's buffer; as a result, a new buffer. Scripts read and write one with Luau's `buffer`
+/// library, whose numbers are little-endian, as `f32::to_le_bytes` and the like write them.
+///
+/// A list of values that convert on their own, such as numbers or strings, can cross as a
+/// `Vec` of them instead, which scripts see as an array.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Buffer(pub Vec<u8>);
+
+impl From<Vec<u8>> for Buffer {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
+
+impl FromArg for Buffer {
+    /// A copy of the buffer's bytes. [`Call::buffer`] borrows them instead.
+    fn from_arg(call: &Call, index: usize) -> Result<Self> {
+        call.buffer(index).map(|bytes| Self(bytes.to_vec()))
+    }
+}
+
+impl<T: FromArg> FromArg for Vec<T> {
+    /// The argument, an array: a table's values from 1 to its length, each converted to `T`.
+    fn from_arg(call: &Call, index: usize) -> Result<Self> {
+        let (mut first, mut count) = (0, 0);
+        // SAFETY: valid for as long as `call` is.
+        let status = unsafe { (host().arg_array)(call.raw, index, &mut first, &mut count) };
+        check(status)?;
+        // The engine made the array's values arguments of the call, from `first` on.
+        (first..first + count)
+            .map(|item| T::from_arg(call, item))
+            .collect()
+    }
+}
+
 /// What a function's arguments convert to: one value, a tuple of them, or `()` for none.
 /// Arguments beyond those are ignored.
 pub trait FromArgs: Sized {
@@ -349,6 +410,27 @@ impl<T: IntoResult> IntoResult for Option<T> {
                 Ok(())
             }
         }
+    }
+}
+
+impl IntoResult for Buffer {
+    /// A new Luau `buffer` of the bytes.
+    fn push(self, call: &Call) -> Result<()> {
+        // SAFETY: valid for as long as `call` is, and the engine copies the bytes.
+        unsafe { (host().push_buffer)(call.raw, self.0.as_ptr(), self.0.len()) };
+        Ok(())
+    }
+}
+
+impl<T: IntoResult> IntoResult for Vec<T> {
+    /// An array of the values: a table of them, from 1.
+    fn push(self, call: &Call) -> Result<()> {
+        let count = self.len();
+        for value in self {
+            value.push(call)?;
+        }
+        // SAFETY: valid for as long as `call` is.
+        check(unsafe { (host().push_array)(call.raw, count) })
     }
 }
 

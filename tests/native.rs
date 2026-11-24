@@ -17,8 +17,9 @@ use wingine::{
     runtime::{self, LibraryConfig, LuauGame},
 };
 use wingine_native::{
-    Affine3, BillboardDraw, Blend, Call, Camera3d, Class, Color, Context, Library, Lighting, Mesh,
-    MeshDraw, MeshVertex, Rect, Registry, Result, Size, Sprite, SpriteDraw, Vec3, View3d, abi,
+    Affine3, BillboardDraw, Blend, Buffer, Call, Camera3d, Class, Color, Context, Library,
+    Lighting, Mesh, MeshDraw, MeshVertex, Rect, Registry, Result, Size, Sprite, SpriteDraw, Vec3,
+    View3d, abi,
 };
 
 /// Writes a game made of `files`, each a path in the game's folder and its contents, to a fresh
@@ -212,6 +213,37 @@ impl Library for Probe {
                 canvas.draw_meshes(&mesh, None, &meshes)?;
                 canvas.draw_billboards(&probe.white, &[billboard])
             })
+            .function("reversed", |_, _, bytes: Buffer| {
+                Ok(Buffer(bytes.0.into_iter().rev().collect()))
+            })
+            .function("byte_sum", |_, call, ()| {
+                let bytes = call.buffer(0)?;
+                Ok(bytes.iter().map(|&byte| u32::from(byte)).sum::<u32>())
+            })
+            // probe.fill_bytes(buffer, offset, byte, count)
+            .function("fill_bytes", |_, call, ()| {
+                let (offset, byte, count): (usize, u8, usize) =
+                    (call.arg(1)?, call.arg(2)?, call.arg(3)?);
+                call.write_buffer(0, offset, &vec![byte; count])
+            })
+            .function("doubled", |_, _, numbers: Vec<f64>| {
+                Ok(numbers.into_iter().map(|n| n * 2.0).collect::<Vec<_>>())
+            })
+            .function("words", |_, _, text: String| {
+                Ok(text.split(' ').map(str::to_owned).collect::<Vec<_>>())
+            })
+            // How many words each row has, and the argument after them, which may be missing.
+            .function(
+                "lengths",
+                |_, _, (rows, after): (Vec<Vec<String>>, Option<u32>)| {
+                    Ok((rows.iter().map(Vec::len).collect::<Vec<_>>(), after))
+                },
+            )
+            .function("grid", |_, _, (rows, columns): (u32, u32)| {
+                Ok((0..rows)
+                    .map(|row| (0..columns).map(|column| row * 10 + column).collect())
+                    .collect::<Vec<Vec<u32>>>())
+            })
             .function("new_counter", |_, _, start: i64| Ok(Counter(start)))
             .function("total", |_, call, ()| {
                 let (a, b) = (call.object::<Counter>(0)?, call.object::<Counter>(1)?);
@@ -313,6 +345,94 @@ fn functions_convert_their_arguments_and_results() {
         (20.0, 20.0),
         "`new` had the context"
     );
+}
+
+#[test]
+fn buffers_cross_both_ways_and_are_written_in_place() {
+    let mut simulation = probe_game(
+        "buffers",
+        "local bytes = buffer.create(4)
+        buffer.writeu32(bytes, 0, 0x04030201)
+        reversed = buffer.readu32(probe.reversed(bytes), 0)
+        kept = buffer.readu32(bytes, 0)
+        empty = buffer.len(probe.reversed(buffer.create(0)))
+        probe.fill_bytes(bytes, 1, 9, 2)
+        filled = buffer.readu32(bytes, 0)
+        sum = probe.byte_sum(bytes)
+        probe.fill_bytes(bytes, 4, 9, 0)
+        local _, err = pcall(probe.fill_bytes, bytes, 3, 9, 2)
+        past_the_end = tostring(err)
+        unchanged = buffer.readu32(bytes, 0)
+        _, err = pcall(probe.reversed, 'text')
+        not_a_buffer = tostring(err)",
+    );
+    assert_eq!(simulation.eval::<u32>("reversed"), 0x0102_0304);
+    assert_eq!(
+        simulation.eval::<u32>("kept"),
+        0x0403_0201,
+        "an argument is a copy"
+    );
+    assert_eq!(simulation.eval::<u32>("empty"), 0);
+    assert_eq!(simulation.eval::<u32>("filled"), 0x0409_0901);
+    assert_eq!(simulation.eval::<u32>("sum"), 1 + 9 + 9 + 4);
+    assert_eq!(simulation.eval::<u32>("unchanged"), 0x0409_0901);
+    for (name, message) in [
+        ("past_the_end", "bad argument #1 to `probe.fill_bytes`"),
+        (
+            "past_the_end",
+            "2 bytes from byte 3 reach past the end of a buffer of 4",
+        ),
+        ("not_a_buffer", "bad argument #1 to `probe.reversed`"),
+    ] {
+        let err: String = simulation.eval(name);
+        assert!(err.contains(message), "{name}: {err}");
+    }
+}
+
+#[test]
+fn arrays_cross_both_ways() {
+    let mut simulation = probe_game(
+        "arrays",
+        "doubled = table.concat(probe.doubled({ 1, 2.5, 3 }), ' ')
+        none = #probe.doubled({})
+        words = table.concat(probe.words('a bc d'), ',')
+        local counts, after = probe.lengths({ { 'a' }, {}, { 'b', 'c' } })
+        lengths = table.concat(counts, ' ')
+        nothing_after = after == nil
+        counts, after = probe.lengths({}, 7)
+        seven_after = after
+        local grid = probe.grid(2, 3)
+        cells = `{#grid} {#grid[1]} {grid[2][3]}`
+        local _, err = pcall(probe.doubled, { 1, true, 3 })
+        not_a_number = tostring(err)
+        _, err = pcall(probe.lengths, { { 'a' }, { 'b', {} } }, 7)
+        nested = tostring(err)
+        _, err = pcall(probe.doubled, 5)
+        not_an_array = tostring(err)",
+    );
+    assert_eq!(simulation.eval::<String>("doubled"), "2 5 6");
+    assert_eq!(simulation.eval::<u32>("none"), 0);
+    assert_eq!(simulation.eval::<String>("words"), "a,bc,d");
+    assert_eq!(simulation.eval::<String>("lengths"), "1 0 2");
+    assert!(
+        simulation.eval::<bool>("nothing_after"),
+        "an array's values don't stand in for an argument left out"
+    );
+    assert_eq!(simulation.eval::<u32>("seven_after"), 7);
+    assert_eq!(simulation.eval::<String>("cells"), "2 3 12");
+    for (name, message) in [
+        ("not_a_number", "bad argument #1 to `probe.doubled`"),
+        ("not_a_number", "`probe.doubled`: item 2: error converting"),
+        ("nested", "bad argument #1 to `probe.lengths`"),
+        (
+            "nested",
+            "`probe.lengths`: item 2: item 2: error converting",
+        ),
+        ("not_an_array", "bad argument #1 to `probe.doubled`"),
+    ] {
+        let err: String = simulation.eval(name);
+        assert!(err.contains(message), "{name}: {err}");
+    }
 }
 
 #[test]
@@ -933,6 +1053,10 @@ fn libraries_load_from_the_games_native_folder() {
                 sparks = particles.new_emitter('#ffffff')
                 sparks:burst(10, 10, 12)
                 sparks:burst_3d(vector.zero, 5)
+                sparks:burst_each({ 2, 3, 18, 17 }, 3)
+                local at = particles.positions()
+                places = buffer.len(at) / 8
+                last = `{buffer.readf32(at, 17 * 8)} {buffer.readf32(at, 17 * 8 + 4)}`
                 gone = false
                 wg.spawn(function()
                     particles.wait_until_gone()
@@ -955,8 +1079,11 @@ fn libraries_load_from_the_games_native_folder() {
     fs::copy(&file, native.join(file.file_name().unwrap())).unwrap();
 
     let mut simulation = simulation(&folder);
-    assert_eq!(simulation.eval::<u32>("sparks:bursts()"), 2);
-    assert_eq!(simulation.eval::<usize>("particles.count()"), 17);
+    assert_eq!(simulation.eval::<u32>("sparks:bursts()"), 3);
+    assert_eq!(simulation.eval::<usize>("particles.count()"), 23);
+    // An array in, of two points, and a buffer out, of every particle's place.
+    assert_eq!(simulation.eval::<u32>("places"), 18);
+    assert_eq!(simulation.eval::<String>("last"), "18 17");
     simulation.step();
     let image = simulation.screenshot().unwrap();
     let lit = image.pixels().chunks(4).filter(|p| p[0] > 0).count();
