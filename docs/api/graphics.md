@@ -483,7 +483,8 @@ wg.graphics.time_library_calls(on: boolean)
 ```
 
 Times the calls scripts make into native libraries, for [`frame_stats`](#graphicsframe_stats)'
-`libraries`, from the next frame on, or stops. Timing a call reads the clock twice, which costs
+`libraries`, from the next frame on, or from this one if no library has been called in it yet,
+or stops. Timing a call reads the clock twice, which costs
 about a tenth of what the call does, so calls aren't timed until a game asks: a benchmark turns
 it on, and a game being played leaves it off. Calls are counted, and hooks timed, either way.
 

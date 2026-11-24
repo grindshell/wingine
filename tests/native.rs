@@ -1010,6 +1010,27 @@ fn frame_stats_say_what_each_library_cost_the_frame_before() {
         2.0 * nap <= draw_calls && draw_calls <= draw,
         "{draw_calls} {draw}"
     );
+
+    // Asked before a frame's first call, as between frames, that frame's calls are all timed.
+    fs::write(
+        folder.join("main.luau"),
+        "local wg = require('@wingine')
+        times = {}
+        function update()
+            wg.graphics.time_library_calls(true)
+            slow.nap()
+            -- False for a frame whose calls weren't timed.
+            table.insert(times, wg.graphics.frame_stats().libraries.slow.update.call_time or false)
+        end",
+    )
+    .unwrap();
+    let mut simulation = self::simulation(&folder);
+    simulation.run_frames(2);
+    assert!(
+        simulation.eval::<bool>("times[1] == false"),
+        "no frame came before the first"
+    );
+    assert!(simulation.eval::<f32>("times[2]") >= nap);
 }
 
 /// A library that says what it registers, for its definitions.

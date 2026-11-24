@@ -455,10 +455,16 @@ impl Times {
 }
 
 impl Timing {
-    /// Times calls from scripts into libraries from now on, or stops.
+    /// Times calls from scripts into libraries from now on, or stops. The frame it's asked in
+    /// counts as timed if no call has been made in it yet, as when it's asked between frames.
     pub(crate) fn set_time_calls(&self, on: bool) {
         self.time_calls.set(on);
-        self.timed.set(self.timed.get() && on);
+        let uncalled = || {
+            let libraries = self.libraries.borrow();
+            let mut frames = libraries.iter().map(|times| times.current.get());
+            frames.all(|stats| stats.update.calls == 0 && stats.draw.calls == 0)
+        };
+        self.timed.set(on && (self.timed.get() || uncalled()));
     }
 
     /// What each library cost the frame before, by its table's name, and whether that frame's
