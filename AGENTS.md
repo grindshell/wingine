@@ -117,7 +117,8 @@ references in their own right.
   TrueType and OpenType fonts (`Face`, `FaceSize`) rasterize a glyph with `ab_glyph` the first time
   layout asks for it, into pages written by `GlyphPages` (`renderer.rs`), whose writes land before
   the frame's draw calls. `scaled` rasterizes a vector font again at the new size, keeping the
-  last few sizes. Layout rounds the pen to whole pixels and kerns by the `kern` table. The
+  last few sizes. Layout rounds the pen to whole pixels and kerns by the `kern` table.
+  `Font::wrap` gives the lines it breaks text into as strings, by the line it put each glyph on. The
   built-in font is drawn as rows of `#` in `default_font.rs`.
 - `src/gui.rs`: egui over games (`wingine::gui` re-exports egui). egui blends in sRGB, so it
   renders through a non-sRGB view of the frame and samples engine textures through non-sRGB views

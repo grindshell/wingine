@@ -995,6 +995,9 @@ declare extern type Font with
     function measure(self, text: string): (number, number)
     --- Returns the distance from one line of text to the next.
     function line_height(self): number
+    --- Returns the lines `font:layout` breaks `text` into to fit `max_width`, as strings, for a
+    --- game that draws each line itself. A line leaves out the spaces it was broken at.
+    function wrap(self, text: string, max_width: number): { string }
     --- Lays `text` out once, to draw with `graphics.draw_text_layout`. With `max_width`, lines wrap
     --- between words to fit it.
     function layout(self, text: string, max_width: number?): TextLayout

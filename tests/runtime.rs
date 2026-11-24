@@ -1949,7 +1949,12 @@ fn fonts_measure_and_scale() {
             width, height = font:measure('Hi')
             big_width = font:scaled(2):measure('Hi')
             line_height = font:line_height()
-            zero_scale_fails = not pcall(function() font:scaled(0) end)",
+            zero_scale_fails = not pcall(function() font:scaled(0) end)
+            -- Wide enough for two of the words, a space between them.
+            local lines = font:wrap('one two\\nthree', (font:measure('one two')))
+            fitting = table.concat(lines, '|')
+            lines = font:wrap('one two three', (font:measure('one two')))
+            wrapped = table.concat(lines, '|')",
         )],
     );
     let mut simulation = simulation(&folder);
@@ -1958,6 +1963,8 @@ fn fonts_measure_and_scale() {
     assert_eq!(height, simulation.eval::<f32>("line_height"));
     assert_eq!(simulation.eval::<f32>("big_width"), width * 2.0);
     assert!(simulation.eval::<bool>("zero_scale_fails"));
+    assert_eq!(simulation.eval::<String>("fitting"), "one two|three");
+    assert_eq!(simulation.eval::<String>("wrapped"), "one two|three");
 }
 
 /// A bitmap font of two glyphs in cells 2x3: `a` covers its cell, and `b` its left column.

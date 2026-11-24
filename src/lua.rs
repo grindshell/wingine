@@ -75,7 +75,8 @@
 //!   `fade_in` (seconds); the rest, or all of them for `nil`, keep their defaults.
 //! - A [`Font`] is userdata with the methods `font:scaled(scale)` (a TrueType or OpenType font
 //!   rasterized at the new size, so it stays sharp), `font:measure(text)` (its width and height),
-//!   `font:line_height()` and `font:layout(text, max_width)`, which lays text out once to draw a
+//!   `font:line_height()`, `font:wrap(text, max_width)`, the lines text breaks into to fit a
+//!   width, as strings, and `font:layout(text, max_width)`, which lays text out once to draw a
 //!   little at a time, wrapping it to `max_width` if given. The
 //!   [`TextLayout`] it returns has `layout:size()`, `layout:glyph_count()` and
 //!   `layout:line_count()`.
@@ -1126,6 +1127,12 @@ impl mlua::UserData for Font {
             Ok((width, height))
         });
         methods.add_method("line_height", |_, font, ()| Ok(font.line_height()));
+        methods.add_method(
+            "wrap",
+            |_, font, (text, max_width): (mlua::LuaString, f32)| {
+                Ok(font.wrap(&text.to_str()?, max_width))
+            },
+        );
         methods.add_method(
             "layout",
             |_, font, (text, max_width): (mlua::LuaString, Option<f32>)| {

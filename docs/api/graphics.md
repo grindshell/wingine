@@ -1100,6 +1100,26 @@ Lays `text` out once, to draw with [`graphics.draw_text_layout`](#graphicsdraw_t
 `max_width`, lines wrap between words to fit it, and a word too long for a line of its own breaks
 between letters. `"\n"` always starts a new line.
 
+#### `font:wrap`
+
+```lua
+font:wrap(text: string, max_width: number): { string }
+```
+
+Returns the lines [`font:layout`](#fontlayout) breaks `text` into to fit `max_width`, as strings,
+for a game that draws each line itself: farther apart than the font's own line height, each in a
+color of its own, or with something at the end of the first. A line leaves out the spaces it was
+broken at, and the `"\n"` that ended it, and keeps everything else, so text that fits comes back
+as its lines.
+
+```lua
+-- A note in a panel, its lines 3 pixels farther apart than the font spaces them.
+local spacing = font:line_height() + 3
+for index, line in font:wrap(note, panel.width - 8) do
+    wg.graphics.draw_text(font, line, panel.x + 4, panel.y + 4 + (index - 1) * spacing, "#ffffff")
+end
+```
+
 ### `TextLayout`
 
 #### `layout:size`

@@ -320,6 +320,14 @@ impl Font {
         }
     }
 
+    /// The lines [`Font::layout`] breaks `text` into to fit `max_width`, as text: for a game
+    /// that draws each line itself, spaced or colored as it likes. A line leaves out the spaces
+    /// it was broken at, and the `\n` that ended it, and keeps the rest, so text that fits is
+    /// its lines as they are.
+    pub fn wrap(&self, text: &str, max_width: f32) -> Vec<String> {
+        self.glyphs().wrap(self.scale, text, max_width)
+    }
+
     /// The width and height of `text` drawn without wrapping. The width runs to the right edge of
     /// the last glyph's ink on the longest line; the height is a whole number of lines.
     pub fn measure(&self, text: &str) -> [f32; 2] {
@@ -841,6 +849,42 @@ trait Glyphs {
         cursor.finish()
     }
 
+    /// The lines [`Glyphs::lay_out`] breaks `text` into to fit `max_width`, as text, by where it
+    /// places each glyph, so the two never disagree. What has no ink goes with the line it's on,
+    /// but for the spaces a line was broken at, which are on neither.
+    fn wrap(&self, scale: f32, text: &str, max_width: f32) -> Vec<String> {
+        // The line of each glyph with ink, in the text's order.
+        let mut placed = Vec::new();
+        let (_, count) = self.lay_out(scale, text, Some(max_width), |_, line| placed.push(line));
+        let mut placed = placed.into_iter();
+        let mut lines = vec![String::new(); count];
+        let mut line = 0;
+        for (i, paragraph) in text.split('\n').enumerate() {
+            if i > 0 {
+                line += 1;
+            }
+            // What's come since the last glyph with ink: spaces, mostly.
+            let mut pending = String::new();
+            for c in paragraph.chars() {
+                let inked = !c.is_control() && self.glyph(c).is_some_and(|glyph| glyph.has_ink());
+                if !inked {
+                    pending.push(c);
+                    continue;
+                }
+                let on = placed.next().unwrap_or(line);
+                if on != line {
+                    line = on;
+                    pending.clear();
+                }
+                lines[line].push_str(&pending);
+                lines[line].push(c);
+                pending.clear();
+            }
+            lines[line].push_str(&pending);
+        }
+        lines
+    }
+
     /// Places the glyphs of `word` from the pen, breaking it between characters to fit
     /// `max_width` if it's `breakable`. Whether it had any ink, and how far it moved the pen, as
     /// [`Glyphs::measure`] measures it.
@@ -1176,6 +1220,32 @@ mod tests {
             "the space is dropped"
         );
         assert_eq!(size, [7.0, 12.0]);
+    }
+
+    #[test]
+    fn wrapping_gives_the_lines_layout_breaks_text_into() {
+        let wrap = |text: &str, max_width: f32| metrics().wrap(1.0, text, max_width);
+        // As `lines_wrap_between_words` lays it out.
+        assert_eq!(wrap("ab cd", 17.0), ["ab cd"]);
+        assert_eq!(wrap("ab cd", 16.0), ["ab", "cd"], "the space is dropped");
+        // Text that fits is its lines as they are, spaces and all.
+        assert_eq!(wrap("  a  b \n\nc", 100.0), ["  a  b ", "", "c"]);
+        assert_eq!(wrap("", 100.0), [""]);
+        // A word longer than a line breaks between characters, as it's laid out.
+        assert_eq!(wrap("a abcdef b", 10.0), ["a", "ab", "cd", "ef", "b"]);
+        // However many spaces a line is broken at, none of them are on either line.
+        assert_eq!(wrap("ab   cd", 10.0), ["ab", "cd"]);
+        // A no-break space is no place to break, and is kept.
+        assert_eq!(wrap("a\u{a0}b c", 10.0), ["a\u{a0}b", "c"]);
+        // Every line is as wide as layout made it, and there are as many.
+        let text = "ab cd e fgab\ncd  abc d";
+        for max_width in [7.0, 10.0, 16.0, 30.0] {
+            let lines = wrap(text, max_width);
+            let (_, size, count) = lay_out(text, Some(max_width));
+            assert_eq!(lines.len(), count, "{max_width} wide");
+            let widest = lines.iter().map(|line| lay_out(line, None).1[0]);
+            assert_eq!(widest.fold(0.0, f32::max), size[0], "{max_width} wide");
+        }
     }
 
     #[test]
