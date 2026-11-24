@@ -122,6 +122,23 @@ impl Call {
 /// A type an argument converts to, as the engine's own functions convert it.
 pub trait FromArg: Sized {
     fn from_arg(call: &Call, index: usize) -> Result<Self>;
+
+    /// The Luau type scripts pass for it, as the library's definitions say it: `any`, unless
+    /// the type says otherwise.
+    fn luau_type() -> String {
+        "any".into()
+    }
+}
+
+/// The Luau type of what may be an `inner` or `nil`.
+fn optional(inner: String) -> String {
+    if inner == "any" || inner.ends_with('?') {
+        inner
+    } else if inner.contains("->") || inner.contains('|') {
+        format!("({inner})?")
+    } else {
+        format!("{inner}?")
+    }
 }
 
 /// Reads an argument with `read`, which writes it to the value it's given.
@@ -141,17 +158,29 @@ impl FromArg for bool {
     fn from_arg(call: &Call, index: usize) -> Result<Self> {
         read(call, index, host().arg_boolean)
     }
+
+    fn luau_type() -> String {
+        "boolean".into()
+    }
 }
 
 impl FromArg for f64 {
     fn from_arg(call: &Call, index: usize) -> Result<Self> {
         read(call, index, host().arg_number)
     }
+
+    fn luau_type() -> String {
+        "number".into()
+    }
 }
 
 impl FromArg for f32 {
     fn from_arg(call: &Call, index: usize) -> Result<Self> {
         f64::from_arg(call, index).map(|value| value as f32)
+    }
+
+    fn luau_type() -> String {
+        "number".into()
     }
 }
 
@@ -171,6 +200,10 @@ macro_rules! integer_args {
                     check(status)?;
                     Ok(value.try_into().expect("in range"))
                 }
+
+                fn luau_type() -> String {
+                    "number".into()
+                }
             }
         )*
     };
@@ -185,6 +218,10 @@ impl FromArg for String {
         let text = unsafe { std::str::from_utf8_unchecked(text.as_bytes()) };
         Ok(text.to_owned())
     }
+
+    fn luau_type() -> String {
+        "string".into()
+    }
 }
 
 impl FromArg for Color {
@@ -192,12 +229,20 @@ impl FromArg for Color {
     fn from_arg(call: &Call, index: usize) -> Result<Self> {
         read(call, index, host().arg_color)
     }
+
+    fn luau_type() -> String {
+        "Color".into()
+    }
 }
 
 impl FromArg for Rect {
     /// The argument, a table `{ x, y, width, height }`.
     fn from_arg(call: &Call, index: usize) -> Result<Self> {
         read(call, index, host().arg_rect)
+    }
+
+    fn luau_type() -> String {
+        "Rect".into()
     }
 }
 
@@ -209,6 +254,10 @@ impl FromArg for Sprite {
         check(status)?;
         Ok(Sprite::copy(sprite))
     }
+
+    fn luau_type() -> String {
+        "Sprite".into()
+    }
 }
 
 impl FromArg for Mesh {
@@ -219,12 +268,20 @@ impl FromArg for Mesh {
         check(status)?;
         Ok(Mesh::copy(mesh))
     }
+
+    fn luau_type() -> String {
+        "Mesh".into()
+    }
 }
 
 impl FromArg for Vec3 {
     /// The argument, a Luau vector such as `vector.create(1, 2, 3)`.
     fn from_arg(call: &Call, index: usize) -> Result<Self> {
         read(call, index, host().arg_vector)
+    }
+
+    fn luau_type() -> String {
+        "vector".into()
     }
 }
 
@@ -236,6 +293,10 @@ impl<T: FromArg> FromArg for Option<T> {
             return Ok(None);
         }
         T::from_arg(call, index).map(Some)
+    }
+
+    fn luau_type() -> String {
+        optional(T::luau_type())
     }
 }
 
@@ -260,6 +321,10 @@ impl FromArg for Buffer {
     fn from_arg(call: &Call, index: usize) -> Result<Self> {
         call.buffer(index).map(|bytes| Self(bytes.to_vec()))
     }
+
+    fn luau_type() -> String {
+        "buffer".into()
+    }
 }
 
 impl<T: FromArg> FromArg for Vec<T> {
@@ -274,23 +339,42 @@ impl<T: FromArg> FromArg for Vec<T> {
             .map(|item| T::from_arg(call, item))
             .collect()
     }
+
+    fn luau_type() -> String {
+        format!("{{ {} }}", T::luau_type())
+    }
 }
 
 /// What a function's arguments convert to: one value, a tuple of them, or `()` for none.
 /// Arguments beyond those are ignored.
 pub trait FromArgs: Sized {
     fn from_args(call: &Call) -> Result<Self>;
+
+    /// The Luau type of each argument, in order, for the library's definitions, or `None` if
+    /// the type doesn't say, as one that reads its arguments by hand doesn't unless it's
+    /// written to.
+    fn luau_types() -> Option<Vec<String>> {
+        None
+    }
 }
 
 impl FromArgs for () {
     fn from_args(_: &Call) -> Result<Self> {
         Ok(())
     }
+
+    fn luau_types() -> Option<Vec<String>> {
+        Some(Vec::new())
+    }
 }
 
 impl<T: FromArg> FromArgs for T {
     fn from_args(call: &Call) -> Result<Self> {
         T::from_arg(call, 0)
+    }
+
+    fn luau_types() -> Option<Vec<String>> {
+        Some(vec![T::luau_type()])
     }
 }
 
@@ -299,6 +383,10 @@ macro_rules! tuple_args {
         impl<$($name: FromArg),+> FromArgs for ($($name,)+) {
             fn from_args(call: &Call) -> Result<Self> {
                 Ok(($($name::from_arg(call, $index)?,)+))
+            }
+
+            fn luau_types() -> Option<Vec<String>> {
+                Some(vec![$($name::luau_type()),+])
             }
         }
     };
@@ -316,6 +404,12 @@ tuple_args!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7);
 /// A type a function returns to scripts.
 pub trait IntoResult {
     fn push(self, call: &Call) -> Result<()>;
+
+    /// The Luau type scripts get for it, as the library's definitions say it: `any`, unless
+    /// the type says otherwise.
+    fn luau_type() -> String {
+        "any".into()
+    }
 }
 
 impl IntoResult for bool {
@@ -323,6 +417,10 @@ impl IntoResult for bool {
         // SAFETY: valid for as long as `call` is.
         unsafe { (host().push_boolean)(call.raw, self) };
         Ok(())
+    }
+
+    fn luau_type() -> String {
+        "boolean".into()
     }
 }
 
@@ -332,11 +430,19 @@ impl IntoResult for f64 {
         unsafe { (host().push_number)(call.raw, self) };
         Ok(())
     }
+
+    fn luau_type() -> String {
+        "number".into()
+    }
 }
 
 impl IntoResult for f32 {
     fn push(self, call: &Call) -> Result<()> {
         f64::from(self).push(call)
+    }
+
+    fn luau_type() -> String {
+        "number".into()
     }
 }
 
@@ -353,6 +459,10 @@ macro_rules! integer_results {
                     }
                     Ok(())
                 }
+
+                fn luau_type() -> String {
+                    "number".into()
+                }
             }
         )*
     };
@@ -366,11 +476,19 @@ impl IntoResult for &str {
         unsafe { (host().push_string)(call.raw, abi::Str::new(self)) };
         Ok(())
     }
+
+    fn luau_type() -> String {
+        "string".into()
+    }
 }
 
 impl IntoResult for String {
     fn push(self, call: &Call) -> Result<()> {
         self.as_str().push(call)
+    }
+
+    fn luau_type() -> String {
+        "string".into()
     }
 }
 
@@ -380,6 +498,10 @@ impl IntoResult for Sprite {
         unsafe { (host().push_sprite)(call.raw, self.as_ptr()) };
         Ok(())
     }
+
+    fn luau_type() -> String {
+        "Sprite".into()
+    }
 }
 
 impl IntoResult for Mesh {
@@ -387,6 +509,10 @@ impl IntoResult for Mesh {
         // SAFETY: valid for as long as `call` is, and the engine copies the handle.
         unsafe { (host().push_mesh)(call.raw, self.as_ptr()) };
         Ok(())
+    }
+
+    fn luau_type() -> String {
+        "Mesh".into()
     }
 }
 
@@ -396,6 +522,10 @@ impl IntoResult for Vec3 {
         // SAFETY: valid for as long as `call` is.
         unsafe { (host().push_vector)(call.raw, self) };
         Ok(())
+    }
+
+    fn luau_type() -> String {
+        "vector".into()
     }
 }
 
@@ -411,6 +541,10 @@ impl<T: IntoResult> IntoResult for Option<T> {
             }
         }
     }
+
+    fn luau_type() -> String {
+        optional(T::luau_type())
+    }
 }
 
 impl IntoResult for Buffer {
@@ -419,6 +553,10 @@ impl IntoResult for Buffer {
         // SAFETY: valid for as long as `call` is, and the engine copies the bytes.
         unsafe { (host().push_buffer)(call.raw, self.0.as_ptr(), self.0.len()) };
         Ok(())
+    }
+
+    fn luau_type() -> String {
+        "buffer".into()
     }
 }
 
@@ -432,6 +570,10 @@ impl<T: IntoResult> IntoResult for Vec<T> {
         // SAFETY: valid for as long as `call` is.
         check(unsafe { (host().push_array)(call.raw, count) })
     }
+
+    fn luau_type() -> String {
+        format!("{{ {} }}", T::luau_type())
+    }
 }
 
 impl<T: Class> IntoResult for T {
@@ -443,22 +585,41 @@ impl<T: Class> IntoResult for T {
         unsafe { (host().push_object)(call.raw, class, object.cast()) };
         Ok(())
     }
+
+    /// The class's name.
+    fn luau_type() -> String {
+        T::NAME.into()
+    }
 }
 
 /// What a function returns to scripts: one value, a tuple of them, or `()` for none.
 pub trait IntoResults {
     fn push_all(self, call: &Call) -> Result<()>;
+
+    /// The Luau type of each result, in order, for the library's definitions, or `None` if the
+    /// type doesn't say.
+    fn luau_types() -> Option<Vec<String>> {
+        None
+    }
 }
 
 impl IntoResults for () {
     fn push_all(self, _: &Call) -> Result<()> {
         Ok(())
     }
+
+    fn luau_types() -> Option<Vec<String>> {
+        Some(Vec::new())
+    }
 }
 
 impl<T: IntoResult> IntoResults for T {
     fn push_all(self, call: &Call) -> Result<()> {
         self.push(call)
+    }
+
+    fn luau_types() -> Option<Vec<String>> {
+        Some(vec![T::luau_type()])
     }
 }
 
@@ -468,6 +629,10 @@ macro_rules! tuple_results {
             fn push_all(self, call: &Call) -> Result<()> {
                 $(self.$index.push(call)?;)+
                 Ok(())
+            }
+
+            fn luau_types() -> Option<Vec<String>> {
+                Some(vec![$($name::luau_type()),+])
             }
         }
     };

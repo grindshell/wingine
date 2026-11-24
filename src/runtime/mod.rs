@@ -580,7 +580,7 @@ use std::{
 use wingine_abi::Phase;
 
 use native::Natives;
-pub use native::link_library;
+pub use native::{LibraryDefinitions, link_library};
 #[cfg(target_arch = "wasm32")]
 use require::FilesRequirer as FileRequirer;
 
@@ -721,6 +721,16 @@ pub struct LibraryConfig {
     /// Whether the game runs without it if there's no such library. One that's there but fails to
     /// load is an error either way.
     pub optional: bool,
+}
+
+/// The definitions file of each native library the game in `folder` lists in its `conf.luau`, in
+/// order: what a language server checks the game's scripts against, as [`DEFINITIONS`] is for
+/// the engine's own API. `wingine definitions` writes them, each as `<library>.d.luau`. A library
+/// is asked what it registers, as when a game loads it, but no game is loaded, so this needs no
+/// window. Optional libraries that aren't there are left out.
+pub fn definitions(folder: impl AsRef<Path>) -> Result<Vec<LibraryDefinitions>> {
+    let folder = folder.as_ref();
+    native::definitions(folder, &config(folder)?.libraries)
 }
 
 /// The settings of the game in `folder`, from its `conf.luau` if it has one.

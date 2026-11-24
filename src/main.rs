@@ -6,6 +6,7 @@
 //! wingine test [--update] [--ignored] path/to/game [filter] [-- arguments...]
 //! wingine export path/to/game path/to/out
 //! wingine bake path/to/song.song.luau path/to/out.wav [section]
+//! wingine definitions [--check] path/to/game path/to/out
 //! wingine [-- arguments...]
 //! ```
 //!
@@ -15,11 +16,14 @@
 //! the tests declared `ignored`, which it otherwise leaves out. `export` makes a folder to
 //! ship, whose executable, a copy of this one, runs the game beside it when it's started without
 //! a folder, as by double-clicking. `bake` renders a song to a WAV file, once through, or one of
-//! its sections as a loop. Everything after the first `--` is the game's, which its scripts'
-//! `arguments()` returns. See the `runtime` module for what the folder holds, `runtime::testing`
-//! for tests, `runtime::export` for exports, and `music` for songs.
+//! its sections as a loop. `definitions` writes a definitions file of each native library the
+//! game lists, `<library>.d.luau`, for a language server to check the game's scripts against;
+//! with `--check`, it writes nothing, and fails if a file isn't what it would write. Everything
+//! after the first `--` is the game's, which its scripts' `arguments()` returns. See the
+//! `runtime` module for what the folder holds, `runtime::testing` for tests, `runtime::export`
+//! for exports, and `music` for songs.
 
-use std::{ffi::OsString, path::Path, process::ExitCode};
+use std::{ffi::OsString, fs, path::Path, process::ExitCode};
 
 use wingine::{
     music::Song,
@@ -29,7 +33,8 @@ use wingine::{
 const USAGE: &str = "usage: wingine [--watch] <game folder> [-- arguments...]
        wingine test [--update] [--ignored] <game folder> [filter] [-- arguments...]
        wingine export <game folder> <out folder>
-       wingine bake <song file> <out wav> [section]";
+       wingine bake <song file> <out wav> [section]
+       wingine definitions [--check] <game folder> <out folder>";
 
 /// Frames a second songs bake at.
 const BAKE_RATE: u32 = 48_000;
@@ -61,6 +66,12 @@ fn main() -> ExitCode {
         ([command, game, out], None) if command == "export" => return export(game, out),
         ([command, song, out, section @ ..], None) if command == "bake" && section.len() <= 1 => {
             return bake(song, out, section.first());
+        }
+        ([command, game, out], None) if command == "definitions" => {
+            return definitions(game, out, false);
+        }
+        ([command, flag, game, out], None) if command == "definitions" && flag == "--check" => {
+            return definitions(game, out, true);
         }
         ([flag, folder], arguments) if flag == "--watch" => {
             runtime::run_watching(folder, arguments.unwrap_or_default())
@@ -133,6 +144,55 @@ fn bake(song: &OsString, out: &OsString, section: Option<&OsString>) -> ExitCode
         }
     }
 }
+
+/// Writes the definitions file of each native library the game in `game` lists to the folder
+/// `out`, as `wingine definitions` does, saying what it wrote; or, to `check`, writes nothing,
+/// and fails unless each file is there and is what it would write.
+fn definitions(game: &OsString, out: &OsString, check: bool) -> ExitCode {
+    let all = match runtime::definitions(game) {
+        Ok(all) => all,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if all.is_empty() {
+        println!(
+            "{} lists no native libraries in its conf.luau",
+            Path::new(game).display()
+        );
+    }
+    let mut code = ExitCode::SUCCESS;
+    for definitions in all {
+        let path = Path::new(out).join(format!("{}.d.luau", definitions.library));
+        let result = if check {
+            // As checked out, which may have turned line endings into CRLF.
+            match fs::read_to_string(&path).map(|text| text.replace("\r\n", "\n")) {
+                Ok(text) if text == definitions.text => Ok("is up to date"),
+                Ok(_) => Err(format!(
+                    "isn't what the `{}` library says of itself: write it again with `wingine \
+                     definitions`",
+                    definitions.library
+                )),
+                Err(err) => Err(format!("couldn't be read: {err}")),
+            }
+        } else {
+            fs::create_dir_all(out)
+                .and_then(|()| fs::write(&path, &definitions.text))
+                .map(|()| "written")
+                .map_err(|err| format!("couldn't be written: {err}"))
+        };
+        match result {
+            Ok(done) => println!("{} {done}", path.display()),
+            Err(err) => {
+                eprintln!("error: {} {err}", path.display());
+                code = ExitCode::FAILURE;
+            }
+        }
+    }
+    code
+}
+
 /// The words a command gave the game, as strings for its scripts: what isn't Unicode in one
 /// becomes U+FFFD.
 fn game_arguments(args: &[OsString]) -> Vec<String> {

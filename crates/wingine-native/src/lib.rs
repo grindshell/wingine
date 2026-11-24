@@ -81,6 +81,12 @@
 //! the view begun last, whether the library or the script began it. Meshes come from
 //! [`Context::create_mesh`] or from scripts, and pass to and from them as [`Mesh`]es; Luau's
 //! vectors pass as [`Vec3`]s.
+//!
+//! A library says what its functions are as it registers them, so the engine can write a
+//! definitions file of it for a language server (`wingine definitions`), and nothing declares the
+//! library by hand. Each function's types are its closure's; [`Registry::named`] names its
+//! parameters and [`Registry::doc`] says what it does, and [`Registry::takes`] and
+//! [`Registry::returns`] say what the closure's types don't.
 
 mod call;
 mod services;
@@ -279,10 +285,119 @@ struct Instance<L> {
     classes: &'static Classes,
 }
 
+/// What a library's definitions say of a function or method: what the types of its closure say
+/// it takes and returns, and what the library says besides.
+struct Described {
+    name: String,
+    /// The Luau type of each parameter and each result, where the closure's types say.
+    params: Option<Vec<String>>,
+    results: Option<Vec<String>>,
+    /// The parameters' names.
+    names: Option<Vec<String>>,
+    /// Its parameters and its results as Luau writes them, said by hand in place of the above.
+    takes: Option<String>,
+    returns: Option<String>,
+    doc: String,
+}
+
+impl Described {
+    fn new<A: FromArgs, R: IntoResults>(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            params: A::luau_types(),
+            results: R::luau_types(),
+            names: None,
+            takes: None,
+            returns: None,
+            doc: String::new(),
+        }
+    }
+
+    /// Its parameters as Luau writes a function's, or what's wrong with their names.
+    fn params(&self) -> Result<String, String> {
+        if let Some(takes) = &self.takes {
+            return Ok(takes.clone());
+        }
+        let named = |names: &mut dyn Iterator<Item = String>, types: &[String]| {
+            let params: Vec<String> = names
+                .zip(types)
+                .map(|(name, kind)| format!("{name}: {kind}"))
+                .collect();
+            params.join(", ")
+        };
+        match (&self.params, &self.names) {
+            (Some(types), Some(names)) if types.len() != names.len() => Err(format!(
+                "`{}` takes {} arguments, and {} are named",
+                self.name,
+                types.len(),
+                names.len()
+            )),
+            (Some(types), Some(names)) => Ok(named(&mut names.iter().cloned(), types)),
+            (Some(types), None) => Ok(named(&mut (1..).map(|place| format!("arg{place}")), types)),
+            (None, Some(names)) => Ok(names
+                .iter()
+                .map(|name| format!("{name}: any"))
+                .collect::<Vec<_>>()
+                .join(", ")),
+            (None, None) => Ok("...: any".into()),
+        }
+    }
+
+    /// Its results as Luau writes what a function returns.
+    fn results(&self) -> String {
+        match (&self.returns, self.results.as_deref()) {
+            (Some(returns), _) => returns.clone(),
+            (None, None) => "...any".into(),
+            (None, Some([])) => "()".into(),
+            (None, Some([one])) => one.clone(),
+            (None, Some(many)) => format!("({})", many.join(", ")),
+        }
+    }
+}
+
+/// Changes what's said of the function or method registered last, `described`, and tells the
+/// engine with `send`, which takes its name, parameters, results and doc. A mistake is kept in
+/// `error`, to fail the registration.
+fn describe(
+    described: &mut Option<Described>,
+    error: &mut Option<String>,
+    change: impl FnOnce(&mut Described),
+    send: impl FnOnce(abi::Str, abi::Str, abi::Str, abi::Str),
+) {
+    let Some(described) = described else {
+        error.get_or_insert_with(|| {
+            "`named`, `takes`, `returns` and `doc` describe the function or method registered \
+             just before them, and none was"
+                .into()
+        });
+        return;
+    };
+    change(described);
+    match described.params() {
+        Ok(params) => send(
+            abi::Str::new(&described.name),
+            abi::Str::new(&params),
+            abi::Str::new(&described.results()),
+            abi::Str::new(&described.doc),
+        ),
+        Err(err) => {
+            error.get_or_insert(err);
+        }
+    }
+}
+
+fn names(names: &[&str]) -> Option<Vec<String>> {
+    Some(names.iter().map(|&name| name.to_owned()).collect())
+}
+
 /// Registers a library's functions, classes and hooks, in [`Library::register`].
 pub struct Registry<L> {
     raw: *mut abi::Registry,
     classes: Vec<(TypeId, *mut abi::Class)>,
+    /// The function registered last, for [`Registry::named`] and the like to describe.
+    described: Option<Described>,
+    /// The first mistake describing a function or method, which fails the registration.
+    error: Option<String>,
     _library: PhantomData<fn() -> L>,
 }
 
@@ -304,6 +419,82 @@ impl<L: Library> Registry<L> {
                 data(function),
             );
         }
+        self.described = Some(Described::new::<A, R>(name));
+        self.describe(|_| {})
+    }
+
+    /// Names the parameters of the function registered just before, for the library's
+    /// definitions, which otherwise call them `arg1`, `arg2` and so on. A name for each is
+    /// needed: any other number fails the library's registration.
+    pub fn named(&mut self, params: &[&str]) -> &mut Self {
+        self.describe(|described| described.names = names(params))
+    }
+
+    /// Says what the function registered just before takes, as Luau writes a function's
+    /// parameters, such as `into: buffer, count: number?`, in place of what its closure's types
+    /// say: for one that reads arguments by hand, as objects and buffers written into are.
+    pub fn takes(&mut self, params: &str) -> &mut Self {
+        self.describe(|described| described.takes = Some(params.to_owned()))
+    }
+
+    /// Says what the function registered just before returns, as Luau writes it, such as
+    /// `number`, `(number, string)` or `()`, in place of what its closure's type says.
+    pub fn returns(&mut self, results: &str) -> &mut Self {
+        self.describe(|described| described.returns = Some(results.to_owned()))
+    }
+
+    /// Says what the function registered just before does, for the library's definitions, where
+    /// a language server shows it.
+    pub fn doc(&mut self, doc: &str) -> &mut Self {
+        self.describe(|described| described.doc = doc.to_owned())
+    }
+
+    /// Declares a function the library's [Luau](Registry::luau) adds to its table, for the
+    /// library's definitions, which can't tell what that adds: its `params` and `results` as
+    /// Luau writes them, and what it does.
+    pub fn declare(&mut self, name: &str, params: &str, results: &str, doc: &str) -> &mut Self {
+        self.described = None;
+        // SAFETY: the strings are valid for the call.
+        unsafe {
+            (host().describe_function)(
+                self.raw,
+                abi::Str::new(name),
+                abi::Str::new(params),
+                abi::Str::new(results),
+                abi::Str::new(doc),
+            );
+        }
+        self
+    }
+
+    /// Has the library's definitions export the type `name`, defined as `definition`, a Luau
+    /// type such as `{ x: number, y: number }`, with `doc` saying what it is: a type its
+    /// functions' descriptions name.
+    pub fn declare_type(&mut self, name: &str, definition: &str, doc: &str) -> &mut Self {
+        self.described = None;
+        // SAFETY: the strings are valid for the call.
+        unsafe {
+            (host().declare_type)(
+                self.raw,
+                abi::Str::new(name),
+                abi::Str::new(definition),
+                abi::Str::new(doc),
+            );
+        }
+        self
+    }
+
+    fn describe(&mut self, change: impl FnOnce(&mut Described)) -> &mut Self {
+        let raw = self.raw;
+        describe(
+            &mut self.described,
+            &mut self.error,
+            change,
+            // SAFETY: the strings are valid for the call.
+            |name, params, results, doc| unsafe {
+                (host().describe_function)(raw, name, params, results, doc);
+            },
+        );
         self
     }
 
@@ -313,9 +504,12 @@ impl<L: Library> Registry<L> {
         let raw = unsafe { (host().add_class)(self.raw, abi::Str::new(T::NAME), drop_object::<T>) };
         // Adding a class twice fails the registration, so this is the only one for `T`.
         self.classes.push((TypeId::of::<T>(), raw));
+        self.described = None;
         ClassRegistry {
             raw,
-            _registry: PhantomData,
+            described: None,
+            error: &mut self.error,
+            _library: PhantomData,
             _class: PhantomData,
         }
     }
@@ -359,6 +553,7 @@ impl<L: Library> Registry<L> {
     /// `wait`, and functions it calls get the [`Context`], as they do while the game loads.
     /// `name` names it in errors.
     pub fn luau(&mut self, name: &str, source: &str) -> &mut Self {
+        self.described = None;
         // SAFETY: the strings are valid for the call.
         unsafe { (host().add_luau)(self.raw, abi::Str::new(name), abi::Str::new(source)) };
         self
@@ -368,6 +563,7 @@ impl<L: Library> Registry<L> {
     where
         F: Fn(&mut L, &mut Context, f32) -> Result<()> + Send + Sync + 'static,
     {
+        self.described = None;
         // SAFETY: the data is what the callback expects.
         unsafe { (host().add_update_hook)(self.raw, phase, call_update_hook::<L, F>, data(hook)) };
         self
@@ -377,6 +573,7 @@ impl<L: Library> Registry<L> {
     where
         F: Fn(&mut L, &mut Canvas) -> Result<()> + Send + Sync + 'static,
     {
+        self.described = None;
         // SAFETY: the data is what the callback expects.
         unsafe { (host().add_draw_hook)(self.raw, phase, call_draw_hook::<L, F>, data(hook)) };
         self
@@ -386,7 +583,10 @@ impl<L: Library> Registry<L> {
 /// Registers the methods of a class, from [`Registry::class`].
 pub struct ClassRegistry<'r, L, T> {
     raw: *mut abi::Class,
-    _registry: PhantomData<&'r mut Registry<L>>,
+    /// The method registered last, and the registry's first mistake, as [`Registry`] has them.
+    described: Option<Described>,
+    error: &'r mut Option<String>,
+    _library: PhantomData<fn() -> L>,
     _class: PhantomData<fn() -> T>,
 }
 
@@ -408,6 +608,45 @@ impl<L: Library, T: Class> ClassRegistry<'_, L, T> {
                 data(method),
             );
         }
+        self.described = Some(Described::new::<A, R>(name));
+        self.describe(|_| {})
+    }
+
+    /// Names the parameters of the method registered just before, not counting the object, as
+    /// [`Registry::named`] does a function's.
+    pub fn named(&mut self, params: &[&str]) -> &mut Self {
+        self.describe(|described| described.names = names(params))
+    }
+
+    /// Says what the method registered just before takes, not counting the object, as
+    /// [`Registry::takes`] does of a function.
+    pub fn takes(&mut self, params: &str) -> &mut Self {
+        self.describe(|described| described.takes = Some(params.to_owned()))
+    }
+
+    /// Says what the method registered just before returns, as [`Registry::returns`] does of a
+    /// function.
+    pub fn returns(&mut self, results: &str) -> &mut Self {
+        self.describe(|described| described.returns = Some(results.to_owned()))
+    }
+
+    /// Says what the method registered just before does, as [`Registry::doc`] does of a
+    /// function.
+    pub fn doc(&mut self, doc: &str) -> &mut Self {
+        self.describe(|described| described.doc = doc.to_owned())
+    }
+
+    fn describe(&mut self, change: impl FnOnce(&mut Described)) -> &mut Self {
+        let raw = self.raw;
+        describe(
+            &mut self.described,
+            self.error,
+            change,
+            // SAFETY: the strings are valid for the call.
+            |name, params, results, doc| unsafe {
+                (host().describe_method)(raw, name, params, results, doc);
+            },
+        );
         self
     }
 }
@@ -427,9 +666,14 @@ unsafe extern "C" fn register<L: Library>(
         let mut registry = Registry {
             raw: registry,
             classes: Vec::new(),
+            described: None,
+            error: None,
             _library: PhantomData,
         };
         L::register(&mut registry);
+        if let Some(err) = registry.error.take() {
+            return Err(Error::new(err));
+        }
         // Leaked, like the callbacks, since games' state refers to it.
         let classes: &'static Classes = Box::leak(Box::new(Classes(registry.classes)));
         // SAFETY: the callbacks are for `L`, and their data is the registration's classes.

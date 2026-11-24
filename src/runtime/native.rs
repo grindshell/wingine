@@ -150,6 +150,29 @@ struct Library {
     classes: Vec<&'static Class>,
     /// Chunks of Luau to run as it loads, with their names.
     luau: Vec<(String, String)>,
+    /// What it says of its table's functions, for its definitions: those it registered, and
+    /// those its Luau adds.
+    described: Vec<Described>,
+    /// The types its definitions export: their names, definitions and docs.
+    types: Vec<(String, String, String)>,
+}
+
+/// What a library says of a function or method, for its definitions.
+struct Described {
+    name: String,
+    /// Its parameters, as Luau writes a function's, and what it returns.
+    params: String,
+    results: String,
+    doc: String,
+}
+
+/// Adds what a library says of a function or method to `all`, in place of what it said of it
+/// before.
+fn describe(all: &mut Vec<Described>, described: Described) {
+    match all.iter_mut().find(|known| known.name == described.name) {
+        Some(known) => *known = described,
+        None => all.push(described),
+    }
 }
 
 /// A class of objects a library registered.
@@ -157,6 +180,8 @@ struct Class {
     name: String,
     drop: abi::DropObject,
     methods: Vec<(String, Callback<abi::Method>)>,
+    /// What the library says of its methods, for its definitions.
+    described: Vec<Described>,
     /// A mistake registering its methods, which fails the library's registration.
     error: Option<String>,
 }
@@ -215,6 +240,8 @@ fn register(descriptor: abi::Library) -> Result<Library, String> {
             functions: Vec::new(),
             classes: Vec::new(),
             luau: Vec::new(),
+            described: Vec::new(),
+            types: Vec::new(),
         },
         classes: Vec::new(),
         error: None,
@@ -251,6 +278,127 @@ unsafe fn text<'a>(text: abi::Str) -> Result<&'a str, String> {
     let bytes = unsafe { text.as_bytes() };
     std::str::from_utf8(bytes)
         .map_err(|_| format!("{:?} isn't UTF-8", String::from_utf8_lossy(bytes)))
+}
+
+/// A native library's definitions file, for a language server: what the library says of its
+/// table, its classes and its types as it registers them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibraryDefinitions {
+    /// The name of the library's table in Luau, which names the file: `<library>.d.luau`.
+    pub library: String,
+    /// The file's text.
+    pub text: String,
+}
+
+/// The definitions of each of `libraries` the game in `folder` loads, in order. It registers
+/// them as loading the game does, but creates no state for a game, so it needs no window.
+/// Optional libraries that aren't there are left out.
+pub(super) fn definitions(
+    folder: &Path,
+    libraries: &[LibraryConfig],
+) -> Result<Vec<LibraryDefinitions>> {
+    let mut all = Vec::new();
+    for LibraryConfig { name, optional } in libraries {
+        let fail = |message: String| Error::NativeLibrary {
+            name: name.clone(),
+            message,
+        };
+        match find(folder, name).map_err(fail)? {
+            Some(library) => all.push(LibraryDefinitions {
+                library: library.name.clone(),
+                text: library.definitions(),
+            }),
+            None if *optional => {}
+            None => {
+                let path = library_path(folder, name);
+                return Err(fail(format!("couldn't find {}", path.display())));
+            }
+        }
+    }
+    Ok(all)
+}
+
+/// How wide a definitions file's lines of docs are, at most, where their words allow.
+const DOC_WIDTH: usize = 100;
+
+/// Adds `doc` to `out` as doc comments indented by `indent`, its lines wrapped to
+/// [`DOC_WIDTH`].
+fn write_doc(out: &mut String, indent: &str, doc: &str) {
+    for paragraph in doc.lines() {
+        let mut line = format!("{indent}---");
+        for word in paragraph.split_whitespace() {
+            if line.len() + 1 + word.len() > DOC_WIDTH && line.len() > indent.len() + 3 {
+                out.push_str(&line);
+                out.push('\n');
+                line = format!("{indent}---");
+            }
+            line.push(' ');
+            line.push_str(word);
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+}
+
+/// `params`, a function's parameters as Luau writes them, as a function type has them: what's
+/// left over is `...any` there, where a function has `...: any`.
+fn type_params(params: &str) -> String {
+    match params.rfind("...: ") {
+        Some(at) if at == 0 || params[..at].ends_with(", ") => {
+            format!("{}...{}", &params[..at], &params[at + "...: ".len()..])
+        }
+        _ => params.to_owned(),
+    }
+}
+
+impl Library {
+    /// The library's definitions file: the types it exports, its classes, then its table.
+    fn definitions(&self) -> String {
+        let name = &self.name;
+        let mut out = format!(
+            "--- The `{name}` native library, for luau-lsp: what the library says of itself as it \
+             registers.\n--- `wingine definitions` wrote this file: change the library, then have \
+             it write the file again.\n"
+        );
+        for (name, definition, doc) in &self.types {
+            out.push('\n');
+            write_doc(&mut out, "", doc);
+            out.push_str(&format!("export type {name} = {definition}\n"));
+        }
+        // What nothing describes takes and returns anything.
+        fn described<'a>(all: &'a [Described], name: &str) -> (&'a str, &'a str, &'a str) {
+            let found = all.iter().find(|described| described.name == name);
+            found.map_or(("...: any", "...any", ""), |described| {
+                (&described.params, &described.results, &described.doc)
+            })
+        }
+        for class in &self.classes {
+            out.push_str(&format!("\ndeclare extern type {} with\n", class.name));
+            for (method, _) in &class.methods {
+                let (params, results, doc) = described(&class.described, method);
+                write_doc(&mut out, "    ", doc);
+                let separator = if params.is_empty() { "" } else { ", " };
+                out.push_str(&format!(
+                    "    function {method}(self{separator}{params}): {results}\n"
+                ));
+            }
+            out.push_str("end\n");
+        }
+        out.push_str(&format!("\ndeclare {name}: {{\n"));
+        // The functions it registered, then those its Luau adds.
+        let registered = self.functions.iter().map(|(function, _)| function.as_str());
+        let added = self.described.iter().map(|described| &*described.name);
+        let added =
+            added.filter(|name| !self.functions.iter().any(|(function, _)| function == name));
+        for function in registered.chain(added) {
+            let (params, results, doc) = described(&self.described, function);
+            write_doc(&mut out, "    ", doc);
+            let params = type_params(params);
+            out.push_str(&format!("    {function}: ({params}) -> {results},\n"));
+        }
+        out.push_str("}\n");
+        out
+    }
 }
 
 /// The native libraries a game loaded, with their state for it.
@@ -725,6 +873,9 @@ static HOST: abi::Host = abi::Host {
     push_buffer: host::push_buffer,
     arg_array: host::arg_array,
     push_array: host::push_array,
+    describe_function: host::describe_function,
+    describe_method: host::describe_method,
+    declare_type: host::declare_type,
 };
 
 /// The functions in [`HOST`]. Each trusts the library to pass what the ABI says: pointers the
@@ -918,6 +1069,7 @@ mod host {
             name,
             drop,
             methods: Vec::new(),
+            described: Vec::new(),
             error: None,
         }));
         registration.classes.push(class);
@@ -958,6 +1110,72 @@ mod host {
         // SAFETY: the library's promise.
         let (name, source) = unsafe { (lossy(name), lossy(source)) };
         registration.library.luau.push((name, source));
+    }
+
+    /// What a library says of a function or method.
+    unsafe fn described(
+        name: abi::Str,
+        params: abi::Str,
+        results: abi::Str,
+        doc: abi::Str,
+    ) -> Described {
+        // SAFETY: the caller's promise.
+        unsafe {
+            Described {
+                name: lossy(name),
+                params: lossy(params),
+                results: lossy(results),
+                doc: lossy(doc),
+            }
+        }
+    }
+
+    pub(super) unsafe extern "C" fn describe_function(
+        registry: *mut abi::Registry,
+        name: abi::Str,
+        params: abi::Str,
+        results: abi::Str,
+        doc: abi::Str,
+    ) {
+        // SAFETY: the library's promise.
+        let registration = unsafe { registration_mut(registry) };
+        // SAFETY: the library's promise.
+        let described = unsafe { described(name, params, results, doc) };
+        describe(&mut registration.library.described, described);
+    }
+
+    pub(super) unsafe extern "C" fn describe_method(
+        class: *mut abi::Class,
+        name: abi::Str,
+        params: abi::Str,
+        results: abi::Str,
+        doc: abi::Str,
+    ) {
+        // SAFETY: the library's promise.
+        let class = unsafe { &mut *class.cast::<Class>() };
+        // SAFETY: the library's promise.
+        let described = unsafe { described(name, params, results, doc) };
+        describe(&mut class.described, described);
+    }
+
+    pub(super) unsafe extern "C" fn declare_type(
+        registry: *mut abi::Registry,
+        name: abi::Str,
+        definition: abi::Str,
+        doc: abi::Str,
+    ) {
+        // SAFETY: the library's promise.
+        let registration = unsafe { registration_mut(registry) };
+        let types = &registration.library.types;
+        // SAFETY: the library's promise.
+        match unsafe { new_name(name, |name| types.iter().any(|(known, ..)| known == name)) } {
+            // SAFETY: the library's promise.
+            Ok(name) => unsafe {
+                let declared = (name, lossy(definition), lossy(doc));
+                registration.library.types.push(declared);
+            },
+            Err(err) => registration.fail(err),
+        }
     }
 
     pub(super) unsafe extern "C" fn arg_count(call: *mut abi::Call) -> usize {

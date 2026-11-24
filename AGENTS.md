@@ -257,7 +257,7 @@ references in their own right.
   to mlua's answers), but remembering whether each path is a file or folder (`Lookups`), once a
   load in a window and once a run in tests, since asking the file system each time was a third of
   a large game's load. `require.rs` is the web's, over the page's files.
-- `src/main.rs`: the `wingine` executable: run a game, `--watch`, `test`, `export`, `bake`, and
+- `src/main.rs`: the `wingine` executable: run a game, `--watch`, `test`, `export`, `bake`, `definitions`, and
   with no arguments, the `game` folder beside it.
 
 ### Web
@@ -420,7 +420,10 @@ game's tests check: after editing one, write it again with `SceneFile::write`.
   `draw_sprites` call, since each call from Luau into a library costs far more than a sprite.
   Lists cross in one call too: arrays, whose values the library reads as arguments of the call at
   indices past the script's own (`ITEMS`), and buffers, whose bytes are copied, since mlua lends
-  no pointer to them.
+  no pointer to them. A library says what its functions take, return and do as it registers them
+  (`wingine-native` reads the types off each closure, `luau_type`), and `wingine definitions`
+  writes a definitions file of it (`Library::definitions`), registering it without loading a
+  game; classes are `declare extern type`s there, as the engine's own userdata are.
   Errors cross as strings (`set_error`, `Status::ERROR`), and panics never unwind into the engine.
   Change the ABI only by adding to the end of `Host` and bumping `ABI_MINOR`; anything else bumps
   `ABI_MAJOR`.

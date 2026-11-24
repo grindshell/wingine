@@ -34,6 +34,10 @@
 //!     local x, y = buffer.readf32(at, offset), buffer.readf32(at, offset + 4)
 //! end
 //! ```
+//!
+//! Each function and method is registered with its parameters' names and what it does, so
+//! `wingine definitions` writes `particles.d.luau` of it, which a language server checks a game's
+//! scripts against.
 
 use wingine_native::{
     BillboardDraw, Buffer, Class, Color, Context, Error, Library, Rect, Registry, Result, Size,
@@ -183,10 +187,12 @@ impl Library for Particles {
             .function("new_emitter", |_, _, color: Color| {
                 Ok(Emitter { color, bursts: 0 })
             })
+            .named(&["color"])
+            .doc("Returns an emitter of bursts of particles of a color.")
             .function("count", |particles, _, ()| {
                 Ok(particles.live.len() + particles.sparks.len())
             })
-            // Where every particle is: `x` then `y` for each, as 32-bit floats.
+            .doc("Returns how many particles and sparks are alive.")
             .function("positions", |particles, _, ()| {
                 let mut bytes = Vec::with_capacity(particles.live.len() * 8);
                 for particle in &particles.live {
@@ -196,6 +202,7 @@ impl Library for Particles {
                 }
                 Ok(Buffer(bytes))
             })
+            .doc("Returns where every particle is: `x` then `y` for each, as 32-bit floats.")
             .function("draw", |particles, call, ()| {
                 let canvas = call.canvas()?;
                 for particle in &particles.live {
@@ -209,10 +216,12 @@ impl Library for Particles {
                 }
                 Ok(())
             })
+            .doc("Draws every particle, a pixel each. Only in `draw`.")
             .function("draw_3d", |particles, call, ()| {
                 let draws = particles.spark_draws();
                 call.canvas()?.draw_billboards(&particles.white, &draws)
             })
+            .doc("Draws every spark as a billboard in the 3D view begun last. Only in `draw`.")
             .after_update(|particles, _, dt| {
                 particles.advance(dt);
                 Ok(())
@@ -224,6 +233,12 @@ impl Library for Particles {
                 function particles.wait_until_gone()
                     wg.wait_until(function() return particles.count() == 0 end)
                 end",
+            )
+            .declare(
+                "wait_until_gone",
+                "",
+                "()",
+                "Waits until no particles or sparks are left. Only in a task.",
             );
         registry
             .class::<Emitter>()
@@ -235,7 +250,8 @@ impl Library for Particles {
                     Ok(())
                 },
             )
-            // A burst of `count` at each of `points`, an array of `x` then `y` for each.
+            .named(&["x", "y", "count"])
+            .doc("Bursts `count` particles at a point of the canvas.")
             .method(
                 "burst_each",
                 |particles, emitter, _, (points, count): (Vec<f32>, u32)| {
@@ -249,6 +265,8 @@ impl Library for Particles {
                     Ok(())
                 },
             )
+            .named(&["points", "count"])
+            .doc("Bursts `count` particles at each of `points`, an array of `x` then `y` for each.")
             .method(
                 "burst_3d",
                 |particles, emitter, _, (position, count): (Vec3, u32)| {
@@ -258,7 +276,10 @@ impl Library for Particles {
                     Ok(())
                 },
             )
-            .method("bursts", |_, emitter, _, ()| Ok(emitter.bursts));
+            .named(&["position", "count"])
+            .doc("Bursts `count` sparks at a point of a 3D view, which fly up, fall and shrink.")
+            .method("bursts", |_, emitter, _, ()| Ok(emitter.bursts))
+            .doc("Returns how many bursts the emitter has made.");
     }
 }
 

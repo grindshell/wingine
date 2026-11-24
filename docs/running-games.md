@@ -30,7 +30,9 @@ wingine path/to/game
 The [release archives](https://github.com/grindshell/wingine/releases) have `wingine` built for
 Windows and Linux too. To ship a game to players, export it: see
 [Shipping a game](#shipping-a-game). `wingine bake` renders a song to a WAV file: see
-[Baking](music.md#baking).
+[Baking](music.md#baking). `wingine definitions` writes a definitions file of each native library
+a game lists, for a language server: see
+[Checking scripts against a library](native-libraries.md#checking-scripts-against-a-library).
 
 The window closes, and the game ends, when the player closes it, unless the game's
 [`close_requested`](api/globals.md#close_requested) asks first, or when a script calls

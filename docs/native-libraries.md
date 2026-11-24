@@ -144,6 +144,46 @@ results convert between Luau and Rust.
 Panics never cross into the engine: the `wingine-native` crate catches them and turns them into
 errors.
 
+## Checking scripts against a library
+
+A language server such as [luau-lsp](editor.md#checking-scripts-with-luau-lsp) knows the engine's
+API from its definitions file, and knows a library's table from one too, which the engine writes
+from what the library says of itself as it registers:
+
+```bash
+wingine definitions path/to/game path/to/types
+```
+
+That writes `<library>.d.luau` into the folder `types` for each library the game lists, named for
+the library's table, such as `particles.d.luau`:
+
+```lua
+declare extern type Emitter with
+    --- Bursts `count` particles at a point of the canvas.
+    function burst(self, x: number, y: number, count: number): ()
+end
+
+declare particles: {
+    --- Returns an emitter of bursts of particles of a color.
+    new_emitter: (color: Color) -> Emitter,
+}
+```
+
+Each function's types are those of its Rust closure, so they can't disagree with what it takes.
+The library [names its parameters and says what it does](api/native.md#definitions) as it
+registers it, and declares by hand only what Rust can't know: the functions its Luau adds, and
+types of its own.
+
+The file names the engine's types, such as `Color`, so a language server loads it after the
+engine's definitions: for luau-lsp, `--definitions=@wingine=path/to/wingine.d.luau
+--definitions=@particles=types/particles.d.luau`. Write it again whenever the library changes.
+With `--check`, `wingine definitions --check path/to/game path/to/types` writes nothing, and fails
+if a file isn't what it would write, which suits a check before committing. The library is only
+asked what it registers, with no game loaded, so the command needs no window.
+
+The [editor](editor.md)'s Script screen hands luau-lsp the engine's definitions alone, so it
+doesn't know a library's table yet.
+
 ## Safety
 
 Scripts run in a sandbox: they can't write files, but their saves and those in folders the player

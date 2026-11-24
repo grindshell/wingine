@@ -37,8 +37,9 @@ use core::{
 pub const ABI_MAJOR: u16 = 0;
 /// 1: the first version. 2: [`Host::draw_sprites`]. 3: 3D: meshes, vectors, and views drawn
 /// in, from [`Host::create_mesh`] on. 4: [`Host::set_blend`]. 5: lists: buffers and arrays, from
-/// [`Host::arg_buffer`] on.
-pub const ABI_MINOR: u16 = 5;
+/// [`Host::arg_buffer`] on. 6: what a library's definitions say, from
+/// [`Host::describe_function`] on.
+pub const ABI_MINOR: u16 = 6;
 
 /// The name of the function a library exports, an [`Entry`].
 pub const ENTRY_SYMBOL: &[u8] = b"wingine_library\0";
@@ -776,4 +777,28 @@ pub struct Host {
     /// Makes the last `count` results one result: an array of them, in the order they were
     /// returned. Fails if there aren't `count` results. Since 0.5.
     pub push_array: unsafe extern "C" fn(call: *mut Call, count: usize) -> Status,
+
+    /// Says what the function `name` of the library's table takes and returns, and what it does,
+    /// for the definitions file the engine writes of the library, which a language server checks
+    /// scripts against: `params` as Luau writes a function's parameters, such as
+    /// `x: number, count: number?`, `results` as it writes what one returns, such as `number`,
+    /// `(number, string)` or `()`, and `doc` in words. A function described twice is as it was
+    /// described last, and one the library never registers is one its Luau adds. Works only
+    /// inside `register`, as [`Host::describe_method`] and [`Host::declare_type`] do. Since 0.6.
+    pub describe_function: unsafe extern "C" fn(
+        registry: *mut Registry,
+        name: Str,
+        params: Str,
+        results: Str,
+        doc: Str,
+    ),
+    /// Says the same of the method `name` of `class`, whose `params` leave out the object it's
+    /// called on. Since 0.6.
+    pub describe_method:
+        unsafe extern "C" fn(class: *mut Class, name: Str, params: Str, results: Str, doc: Str),
+    /// Has the library's definitions export the type `name`, defined as `definition`, a Luau
+    /// type, with `doc` saying what it is: a type the descriptions of its functions name. Since
+    /// 0.6.
+    pub declare_type:
+        unsafe extern "C" fn(registry: *mut Registry, name: Str, definition: Str, doc: Str),
 }

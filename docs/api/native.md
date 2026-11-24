@@ -19,6 +19,7 @@ Everything below is in the crate's root, `wingine_native`. For its full Rust doc
   [`Registry`](#registry), [`Class`](#class), [`ClassRegistry`](#classregistry)
 - [Calls](#calls): [`Call`](#call), [converting arguments and results](#converting-arguments-and-results),
   [lists](#lists)
+- [Definitions](#definitions): what a library says of its functions, for a language server
 - [The engine's services](#the-engines-services): [`Context`](#context), [`Canvas`](#canvas),
   [`Sprite`](#sprite), [`SpriteDraw`](#spritedraw), [`Color`](#color), [`Rect`](#rect)
 - [3D](#3d): [`Mesh`](#mesh), [`Vec3`](#vec3), [`Affine3`](#affine3),
@@ -458,6 +459,121 @@ As an argument, a `Buffer` is a copy of the script's; [`call.buffer`](#callbuffe
 borrows the bytes instead, and `call.write_buffer` writes into the script's buffer, which saves
 making a new one each call. Nothing describes a buffer's layout to both sides: the library and
 its scripts each say where every field is, and must agree.
+
+## Definitions
+
+`wingine definitions` writes a [definitions file](../native-libraries.md#checking-scripts-against-a-library)
+of a library, for a language server to check a game's scripts against, from what the library says
+as it registers. A function's or method's types are those of its closure, as the tables above
+convert them:
+
+| Rust | Luau type |
+|---|---|
+| `bool` | `boolean` |
+| `f64`, `f32` and integers | `number` |
+| `String`, `&str` | `string` |
+| `Color`, `Rect`, `Sprite`, `Mesh` | The engine's types of those names. |
+| `Vec3` | `vector` |
+| `Option<T>` | `T?` |
+| `Vec<T>` | `{ T }` |
+| `Buffer` | `buffer` |
+| A type implementing `Class` | The class's `NAME`. |
+| `()`, as all the arguments or results | None. |
+
+The rest is said with methods of the [`Registry`](#registry) and the
+[`ClassRegistry`](#classregistry), each about the function or method registered just before it:
+
+```rust
+registry
+    .function("burst_at", |particles, _, (x, y, count): (f32, f32, Option<u32>)| {
+        particles.burst([x, y], count.unwrap_or(16), Color::WHITE);
+        Ok(())
+    })
+    .named(&["x", "y", "count"])
+    .doc("Bursts `count` white particles at a point of the canvas, or 16.");
+```
+
+```lua
+--- Bursts `count` white particles at a point of the canvas, or 16.
+burst_at: (x: number, y: number, count: number?) -> (),
+```
+
+Called with no function or method registered just before, any of them fails the library's
+registration.
+
+#### `named`
+
+```rust
+fn named(&mut self, params: &[&str]) -> &mut Self;
+```
+
+Names the parameters, a method's not counting its object. Unnamed, they're `arg1`, `arg2` and so
+on. A name for each is needed: any other number fails the library's registration, so the names
+can't fall behind the closure.
+
+#### `doc`
+
+```rust
+fn doc(&mut self, doc: &str) -> &mut Self;
+```
+
+Says what it does, in words a language server shows. The file wraps them to lines of 100
+columns, and keeps the lines the text has.
+
+#### `takes` and `returns`
+
+```rust
+fn takes(&mut self, params: &str) -> &mut Self;
+fn returns(&mut self, results: &str) -> &mut Self;
+```
+
+Say what it takes and returns as Luau writes them, in place of what the closure's types say:
+`takes` a function's parameters, such as `into: buffer, count: number?` or nothing, and `returns`
+what follows a function's `:`, such as `number`, `(number, string)` or `()`. They're for what the
+types don't say: arguments read by hand, as objects ([`call.object`](#callobject-and-callobject_mut))
+and buffers written into are, and types narrower than a conversion's, such as a `string` that's
+one of a few. A type implementing `FromArgs` or `IntoResults` itself can say its types instead,
+with `luau_types`, and one implementing `FromArg` or `IntoResult`, with `luau_type`; left unsaid,
+arguments are `...: any` and a value is `any`.
+
+```rust
+// particles.merge(into, from): `from`'s bursts join `into`'s.
+registry
+    .function("merge", |_, call, ()| {
+        let bursts = call.object::<Emitter>(1)?.bursts;
+        call.object_mut::<Emitter>(0)?.bursts += bursts;
+        Ok(())
+    })
+    .takes("into: Emitter, from: Emitter");
+```
+
+#### `registry.declare`
+
+```rust
+fn declare(&mut self, name: &str, params: &str, results: &str, doc: &str) -> &mut Self;
+```
+
+Declares a function the library's [Luau](#registryluau) adds to its table, which the engine
+can't tell from the source: its parameters and results as `takes` and `returns` take them, and
+what it does.
+
+```rust
+registry.declare("wait_until_gone", "", "()", "Waits until no particles are left.");
+```
+
+#### `registry.declare_type`
+
+```rust
+fn declare_type(&mut self, name: &str, definition: &str, doc: &str) -> &mut Self;
+```
+
+Has the definitions export a type, `export type name = definition`, for descriptions to name:
+
+```rust
+registry.declare_type("Point", "{ x: number, y: number }", "A place on the canvas.");
+```
+
+Declaring a type twice fails the library's registration.
 
 ## The engine's services
 

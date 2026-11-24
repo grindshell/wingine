@@ -901,6 +901,203 @@ impl Library for Twice {
     }
 }
 
+/// A library that says what it registers, for its definitions.
+struct Told;
+
+/// A count scripts hold.
+struct Tally(u32);
+
+impl Class for Tally {
+    const NAME: &str = "Tally";
+}
+
+/// Arguments read by hand, whose types say nothing of what scripts pass.
+struct Anything;
+
+impl wingine_native::FromArgs for Anything {
+    fn from_args(_: &Call) -> Result<Self> {
+        Ok(Self)
+    }
+}
+
+impl Library for Told {
+    const NAME: &str = "told";
+
+    fn new(_: &mut Context) -> Result<Self> {
+        Ok(Self)
+    }
+
+    fn register(registry: &mut Registry<Self>) {
+        registry
+            .declare_type(
+                "Point",
+                "{ x: number, y: number }",
+                "A place on the canvas.",
+            )
+            .function("add", |_, _, (a, b): (f64, Option<f64>)| {
+                Ok(a + b.unwrap_or(1.0))
+            })
+            .named(&["a", "b"])
+            .doc(
+                "Adds `b` to `a`, or 1 without it. What it does takes more words to say than a \
+                 line of a definitions file holds, so they go on to the next.\nAnd a line \
+                 written apart stays apart.",
+            )
+            .function("plain", |_, _, (_, _): (String, Vec<u8>)| {
+                Ok(("one", 2, None::<Buffer>))
+            })
+            .function("fill", |_, call, ()| call.write_buffer(0, 0, &[1]))
+            .takes("into: buffer")
+            .function("tally", |_, _, start: u32| Ok(Tally(start)))
+            .named(&["start"])
+            .function("raw", |_, _, _: Anything| Ok(()))
+            .function("counted", |_, _, _: Anything| Ok(()))
+            .named(&["first", "second"])
+            .returns("number?")
+            .luau(
+                "middle",
+                "local told = ...
+                function told.middle(a, b)
+                    return { x = (a.x + b.x) / 2, y = (a.y + b.y) / 2 }
+                end",
+            )
+            .declare(
+                "middle",
+                "a: Point, b: Point",
+                "Point",
+                "The point halfway between two.",
+            );
+        registry
+            .class::<Tally>()
+            .method("add", |_, tally, _, n: u32| {
+                tally.0 += n;
+                Ok(())
+            })
+            .named(&["n"])
+            .doc("Adds `n` to the tally.")
+            .method("total", |_, tally, _, ()| Ok(tally.0))
+            .method("raw", |_, _, _, _: Anything| Ok(()));
+    }
+}
+
+const TOLD: &str = "\
+--- The `told` native library, for luau-lsp: what the library says of itself as it registers.
+--- `wingine definitions` wrote this file: change the library, then have it write the file again.
+
+--- A place on the canvas.
+export type Point = { x: number, y: number }
+
+declare extern type Tally with
+    --- Adds `n` to the tally.
+    function add(self, n: number): ()
+    function total(self): number
+    function raw(self, ...: any): ()
+end
+
+declare told: {
+    --- Adds `b` to `a`, or 1 without it. What it does takes more words to say than a line of a
+    --- definitions file holds, so they go on to the next.
+    --- And a line written apart stays apart.
+    add: (a: number, b: number?) -> number,
+    plain: (arg1: string, arg2: { number }) -> (string, number, buffer?),
+    fill: (into: buffer) -> (),
+    tally: (start: number) -> Tally,
+    raw: (...any) -> (),
+    counted: (first: any, second: any) -> number?,
+    --- The point halfway between two.
+    middle: (a: Point, b: Point) -> Point,
+}
+";
+
+#[test]
+fn a_librarys_definitions_say_what_it_registers() {
+    runtime::link_library("told", wingine_native::library::<Told>());
+    let folder = game(
+        "definitions",
+        &[(
+            "conf.luau",
+            "return { libraries = { 'told', { name = 'not_there', optional = true } } }",
+        )],
+    );
+    // Without a window: the library registers, and no game loads.
+    let definitions = runtime::definitions(&folder).expect("the library registers");
+    assert_eq!(
+        definitions.len(),
+        1,
+        "an optional library that isn't there is left out"
+    );
+    assert_eq!(definitions[0].library, "told");
+    assert_eq!(definitions[0].text, TOLD);
+
+    // What its Luau adds is there as it's declared.
+    fs::write(folder.join("conf.luau"), conf(&["told"])).unwrap();
+    fs::write(
+        folder.join("main.luau"),
+        "local middle = told.middle({ x = 0, y = 2 }, { x = 4, y = 4 })
+        halfway = `{middle.x} {middle.y}`",
+    )
+    .unwrap();
+    let mut simulation = simulation(&folder);
+    assert_eq!(simulation.eval::<String>("halfway"), "2 3");
+
+    fs::write(folder.join("conf.luau"), conf(&["nowhere"])).unwrap();
+    let err = runtime::definitions(&folder).unwrap_err().to_string();
+    assert!(
+        err.contains("native library `nowhere`: couldn't find"),
+        "{err}"
+    );
+}
+
+/// A library that names one of a function's two parameters.
+struct Misnamed;
+
+impl Library for Misnamed {
+    const NAME: &str = "misnamed";
+
+    fn new(_: &mut Context) -> Result<Self> {
+        Ok(Self)
+    }
+
+    fn register(registry: &mut Registry<Self>) {
+        registry
+            .function("add", |_, _, (a, b): (f64, f64)| Ok(a + b))
+            .named(&["a"]);
+    }
+}
+
+/// A library that describes a function before registering one.
+struct Undescribed;
+
+impl Library for Undescribed {
+    const NAME: &str = "undescribed";
+
+    fn new(_: &mut Context) -> Result<Self> {
+        Ok(Self)
+    }
+
+    fn register(registry: &mut Registry<Self>) {
+        registry
+            .doc("Does nothing.")
+            .function("go", |_, _, ()| Ok(()));
+    }
+}
+
+#[test]
+fn a_library_that_describes_itself_wrongly_fails_to_load() {
+    runtime::link_library("misnamed", wingine_native::library::<Misnamed>());
+    let err = load_error(&["misnamed"]);
+    assert!(
+        err.contains("`add` takes 2 arguments, and 1 are named"),
+        "{err}"
+    );
+    runtime::link_library("undescribed", wingine_native::library::<Undescribed>());
+    let err = load_error(&["undescribed"]);
+    assert!(
+        err.contains("describe the function or method registered just before them"),
+        "{err}"
+    );
+}
+
 /// A library whose table would replace one of Luau's.
 struct Impostor;
 
@@ -1077,6 +1274,25 @@ fn libraries_load_from_the_games_native_folder() {
     let native = folder.join("native");
     fs::create_dir_all(&native).unwrap();
     fs::copy(&file, native.join(file.file_name().unwrap())).unwrap();
+
+    // What the library says of itself, read from its file.
+    let definitions = runtime::definitions(&folder).unwrap();
+    assert_eq!(definitions[0].library, "particles");
+    for line in [
+        "declare extern type Emitter with\n",
+        "    --- Bursts `count` particles at a point of the canvas.\n    \
+         function burst(self, x: number, y: number, count: number): ()\n",
+        "    function burst_3d(self, position: vector, count: number): ()\n",
+        "    new_emitter: (color: Color) -> Emitter,\n",
+        "    positions: () -> buffer,\n",
+        "    wait_until_gone: () -> (),\n",
+    ] {
+        assert!(
+            definitions[0].text.contains(line),
+            "{}",
+            definitions[0].text
+        );
+    }
 
     let mut simulation = simulation(&folder);
     assert_eq!(simulation.eval::<u32>("sparks:bursts()"), 3);
