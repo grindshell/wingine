@@ -457,7 +457,10 @@ end
 With vsync on, `frame` includes waiting for the display, so a frame takes a 60th of a second on a
 60 Hz display however little the game does. Set `vsync = false` in `conf.luau` to see what a
 frame really costs. [`graphics.frame_stats`](api/graphics.md#graphicsframe_stats) says what each
-number measures.
+number measures. For a game with [native libraries](native-libraries.md), its `libraries` say
+what each cost the frame: the time its hooks took, how many calls scripts made into it, and,
+once [`graphics.time_library_calls`](api/graphics.md#graphicstime_library_calls) is on, how long
+those took, which leaves the rest of `update` as the scripts' own.
 
 Or, without writing any of that, set a [`debug_key`](project-structure.md#debug_key) in
 `conf.luau`: pressing it shows a window of the same numbers over the game, with a graph of recent

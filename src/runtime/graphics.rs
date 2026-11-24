@@ -1,10 +1,10 @@
 //! The `graphics` table, for drawing.
 
-use std::path::Path;
+use std::{path::Path, rc::Rc};
 
 use mlua::{ErrorContext, IntoLua, Lua, Table, UserDataRef, Vector};
 
-use super::{Lent, Textures};
+use super::{Lent, Textures, native::Timing};
 use crate::{
     Context,
     graphics::{
@@ -477,9 +477,37 @@ pub(super) fn module(
             table.set("lights_left_out", stats.lights_left_out)?;
             table.set("shadow_maps", stats.shadow_maps)?;
             table.set("shadows_left_out", stats.shadows_left_out)?;
+            // What each native library cost the frame, which the libraries' own timing knows.
+            let libraries = lua.create_table()?;
+            if let Some(timing) = lua.app_data_ref::<Rc<Timing>>() {
+                let (all, timed) = timing.last();
+                for (name, stats) in all {
+                    let library = lua.create_table()?;
+                    for (phase, stats) in [("update", stats.update), ("draw", stats.draw)] {
+                        let table = lua.create_table()?;
+                        table.set("hooks", stats.hooks)?;
+                        table.set("calls", stats.calls)?;
+                        if timed {
+                            table.set("call_time", stats.call_time)?;
+                        }
+                        library.set(phase, table)?;
+                    }
+                    libraries.set(name, library)?;
+                }
+            }
+            table.set("libraries", libraries)?;
             Ok(table)
         })?
     })?;
+    graphics.set(
+        "time_library_calls",
+        lua.create_function(|lua, on: bool| {
+            if let Some(timing) = lua.app_data_ref::<Rc<Timing>>() {
+                timing.set_time_calls(on);
+            }
+            Ok(())
+        })?,
+    )?;
     add_3d(lua, &graphics, lent)?;
     graphics.set("load_model", {
         let lent = lent.clone();

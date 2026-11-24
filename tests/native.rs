@@ -901,6 +901,117 @@ impl Library for Twice {
     }
 }
 
+/// A library that takes its time: 2 milliseconds for its hook after each update, and for each
+/// call.
+struct Slow;
+
+const NAP: std::time::Duration = std::time::Duration::from_millis(2);
+
+impl Library for Slow {
+    const NAME: &str = "slow";
+
+    fn new(_: &mut Context) -> Result<Self> {
+        Ok(Self)
+    }
+
+    fn register(registry: &mut Registry<Self>) {
+        registry
+            .function("nap", |_, _, ()| {
+                std::thread::sleep(NAP);
+                Ok(())
+            })
+            .after_update(|_, _, _| {
+                std::thread::sleep(NAP);
+                Ok(())
+            });
+    }
+}
+
+#[test]
+fn frame_stats_say_what_each_library_cost_the_frame_before() {
+    runtime::link_library("slow", wingine_native::library::<Slow>());
+    runtime::link_library("slow_probe", wingine_native::library::<Probe>());
+    let folder = game(
+        "library_stats",
+        &[
+            ("conf.luau", &conf(&["slow", "slow_probe"])),
+            (
+                "main.luau",
+                "local wg = require('@wingine')
+                -- While the game loads, which is no frame.
+                slow.nap()
+                seen = {}
+                function update()
+                    table.insert(seen, wg.graphics.frame_stats())
+                    slow.nap()
+                    probe.add(1, 2)
+                    -- From the frame after this one.
+                    if #seen == 2 then
+                        wg.graphics.time_library_calls(true)
+                    elseif #seen == 4 then
+                        wg.graphics.time_library_calls(false)
+                    end
+                end
+                function draw()
+                    slow.nap()
+                    slow.nap()
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.run_frames(6);
+    let nap = NAP.as_secs_f32();
+
+    // Before the first frame has finished, nothing, though the game called a library as it
+    // loaded.
+    assert_eq!(
+        simulation.eval::<(u32, u32, f32)>(
+            "seen[1].libraries.slow.update.calls, seen[1].libraries.slow.draw.calls, \
+             seen[1].libraries.slow.update.hooks"
+        ),
+        (0, 0, 0.0)
+    );
+    // Each library's calls are counted by when they were made, and its hooks timed, within
+    // what the frame's updates and drawing took.
+    for frame in 2..=6 {
+        let slow = format!("seen[{frame}].libraries.slow");
+        assert_eq!(
+            simulation.eval::<(u32, u32)>(&format!("{slow}.update.calls, {slow}.draw.calls")),
+            (1, 2)
+        );
+        let (hooks, update): (f32, f32) =
+            simulation.eval(&format!("{slow}.update.hooks, seen[{frame}].update"));
+        assert!(nap <= hooks && hooks <= update, "{nap} {hooks} {update}");
+        assert_eq!(simulation.eval::<f32>(&format!("{slow}.draw.hooks")), 0.0);
+        assert_eq!(
+            simulation.eval::<u32>(&format!("seen[{frame}].libraries.probe.update.calls")),
+            1,
+            "a library is named by its table"
+        );
+    }
+    // Calls are timed only once a game asks, and for the frames they were timed all through.
+    for frame in [2, 3, 5, 6] {
+        let timed: bool = simulation.eval(&format!(
+            "seen[{frame}].libraries.slow.update.call_time ~= nil \
+             or seen[{frame}].libraries.slow.draw.call_time ~= nil"
+        ));
+        assert!(!timed, "frame {frame}");
+    }
+    let (update_calls, draw_calls, update, draw): (f32, f32, f32, f32) = simulation.eval(
+        "seen[4].libraries.slow.update.call_time, seen[4].libraries.slow.draw.call_time, \
+         seen[4].update, seen[4].draw",
+    );
+    assert!(
+        nap <= update_calls && update_calls <= update,
+        "{update_calls} {update}"
+    );
+    assert!(
+        2.0 * nap <= draw_calls && draw_calls <= draw,
+        "{draw_calls} {draw}"
+    );
+}
+
 /// A library that says what it registers, for its definitions.
 struct Told;
 

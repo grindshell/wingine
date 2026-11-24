@@ -259,6 +259,27 @@ export type FrameStats = {
     --- Lights with `shadows` that lit a 3D view without them, there being more than the 24
     --- shadow maps a view has.
     shadows_left_out: number,
+    --- What each native library cost the frame, by the name of its table: its share of `update`
+    --- and `draw`.
+    libraries: { [string]: LibraryStats },
+}
+
+--- What a native library cost a frame: in its updates, and in laying out its interface and
+--- drawing.
+export type LibraryStats = {
+    update: LibraryPhaseStats,
+    draw: LibraryPhaseStats,
+}
+
+--- What a native library cost a frame's updates, or its drawing.
+export type LibraryPhaseStats = {
+    --- The seconds its hooks took.
+    hooks: number,
+    --- How many calls scripts made into it.
+    calls: number,
+    --- The seconds those calls took, or nil unless calls were timed through the whole frame, as
+    --- `graphics.time_library_calls` has them.
+    call_time: number?,
 }
 
 --- A camera looking into a 3D world, for a `View3d`. 3D coordinates are right-handed with `y` up:
@@ -1608,6 +1629,10 @@ export type GraphicsApi = {
     color: (color: Color, opacity: number?) -> number,
     --- Returns how long the frame before took, and how much it drew.
     frame_stats: () -> FrameStats,
+    --- Times the calls scripts make into native libraries, for `frame_stats`' `libraries`, from
+    --- the next frame on, or stops. Timing a call costs about a tenth of the call, so calls aren't
+    --- timed until a game asks.
+    time_library_calls: (on: boolean) -> (),
     --- Loads the PNG image at `path`, divided into sprites `tile_width` by `tile_height` texels.
     load_sprite_sheet: (path: string, tile_width: number, tile_height: number) -> SpriteSheet,
     --- Returns an animation that shows each of `frames` for `frame_time` seconds, then starts over.

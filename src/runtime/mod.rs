@@ -153,6 +153,13 @@
 //!   table: `frame`, `update`, `draw` and `render` are seconds, and `quads`, `triangles`,
 //!   `draw_calls`, `lights`, `lights_left_out`, `shadow_maps` and `shadows_left_out` counts.
 //!   Before the first frame has finished, all are 0. See `FrameStats` for what each measures.
+//!   `libraries` is what each native library cost the frame, by its table's name: its `update`
+//!   and its `draw`, each a table of `hooks`, the seconds its hooks took, `calls`, how many calls
+//!   scripts made into it, and `call_time`, the seconds those took, which is there only while
+//!   calls are timed.
+//! - `graphics.time_library_calls(on)` times the calls scripts make into native libraries, for
+//!   `frame_stats`, from the next frame on, or stops. Timing a call costs about a tenth of the
+//!   call, so calls aren't timed until a game asks.
 //! - `graphics.load_sprite_sheet(path, tile_width, tile_height)` loads a PNG divided into a grid
 //!   of sprites `tile_width` by `tile_height` texels, starting at its top-left corner. Each image
 //!   is read once; loading it again, even divided differently, reuses it.
@@ -1142,6 +1149,7 @@ impl LuauGame {
         let natives = Natives::load(lua, &lent, ctx, folder, &config.libraries)?;
         let bytecode = reuse.bytecode.as_ref();
         lent.lend(ctx, || scripts.load_with_bytecode(&main, bytecode))?;
+        natives.loaded();
         Ok(Self {
             scripts,
             natives,
@@ -1252,6 +1260,8 @@ impl Game for LuauGame {
         if let Some(err) = &self.error {
             draw_error(canvas, &self.font, err);
         }
+        // The frame's last word: what its libraries cost is the frame before's from here.
+        self.natives.end_frame();
     }
 
     fn close_requested(&mut self, ctx: &mut Context) -> bool {
@@ -1273,6 +1283,14 @@ impl LuauGame {
     /// Runs the libraries' hooks before `update`, the script's `update` and its tasks, then the
     /// hooks after.
     fn run_update(&mut self, ctx: &mut Context, dt: f32) -> Result<()> {
+        // What scripts call of the libraries from here is counted with the frame's updates.
+        self.natives.set_updating(true);
+        let result = self.update_scripts(ctx, dt);
+        self.natives.set_updating(false);
+        result
+    }
+
+    fn update_scripts(&mut self, ctx: &mut Context, dt: f32) -> Result<()> {
         self.natives.update(Phase::BEFORE, ctx, dt)?;
         // Tasks started before this frame, such as while the game loaded, resume in it. Those
         // `update` starts have run until they first waited, and resume from the next frame.

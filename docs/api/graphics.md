@@ -16,7 +16,8 @@ functions work in `draw` and inside a [`paint:scene` callback](gui.md#paint).
 - [The camera](#the-camera): [`set_camera`](#graphicsset_camera)
 - [Blend modes](#blend-modes): [`set_blend`](#graphicsset_blend)
 - [The canvas and frames](#the-canvas-and-frames): [`size`](#graphicssize),
-  [`color`](#graphicscolor), [`frame_stats`](#graphicsframe_stats)
+  [`color`](#graphicscolor), [`frame_stats`](#graphicsframe_stats),
+  [`time_library_calls`](#graphicstime_library_calls)
 - [Sprites](#sprites): [`load_sprite_sheet`](#graphicsload_sprite_sheet),
   [`SpriteSheet`](#spritesheet), [`Sprite`](#sprite)
 - [Animation](#animation): [`new_animation`](#graphicsnew_animation), [`Animation`](#animation-1)
@@ -450,10 +451,41 @@ seconds, measured on the CPU:
 | `lights_left_out` | How many lights reached what a 3D view saw but didn't light it, there being more than the 32 that light a view at once. |
 | `shadow_maps` | How many [shadow maps](#shadows) those lights took. Each draws its view's meshes that cast shadows again, from a light, in draw calls `draw_calls` doesn't count. |
 | `shadows_left_out` | How many lights with `shadows` lit a 3D view without them, there being more than the 24 shadow maps a view has. |
+| `libraries` | What each [native library](../native-libraries.md) cost the frame, by the name of its table: its share of `update` and `draw`. |
 
 Before the first frame has finished, everything is 0. To see what a frame really costs, turn
 [`vsync`](../project-structure.md#vsync) off, and run a release build. See
 [Measuring performance](../running-games.md#measuring-performance).
+
+Each of `libraries` is a table of two, `update` and `draw`: what the library cost the frame's
+updates, and what it cost laying out the game's interface and drawing. Each of those has:
+
+| Field | What it is |
+|---|---|
+| `hooks` | The seconds the library's hooks took: around `update`, or around `draw`. |
+| `calls` | How many calls scripts made into the library: its functions and its objects' methods. |
+| `call_time` | The seconds those calls took, or `nil` unless calls were timed through the whole frame: see [`time_library_calls`](#graphicstime_library_calls). |
+
+What a library cost while the game loaded is no frame's. The rest of `update` is the game's own
+Luau: `stats.update` less each library's `update.hooks` and `update.call_time`.
+
+```lua
+-- How a frame's updates divide between a library and the scripts that call it.
+local stats = wg.graphics.frame_stats()
+local particles = stats.libraries.particles.update
+local scripts = stats.update - particles.hooks - (particles.call_time or 0)
+```
+
+### `graphics.time_library_calls`
+
+```lua
+wg.graphics.time_library_calls(on: boolean)
+```
+
+Times the calls scripts make into native libraries, for [`frame_stats`](#graphicsframe_stats)'
+`libraries`, from the next frame on, or stops. Timing a call reads the clock twice, which costs
+about a tenth of what the call does, so calls aren't timed until a game asks: a benchmark turns
+it on, and a game being played leaves it off. Calls are counted, and hooks timed, either way.
 
 ## Sprites
 

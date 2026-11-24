@@ -38,6 +38,9 @@ What a library doesn't speed up is calling it. A call from Luau into a library c
 drawing a sprite, so a library pays off when each call does a lot of work: "move every bullet",
 not "move this bullet". The same goes for what a script reads back: a library hands over a
 [list](api/native.md#lists) in one call, as an array or a `buffer`, rather than a value a call.
+[`graphics.frame_stats`](api/graphics.md#graphicsframe_stats) says what a library costs a frame:
+the time its hooks took, and how many calls scripts made into it and how long those took, apart
+from the scripts' own time.
 
 ## How a game loads one
 

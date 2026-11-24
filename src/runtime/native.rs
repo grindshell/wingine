@@ -7,17 +7,19 @@
 //! library's state of its own, and its own copies of the library's functions in its VM.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     env::consts::{DLL_PREFIX, DLL_SUFFIX},
     ffi::c_void,
     io,
     path::{Path, PathBuf},
     ptr,
+    rc::Rc,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 
 use mlua::IntoLua;
+use web_time::Instant;
 use wingine_abi as abi;
 
 use super::{Lent, LibraryConfig};
@@ -401,10 +403,107 @@ impl Library {
     }
 }
 
+/// What a library cost a frame in its updates, or in laying out its interface and drawing.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct PhaseStats {
+    /// The seconds its hooks took.
+    pub(crate) hooks: f32,
+    /// How many calls scripts made into it.
+    pub(crate) calls: u32,
+    /// The seconds those calls took, if they were timed.
+    pub(crate) call_time: f32,
+}
+
+/// What a library cost a frame: its share of [`FrameStats`](crate::FrameStats)' `update` and
+/// `draw`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct LibraryStats {
+    pub(crate) update: PhaseStats,
+    pub(crate) draw: PhaseStats,
+}
+
+/// How long a game's libraries take each frame, shared by the game, which says where a frame
+/// is, the libraries' functions in its VM, which count their calls, and `graphics.frame_stats`,
+/// which finds it among the VM's app data.
+#[derive(Default)]
+pub(crate) struct Timing {
+    /// Whether calls from scripts are timed, which costs each two readings of the clock, a
+    /// tenth of what a call costs: so only when a game asks.
+    time_calls: Cell<bool>,
+    /// Whether they've been timed since the frame began, and were through the frame before.
+    timed: Cell<bool>,
+    last_timed: Cell<bool>,
+    /// Whether the game is updating: if not, it's laying out its interface or drawing.
+    updating: Cell<bool>,
+    libraries: RefCell<Vec<Rc<Times>>>,
+}
+
+/// What one library has cost the frame so far, and what it cost the frame before.
+struct Times {
+    /// The name of the library's table.
+    name: String,
+    current: Cell<LibraryStats>,
+    last: Cell<LibraryStats>,
+}
+
+impl Times {
+    fn change(&self, change: impl FnOnce(&mut LibraryStats)) {
+        let mut stats = self.current.get();
+        change(&mut stats);
+        self.current.set(stats);
+    }
+}
+
+impl Timing {
+    /// Times calls from scripts into libraries from now on, or stops.
+    pub(crate) fn set_time_calls(&self, on: bool) {
+        self.time_calls.set(on);
+        self.timed.set(self.timed.get() && on);
+    }
+
+    /// What each library cost the frame before, by its table's name, and whether that frame's
+    /// calls were timed from its start to its end.
+    pub(crate) fn last(&self) -> (Vec<(String, LibraryStats)>, bool) {
+        let libraries = self.libraries.borrow();
+        let all = libraries
+            .iter()
+            .map(|times| (times.name.clone(), times.last.get()));
+        (all.collect(), self.last_timed.get())
+    }
+
+    /// Ends a frame: what the libraries cost it is what they cost the frame before.
+    fn end_frame(&self) {
+        for times in self.libraries.borrow().iter() {
+            times.last.set(times.current.take());
+        }
+        self.last_timed.set(self.timed.get());
+        self.timed.set(self.time_calls.get());
+    }
+
+    /// Runs a call from a script into a library, counting it, and timing it if calls are timed.
+    fn call<R>(&self, times: &Times, run: impl FnOnce() -> R) -> R {
+        let start = self.time_calls.get().then(Instant::now);
+        let result = run();
+        let elapsed = start.map_or(0.0, |start| start.elapsed().as_secs_f32());
+        let updating = self.updating.get();
+        times.change(|stats| {
+            let phase = if updating {
+                &mut stats.update
+            } else {
+                &mut stats.draw
+            };
+            phase.calls += 1;
+            phase.call_time += elapsed;
+        });
+        result
+    }
+}
+
 /// The native libraries a game loaded, with their state for it.
 #[derive(Default)]
 pub(crate) struct Natives {
     instances: Vec<Instance>,
+    timing: Rc<Timing>,
 }
 
 /// A library loaded for a game, with its state for the game.
@@ -413,6 +512,7 @@ struct Instance {
     name: String,
     library: &'static Library,
     state: *mut c_void,
+    times: Rc<Times>,
 }
 
 impl Natives {
@@ -426,6 +526,7 @@ impl Natives {
         libraries: &[LibraryConfig],
     ) -> Result<Self> {
         let mut natives = Self::default();
+        lua.set_app_data(Rc::clone(&natives.timing));
         for LibraryConfig { name, optional } in libraries {
             let fail = |message: String| Error::NativeLibrary {
                 name: name.clone(),
@@ -459,34 +560,72 @@ impl Natives {
                     return Err(fail(take_error()));
                 }
             }
+            let times = Rc::new(Times {
+                name: library.name.clone(),
+                current: Cell::default(),
+                last: Cell::default(),
+            });
+            natives
+                .timing
+                .libraries
+                .borrow_mut()
+                .push(Rc::clone(&times));
             natives.instances.push(Instance {
                 name: name.clone(),
                 library,
                 state,
+                times: Rc::clone(&times),
             });
             // The context is lent for the library's Luau, as it is for the game's `main.luau`.
-            lent.lend(ctx, || Ok(install(lua, lent, library, state)))?
-                .map_err(|err| fail(err.to_string()))?;
+            let timing = &natives.timing;
+            lent.lend(ctx, || {
+                Ok(install(lua, lent, library, state, timing, &times))
+            })?
+            .map_err(|err| fail(err.to_string()))?;
         }
         Ok(natives)
+    }
+
+    /// Says the game has loaded: what its libraries cost while it did is no frame's.
+    pub(super) fn loaded(&self) {
+        self.timing.end_frame();
+        self.timing.end_frame();
+    }
+
+    /// Says whether the game is updating, which the calls scripts make are counted by: those
+    /// made at any other time are counted with its drawing, as its interface's are.
+    pub(super) fn set_updating(&self, updating: bool) {
+        self.timing.updating.set(updating);
+    }
+
+    /// Ends a frame, once the game has drawn: what the libraries cost it is what
+    /// `graphics.frame_stats` says of the frame before.
+    pub(super) fn end_frame(&self) {
+        self.timing.end_frame();
     }
 
     /// Runs the libraries' hooks for `phase` around the game's `update`, in the order they
     /// loaded.
     pub(crate) fn update(&self, phase: abi::Phase, ctx: &mut Context, dt: f32) -> Result<()> {
         for instance in &self.instances {
+            let mut start = None;
             for (_, hook) in instance
                 .library
                 .update_hooks
                 .iter()
                 .filter(|(p, _)| *p == phase)
             {
+                start.get_or_insert_with(Instant::now);
                 clear_error();
                 // SAFETY: the library's own callback, called as the ABI says.
                 let status = unsafe {
                     (hook.function)(hook.data, instance.state, ptr::from_mut(ctx).cast(), dt)
                 };
                 instance.check(status)?;
+            }
+            if let Some(start) = start {
+                let elapsed = start.elapsed().as_secs_f32();
+                instance.times.change(|stats| stats.update.hooks += elapsed);
             }
         }
         Ok(())
@@ -495,18 +634,24 @@ impl Natives {
     /// Runs the libraries' hooks for `phase` around the game's `draw`, in the order they loaded.
     pub(crate) fn draw(&self, phase: abi::Phase, canvas: &mut Canvas) -> Result<()> {
         for instance in &self.instances {
+            let mut start = None;
             for (_, hook) in instance
                 .library
                 .draw_hooks
                 .iter()
                 .filter(|(p, _)| *p == phase)
             {
+                start.get_or_insert_with(Instant::now);
                 clear_error();
                 // SAFETY: the library's own callback, called as the ABI says.
                 let status = unsafe {
                     (hook.function)(hook.data, instance.state, ptr::from_mut(canvas).cast())
                 };
                 instance.check(status)?;
+            }
+            if let Some(start) = start {
+                let elapsed = start.elapsed().as_secs_f32();
+                instance.times.change(|stats| stats.draw.hooks += elapsed);
             }
         }
         Ok(())
@@ -546,22 +691,28 @@ fn class_key(class: &Class) -> usize {
     ptr::from_ref(class) as usize
 }
 
-/// Adds `library`'s table to `lua`, with functions that call it with its state for the game.
+/// Adds `library`'s table to `lua`, with functions that call it with its state for the game,
+/// counting each call in `times`.
 fn install(
     lua: &mlua::Lua,
     lent: &Lent,
     library: &'static Library,
     state: *mut c_void,
+    timing: &Rc<Timing>,
+    times: &Rc<Times>,
 ) -> mlua::Result<()> {
     let table = lua.create_table()?;
     for (name, callback) in &library.functions {
         let label = format!("{}.{name}", library.name);
         let callback = *callback;
         let lent = lent.clone();
+        let (timing, times) = (Rc::clone(timing), Rc::clone(times));
         let function = lua.create_function(move |lua, args: mlua::Variadic<mlua::Value>| {
-            invoke(lua, &lent, &label, &args, 1, |call| {
-                // SAFETY: the library's own callback, called as the ABI says.
-                unsafe { (callback.function)(callback.data, state, call) }
+            timing.call(&times, || {
+                invoke(lua, &lent, &label, &args, 1, |call| {
+                    // SAFETY: the library's own callback, called as the ABI says.
+                    unsafe { (callback.function)(callback.data, state, call) }
+                })
             })
         })?;
         table.set(name.as_str(), function)?;
@@ -576,6 +727,7 @@ fn install(
             let label = format!("{}:{name}", class.name);
             let callback = *callback;
             let lent = lent.clone();
+            let (timing, times) = (Rc::clone(timing), Rc::clone(times));
             let method = lua.create_function(move |lua, args: mlua::Variadic<mlua::Value>| {
                 let bad_self = |message: String| mlua::Error::BadArgument {
                     to: Some(label.clone()),
@@ -600,9 +752,11 @@ fn install(
                     return Err(bad_self(message));
                 }
                 let pointer = object.object;
-                invoke(lua, &lent, &label, &args[1..], 2, |call| {
-                    // SAFETY: the library's own callback, called as the ABI says.
-                    unsafe { (callback.function)(callback.data, state, pointer, call) }
+                timing.call(&times, || {
+                    invoke(lua, &lent, &label, &args[1..], 2, |call| {
+                        // SAFETY: the library's own callback, called as the ABI says.
+                        unsafe { (callback.function)(callback.data, state, pointer, call) }
+                    })
                 })
             })?;
             methods.set(name.as_str(), method)?;

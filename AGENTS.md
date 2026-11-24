@@ -245,7 +245,10 @@ references in their own right.
   plain data for the new one's `window.reloaded()`. A game that fails to load becomes a stopped
   game holding that data for the next reload. `--watch` reloads on changes.
 - `native.rs`: native libraries, registered once per process and never unloaded, each game
-  getting state of its own. `crates/wingine-abi` is the C ABI (`ABI_MAJOR`, `ABI_MINOR`), and
+  getting state of its own. `Timing`, among the VM's app data, is what each cost the frame:
+  its hooks timed, its calls counted, and timed only once `graphics.time_library_calls` asks,
+  since two readings of the clock are a tenth of a call. A frame ends for it as the game's
+  `draw` returns. `crates/wingine-abi` is the C ABI (`ABI_MAJOR`, `ABI_MINOR`), and
   `crates/wingine-native` the crate libraries are written with, which never depends on `wingine`.
 - `export.rs`: `wingine export`, the CLI's executable copied as the game, beside `game/` and
   `licenses/`; on Windows it's patched to open no console and given the game's icon.

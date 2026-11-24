@@ -398,6 +398,10 @@ fn scripts_see_the_stats_of_the_frame_before() {
     );
     assert!(simulation.eval::<f32>("seen[2].frame") > 0.0);
     assert_eq!(simulation.eval::<u32>("drawing.quads"), 2);
+    assert!(
+        simulation.eval::<bool>("next(seen[2].libraries) == nil"),
+        "a game without native libraries has none to cost it anything"
+    );
 }
 
 #[test]
