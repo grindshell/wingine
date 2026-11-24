@@ -219,9 +219,11 @@ impl Library for Particles {
             .doc("Draws every particle, a pixel each. Only in `draw`.")
             .function("draw_3d", |particles, call, ()| {
                 let draws = particles.spark_draws();
-                call.canvas()?.draw_billboards(&particles.white, &draws)
+                // Sparks show their colors whatever lights the view, or doesn't.
+                call.canvas()?
+                    .draw_billboards_glowing(&particles.white, &draws, Color::WHITE)
             })
-            .doc("Draws every spark as a billboard in the 3D view begun last. Only in `draw`.")
+            .doc("Draws every spark as a glowing billboard in the 3D view begun last. Only in `draw`.")
             .after_update(|particles, _, dt| {
                 particles.advance(dt);
                 Ok(())

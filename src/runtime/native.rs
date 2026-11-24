@@ -1036,6 +1036,8 @@ static HOST: abi::Host = abi::Host {
     describe_function: host::describe_function,
     describe_method: host::describe_method,
     declare_type: host::declare_type,
+    draw_meshes_glowing: host::draw_meshes_glowing,
+    draw_billboards_glowing: host::draw_billboards_glowing,
 };
 
 /// The functions in [`HOST`]. Each trusts the library to pass what the ABI says: pointers the
@@ -1885,6 +1887,57 @@ mod host {
         abi::Status::ERROR
     }
 
+    /// Draws a library's meshes in the view begun last, glowing `glow`, for `function`.
+    unsafe fn meshes(
+        canvas: *mut abi::Canvas,
+        mesh: *const abi::Mesh,
+        sprite: *const abi::Sprite,
+        draws: *const abi::MeshDraw,
+        count: usize,
+        glow: Color,
+        function: &str,
+    ) -> abi::Status {
+        // SAFETY: the caller's promise.
+        let (canvas, mesh, draws) =
+            unsafe { (canvas_mut(canvas), mesh_ref(mesh), slice(draws, count)) };
+        // SAFETY: the caller's promise.
+        let sprite = (!sprite.is_null()).then(|| unsafe { sprite_ref(sprite) });
+        let Some(mut view) = canvas.open_view() else {
+            return no_view(function);
+        };
+        // Whatever the script drew last in the view, a library's meshes cast shadows, and glow
+        // only as it says: a batch at a time, since the ABI's draws have no glow of their own.
+        view.set_casts_shadow(true);
+        view.set_glow(glow);
+        for draw in draws {
+            view.draw_mesh(mesh, affine3(draw.transform), sprite, color(draw.tint));
+        }
+        abi::Status::OK
+    }
+
+    /// Draws a library's billboards in the view begun last, glowing `glow`, for `function`.
+    unsafe fn billboards(
+        canvas: *mut abi::Canvas,
+        sprite: *const abi::Sprite,
+        draws: *const abi::BillboardDraw,
+        count: usize,
+        glow: Color,
+        function: &str,
+    ) -> abi::Status {
+        // SAFETY: the caller's promise.
+        let (canvas, sprite, draws) =
+            unsafe { (canvas_mut(canvas), sprite_ref(sprite), slice(draws, count)) };
+        let Some(mut view) = canvas.open_view() else {
+            return no_view(function);
+        };
+        view.set_glow(glow);
+        for draw in draws {
+            let size = [draw.size.width, draw.size.height];
+            view.draw_billboard(sprite, vec3(draw.position), size, color(draw.tint));
+        }
+        abi::Status::OK
+    }
+
     pub(super) unsafe extern "C" fn draw_meshes(
         canvas: *mut abi::Canvas,
         mesh: *const abi::Mesh,
@@ -1892,22 +1945,9 @@ mod host {
         draws: *const abi::MeshDraw,
         count: usize,
     ) -> abi::Status {
+        let glow = Color::BLACK;
         // SAFETY: the library's promise.
-        let (canvas, mesh, draws) =
-            unsafe { (canvas_mut(canvas), mesh_ref(mesh), slice(draws, count)) };
-        // SAFETY: the library's promise.
-        let sprite = (!sprite.is_null()).then(|| unsafe { sprite_ref(sprite) });
-        let Some(mut view) = canvas.open_view() else {
-            return no_view("draw_meshes");
-        };
-        // Whatever the script drew last in the view, a library's meshes cast shadows, and
-        // don't glow: the ABI has no glow.
-        view.set_casts_shadow(true);
-        view.set_glow(Color::BLACK);
-        for draw in draws {
-            view.draw_mesh(mesh, affine3(draw.transform), sprite, color(draw.tint));
-        }
-        abi::Status::OK
+        unsafe { meshes(canvas, mesh, sprite, draws, count, glow, "draw_meshes") }
     }
 
     pub(super) unsafe extern "C" fn draw_billboards(
@@ -1916,18 +1956,53 @@ mod host {
         draws: *const abi::BillboardDraw,
         count: usize,
     ) -> abi::Status {
+        let glow = Color::BLACK;
         // SAFETY: the library's promise.
-        let (canvas, sprite, draws) =
-            unsafe { (canvas_mut(canvas), sprite_ref(sprite), slice(draws, count)) };
-        let Some(mut view) = canvas.open_view() else {
-            return no_view("draw_billboards");
-        };
-        view.set_glow(Color::BLACK);
-        for draw in draws {
-            let size = [draw.size.width, draw.size.height];
-            view.draw_billboard(sprite, vec3(draw.position), size, color(draw.tint));
+        unsafe { billboards(canvas, sprite, draws, count, glow, "draw_billboards") }
+    }
+
+    pub(super) unsafe extern "C" fn draw_meshes_glowing(
+        canvas: *mut abi::Canvas,
+        mesh: *const abi::Mesh,
+        sprite: *const abi::Sprite,
+        draws: *const abi::MeshDraw,
+        count: usize,
+        glow: abi::Color,
+    ) -> abi::Status {
+        let glow = color(glow);
+        // SAFETY: the library's promise.
+        unsafe {
+            meshes(
+                canvas,
+                mesh,
+                sprite,
+                draws,
+                count,
+                glow,
+                "draw_meshes_glowing",
+            )
         }
-        abi::Status::OK
+    }
+
+    pub(super) unsafe extern "C" fn draw_billboards_glowing(
+        canvas: *mut abi::Canvas,
+        sprite: *const abi::Sprite,
+        draws: *const abi::BillboardDraw,
+        count: usize,
+        glow: abi::Color,
+    ) -> abi::Status {
+        let glow = color(glow);
+        // SAFETY: the library's promise.
+        unsafe {
+            billboards(
+                canvas,
+                sprite,
+                draws,
+                count,
+                glow,
+                "draw_billboards_glowing",
+            )
+        }
     }
 
     pub(super) unsafe extern "C" fn set_blend(

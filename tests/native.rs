@@ -213,6 +213,27 @@ impl Library for Probe {
                 canvas.draw_meshes(&mesh, None, &meshes)?;
                 canvas.draw_billboards(&probe.white, &[billboard])
             })
+            // In the view begun last: `mesh` red on the left, and a blue billboard below it,
+            // each glowing `glow`, and `mesh` green on the right, which doesn't.
+            .function("glowing_scene", |probe, call, (mesh, glow): (Mesh, Color)| {
+                let at = |x| Affine3::from_translation(Vec3::new(x, 0.0, 0.0));
+                let red = MeshDraw {
+                    tint: Color::rgb(1.0, 0.0, 0.0),
+                    ..MeshDraw::new(at(-0.5))
+                };
+                let green = MeshDraw {
+                    tint: Color::rgb(0.0, 1.0, 0.0),
+                    ..MeshDraw::new(at(0.5))
+                };
+                let billboard = BillboardDraw {
+                    tint: Color::rgb(0.0, 0.0, 1.0),
+                    ..BillboardDraw::new(Vec3::new(0.0, -1.0, 1.0), Size::new(0.4, 0.4))
+                };
+                let canvas = call.canvas()?;
+                canvas.draw_meshes_glowing(&mesh, None, &[red], glow)?;
+                canvas.draw_billboards_glowing(&probe.white, &[billboard], glow)?;
+                canvas.draw_meshes(&mesh, None, &[green])
+            })
             .function("reversed", |_, _, bytes: Buffer| {
                 Ok(Buffer(bytes.0.into_iter().rev().collect()))
             })
@@ -649,6 +670,56 @@ fn libraries_make_meshes_and_draw_in_3d_views() {
         .expect("the game stopped")
         .to_string();
     assert!(err.contains("begin one first"), "{err}");
+}
+
+#[test]
+fn a_librarys_draws_glow_a_batch_at_a_time() {
+    let mut simulation = probe_game(
+        "glow",
+        "local wg = require('@wingine')
+        square = probe.square('#ffffff')
+        glow = '#000000'
+        function draw()
+            wg.graphics.clear('#000000')
+            -- A view with no light in it, where only what glows shows.
+            wg.graphics.begin_3d({
+                camera = { position = vector.create(0, 0, 5), target = vector.zero, height = 2 },
+                lighting = { color = '#000000', ambient = '#000000' },
+            })
+            -- A script's glow before the library draws is none of the library's.
+            wg.graphics.draw_mesh(square, vector.create(0, 0, -1), { scale = 0.1, glow = '#ffffff' })
+            probe.glowing_scene(square, glow)
+        end",
+    );
+    simulation.step();
+    assert_eq!(simulation.game().error().map(ToString::to_string), None);
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(image.pixel(5, 10), [0, 0, 0, 255], "unlit, and not glowing");
+    assert_eq!(image.pixel(10, 18), [0, 0, 0, 255]);
+
+    simulation.exec("glow = '#ffffff'");
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(image.pixel(5, 10), [255, 0, 0, 255], "the mesh glows");
+    assert_eq!(image.pixel(10, 18), [0, 0, 255, 255], "and the billboard");
+    assert_eq!(
+        image.pixel(15, 10),
+        [0, 0, 0, 255],
+        "what's drawn after them, without, doesn't"
+    );
+
+    // With no view open, as the calls without glow fail.
+    simulation.exec("function draw() probe.glowing_scene(square, glow) end");
+    simulation.step();
+    let err = simulation
+        .game()
+        .error()
+        .expect("the game stopped")
+        .to_string();
+    assert!(
+        err.contains("draw_meshes_glowing draws in a 3D view"),
+        "{err}"
+    );
 }
 
 #[test]

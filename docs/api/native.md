@@ -608,6 +608,8 @@ set, or canvas pixels without one.
 | `fn begin_3d(&mut self, view: &View3d) -> Result<()>` | Begins a [3D view](#view3d-camera3d-and-lighting) over what's been drawn, as `graphics.begin_3d` does. Fails if its camera's projection, `near` or `far` aren't ones it allows. |
 | `fn draw_meshes(&mut self, mesh: &Mesh, sprite: Option<&Sprite>, draws: &[MeshDraw]) -> Result<()>` | Draws `mesh` as each of [`draws`](#meshdraw) says, showing `sprite`, or white without one, in the 3D view begun last. |
 | `fn draw_billboards(&mut self, sprite: &Sprite, draws: &[BillboardDraw]) -> Result<()>` | Draws `sprite` standing upright as each of [`draws`](#billboarddraw) says, facing the camera, in the 3D view begun last. |
+| `fn draw_meshes_glowing(&mut self, mesh: &Mesh, sprite: Option<&Sprite>, draws: &[MeshDraw], glow: Color) -> Result<()>` | Draws `mesh` as `draw_meshes` does, [glowing](graphics.md#glow): each shows `glow` of its own colors whatever lights it, white as full light would show them, black none. |
+| `fn draw_billboards_glowing(&mut self, sprite: &Sprite, draws: &[BillboardDraw], glow: Color) -> Result<()>` | Draws `sprite` as `draw_billboards` does, glowing the same way. |
 
 `draw_sprites` draws any number of sprites for the cost of one call into the engine, so it's how
 to draw many. Keep a `Vec<SpriteDraw>` in the library's state, fill it each frame, and pass it,
@@ -785,8 +787,10 @@ engine's default sun and ambient light; `Lighting::UNLIT` shows every surface as
 `Lighting` has no `lights`, and a `View3d` no `fog` or `sky`: a library can't add lights at
 places to a view, or fog, or a sky. What it draws in a
 view a script began is lit by that view's lights, as the rest of the view is, and shaded from
-those with `shadows`. Its meshes always cast shadows from them, and never glow: a
-[`MeshDraw`](#meshdraw) has no `casts_shadow` and no `glow`, nor a billboard's draw a `glow`.
+those with `shadows`. Its meshes always cast shadows from them: a [`MeshDraw`](#meshdraw) has no
+`casts_shadow`. Nor has it a `glow`, nor a billboard's draw: what a library draws
+[glows](graphics.md#glow) a call at a time, with `Canvas::draw_meshes_glowing` and
+`Canvas::draw_billboards_glowing`, so draws that glow differently go in calls of their own.
 
 A camera's `projection` is `Projection::PERSPECTIVE`, which uses `fov_y`, the angle the view takes
 in from its bottom edge to its top in radians, or `Projection::ORTHOGRAPHIC`, which uses `height`,

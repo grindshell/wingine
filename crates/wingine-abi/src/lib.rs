@@ -38,8 +38,9 @@ pub const ABI_MAJOR: u16 = 0;
 /// 1: the first version. 2: [`Host::draw_sprites`]. 3: 3D: meshes, vectors, and views drawn
 /// in, from [`Host::create_mesh`] on. 4: [`Host::set_blend`]. 5: lists: buffers and arrays, from
 /// [`Host::arg_buffer`] on. 6: what a library's definitions say, from
-/// [`Host::describe_function`] on.
-pub const ABI_MINOR: u16 = 6;
+/// [`Host::describe_function`] on. 7: glow, [`Host::draw_meshes_glowing`] and
+/// [`Host::draw_billboards_glowing`].
+pub const ABI_MINOR: u16 = 7;
 
 /// The name of the function a library exports, an [`Entry`].
 pub const ENTRY_SYMBOL: &[u8] = b"wingine_library\0";
@@ -458,8 +459,8 @@ impl View3d {
     }
 }
 
-/// A mesh as [`Host::draw_meshes`] draws it: placed by `transform`, its colors multiplied by
-/// `tint`.
+/// A mesh as [`Host::draw_meshes`] and [`Host::draw_meshes_glowing`] draw it: placed by
+/// `transform`, its colors multiplied by `tint`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeshDraw {
@@ -801,4 +802,25 @@ pub struct Host {
     /// 0.6.
     pub declare_type:
         unsafe extern "C" fn(registry: *mut Registry, name: Str, definition: Str, doc: Str),
+
+    /// Draws meshes as [`Host::draw_meshes`] does, glowing: each shows `glow` of its own colors
+    /// whatever lights it, white as full light would show them and black none, as
+    /// `graphics.draw_mesh`'s `glow` has it. Since 0.7.
+    pub draw_meshes_glowing: unsafe extern "C" fn(
+        canvas: *mut Canvas,
+        mesh: *const Mesh,
+        sprite: *const Sprite,
+        draws: *const MeshDraw,
+        count: usize,
+        glow: Color,
+    ) -> Status,
+    /// Draws billboards as [`Host::draw_billboards`] does, glowing as
+    /// [`Host::draw_meshes_glowing`]'s meshes do. Since 0.7.
+    pub draw_billboards_glowing: unsafe extern "C" fn(
+        canvas: *mut Canvas,
+        sprite: *const Sprite,
+        draws: *const BillboardDraw,
+        count: usize,
+        glow: Color,
+    ) -> Status,
 }

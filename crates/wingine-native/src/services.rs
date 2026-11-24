@@ -175,6 +175,53 @@ impl Canvas {
             (host().draw_billboards)(self.raw, sprite.as_ptr(), draws.as_ptr(), draws.len())
         })
     }
+
+    /// Draws `mesh` as [`draw_meshes`](Self::draw_meshes) does, glowing: each shows `glow` of
+    /// its own colors whatever lights it, or doesn't, white as full light would show them and
+    /// black none, as `graphics.draw_mesh`'s `glow` has it. The glow is the call's, so draws
+    /// that glow differently go in calls of their own.
+    pub fn draw_meshes_glowing(
+        &mut self,
+        mesh: &Mesh,
+        sprite: Option<&Sprite>,
+        draws: &[MeshDraw],
+        glow: Color,
+    ) -> Result<()> {
+        let sprite = sprite.map_or(ptr::null(), Sprite::as_ptr);
+        // SAFETY: lent for as long as `self` is, the mesh and sprite are alive, and the draws are
+        // valid for the call.
+        check(unsafe {
+            (host().draw_meshes_glowing)(
+                self.raw,
+                mesh.as_ptr(),
+                sprite,
+                draws.as_ptr(),
+                draws.len(),
+                glow,
+            )
+        })
+    }
+
+    /// Draws `sprite` as [`draw_billboards`](Self::draw_billboards) does, glowing as
+    /// [`draw_meshes_glowing`](Self::draw_meshes_glowing)'s meshes do.
+    pub fn draw_billboards_glowing(
+        &mut self,
+        sprite: &Sprite,
+        draws: &[BillboardDraw],
+        glow: Color,
+    ) -> Result<()> {
+        // SAFETY: lent for as long as `self` is, the sprite is alive, and the draws are valid for
+        // the call.
+        check(unsafe {
+            (host().draw_billboards_glowing)(
+                self.raw,
+                sprite.as_ptr(),
+                draws.as_ptr(),
+                draws.len(),
+                glow,
+            )
+        })
+    }
 }
 
 /// Triangles on the GPU, to draw in 3D views: the engine's mesh, which scripts hold too. Clones

@@ -111,7 +111,8 @@ references in their own right.
   `lights_of` and `shadows_of` choose a view's lights and shadow maps for the renderer and the
   frame's stats alike. Glow rides each draw's `Instance`, so it never splits a draw call.
   `Lighting` and `View3d` stay `Copy`, and the ABI's view is unchanged, so native libraries can't
-  add lights, fog or a sky, and their draws never glow (`native.rs` sets it black).
+  add lights, fog or a sky, and their draws glow a batch at a time, not each
+  (`draw_meshes_glowing`, `draw_billboards_glowing`; `native.rs` sets it black for the rest).
 - `src/graphics/font.rs`: `Font` and `TextLayout`. Built-in and bitmap fonts have their glyphs in
   one texture (`Metrics`; bitmap glyphs cut from a font file's PNG, as wide as their ink).
   TrueType and OpenType fonts (`Face`, `FaceSize`) rasterize a glyph with `ab_glyph` the first time
