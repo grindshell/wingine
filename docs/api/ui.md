@@ -1,5 +1,9 @@
 # `ui`
 
+- [`ui.menu`](#uimenu) and [`Menu`](#menu): a menu over a scene's nodes
+- [`ui.new_menu`](#uinew_menu): a [menu without a scene](#menus-without-a-scene), over rectangles
+  a game hands it
+
 Menus over a [scene](scene.md)'s nodes: a selection among them that the keys and the mouse move,
 as the RPG's title screen and questions and the shmup's title menu are picked. A menu only
 chooses: the scene lays its items out, and the game shows which is selected however it likes,
@@ -138,3 +142,82 @@ menu:is_enabled(item: number): boolean
 ```
 
 Returns whether item `item` can be selected and picked.
+
+## Menus without a scene
+
+A game that draws its interface itself, with [`graphics`](graphics.md) and no scene, has a menu
+of items it says where are: [`ui.new_menu`](#uinew_menu). It chooses as a menu over a scene's
+nodes does, by the same actions and the mouse, among rectangles the game hands it each update.
+
+```lua
+local wg = require("@wingine")
+local font = wg.graphics.default_font()
+local labels = { "Continue", "New game", "Quit" }
+local menu = wg.ui.new_menu()
+
+-- Where each label is drawn: a row 12 pixels tall.
+local function items(): { MenuItem }
+    local found = {}
+    for index in labels do
+        found[index] = { x = 40, y = 30 + index * 12, width = 120, height = 12 }
+    end
+    return found
+end
+
+function update(dt: number)
+    local happened, item = menu:update(items())
+    if happened == "picked" and item then
+        start(labels[item])
+    end
+end
+
+function draw()
+    for index, row in items() do
+        local color = if index == menu:selected() then "#ffffff" else "#808080"
+        wg.graphics.draw_text(font, labels[index], row.x, row.y, color)
+    end
+end
+```
+
+### `ui.new_menu`
+
+```lua
+wg.ui.new_menu(options: MenuOptions?): RectMenu
+```
+
+Returns a menu with no items yet: its first [`update`](#rectmenuupdate) says what they are.
+`options` are [`ui.menu`](#uimenu)'s, but for `tag`.
+
+### `rectmenu:update`
+
+```lua
+menu:update(items: { MenuItem }, clip: Rect?): (("moved" | "picked" | "cancelled")?, number?)
+```
+
+Takes the player's input for this update among `items`, and returns what they did, as
+[`menu:update`](#menuupdate) does. Each item is a table of where it's drawn, in canvas pixels,
+`x`, `y`, `width` and `height`, and optionally `enabled`: false for one that's passed over every
+way and never picked. Items are numbered from 1, in the order given. They may change between
+updates: the selection stays on the same number, or moves to the next that can be picked.
+
+With `clip`, a rectangle, the mouse selects and picks only inside it. That's for a list that
+scrolls: hand the menu every item, those scrolled out of the list where they'd be, past its
+edges, so the direction actions reach them, with the list's own rectangle as the `clip`, so the
+mouse doesn't. When the selection moves to one that doesn't show, scroll the list to it.
+
+### `rectmenu:selected`
+
+```lua
+menu:selected(): number?
+```
+
+Returns the selected item's number as of the last update, or `nil` if none is.
+
+### `rectmenu:select`
+
+```lua
+menu:select(item: number?)
+```
+
+Selects item `item`, or nothing with `nil`. The next update moves the selection on to an item
+that can be picked, if that isn't one: from nothing, to the first.

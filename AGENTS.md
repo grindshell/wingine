@@ -172,7 +172,9 @@ references in their own right.
   the 2D one changes for it. `Canvas3d::draw_particles` pushes an instance for each, an unlit
   one's colors riding its emission, so no shader knows it's a particle.
 - `src/menu.rs`: `Menu`, a selection that holds no items: each `update` takes them as they are.
-  Directions go by where items are, so lists, rows and ragged grids move as they look.
+  Directions go by where items are, so lists, rows and ragged grids move as they look. Luau has
+  it over a scene's nodes (`ui.menu`) and over rects a script hands it (`ui.new_menu`), where a
+  `clip` keeps the mouse to the part of a scrolled list that shows.
 - `src/physics.rs`, `physics/world2d.rs` and `physics/world3d.rs`: `World` and `World3d`, by
   Rapier, sharing `BodyKind` and `Material`: fixed, dynamic and kinematic bodies, and `walk` for
   characters, flat-footed boxes in 2D and cylinders in 3D, that step and slope. 2D also has fixed

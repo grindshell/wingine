@@ -1,4 +1,4 @@
-//! The `ui` table, for menus over scenes' nodes.
+//! The `ui` table, for menus: over scenes' nodes, and over items a script says where are.
 
 use std::{collections::HashSet, rc::Rc};
 
@@ -27,7 +27,7 @@ pub(super) fn module(lua: &Lua, lent: &Lent) -> mlua::Result<Table> {
                     lent: lent.clone(),
                 };
                 if let Some(options) = options {
-                    menu.configure(lua, options)?;
+                    menu.tag = configure(lua, &mut menu.menu, options, true)?;
                 }
                 // So the item under a resting cursor isn't selected until it moves. In `draw`,
                 // the menu can't tell, so its first update takes the cursor as having moved.
@@ -35,6 +35,20 @@ pub(super) fn module(lua: &Lua, lent: &Lent) -> mlua::Result<Table> {
                 Ok(menu)
             },
         )?
+    })?;
+    ui.set("new_menu", {
+        let lent = lent.clone();
+        lua.create_function(move |lua, options: Option<Table>| {
+            let mut menu = RectMenu {
+                menu: Menu::new(),
+                lent: lent.clone(),
+            };
+            if let Some(options) = options {
+                configure(lua, &mut menu.menu, options, false)?;
+            }
+            lent.context(|ctx| menu.menu.track_cursor(ctx.input())).ok();
+            Ok(menu)
+        })?
     })?;
     ui.set_readonly(true);
     Ok(ui)
@@ -54,42 +68,124 @@ struct ScriptMenu {
     lent: Lent,
 }
 
-impl ScriptMenu {
-    fn configure(&mut self, lua: &Lua, options: Table) -> mlua::Result<()> {
-        for pair in options.pairs::<String, mlua::Value>() {
-            let (key, value) = pair?;
-            let actions = &mut self.menu.actions;
-            let action = match key.as_str() {
-                "tag" => {
-                    self.tag = Some(lua.unpack(value)?);
-                    continue;
-                }
-                "wrap" => {
-                    self.menu.wrap = lua.unpack(value)?;
-                    continue;
-                }
-                "mouse" => {
-                    self.menu.mouse = lua.unpack(value)?;
-                    continue;
-                }
-                "up" => &mut actions.up,
-                "down" => &mut actions.down,
-                "left" => &mut actions.left,
-                "right" => &mut actions.right,
-                "confirm" => &mut actions.confirm,
-                "cancel" => &mut actions.cancel,
-                _ => {
-                    return Err(mlua::Error::runtime(format!(
-                        "a menu's options are `tag`, `wrap`, `mouse`, and the actions `up`, \
-                         `down`, `left`, `right`, `confirm` and `cancel`, not `{key}`"
-                    )));
-                }
-            };
-            *action = lua.unpack(value)?;
-        }
-        Ok(())
+/// Sets `menu` up as `options` say, and returns their `tag`, which only a menu over a node's
+/// items has: `tagged` says whether this is one.
+fn configure(
+    lua: &Lua,
+    menu: &mut Menu,
+    options: Table,
+    tagged: bool,
+) -> mlua::Result<Option<String>> {
+    let mut tag = None;
+    for pair in options.pairs::<String, mlua::Value>() {
+        let (key, value) = pair?;
+        let actions = &mut menu.actions;
+        let action = match key.as_str() {
+            "tag" if tagged => {
+                tag = Some(lua.unpack(value)?);
+                continue;
+            }
+            "wrap" => {
+                menu.wrap = lua.unpack(value)?;
+                continue;
+            }
+            "mouse" => {
+                menu.mouse = lua.unpack(value)?;
+                continue;
+            }
+            "up" => &mut actions.up,
+            "down" => &mut actions.down,
+            "left" => &mut actions.left,
+            "right" => &mut actions.right,
+            "confirm" => &mut actions.confirm,
+            "cancel" => &mut actions.cancel,
+            _ => {
+                let tag = if tagged { "`tag`, " } else { "" };
+                return Err(mlua::Error::runtime(format!(
+                    "a menu's options are {tag}`wrap`, `mouse`, and the actions `up`, `down`, \
+                     `left`, `right`, `confirm` and `cancel`, not `{key}`"
+                )));
+            }
+        };
+        *action = lua.unpack(value)?;
     }
+    Ok(tag)
+}
 
+/// What a menu's update returns to scripts: what happened, and to which item, counting from 1.
+fn event(event: Option<MenuEvent>) -> (Option<&'static str>, Option<usize>) {
+    match event {
+        Some(MenuEvent::Moved(index)) => (Some("moved"), Some(index + 1)),
+        Some(MenuEvent::Picked(index)) => (Some("picked"), Some(index + 1)),
+        Some(MenuEvent::Cancelled) => (Some("cancelled"), None),
+        None => (None, None),
+    }
+}
+
+/// A [`Menu`] over items a script says where are each update, as scripts hold it: for an
+/// interface a script draws itself, with no scene.
+struct RectMenu {
+    menu: Menu,
+    lent: Lent,
+}
+
+impl mlua::UserData for RectMenu {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method_mut(
+            "update",
+            |_, menu, (items, clip): (Vec<Table>, Option<Rect>)| {
+                let items = items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        let rect = |key| {
+                            item.get::<f32>(key).map_err(|err| {
+                                mlua::Error::runtime(format!(
+                                    "item {}: `{key}`: {err}: an item is a table {{ x, y, width, \
+                                     height, enabled? }}",
+                                    index + 1
+                                ))
+                            })
+                        };
+                        Ok(MenuItem {
+                            rect: Rect::new(
+                                rect("x")?,
+                                rect("y")?,
+                                rect("width")?,
+                                rect("height")?,
+                            ),
+                            enabled: item.get::<Option<bool>>("enabled")?.unwrap_or(true),
+                        })
+                    })
+                    .collect::<mlua::Result<Vec<MenuItem>>>()?;
+                menu.menu.clip = clip;
+                let lent = menu.lent.clone();
+                let happened = lent.context(|ctx| menu.menu.update(&items, ctx.input()))?;
+                Ok(event(happened))
+            },
+        );
+        methods.add_method("selected", |_, menu, ()| {
+            Ok(menu.menu.selected().map(|index| index + 1))
+        });
+        methods.add_method_mut("select", |_, menu, number: Option<i64>| {
+            let index = match number {
+                Some(number) => Some(
+                    usize::try_from(number)
+                        .ok()
+                        .and_then(|number| number.checked_sub(1))
+                        .ok_or_else(|| {
+                            mlua::Error::runtime(format!("items count from 1, so none is {number}"))
+                        })?,
+                ),
+                None => None,
+            };
+            menu.menu.select(index);
+            Ok(())
+        });
+    }
+}
+
+impl ScriptMenu {
     /// The menu's items as they are now, and where each is, with the selection kept on the item it
     /// was on, if that's among them, and on one that can be picked.
     fn refresh(&mut self) -> mlua::Result<(Vec<NodeId>, Vec<MenuItem>)> {
@@ -149,12 +245,7 @@ impl mlua::UserData for ScriptMenu {
             let lent = menu.lent.clone();
             let event = lent.context(|ctx| menu.menu.update(&items, ctx.input()))?;
             menu.selected = menu.menu.selected().map(|index| ids[index]);
-            Ok(match event {
-                Some(MenuEvent::Moved(index)) => (Some("moved"), Some(index + 1)),
-                Some(MenuEvent::Picked(index)) => (Some("picked"), Some(index + 1)),
-                Some(MenuEvent::Cancelled) => (Some("cancelled"), None),
-                None => (None, None),
-            })
+            Ok(self::event(event))
         });
         methods.add_method_mut("selected", |_, menu, ()| {
             menu.refresh()?;

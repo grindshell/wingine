@@ -817,6 +817,16 @@ export type MenuOptions = {
 --- What happened to a menu in an update.
 export type MenuEvent = "moved" | "picked" | "cancelled"
 
+--- An item of a menu from `ui.new_menu`, as the game says it is each update: where it's drawn, in
+--- canvas pixels, and whether it can be selected and picked, which it can unless this says not.
+export type MenuItem = {
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    enabled: boolean?,
+}
+
 --- A file or folder in a folder the player picked, as `folder:list` finds it.
 export type FolderEntry = {
     --- Its path in the folder picked, which the folder's methods take.
@@ -1432,6 +1442,18 @@ end
 --- A selection among a node's items, its children or the nodes inside it with a tag, those shown,
 --- from `ui.menu`. Items are numbered from 1 in order, and found again each call, so they may come
 --- and go; the selection stays on its item while it's there, and on one that can be picked.
+declare extern type RectMenu with
+    --- Takes the player's input for this update, among `items` as they are now, and returns what
+    --- they did, if anything, and to which item, as `Menu`'s does. With `clip`, the mouse selects
+    --- and picks only inside it: the part of a list that shows, whose items scrolled out of it
+    --- are past its edges, where the keys still find them.
+    function update(self, items: { MenuItem }, clip: Rect?): (MenuEvent?, number?)
+    --- Returns the selected item's number, as of the last update, or nil if none is.
+    function selected(self): number?
+    --- Selects item `item`, or nothing. The next update moves it on to one that can be picked.
+    function select(self, item: number?): ()
+end
+
 declare extern type Menu with
     --- Takes the player's input, in `update`, and returns what they did, if anything, and to
     --- which item: `"moved"` the selection to it, by an action or the mouse moving onto it,
@@ -1854,6 +1876,9 @@ export type UiApi = {
     --- the nodes inside it with that tag. Those shown are the items, where they're drawn, which
     --- must be in canvas pixels, without a camera, for the mouse to point at them.
     menu: (node: SceneNode, options: MenuOptions?) -> Menu,
+    --- Returns a menu of items the game says where are each update, as `menu:update(items)`:
+    --- for an interface a script draws itself. `options` are `ui.menu`'s, but for `tag`.
+    new_menu: (options: MenuOptions?) -> RectMenu,
 }
 
 --- Data kept between runs of the game, in saves named with letters, digits, `_` and `-`, but no

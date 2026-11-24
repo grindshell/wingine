@@ -291,6 +291,12 @@
 //! - `menu:selected()` returns the selected item's number, `menu:select(item)` selects one,
 //!   `menu:items()` returns the items, and `menu:set_enabled(item, enabled)` and
 //!   `menu:is_enabled(item)` set and tell whether one can be picked.
+//! - `ui.new_menu(options)` returns a menu without a scene, for an interface a script draws
+//!   itself: `menu:update(items, clip)` takes the items as they are, each a table of `x`, `y`,
+//!   `width`, `height` and optionally `enabled`, and returns what `menu:update()` does. With
+//!   `clip`, a rect, the mouse counts only inside it, as a list that scrolls wants, whose items
+//!   scrolled out are past its edges. `menu:selected()` and `menu:select(item)` are its
+//!   selection, which `select(nil)` clears.
 //!
 //! `input`, while the game loads and in `update`:
 //!

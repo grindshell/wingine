@@ -2709,6 +2709,106 @@ fn menus_pick_among_the_nodes_shown() {
 }
 
 #[test]
+fn menus_choose_among_items_a_script_says_where_are() {
+    let folder = game(
+        "rect_menu",
+        &[(
+            "main.luau",
+            "local wg = require('@wingine')
+            wg.input.bind('up', { 'Up' })
+            wg.input.bind('down', { 'Down' })
+            wg.input.bind('pick', { 'Space' })
+            wg.input.bind('cancel', { 'X' })
+            menu = wg.ui.new_menu({ confirm = 'pick' })
+            -- A list of five rows 10 tall, of which three show at a time, from `top`: the rest
+            -- are where they'd be, above and below.
+            top = 1
+            disabled = {}
+            local clip = { x = 10, y = 20, width = 60, height = 30 }
+            function items()
+                local found = {}
+                for index = 1, 5 do
+                    found[index] = {
+                        x = 10, y = 20 + (index - top) * 10, width = 60, height = 10,
+                        enabled = not disabled[index],
+                    }
+                end
+                return found
+            end
+            said = nil
+            function update()
+                local happened, item = menu:update(items(), clip)
+                if happened then
+                    said = `{happened} {item or ''}`
+                    -- As a list scrolls to keep its selection showing.
+                    if item and item >= top + 3 then
+                        top = item - 2
+                    elseif item and item < top then
+                        top = item
+                    end
+                end
+            end",
+        )],
+    );
+    let mut simulation = simulation(&folder);
+    let said = |simulation: &mut Simulation<LuauGame>| -> Option<String> {
+        let said = simulation.eval("said");
+        simulation.exec("said = nil");
+        said
+    };
+    simulation.step();
+    assert_eq!(simulation.eval::<u32>("menu:selected()"), 1);
+    simulation.tap(Key::Down);
+    assert_eq!(said(&mut simulation).as_deref(), Some("moved 2"));
+    simulation.tap(Key::Down);
+    simulation.tap(Key::Down);
+    assert_eq!(
+        said(&mut simulation).as_deref(),
+        Some("moved 4"),
+        "to an item past what shows"
+    );
+    assert_eq!(simulation.eval::<u32>("top"), 2);
+
+    // Items the game says can't be picked are passed over.
+    simulation.exec("disabled[5] = true");
+    simulation.tap(Key::Down);
+    assert_eq!(said(&mut simulation).as_deref(), Some("moved 1"), "round");
+    simulation.exec("disabled[5] = nil");
+
+    // The mouse selects and picks what's inside the clip: the second row shown is item 2.
+    simulation.move_mouse(30.0, 35.0);
+    simulation.step();
+    assert_eq!(said(&mut simulation).as_deref(), Some("moved 2"));
+    simulation.click(MouseButton::Left, 30.0, 45.0);
+    assert_eq!(said(&mut simulation).as_deref(), Some("picked 3"));
+    // Item 4 is where a fourth row would be, under the clip, where the mouse does nothing.
+    simulation.click(MouseButton::Left, 30.0, 55.0);
+    assert_eq!(said(&mut simulation), None);
+    assert_eq!(simulation.eval::<u32>("menu:selected()"), 3);
+
+    simulation.tap(Key::Space);
+    assert_eq!(said(&mut simulation).as_deref(), Some("picked 3"));
+    simulation.tap(Key::X);
+    assert_eq!(said(&mut simulation).as_deref(), Some("cancelled "));
+
+    // The game moves the selection too, and may leave nothing selected until the next update.
+    simulation.exec("menu:select(5)");
+    assert_eq!(simulation.eval::<u32>("menu:selected()"), 5);
+    simulation.exec("menu:select(nil)");
+    assert!(simulation.eval::<bool>("menu:selected() == nil"));
+    simulation.step();
+    assert_eq!(simulation.eval::<u32>("menu:selected()"), 1);
+
+    let mut error = |code: &str| simulation.try_exec(code).unwrap_err().to_string();
+    let err = error("require('@wingine').ui.new_menu({ tag = 'row' })");
+    assert!(err.contains("not `tag`"), "{err}");
+    let err = error("menu:select(0)");
+    assert!(err.contains("items count from 1"), "{err}");
+    let err = error("menu:update({ { x = 0, y = 0, width = 10 } })");
+    assert!(err.contains("item 1: `height`"), "{err}");
+}
+
+#[test]
 fn scene_nodes_refuse_what_they_do_not_have() {
     let folder = game(
         "scene_errors",

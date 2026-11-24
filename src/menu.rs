@@ -13,7 +13,9 @@
 //!   time the system repeats it.
 //! - The confirm action picks the selected item, and the cancel action cancels the menu.
 //! - The mouse selects the item it moves onto, only as it moves, so the keys choose while it
-//!   rests, and clicking an item picks it.
+//!   rests, and clicking an item picks it. With a [`Menu::clip`], it does only inside that, as a
+//!   list that scrolls wants: the items scrolled out of it are still where the keys find them,
+//!   past its edges, where the mouse mustn't.
 //! - Items that aren't enabled are passed over every way, and never picked.
 //!
 //! Its tests don't need a GPU.
@@ -92,6 +94,9 @@ pub struct Menu {
     pub wrap: bool,
     /// Whether the mouse selects and picks items. On by default.
     pub mouse: bool,
+    /// Where the mouse selects and picks items, if not everywhere: the part of a list that
+    /// shows, whose items scrolled out of it are past its edges.
+    pub clip: Option<Rect>,
     selected: Option<usize>,
     /// Where the cursor was at the last update, if it was in the window, so the menu can tell
     /// when it moves.
@@ -112,6 +117,7 @@ impl Menu {
             actions: MenuActions::default(),
             wrap: true,
             mouse: true,
+            clip: None,
             selected: None,
             cursor: None,
         }
@@ -165,7 +171,8 @@ impl Menu {
             let cursor = input.mouse_position();
             let moved = cursor != self.cursor;
             self.cursor = cursor;
-            let pointed = cursor.and_then(|point| {
+            let inside = cursor.filter(|&point| self.clip.is_none_or(|clip| clip.contains(point)));
+            let pointed = inside.and_then(|point| {
                 items
                     .iter()
                     .position(|item| item.enabled && item.rect.contains(point))
@@ -604,5 +611,29 @@ mod tests {
         input.mouse_down(MouseButton::Left);
         assert_eq!(idle(&mut menu, &items, &mut input), None);
         assert_eq!(menu.selected(), Some(2));
+    }
+
+    #[test]
+    fn a_clipped_menu_takes_the_mouse_only_inside_its_clip() {
+        // A list of five, of which the first two show: the rest are past its bottom edge.
+        let (mut menu, items, mut input) = (Menu::new(), column(5), input());
+        menu.clip = Some(Rect::new(20.0, 10.0, 40.0, 22.0));
+        idle(&mut menu, &items, &mut input);
+        // Over the fourth, which doesn't show, the mouse does nothing, moving or clicking.
+        input.set_mouse_position(Some([30.0, 50.0]));
+        assert_eq!(idle(&mut menu, &items, &mut input), None);
+        input.mouse_down(MouseButton::Left);
+        assert_eq!(idle(&mut menu, &items, &mut input), None);
+        input.mouse_up(MouseButton::Left);
+        assert_eq!(menu.selected(), Some(0));
+        // Over the second, it selects it.
+        input.set_mouse_position(Some([30.0, 27.0]));
+        assert_eq!(
+            idle(&mut menu, &items, &mut input),
+            Some(MenuEvent::Moved(1))
+        );
+        // The keys reach what the clip leaves out, where it is.
+        let down = press(&mut menu, &items, &mut input, Key::Down);
+        assert_eq!(down, Some(MenuEvent::Moved(2)));
     }
 }
