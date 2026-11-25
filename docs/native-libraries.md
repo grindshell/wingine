@@ -111,8 +111,8 @@ A library reaches the engine only through the services the engine lends it, at t
 lends them to scripts:
 
 - **The context**, while the game loads and in `update`: the canvas's size, whether actions are
-  held, pressed or released, the mouse's position, and creating sprites from pixels and meshes
-  from triangles.
+  held, pressed or released, the mouse's position, creating sprites from pixels and meshes
+  from triangles, and writing a mesh's corners again where they've moved to.
 - **The canvas**, in `draw`: its size, filling rectangles, drawing sprites, one at a time or many
   in one call, setting the [blend mode](api/graphics.md#blend-modes), and
   [3D views](api/native.md#3d): beginning one, and drawing batches of a mesh or of billboards in

@@ -1,7 +1,10 @@
 use std::{
     f32::consts::{PI, TAU},
     fmt,
-    sync::Arc,
+    sync::{
+        Arc, Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use bytemuck::{Pod, Zeroable};
@@ -213,10 +216,23 @@ pub(crate) struct GpuVertex {
     pub color: [u8; 4],
 }
 
+impl GpuVertex {
+    /// A corner as the GPU stores it.
+    fn of(vertex: MeshVertex) -> Self {
+        Self {
+            position: vertex.position,
+            normal: vertex.normal,
+            uv: vertex.uv,
+            color: vertex.color.to_rgba8(),
+        }
+    }
+}
+
 /// A mesh uploaded to the GPU, created with [`Context::create_mesh`](crate::Context::create_mesh)
-/// and drawn with [`Canvas3d::draw_mesh`](super::Canvas3d::draw_mesh).
+/// and drawn with [`Canvas3d::draw_mesh`](super::Canvas3d::draw_mesh). Its corners can be moved
+/// with [`Context::write_mesh`](crate::Context::write_mesh).
 ///
-/// Cloning is cheap; clones share the same GPU buffers.
+/// Cloning is cheap; clones share the same GPU buffers, so writing one writes them all.
 #[derive(Clone)]
 pub struct Mesh {
     inner: Arc<MeshInner>,
@@ -225,10 +241,28 @@ pub struct Mesh {
 struct MeshInner {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
+    vertex_count: u32,
     index_count: u32,
-    bounds: Option<Bounds3>,
+    written: Mutex<Written>,
+    /// Whether the GPU has yet to be given the vertices last written. Read for every draw call
+    /// of the mesh, so it's beside the lock, not behind it.
+    stale: AtomicBool,
     #[cfg(feature = "physics")]
     geometry: Geometry,
+}
+
+/// What a mesh was last written with, and the box its vertices take up.
+struct Written {
+    /// The vertices last written, as the GPU stores them, kept for the next frame that draws
+    /// the mesh and for its bounds, and written over by the next write, which so allocates
+    /// nothing. Empty until a write.
+    vertices: Vec<GpuVertex>,
+    /// The box the mesh's vertices took up as it was made, or as `vertices` have it once it's
+    /// been asked for.
+    bounds: Option<Bounds3>,
+    /// Whether `bounds` is yet to be worked out from `vertices`: it costs nearly as much as
+    /// the write, and a mesh written every frame is seldom asked for it.
+    unmeasured: bool,
 }
 
 /// Where a mesh's corners are and which make its triangles, kept on the CPU when physics needs
@@ -247,16 +281,7 @@ impl Mesh {
         if let Some(problem) = data.problem() {
             return Err(problem);
         }
-        let vertices: Vec<GpuVertex> = data
-            .vertices
-            .iter()
-            .map(|vertex| GpuVertex {
-                position: vertex.position,
-                normal: vertex.normal,
-                uv: vertex.uv,
-                color: vertex.color.to_rgba8(),
-            })
-            .collect();
+        let vertices: Vec<GpuVertex> = data.vertices.iter().copied().map(GpuVertex::of).collect();
         let buffer = |label, contents, usage| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
@@ -266,18 +291,25 @@ impl Mesh {
         };
         Ok(Self {
             inner: Arc::new(MeshInner {
+                // Copied to by `upload`, once the mesh is written.
                 vertices: buffer(
                     "mesh vertices",
                     bytemuck::cast_slice(&vertices),
-                    wgpu::BufferUsages::VERTEX,
+                    wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 ),
                 indices: buffer(
                     "mesh indices",
                     bytemuck::cast_slice(&data.indices),
                     wgpu::BufferUsages::INDEX,
                 ),
+                vertex_count: data.vertices.len() as u32,
                 index_count: data.indices.len() as u32,
-                bounds: data.bounds(),
+                written: Mutex::new(Written {
+                    vertices: Vec::new(),
+                    bounds: data.bounds(),
+                    unmeasured: false,
+                }),
+                stale: AtomicBool::new(false),
                 #[cfg(feature = "physics")]
                 geometry: Geometry {
                     points: data.vertices.iter().map(|vertex| vertex.position).collect(),
@@ -298,10 +330,62 @@ impl Mesh {
         self.inner.index_count / 3
     }
 
-    /// The box its vertices take up, kept from the data it was made from, or `None` if it has
-    /// none.
+    /// The box its vertices take up, as it was made or last written, or `None` if it has none.
+    /// After a write it's worked out the first time it's asked for.
     pub fn bounds(&self) -> Option<Bounds3> {
-        self.inner.bounds
+        let mut written = self.written();
+        if written.unmeasured {
+            let points = written.vertices.iter().map(|vertex| vertex.position);
+            written.bounds = Bounds3::from_points(points);
+            written.unmeasured = false;
+        }
+        written.bounds
+    }
+
+    /// Writes `vertices` over the mesh's own, as many as it was made with: its triangles stay
+    /// between the same corners, wherever those now are. They're kept here, and reach the GPU
+    /// when a frame that draws the mesh is next rendered (`upload`), so a mesh written many
+    /// times between frames, as in a simulation that renders none, uploads only the last.
+    pub(crate) fn write(
+        &self,
+        vertices: impl ExactSizeIterator<Item = MeshVertex>,
+    ) -> Result<(), String> {
+        let (given, made_with) = (vertices.len(), self.inner.vertex_count as usize);
+        if given != made_with {
+            return Err(format!(
+                "{given} vertices written to a mesh made with {made_with}"
+            ));
+        }
+        let mut written = self.written();
+        written.vertices.clear();
+        written.vertices.extend(vertices.map(GpuVertex::of));
+        written.unmeasured = true;
+        // Set under the lock, as `upload` clears it, so a write is never taken for uploaded.
+        self.inner.stale.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// Gives the GPU the vertices last written, if it hasn't them yet. The renderer calls it for
+    /// every mesh a frame draws, before it submits the frame, whose draws then show them.
+    pub(crate) fn upload(&self, queue: &wgpu::Queue) {
+        if !self.inner.stale.load(Ordering::Acquire) {
+            return;
+        }
+        let written = self.written();
+        self.inner.stale.store(false, Ordering::Release);
+        if !written.vertices.is_empty() {
+            let bytes = bytemuck::cast_slice(&written.vertices);
+            queue.write_buffer(&self.inner.vertices, 0, bytes);
+        }
+    }
+
+    /// What it was last written with. A panic while it was held left it whole enough: the next
+    /// write clears it.
+    fn written(&self) -> MutexGuard<'_, Written> {
+        self.inner
+            .written
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(crate) fn index_count(&self) -> u32 {

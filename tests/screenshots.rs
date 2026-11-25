@@ -1273,6 +1273,153 @@ fn meshes_depth() {
     assert_screenshot(&headless.adapter_name(), "meshes_depth", far_first);
 }
 
+/// A cube written with the corners of a slab whose top is green: every handle to it then shows
+/// what a mesh made of those corners does, their places, the ways they face and their colors.
+#[test]
+fn meshes_written() {
+    let mut headless = headless();
+    let mut slab = MeshData::cuboid([1.8, 0.5, 1.0]);
+    for vertex in &mut slab.vertices {
+        if vertex.normal == [0.0, 1.0, 0.0] {
+            vertex.color = Color::rgb8(0x60, 0xc0, 0x50);
+        }
+    }
+    let ctx = headless.context();
+    let made = ctx.create_mesh(&slab).unwrap();
+    let written = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let handle = written.clone();
+    let frame = |headless: &mut Headless, mesh: &Mesh| {
+        headless
+            .render(96, 64, |canvas| {
+                canvas.clear(Color::rgb8(0x1b, 0x26, 0x1e));
+                let camera = Camera3d::perspective([0.03, 1.61, 4.02], [0.0; 3], 0.8);
+                let mut view =
+                    canvas.begin_3d(View3d::new(camera, Rect::new(0.0, 0.0, 96.0, 64.0)));
+                let turned = Affine3::from_rotation_y(0.6);
+                view.draw_mesh(mesh, turned, None, Color::rgb8(0xd0, 0xd0, 0xd0));
+            })
+            .unwrap()
+    };
+    let cube = frame(&mut headless, &written);
+    headless
+        .context()
+        .write_mesh(&written, &slab.vertices)
+        .unwrap();
+    let after = frame(&mut headless, &handle);
+    assert!(cube.pixels() != after.pixels(), "the write showed nothing");
+    let expected = frame(&mut headless, &made);
+    assert!(
+        after.pixels() == expected.pixels(),
+        "a mesh written shows other than one made of the same vertices"
+    );
+    // A frame with nothing written since shows the same.
+    let again = frame(&mut headless, &written);
+    assert!(again.pixels() == expected.pixels());
+    assert_screenshot(&headless.adapter_name(), "meshes_written", after);
+}
+
+/// A write brings as many vertices as the mesh was made with, or changes nothing; the mesh's
+/// bounds follow one, for every handle; and its triangles stay.
+#[test]
+fn written_meshes_keep_their_vertex_count_and_move_their_bounds() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let mesh = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let handle = mesh.clone();
+    let err = ctx
+        .write_mesh(&mesh, &MeshData::plane([9.0, 9.0]).vertices)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("4 vertices written to a mesh made with 24"),
+        "{err}"
+    );
+    assert_eq!(mesh.bounds(), MeshData::cube(1.0).bounds());
+
+    let slab = MeshData::cuboid([2.0, 4.0, 6.0]);
+    ctx.write_mesh(&mesh, &slab.vertices).unwrap();
+    assert_eq!(handle.bounds(), slab.bounds());
+    assert_eq!(handle.bounds(), slab.bounds(), "asked again");
+    assert_eq!(mesh.triangle_count(), 12);
+    let flat = MeshData::cuboid([2.0, 0.0, 6.0]);
+    ctx.write_mesh(&handle, &flat.vertices).unwrap();
+    assert_eq!(mesh.bounds(), flat.bounds());
+
+    // A mesh of nothing is written with nothing.
+    let empty = ctx.create_mesh(&MeshData::default()).unwrap();
+    ctx.write_mesh(&empty, &[]).unwrap();
+    assert_eq!(empty.bounds(), None);
+    assert!(ctx.write_mesh(&empty, &slab.vertices[..1]).is_err());
+}
+
+/// A game that writes its mesh twice every update, in a simulation, which renders a frame only
+/// when asked for one: the frame shows the last write before it, however many came before.
+#[test]
+fn meshes_written_every_update_show_the_last_write() {
+    use wingine::{Game, WindowConfig, headless::Simulation};
+
+    /// A white square a unit across, facing `+z`, its middle `x` along.
+    fn square(x: f32) -> MeshData {
+        let corners = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]];
+        MeshData {
+            vertices: corners
+                .map(|[dx, y]| MeshVertex::new([x + dx, y, 0.0], [0.0, 0.0, 1.0], [0.0; 2]))
+                .to_vec(),
+            indices: vec![0, 1, 2, 0, 2, 3],
+        }
+    }
+
+    struct Sliding {
+        mesh: Mesh,
+        updates: u32,
+    }
+    impl Game for Sliding {
+        fn update(&mut self, ctx: &mut Context, _dt: f32) {
+            self.updates += 1;
+            // Left of the middle after odd updates and right of it after even ones, by way of
+            // somewhere out of sight.
+            let side = if self.updates % 2 == 1 { -0.5 } else { 0.5 };
+            ctx.write_mesh(&self.mesh, &square(9.0).vertices).unwrap();
+            ctx.write_mesh(&self.mesh, &square(side).vertices).unwrap();
+        }
+
+        fn draw(&mut self, canvas: &mut Canvas) {
+            canvas.clear(Color::BLACK);
+            // The middle of the world, 2 units across.
+            let camera = Camera3d::orthographic([0.0, 0.0, 5.0], [0.0; 3], 2.0);
+            let mut view = canvas.begin_3d(View3d {
+                lighting: Lighting::UNLIT,
+                ..View3d::new(camera, Rect::new(0.0, 0.0, 20.0, 20.0))
+            });
+            view.draw_mesh(&self.mesh, Affine3::IDENTITY, None, Color::WHITE);
+        }
+    }
+
+    let config = WindowConfig {
+        width: 20,
+        height: 20,
+        ..Default::default()
+    };
+    let mut simulation = Simulation::new(&config, |ctx| {
+        Ok(Sliding {
+            mesh: ctx.create_mesh(&square(0.0))?,
+            updates: 0,
+        })
+    })
+    .expect("a GPU adapter is available");
+    let [white, black] = [[255; 4], [0, 0, 0, 255]];
+    let sides = |simulation: &mut Simulation<Sliding>| {
+        let frame = simulation.screenshot().unwrap();
+        [frame.pixel(5, 10), frame.pixel(15, 10)]
+    };
+    simulation.run_frames(600);
+    assert_eq!(simulation.game().updates, 600);
+    assert_eq!(sides(&mut simulation), [black, white]);
+    assert_eq!(sides(&mut simulation), [black, white], "rendered again");
+    simulation.run_frames(1);
+    assert_eq!(sides(&mut simulation), [white, black]);
+}
+
 /// 3D views among 2D drawing: stripes under a view, a translucent bar over it, a second view over
 /// part of the first and the bar, whose depth doesn't hide it behind the first's meshes, and a
 /// marker over that. Views don't clear what's under them.

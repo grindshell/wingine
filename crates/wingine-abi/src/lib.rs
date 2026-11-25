@@ -39,8 +39,8 @@ pub const ABI_MAJOR: u16 = 0;
 /// in, from [`Host::create_mesh`] on. 4: [`Host::set_blend`]. 5: lists: buffers and arrays, from
 /// [`Host::arg_buffer`] on. 6: what a library's definitions say, from
 /// [`Host::describe_function`] on. 7: glow, [`Host::draw_meshes_glowing`] and
-/// [`Host::draw_billboards_glowing`].
-pub const ABI_MINOR: u16 = 7;
+/// [`Host::draw_billboards_glowing`]. 8: [`Host::write_mesh`].
+pub const ABI_MINOR: u16 = 8;
 
 /// The name of the function a library exports, an [`Entry`].
 pub const ENTRY_SYMBOL: &[u8] = b"wingine_library\0";
@@ -822,5 +822,15 @@ pub struct Host {
         draws: *const BillboardDraw,
         count: usize,
         glow: Color,
+    ) -> Status,
+
+    /// Writes the `vertex_count` vertices at `vertices` over those `mesh` was made with, whose
+    /// triangles stay between the same corners, for every handle to it, from the next frame
+    /// rendered. Fails unless there are as many as the mesh was made with. Since 0.8.
+    pub write_mesh: unsafe extern "C" fn(
+        ctx: *mut Context,
+        mesh: *const Mesh,
+        vertices: *const MeshVertex,
+        vertex_count: usize,
     ) -> Status,
 }

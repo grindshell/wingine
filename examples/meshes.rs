@@ -3,6 +3,9 @@
 //! view renders at the canvas's 320x180 pixels, so it keeps the pixel art's look, and a 2D HUD
 //! goes over it, with a label that follows the ball.
 //!
+//! The post flies a flag, a mesh made once and written again every update with its corners where
+//! the wind has them (`Context::write_mesh`), which costs less than making a mesh of them anew.
+//!
 //! The field is a mesh built by hand, a quad for each tile, shaded a little lighter or darker by
 //! its corners' colors. It's drawn twice: plain, as the ground, then a little above it showing the
 //! grass sprite, whose transparent background shows the ground through. The table and the barrels
@@ -10,6 +13,8 @@
 //!
 //! Left and Right (or A and D) turn the camera round faster either way. Run with
 //! `cargo run --example meshes`.
+
+use std::f32::consts::TAU;
 
 use wingine::{
     Context, FrameStats, Game, WindowConfig,
@@ -45,11 +50,23 @@ const CAMERA_HEIGHT: f32 = 3.5;
 const BOUNCES: f32 = 0.8;
 const BOUNCE_HEIGHT: f32 = 1.2;
 const BALL_RADIUS: f32 = 0.4;
+/// Where the post stands, by its middle, and how thick and tall it is.
+const POST: [f32; 3] = [-2.0, 1.0, 1.5];
+const POST_SIZE: [f32; 3] = [0.25, 2.0, 0.25];
+/// The flag: how many quads it is across and down, how long and tall it is, how far its fly
+/// ripples either way, how many waves it holds, and how many pass along it a second.
+const FLAG_QUADS: [u32; 2] = [8, 3];
+const FLAG_SIZE: [f32; 2] = [1.2, 0.7];
+const FLAG_RIPPLE: f32 = 0.14;
+const FLAG_WAVES: f32 = 1.25;
+const FLAG_SPEED: f32 = 0.9;
 
 struct Meshes {
     field: Mesh,
     cube: Mesh,
     post: Mesh,
+    /// Written every update, as it flies.
+    flag: Mesh,
     ball: Mesh,
     table: Model,
     barrel: Model,
@@ -72,7 +89,8 @@ impl Meshes {
         Ok(Self {
             field: ctx.create_mesh(&field())?,
             cube: ctx.create_mesh(&MeshData::cube(1.0))?,
-            post: ctx.create_mesh(&MeshData::cuboid([0.25, 2.0, 0.25]))?,
+            post: ctx.create_mesh(&MeshData::cuboid(POST_SIZE))?,
+            flag: ctx.create_mesh(&flag(0.0))?,
             ball: ctx.create_mesh(&MeshData::sphere(BALL_RADIUS, 16, 8))?,
             table: ctx.load_model(TABLE)?,
             barrel: ctx.load_model(BARREL)?,
@@ -106,8 +124,10 @@ impl Meshes {
         ] {
             view.draw_mesh(&self.cube, transform, None, wood);
         }
-        let post = Affine3::from_translation([-2.0, 1.0, 1.5]);
+        let post = Affine3::from_translation(POST);
         view.draw_mesh(&self.post, post, None, Color::rgb8(0xe0, 0xe0, 0xd8));
+        let hoist = Affine3::from_translation(flag_hoist());
+        view.draw_mesh(&self.flag, hoist, None, Color::rgb8(0xe8, 0xc0, 0x40));
 
         // The models, as they were made: a table across from the crates, and barrels by the post.
         let table = Affine3::from_translation([2.0, 0.0, -1.6]) * Affine3::from_rotation_y(-0.4);
@@ -162,11 +182,61 @@ fn field() -> MeshData {
     mesh
 }
 
+/// Where the top of the flag's hoist is: up the side of the post, just under its top.
+fn flag_hoist() -> [f32; 3] {
+    let [x, y, z] = POST;
+    [x + POST_SIZE[0] / 2.0, y + POST_SIZE[1] / 2.0 - 0.05, z]
+}
+
+/// The flag as it flies at `time`, from the top of its hoist: quads facing `+z` and the same
+/// again facing `-z`, since a mesh shows from one side, each corner pushed along `z` by a wave
+/// running from the hoist, which stays on the post, and growing toward the fly. Its triangles
+/// are between the same corners whenever it is, so one mesh is written with each in turn.
+fn flag(time: f32) -> MeshData {
+    let [columns, rows] = FLAG_QUADS;
+    let [length, height] = FLAG_SIZE;
+    let mut mesh = MeshData::default();
+    for facing in [1.0, -1.0] {
+        let first = mesh.vertices.len() as u32;
+        for row in 0..=rows {
+            for column in 0..=columns {
+                let [along, down] = [column as f32 / columns as f32, row as f32 / rows as f32];
+                let wave = TAU * (FLAG_WAVES * along - FLAG_SPEED * time);
+                let (sin, cos) = wave.sin_cos();
+                // How steeply the flag crosses `z` here, which its surface leans away from.
+                let slope = FLAG_RIPPLE / length * (sin + TAU * FLAG_WAVES * along * cos);
+                mesh.vertices.push(MeshVertex::new(
+                    [along * length, -down * height, FLAG_RIPPLE * along * sin],
+                    [-slope * facing, 0.0, facing],
+                    [along, down],
+                ));
+            }
+        }
+        let across = columns + 1;
+        for row in 0..rows {
+            for column in 0..columns {
+                let corner = first + row * across + column;
+                // From the quad's bottom-left, counter-clockwise seen from `+z`.
+                let quad = [corner + across, corner + across + 1, corner + 1, corner];
+                let order = if facing > 0.0 {
+                    [0, 1, 2, 0, 2, 3]
+                } else {
+                    [0, 2, 1, 0, 3, 2]
+                };
+                mesh.indices.extend(order.map(|i| quad[i]));
+            }
+        }
+    }
+    mesh
+}
+
 impl Game for Meshes {
     fn update(&mut self, ctx: &mut Context, dt: f32) {
         let turn = ctx.input().axis("left", "right");
         self.angle += (ORBIT_SPEED + turn * TURN_SPEED) * dt;
         self.time += dt;
+        ctx.write_mesh(&self.flag, &flag(self.time).vertices)
+            .expect("the flag has as many corners however it flies");
         self.stats = ctx.frame_stats();
     }
 
@@ -235,15 +305,40 @@ mod tests {
         let game = simulation.game();
         let triangles = 2 * field().triangle_count()
             + 3 * MeshData::cube(1.0).triangle_count()
-            + MeshData::cuboid([0.25, 2.0, 0.25]).triangle_count()
+            + MeshData::cuboid(POST_SIZE).triangle_count()
+            + flag(0.0).triangle_count()
             + MeshData::sphere(BALL_RADIUS, 16, 8).triangle_count()
             + game.table.triangle_count() as usize
             + BARRELS.len() * game.barrel.triangle_count() as usize;
         assert_eq!(stats.triangles as usize, triangles);
         // The field, then the field again showing grass, the three crates, one mesh, together,
-        // the post, the table's top, then its four legs together, the two barrels together, and
-        // the ball, then the HUD: its shade, then its text.
-        assert_eq!(stats.draw_calls, 1 + 1 + 1 + 1 + 2 + 1 + 1 + 2);
+        // the post, the flag, the table's top, then its four legs together, the two barrels
+        // together, and the ball, then the HUD: its shade, then its text.
+        assert_eq!(stats.draw_calls, 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 2);
+    }
+
+    #[test]
+    fn the_flag_is_written_as_it_flies() {
+        let mut simulation = simulation();
+        simulation.run_frames(1);
+        let early = simulation.game().flag.bounds().unwrap();
+        simulation.run_frames(20);
+        let game = simulation.game();
+        let later = game.flag.bounds().unwrap();
+        assert_eq!(Some(later), flag(game.time).bounds(), "as it flies now");
+        assert_ne!(early, later, "it flew on");
+        // Its hoist stays on the post, and its fly within its ripple.
+        for bounds in [early, later] {
+            assert_eq!([bounds.min[0], bounds.max[0]], [0.0, FLAG_SIZE[0]]);
+            assert!(bounds.min[2] >= -FLAG_RIPPLE && bounds.max[2] <= FLAG_RIPPLE);
+        }
+        // Both faces lean as the surface does, each away from the other.
+        let data = flag(game.time);
+        let half = data.vertices.len() / 2;
+        for (front, back) in data.vertices[..half].iter().zip(&data.vertices[half..]) {
+            assert_eq!(front.position, back.position);
+            assert_eq!(front.normal.map(|v| -v), back.normal);
+        }
     }
 
     #[test]

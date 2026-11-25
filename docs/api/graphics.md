@@ -1626,8 +1626,11 @@ one big enough to hold it however it's turned. Works anywhere.
 
 ## Meshes
 
-A mesh is triangles, uploaded to the GPU once and drawn as many times as a game likes, in
-[3D views](#3d-views). Meshes are made while the game loads and in `update`.
+A mesh is triangles, uploaded to the GPU and drawn as many times as a game likes, in
+[3D views](#3d-views). Meshes are made while the game loads and in `update`. A script's mesh keeps
+the shape it was made in: only a [native library](native.md#context) moves a mesh's corners
+(`Context::write_mesh`), for a shape that changes, as a flag's does, and every handle to the mesh
+then shows it, scripts' among them.
 
 ### `graphics.new_cube`
 

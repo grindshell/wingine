@@ -10,7 +10,7 @@ use crate::{
     audio::Audio,
     folders::Folders,
     graphics::{
-        Font, FontSettings, Mesh, MeshData, Resolution, Scaling, Texture,
+        Font, FontSettings, Mesh, MeshData, MeshVertex, Resolution, Scaling, Texture,
         gpu::{Gpu, texture_size_problem},
         renderer::Renderer,
         screen::Screen,
@@ -229,6 +229,33 @@ impl Context {
     /// for each triangle, or reach past its vertices.
     pub fn create_mesh(&mut self, data: &MeshData) -> Result<Mesh> {
         Mesh::new(&self.gpu.device, data).map_err(Error::Mesh)
+    }
+
+    /// Writes `vertices` over those `mesh` was made with, so a mesh whose corners move, such as
+    /// a character posed each frame, a flag or water, is made once and written again, which
+    /// costs much less than making it anew: about a quarter, for a mesh of 700 vertices. Its
+    /// triangles stay between the same corners, wherever those now are. Fails unless there are
+    /// as many vertices as the mesh was made with.
+    ///
+    /// Every handle to the mesh shows them, a model's parts among them, since handles share its
+    /// buffers. A frame shows what was written last before it's rendered: the mesh keeps the
+    /// vertices until a frame draws it, so writes between frames upload only the last, and
+    /// writes with no frame rendered, as in a simulation, upload nothing.
+    /// [`Mesh::bounds`] follows, worked out when it's next asked for, though a model's bounds
+    /// stay as it was loaded. With the `physics` feature, colliders shaped like the mesh stay
+    /// the shape it was made in.
+    pub fn write_mesh(&mut self, mesh: &Mesh, vertices: &[MeshVertex]) -> Result<()> {
+        self.write_mesh_from(mesh, vertices.iter().copied())
+    }
+
+    /// Writes a mesh as [`write_mesh`](Self::write_mesh) does, from vertices worked out as
+    /// they're read, as a native library's are.
+    pub(crate) fn write_mesh_from(
+        &mut self,
+        mesh: &Mesh,
+        vertices: impl ExactSizeIterator<Item = MeshVertex>,
+    ) -> Result<()> {
+        mesh.write(vertices).map_err(Error::Mesh)
     }
 
     /// Loads a PNG file into a texture.

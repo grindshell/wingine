@@ -89,6 +89,19 @@ impl Context {
             .map(|raw| Mesh { raw })
             .ok_or_else(Error::from_engine)
     }
+
+    /// Writes `vertices` over those `mesh` was made with, so a mesh whose corners move, such as
+    /// a character posed each frame, is made once and written again, which costs less than
+    /// making it anew. Its triangles stay between the same corners, wherever those now are, and
+    /// every handle to the mesh, scripts' among them, shows them from the next frame rendered.
+    /// Fails unless there are as many vertices as the mesh was made with.
+    pub fn write_mesh(&mut self, mesh: &Mesh, vertices: &[MeshVertex]) -> Result<()> {
+        // SAFETY: lent for as long as `self` is, the mesh is alive, and the vertices are valid for
+        // the call.
+        check(unsafe {
+            (host().write_mesh)(self.raw, mesh.as_ptr(), vertices.as_ptr(), vertices.len())
+        })
+    }
 }
 
 /// What a game draws on, lent while it draws.

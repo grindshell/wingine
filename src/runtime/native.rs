@@ -1038,6 +1038,7 @@ static HOST: abi::Host = abi::Host {
     declare_type: host::declare_type,
     draw_meshes_glowing: host::draw_meshes_glowing,
     draw_billboards_glowing: host::draw_billboards_glowing,
+    write_mesh: host::write_mesh,
 };
 
 /// The functions in [`HOST`]. Each trusts the library to pass what the ABI says: pointers the
@@ -1750,15 +1751,7 @@ mod host {
         let (vertices, indices) =
             unsafe { (slice(vertices, vertex_count), slice(indices, index_count)) };
         let data = MeshData {
-            vertices: vertices
-                .iter()
-                .map(|vertex| MeshVertex {
-                    position: vec3(vertex.position),
-                    normal: vec3(vertex.normal),
-                    uv: [vertex.u, vertex.v],
-                    color: color(vertex.color),
-                })
-                .collect(),
+            vertices: vertices.iter().map(mesh_vertex).collect(),
             indices: indices.to_vec(),
         };
         match ctx.create_mesh(&data) {
@@ -1766,6 +1759,34 @@ mod host {
             Err(err) => {
                 super::set_error(err.to_string());
                 ptr::null_mut()
+            }
+        }
+    }
+
+    fn mesh_vertex(vertex: &abi::MeshVertex) -> MeshVertex {
+        MeshVertex {
+            position: vec3(vertex.position),
+            normal: vec3(vertex.normal),
+            uv: [vertex.u, vertex.v],
+            color: color(vertex.color),
+        }
+    }
+
+    pub(super) unsafe extern "C" fn write_mesh(
+        ctx: *mut abi::Context,
+        mesh: *const abi::Mesh,
+        vertices: *const abi::MeshVertex,
+        vertex_count: usize,
+    ) -> abi::Status {
+        // SAFETY: the library's promise.
+        let (ctx, mesh) = unsafe { (context_mut(ctx), mesh_ref(mesh)) };
+        // SAFETY: the library's promise.
+        let vertices = unsafe { slice(vertices, vertex_count) };
+        match ctx.write_mesh_from(mesh, vertices.iter().map(mesh_vertex)) {
+            Ok(()) => abi::Status::OK,
+            Err(err) => {
+                super::set_error(err.to_string());
+                abi::Status::ERROR
             }
         }
     }

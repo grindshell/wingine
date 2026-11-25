@@ -102,7 +102,11 @@ references in their own right.
   `y` up, as glTF. Texels under half opaque are discarded and only particles blend, so billboards
   need no sorting; a view's draws of a kind are one instanced draw, in the order `MeshOrder`
   gives. `model_file::read` reads glTF without a GPU into `ModelData`. Picking is by boxes
-  (`Bounds3`, `Ray::hit_box`), not triangles. Luau's points are native `vector`s; `draw_mesh` and
+  (`Bounds3`, `Ray::hit_box`), not triangles. A mesh's vertices can be written again
+  (`Context::write_mesh`, the ABI's `write_mesh`; Luau has no call for it): the mesh keeps them
+  until the renderer uploads them for a frame that draws it (`Mesh::upload`), so writes in a
+  simulation that renders nothing queue nothing, and its bounds are worked out when asked for.
+  Physics' copy of a mesh (`Mesh::geometry`) stays as it was made. Luau's points are native `vector`s; `draw_mesh` and
   `draw_billboard` add to the view begun last only while nothing else has been drawn since
   (`Canvas::open_view`).
 - A view's lights (`Light`: points and spots, kept to boxes, casting shadows), glow, fog and sky

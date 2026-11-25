@@ -80,7 +80,8 @@
 //! [`Canvas::draw_meshes`] and [`Canvas::draw_billboards`] draw batches of a mesh or a sprite in
 //! the view begun last, whether the library or the script began it. Meshes come from
 //! [`Context::create_mesh`] or from scripts, and pass to and from them as [`Mesh`]es; Luau's
-//! vectors pass as [`Vec3`]s.
+//! vectors pass as [`Vec3`]s. [`Context::write_mesh`] moves a mesh's corners, for a shape that
+//! changes, such as a character posed each frame, which scripts can't do.
 //!
 //! A library says what its functions are as it registers them, so the engine can write a
 //! definitions file of it for a language server (`wingine definitions`), and nothing declares the

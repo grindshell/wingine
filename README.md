@@ -275,10 +275,11 @@ outlined.
 ### Meshes
 
 [`examples/meshes.rs`](examples/meshes.rs) draws meshes and models in a 3D view at 320x180, lit
-by the sun, with a HUD over it. Its models are in [`examples/models`](examples/models), made in
-Blender ([`props.blend`](examples/models/props.blend)).
+by the sun, with a HUD over it, and flies a flag whose corners it writes again each update. Its
+models are in [`examples/models`](examples/models), made in Blender
+([`props.blend`](examples/models/props.blend)).
 
-![Crates, a table, barrels, a post and a ball on a field of grass](docs/screenshots/meshes.png)
+![Crates, a table, barrels, a post flying a flag and a ball on a field of grass](docs/screenshots/meshes.png)
 
 ### egui
 

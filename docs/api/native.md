@@ -591,6 +591,7 @@ functions get it from [`call.context`](#callcontext).
 | `fn mouse_position(&self) -> Option<[f32; 2]>` | The cursor's position in canvas pixels, or `None` when it's outside the window. |
 | `fn create_sprite(&mut self, width: u32, height: u32, rgba: &[u8]) -> Result<Sprite>` | Creates a sprite from `width` by `height` pixels: sRGB RGBA bytes, row by row from the top. Fails if `rgba` isn't `width * height * 4` bytes, or the size is empty or too large. |
 | `fn create_mesh(&mut self, vertices: &[MeshVertex], indices: &[u32]) -> Result<Mesh>` | Creates a [mesh](#mesh) of `vertices`, and `indices` into them counting from 0, three for each triangle, counter-clockwise seen from the side it faces, the only side that shows. Fails if the indices aren't three for each triangle or reach past the vertices. |
+| `fn write_mesh(&mut self, mesh: &Mesh, vertices: &[MeshVertex]) -> Result<()>` | Writes `vertices` over those a [mesh](#mesh) was made with, so one whose corners move is made once and written again, which costs less than making it anew. Its triangles stay between the same corners, and every handle to it, scripts' among them, shows them from the next frame rendered. Fails unless there are as many vertices as the mesh was made with. |
 
 ### `Canvas`
 
@@ -704,6 +705,13 @@ and one for those that don't, drawn with the view's other draws of that mesh. 3D
 Triangles on the GPU: the same meshes scripts hold. A library gets them as arguments from scripts,
 or creates them with [`Context::create_mesh`](#context), and returns them as results. `clone()` is
 another handle to the same triangles, and cheap.
+
+A mesh whose shape changes, such as a character bent at its joints, a flag or a wave, is made once
+and its corners written again with [`Context::write_mesh`](#context), while the game loads or
+updates: as many vertices as it was made with, between which its triangles stay. Whoever holds the
+mesh shows what was written last before a frame is rendered, and
+[`mesh:bounds`](graphics.md#meshbounds) follows. Colliders shaped like the mesh stay the shape it
+was made in.
 
 ### `Vec3`
 

@@ -170,6 +170,18 @@ impl Library for Probe {
                 let vertex = MeshVertex::new(Vec3::ZERO, Vec3::Y);
                 call.context()?.create_mesh(&[vertex], &[0, 1, 2])
             })
+            // Moves `mesh`, a square `square` made, so its middle is `x` along, and makes it
+            // white.
+            .function("move_square", |_, call, (mesh, x): (Mesh, f64)| {
+                let normal = Vec3::new(0.0, 0.0, 1.0);
+                let vertices = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]]
+                    .map(|[dx, y]| MeshVertex::new(Vec3::new(x as f32 + dx, y, 0.0), normal));
+                call.context()?.write_mesh(&mesh, &vertices)
+            })
+            .function("bad_write", |_, call, mesh: Mesh| {
+                let vertex = MeshVertex::new(Vec3::ZERO, Vec3::Y);
+                call.context()?.write_mesh(&mesh, &[vertex; 3])
+            })
             .function("midpoint", |_, _, (a, b): (Vec3, Vec3)| {
                 Ok(Vec3::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0, (a.z + b.z) / 2.0))
             })
@@ -670,6 +682,46 @@ fn libraries_make_meshes_and_draw_in_3d_views() {
         .expect("the game stopped")
         .to_string();
     assert!(err.contains("begin one first"), "{err}");
+}
+
+#[test]
+fn libraries_write_meshes_again() {
+    let mut simulation = probe_game(
+        "written",
+        "local wg = require('@wingine')
+        square = probe.square('#ff0000')
+        held = square
+        _, bad_write = pcall(probe.bad_write, square)
+        side = -0.5
+        function update()
+            probe.move_square(square, side)
+        end
+        function draw()
+            wg.graphics.clear('#000000')
+            probe.view()
+            wg.graphics.draw_mesh(held, vector.zero)
+        end",
+    );
+    let bad_write: String = simulation.eval("tostring(bad_write)");
+    assert!(
+        bad_write.contains("3 vertices written to a mesh made with 4"),
+        "{bad_write}"
+    );
+    let [white, black] = [[255; 4], [0, 0, 0, 255]];
+    let sides = |simulation: &mut Simulation<LuauGame>| {
+        simulation.step();
+        assert_eq!(simulation.game().error().map(ToString::to_string), None);
+        let image = simulation.screenshot().unwrap();
+        [image.pixel(5, 10), image.pixel(15, 10)]
+    };
+    // The square the script holds, moved left and made white by the library.
+    assert_eq!(sides(&mut simulation), [white, black]);
+    simulation.exec("side = 0.5");
+    assert_eq!(sides(&mut simulation), [black, white]);
+    // Its bounds follow, for scripts too.
+    let (left, right): (f32, f32) =
+        simulation.eval("(function() local low, high = held:bounds() return low.x, high.x end)()");
+    assert_eq!((left, right), (0.0, 1.0));
 }
 
 #[test]

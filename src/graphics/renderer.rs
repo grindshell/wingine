@@ -1102,6 +1102,12 @@ impl MeshRenderer {
             instances.len(),
         );
         queue.write_buffer(&self.instance_buffer, 0, instances);
+        // Meshes written since a frame last drew them get their vertices, each once.
+        for run in &self.runs {
+            if let Some(mesh) = &canvas.mesh_draws[run.draw as usize].mesh {
+                mesh.upload(queue);
+            }
+        }
     }
 
     /// A depth buffer for a target of `size`, made the first time a target of that size draws a
