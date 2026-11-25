@@ -26,6 +26,10 @@ pub enum Error {
     /// An image was read, but can't be a texture: it's larger than the GPU takes.
     #[error("image {}: {message}", .path.display())]
     Image { path: PathBuf, message: String },
+    /// Pixels a game worked out can't be a texture: they aren't four bytes for each pixel, or
+    /// their size is empty or larger than the GPU takes.
+    #[error("invalid texture: {0}")]
+    Texture(String),
     /// A window's configuration asks for what the GPU can't do, such as a fixed resolution larger
     /// than it renders.
     #[error("invalid window configuration: {0}")]

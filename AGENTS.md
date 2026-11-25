@@ -85,7 +85,9 @@ references in their own right.
   falls back to borderless where there's no exclusive mode. With `Redraw::OnDemand`, frames come
   only when asked for (`Redraws`, shared with the `Context`, `Waker`s and egui).
 - `src/context.rs`: `Context`, the services games get: input, audio, saves, canvas size, fonts,
-  loading textures, fonts and models, `FrameStats`, and redraw requests.
+  loading textures, fonts and models, making a texture of pixels a game worked out
+  (`create_texture`, the upload `load_texture` and the ABI's `create_sprite` end in),
+  `FrameStats`, and redraw requests.
 - `src/graphics/`: `Canvas` records quads, all through one textured shader (fills use a white
   texture), batched by texture and `Blend` into draw calls, a pipeline for each blend mode, all
   blending premultiplied colors; rotation, transforms, slicing, outlines, lines and circles are

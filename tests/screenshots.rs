@@ -16,7 +16,8 @@ use wingine::{
     Context,
     graphics::{
         Align, Blend, Camera, Camera3d, Canvas, Color, Fog, Font, Light, Lighting, Mesh, MeshData,
-        MeshVertex, Model, ModelPart, Resolution, Scaling, Sky, SpriteSheet, Texture, View3d,
+        MeshVertex, Model, ModelPart, Resolution, Scaling, Sky, Sprite, SpriteSheet, Texture,
+        View3d,
     },
     headless::{Comparison, Headless, Image},
     math::{Affine, Affine3, Bounds3, Rect},
@@ -162,6 +163,134 @@ fn sprites() {
         })
         .unwrap();
     assert_screenshot(&headless.adapter_name(), "sprites", frame);
+}
+
+/// A texture made of pixels a game worked out, not read from a file: four texels by four, a
+/// quarter each of four colors, with a hole through its middle. Drawn a texel a pixel, then
+/// stretched, then a quarter of it alone.
+#[test]
+fn textures_from_pixels() {
+    let mut headless = headless();
+    let [red, green, blue, gold] = [
+        [0xd0, 0x40, 0x40, 0xff],
+        [0x40, 0xb0, 0x50, 0xff],
+        [0x30, 0xa0, 0xf0, 0xff],
+        [0xf0, 0xc0, 0x30, 0xff],
+    ];
+    let mut pixels = Vec::new();
+    for y in 0..4 {
+        for x in 0..4 {
+            let color = match (x < 2, y < 2) {
+                (true, true) => red,
+                (false, true) => green,
+                (true, false) => blue,
+                (false, false) => gold,
+            };
+            let hole = (1..=2).contains(&x) && (1..=2).contains(&y);
+            pixels.extend(if hole { [0; 4] } else { color });
+        }
+    }
+    let texture = headless.context().create_texture(4, 4, &pixels).unwrap();
+    assert_eq!([texture.width(), texture.height()], [4, 4]);
+    let whole = texture.sprite();
+    let quarter = SpriteSheet::new(texture, 2, 2).sprite(1, 0);
+    let behind = [0x20, 0x20, 0x28, 0xff];
+    let frame = headless
+        .render(48, 32, |canvas| {
+            canvas.clear(Color::rgb8(behind[0], behind[1], behind[2]));
+            canvas.draw_sprite(&whole, Rect::new(2.0, 2.0, 4.0, 4.0), Color::WHITE);
+            canvas.draw_sprite(&whole, Rect::new(8.0, 4.0, 24.0, 24.0), Color::WHITE);
+            canvas.draw_sprite(&quarter, Rect::new(36.0, 4.0, 8.0, 8.0), Color::WHITE);
+        })
+        .unwrap();
+    // Where it's drawn a texel a pixel, the frame has the pixels it was made of, to within what
+    // GPUs round differently, and what's behind it through its hole.
+    let near = |at: [u32; 2], color: [u8; 4]| {
+        let shown = frame.pixel(at[0], at[1]);
+        let off = |i: usize| shown[i].abs_diff(color[i]) <= CHANNEL_TOLERANCE;
+        assert!((0..4).all(off), "{shown:?} at {at:?} is not {color:?}");
+    };
+    near([2, 2], red);
+    near([5, 2], green);
+    near([2, 5], blue);
+    near([5, 5], gold);
+    near([3, 3], behind);
+    assert_screenshot(&headless.adapter_name(), "textures_from_pixels", frame);
+}
+
+/// Pixels are a texture only if there are four bytes for each, and of a size the GPU takes.
+#[test]
+fn textures_from_pixels_are_refused_unless_their_bytes_fit_their_size() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let err = ctx
+        .create_texture(2, 2, &[0xff; 15])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("2x2 pixels are 16 bytes of RGBA, not 15"),
+        "{err}"
+    );
+    assert!(ctx.create_texture(2, 2, &[0xff; 20]).is_err());
+    for [width, height] in [[0, 4], [4, 0], [0, 0]] {
+        let err = ctx
+            .create_texture(width, height, &[])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("a texture is from 1x1"), "{err}");
+    }
+    // Wider than any GPU takes, whatever bytes come with it.
+    let err = ctx
+        .create_texture(1 << 20, 1, &[0xff; 4])
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("not 1048576x1"), "{err}");
+    assert!(ctx.create_texture(1, 1, &[0xff; 4]).is_ok());
+}
+
+/// A game makes a texture as it loads and another as it updates, in a simulation, and both show
+/// in the frame after.
+#[test]
+fn textures_from_pixels_are_made_as_a_game_loads_and_as_it_updates() {
+    use wingine::{Game, WindowConfig, headless::Simulation};
+
+    struct Painted {
+        left: Sprite,
+        right: Option<Sprite>,
+    }
+    impl Game for Painted {
+        fn update(&mut self, ctx: &mut Context, _dt: f32) {
+            if self.right.is_none() {
+                let blue = ctx.create_texture(1, 1, &[0, 0, 0xff, 0xff]).unwrap();
+                self.right = Some(blue.sprite());
+            }
+        }
+
+        fn draw(&mut self, canvas: &mut Canvas) {
+            canvas.clear(Color::BLACK);
+            canvas.draw_sprite(&self.left, Rect::new(0.0, 0.0, 10.0, 20.0), Color::WHITE);
+            if let Some(right) = &self.right {
+                canvas.draw_sprite(right, Rect::new(10.0, 0.0, 10.0, 20.0), Color::WHITE);
+            }
+        }
+    }
+
+    let config = WindowConfig {
+        width: 20,
+        height: 20,
+        ..Default::default()
+    };
+    let mut simulation = Simulation::new(&config, |ctx| {
+        Ok(Painted {
+            left: ctx.create_texture(1, 1, &[0xff, 0, 0, 0xff])?.sprite(),
+            right: None,
+        })
+    })
+    .expect("a GPU adapter is available");
+    simulation.run_frames(2);
+    let frame = simulation.screenshot().unwrap();
+    assert_eq!(frame.pixel(5, 10), [0xff, 0, 0, 0xff]);
+    assert_eq!(frame.pixel(15, 10), [0, 0, 0xff, 0xff]);
 }
 
 /// Sprites rotated about their centers: unturned, a quarter turn, a half turn and an eighth back,

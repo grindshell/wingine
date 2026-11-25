@@ -5,6 +5,8 @@
 //!
 //! The post flies a flag, a mesh made once and written again every update with its corners where
 //! the wind has them (`Context::write_mesh`), which costs less than making a mesh of them anew.
+//! Its colors are a texture the example works out, pixel by pixel (`Context::create_texture`),
+//! where the grass's is read from a file.
 //!
 //! The field is a mesh built by hand, a quad for each tile, shaded a little lighter or darker by
 //! its corners' colors. It's drawn twice: plain, as the ground, then a little above it showing the
@@ -71,6 +73,8 @@ struct Meshes {
     table: Model,
     barrel: Model,
     grass: Sprite,
+    /// What the flag shows, made of pixels worked out here.
+    banner: Sprite,
     font: Font,
     /// The camera's angle round the middle, in radians.
     angle: f32,
@@ -86,6 +90,8 @@ impl Meshes {
         input.bind("left", [Key::Left, Key::A]);
         input.bind("right", [Key::Right, Key::D]);
         let sheet = SpriteSheet::new(ctx.load_texture(TILESET)?, 16, 16);
+        let ([width, height], pixels) = banner();
+        let banner = ctx.create_texture(width, height, &pixels)?.sprite();
         Ok(Self {
             field: ctx.create_mesh(&field())?,
             cube: ctx.create_mesh(&MeshData::cube(1.0))?,
@@ -95,6 +101,7 @@ impl Meshes {
             table: ctx.load_model(TABLE)?,
             barrel: ctx.load_model(BARREL)?,
             grass: sheet.sprite(5, 0),
+            banner,
             font: ctx.default_font().clone(),
             angle: 0.6,
             time: 0.0,
@@ -127,7 +134,7 @@ impl Meshes {
         let post = Affine3::from_translation(POST);
         view.draw_mesh(&self.post, post, None, Color::rgb8(0xe0, 0xe0, 0xd8));
         let hoist = Affine3::from_translation(flag_hoist());
-        view.draw_mesh(&self.flag, hoist, None, Color::rgb8(0xe8, 0xc0, 0x40));
+        view.draw_mesh(&self.flag, hoist, Some(&self.banner), Color::WHITE);
 
         // The models, as they were made: a table across from the crates, and barrels by the post.
         let table = Affine3::from_translation([2.0, 0.0, -1.6]) * Affine3::from_rotation_y(-0.4);
@@ -186,6 +193,22 @@ fn field() -> MeshData {
 fn flag_hoist() -> [f32; 3] {
     let [x, y, z] = POST;
     [x + POST_SIZE[0] / 2.0, y + POST_SIZE[1] / 2.0 - 0.05, z]
+}
+
+/// What the flag shows: its size in texels, a texel for each tenth of a unit of the flag, and
+/// their sRGB RGBA bytes, row by row from the top. A field of gold with a cross of blue, its
+/// upright nearer the hoist.
+fn banner() -> ([u32; 2], Vec<u8>) {
+    const SIZE: [u32; 2] = [12, 7];
+    let [gold, blue] = [[0xe8, 0xc0, 0x40, 0xff], [0x2c, 0x5a, 0xa0, 0xff]];
+    let mut pixels = Vec::new();
+    for y in 0..SIZE[1] {
+        for x in 0..SIZE[0] {
+            let crossed = y == SIZE[1] / 2 || x == 3 || x == 4;
+            pixels.extend(if crossed { blue } else { gold });
+        }
+    }
+    (SIZE, pixels)
 }
 
 /// The flag as it flies at `time`, from the top of its hoist: quads facing `+z` and the same
@@ -339,6 +362,18 @@ mod tests {
             assert_eq!(front.position, back.position);
             assert_eq!(front.normal.map(|v| -v), back.normal);
         }
+    }
+
+    #[test]
+    fn the_flag_shows_colors_worked_out_here() {
+        let ([width, height], pixels) = banner();
+        assert_eq!(pixels.len() as u32, width * height * 4);
+        let simulation = simulation();
+        let shown = &simulation.game().banner;
+        assert_eq!(
+            [shown.width(), shown.height()],
+            [width as f32, height as f32]
+        );
     }
 
     #[test]

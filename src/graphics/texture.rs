@@ -5,7 +5,9 @@ use std::{fmt, sync::Arc};
 use super::Sprite;
 use crate::math::Rect;
 
-/// An image uploaded to the GPU, created with [`Context::load_texture`](crate::Context::load_texture).
+/// An image uploaded to the GPU: a file's, loaded with
+/// [`Context::load_texture`](crate::Context::load_texture), or pixels a game worked out, made
+/// one with [`Context::create_texture`](crate::Context::create_texture).
 ///
 /// Cloning is cheap; clones share the same GPU texture.
 #[derive(Clone)]

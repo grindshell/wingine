@@ -288,6 +288,30 @@ impl Context {
         ))
     }
 
+    /// Makes a texture of pixels the game worked out, as [`load_texture`](Self::load_texture)
+    /// makes one of a file's: `width` by `height` of them, sRGB RGBA bytes, row by row from the
+    /// top, sampled as a loaded texture's are. Fails unless `rgba` is four bytes for each pixel,
+    /// and for a size that's empty or larger than the GPU takes.
+    ///
+    /// It's for what a game bakes, generates, or decodes itself, on a thread of its own if it
+    /// likes, since only the upload needs the context.
+    pub fn create_texture(&mut self, width: u32, height: u32, rgba: &[u8]) -> Result<Texture> {
+        let size = [width, height];
+        if let Some(problem) = texture_size_problem(&self.gpu.device, "a texture", size) {
+            return Err(Error::Texture(problem));
+        }
+        let bytes = width as usize * height as usize * 4;
+        if rgba.len() != bytes {
+            return Err(Error::Texture(format!(
+                "{width}x{height} pixels are {bytes} bytes of RGBA, not {}",
+                rgba.len()
+            )));
+        }
+        Ok(self
+            .renderer
+            .create_texture(&self.gpu.device, &self.gpu.queue, width, height, rgba))
+    }
+
     /// Loads a font file, `*.font.luau` by convention: a bitmap font, its glyphs drawn in a PNG
     /// divided into cells, or a TrueType or OpenType font at a size, each named by its path from
     /// the font file's folder. See [`scene`](crate::scene) for the format.
