@@ -1254,29 +1254,32 @@ impl MeshOrder {
     /// Adds the draws `indices` of `draws` to the order, those of a kind together, each kind's
     /// in the order they're given, the kinds in the order each first comes.
     fn group(&mut self, draws: &[MeshDraw], indices: impl Iterator<Item = u32> + Clone) {
-        let mut kinds: Vec<DrawKind> = Vec::new();
-        let mut kind_of = Vec::new();
+        // Each draw's kind, numbered as kinds first come, and how many draws each kind has, in
+        // `ends` for now, after the runs already there: a view may hold a thousand kinds, so
+        // each is looked up, not searched for among those so far.
+        self.kinds.clear();
+        self.kind_of.clear();
+        let first = self.ends.len();
         for i in indices.clone() {
-            let kind = draws[i as usize].kind();
-            let index = match kinds.iter().position(|&known| known == kind) {
-                Some(index) => index,
-                None => {
-                    kinds.push(kind);
-                    kinds.len() - 1
-                }
-            };
-            kind_of.push(index);
+            let next = (self.ends.len() - first) as u32;
+            let kind = *self.kinds.entry(draws[i as usize].kind()).or_insert(next);
+            if kind == next {
+                self.ends.push(0);
+            }
+            self.ends[first + kind as usize] += 1;
+            self.kind_of.push(kind);
         }
-        for kind in 0..kinds.len() {
-            let before = self.order.len();
-            for (i, &of) in indices.clone().zip(&kind_of) {
-                if of == kind {
-                    self.order.push(i);
-                }
-            }
-            if self.order.len() > before {
-                self.ends.push(self.order.len() as u32);
-            }
+        // Where each kind's run starts in the order, which becomes where it ends as each draw
+        // is put in its kind's run.
+        let mut start = self.order.len() as u32;
+        for count in &mut self.ends[first..] {
+            (*count, start) = (start, start + *count);
+        }
+        self.order.resize(start as usize, 0);
+        for (i, &kind) in indices.zip(&self.kind_of) {
+            let at = &mut self.ends[first + kind as usize];
+            self.order[*at as usize] = i;
+            *at += 1;
         }
     }
 
@@ -1895,5 +1898,44 @@ mod tests {
         assert_eq!(drawn, [1, 7, 4, 2, 6, 5, 3, 0]);
         assert_eq!(order.ends, [2, 3, 5, 6, 7, 8]);
         assert_eq!(MeshOrder::kind_count(&draws), 6);
+    }
+
+    #[test]
+    fn a_blended_draw_leaves_the_opaque_ones_in_the_order_they_have_without_it() {
+        // Billboards of eight kinds, by which way round they're drawn and whether they cast
+        // shadows, no two of a kind one after the other.
+        let draw = |kind: u32, blend, depth| MeshDraw {
+            mesh: None,
+            texture: None,
+            emission_texture: None,
+            mirrored: kind & 1 != 0,
+            double_sided: kind & 2 != 0,
+            casts_shadow: kind & 4 != 0,
+            blend,
+            depth,
+        };
+        let mut draws: Vec<MeshDraw> = (0..200).map(|i| draw(i * 5 % 8, None, 0.0)).collect();
+        let mut opaque = MeshOrder::default();
+        opaque.arrange(&draws);
+        assert!(!opaque.in_order);
+        assert_eq!(opaque.ends.len(), 8);
+
+        // One particle, drawn in the middle of them.
+        draws.insert(100, draw(0, Some(Blend::Normal), 3.0));
+        let mut order = MeshOrder::default();
+        order.arrange(&draws);
+        // Which draw each opaque one is, now that the particle is among them.
+        let moved = |i: u32| if i >= 100 { i + 1 } else { i };
+        let expected: Vec<u32> = opaque.order().iter().map(|&i| moved(i)).collect();
+        assert_eq!(order.order()[..200], expected);
+        assert_eq!(order.order()[200], 100);
+        assert_eq!(order.ends[..8], opaque.ends);
+        assert_eq!(order.ends[8], 201);
+        assert_eq!(MeshOrder::kind_count(&draws), 9);
+
+        // Kept from frame to frame, it starts again each time.
+        order.arrange(&draws);
+        assert_eq!(order.order()[..200], expected);
+        assert_eq!(order.ends.len(), 9);
     }
 }

@@ -3,7 +3,8 @@
 //!
 //! Each case draws [`SPRITES`] sprites, or characters, a frame in a [`Simulation`], and reports
 //! the median time `draw` took over [`FRAMES`] frames, per sprite, from the frame stats. The last
-//! cases render the frames too, for what rendering that many quads, billboards and meshes costs.
+//! cases render the frames too, for what rendering that many quads, billboards and meshes costs,
+//! and what one blended particle among meshes of many kinds adds to it.
 
 use std::{
     fs,
@@ -16,12 +17,14 @@ use wingine::{
     graphics::{Camera3d, Canvas, Color, Font, FontSettings, Mesh, MeshData, Sprite, View3d},
     headless::Simulation,
     math::{Affine, Affine3, Rect},
-    particles::{ParticleSettings, Particles},
+    particles::{ParticleSettings, ParticleSettings3d, Particles, Particles3d},
     runtime::{self, LuauGame},
 };
 use wingine_native as native;
 
 const SPRITES: u32 = 10_000;
+/// How many meshes [`Shape::Kinds`] draws its cubes of.
+const KINDS: u32 = 1_000;
 /// Frames run before measuring, so caches and buffers have warmed up.
 const WARMUP: u32 = 30;
 const FRAMES: u32 = 120;
@@ -167,6 +170,11 @@ fn main() {
         ("billboards in a 3D view", Shape::Billboard),
         ("cubes in a 3D view", Shape::Cube),
         ("cubes and posts in turn in a 3D view", Shape::CubesAndPosts),
+        ("cubes of 1,000 meshes in turn in a 3D view", Shape::Kinds),
+        (
+            "cubes of 1,000 meshes in turn, and one blended particle",
+            Shape::KindsAndParticle,
+        ),
     ] {
         let mut simulation =
             Simulation::new(&config(), |ctx| RustGame::load(ctx, &image, shape)).unwrap();
@@ -307,6 +315,12 @@ enum Shape {
     Cube,
     /// Cubes and posts, a mesh of their own, in turn, as tables of two parts would be.
     CubesAndPosts,
+    /// Cubes of [`KINDS`] meshes in turn, as a village of models would be: a draw call for each
+    /// mesh, none of whose draws come one after another.
+    Kinds,
+    /// As [`Shape::Kinds`], with one blended particle in the view, which its draws are then
+    /// ordered around.
+    KindsAndParticle,
     /// The sprite as particles of an emitter, each colored and sized by its age, unturned.
     Particles,
     /// [`TEXT`] in lines of [`SPRITES`] characters in all, in the built-in font.
@@ -333,6 +347,10 @@ struct RustGame {
     sprite: Sprite,
     cube: Mesh,
     post: Mesh,
+    /// [`KINDS`] cubes, a mesh each, for [`Shape::Kinds`].
+    kinds: Vec<Mesh>,
+    /// One particle that never ages, half see-through, so it blends.
+    particle: Particles3d,
     /// [`SPRITES`] still particles over the canvas, of every age, for [`Shape::Particles`].
     particles: Particles,
     /// What text is drawn in.
@@ -345,6 +363,22 @@ impl RustGame {
         let sprite = ctx.load_texture(image)?.sprite();
         let cube = ctx.create_mesh(&MeshData::cube(0.5))?;
         let post = ctx.create_mesh(&MeshData::cuboid([0.2, 1.0, 0.2]))?;
+        let kinds = match shape {
+            Shape::Kinds | Shape::KindsAndParticle => (0..KINDS)
+                .map(|_| ctx.create_mesh(&MeshData::cube(0.5)))
+                .collect::<wingine::Result<_>>()?,
+            _ => Vec::new(),
+        };
+        let blended = ParticleSettings3d {
+            common: ParticleSettings {
+                rate: 0.0,
+                colors: vec![Color::rgba(1.0, 1.0, 1.0, 0.5)],
+                ..ParticleSettings::default()
+            },
+            ..ParticleSettings3d::default()
+        };
+        let mut particle = Particles3d::new(blended, None, 1);
+        particle.emit(1);
         let settings = ParticleSettings {
             rate: SPRITES as f32,
             limit: SPRITES,
@@ -367,6 +401,8 @@ impl RustGame {
             sprite,
             cube,
             post,
+            kinds,
+            particle,
             particles,
             font,
             shape,
@@ -377,7 +413,12 @@ impl RustGame {
 impl Game for RustGame {
     fn draw(&mut self, canvas: &mut Canvas) {
         let tint = Color::rgb8(0xff, 0x80, 0x40);
-        if let Shape::Billboard | Shape::Cube | Shape::CubesAndPosts = self.shape {
+        if let Shape::Billboard
+        | Shape::Cube
+        | Shape::CubesAndPosts
+        | Shape::Kinds
+        | Shape::KindsAndParticle = self.shape
+        {
             // A grid on the ground, 100 by 100, seen from above at an angle.
             let camera = Camera3d::perspective([50.0, 60.0, 130.0], [50.0, 0.0, 50.0], 0.8);
             let view = View3d::new(camera, Rect::new(0.0, 0.0, 320.0, 180.0));
@@ -392,11 +433,19 @@ impl Game for RustGame {
                         let placed = Affine3::from_translation(at);
                         world.draw_mesh(&self.post, placed, Some(&self.sprite), tint);
                     }
+                    Shape::Kinds | Shape::KindsAndParticle => {
+                        let placed = Affine3::from_translation(at);
+                        let mesh = &self.kinds[(i % KINDS) as usize];
+                        world.draw_mesh(mesh, placed, Some(&self.sprite), tint);
+                    }
                     _ => {
                         let placed = Affine3::from_translation(at);
                         world.draw_mesh(&self.cube, placed, Some(&self.sprite), tint);
                     }
                 }
+            }
+            if let Shape::KindsAndParticle = self.shape {
+                world.draw_particles(&self.particle, Affine3::IDENTITY);
             }
             return;
         }
@@ -429,6 +478,8 @@ impl Game for RustGame {
                 Shape::Billboard
                 | Shape::Cube
                 | Shape::CubesAndPosts
+                | Shape::Kinds
+                | Shape::KindsAndParticle
                 | Shape::Particles
                 | Shape::Text
                 | Shape::VectorText
