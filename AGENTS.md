@@ -125,8 +125,15 @@ references in their own right.
   `Fog::amount_at` and `Sky::color_at`, which follow the shader: change them together.
   `lights_of` and `shadows_of` choose a view's lights and shadow maps for the renderer and the
   frame's stats alike. Glow rides each draw's `Instance`, so it never splits a draw call.
+  A view's sun casts shadows if its `Lighting` says how (`SunShadows`), from one map of its own,
+  2048 texels across, made when first wanted: `View3d::sun_map` gives what looks along the
+  sunlight, without perspective, at the box a little past the shadows' reach each way from the
+  camera's target, its middle a whole number of texels from the world's origin, so shadows keep
+  still as the camera moves. `shadow.wgsl`'s `vs_sun` draws what's nearer the sun than that box
+  at its near side, so it still casts, and `mesh.wgsl`'s `sun_lit` shades nothing farther than
+  the reach from the target.
   `Lighting` and `View3d` stay `Copy`, and the ABI's view is unchanged, so native libraries can't
-  add lights, fog or a sky, and their draws glow a batch at a time, not each
+  add lights, a sun's shadows, fog or a sky, and their draws glow a batch at a time, not each
   (`draw_meshes_glowing`, `draw_billboards_glowing`; `native.rs` sets it black for the rest).
 - `src/graphics/font.rs`: `Font` and `TextLayout`. Built-in and bitmap fonts have their glyphs in
   one texture (`Metrics`; bitmap glyphs cut from a font file's PNG, as wide as their ink).

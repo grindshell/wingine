@@ -201,7 +201,7 @@ impl Writer {
         let direction = lighting.direction != default.direction;
         let color = !same_color(lighting.color, default.color);
         let ambient = !same_color(lighting.ambient, default.ambient);
-        if !(direction || color || ambient) {
+        if !(direction || color || ambient || lighting.shadows.is_some()) {
             return Ok(());
         }
         self.key("lighting");
@@ -215,6 +215,18 @@ impl Writer {
         }
         if ambient {
             self.any_color("ambient", lighting.ambient);
+        }
+        if let Some(shadows) = lighting.shadows {
+            let at = |err: String| format!("lighting.shadows: {err}");
+            self.key("shadows");
+            self.open();
+            self.number_field("reach", shadows.reach).map_err(at)?;
+            if shadows.darkness != 1.0 {
+                self.number_field("darkness", shadows.darkness)
+                    .map_err(at)?;
+            }
+            self.close();
+            self.end_field();
         }
         self.close();
         self.end_field();
@@ -1610,6 +1622,12 @@ mod tests {
                 height = 12,
                 near = 1,
             },
+            lighting = {
+                shadows = {
+                    reach = 12,
+                    darkness = 0.75,
+                },
+            },
             fog = {
                 far = 20,
             },
@@ -1655,6 +1673,11 @@ mod tests {
             panic!("{:?}", scene.children[1].kind);
         };
         assert_eq!(map.sky, Some(Sky::flat(Color::rgb8(0x20, 0x40, 0x60))));
+        // Its sun casts shadows, and is otherwise the default's, which isn't written.
+        let shadows = map.lighting.shadows.expect("the map's sun casts shadows");
+        assert_eq!([shadows.reach, shadows.darkness], [12.0, 0.75]);
+        assert_eq!(map.lighting.direction, Lighting::default().direction);
+        assert_eq!(view.lighting.shadows, None);
         // Written and read back from Rust, every field the same.
         let written = scene.to_luau().unwrap();
         assert_eq!(parse(&written), scene);

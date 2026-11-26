@@ -449,7 +449,7 @@ seconds, measured on the CPU:
 | `draw_calls` | How many draw calls those took: one for each run of quads with the same texture and blend mode, one for each kind of mesh, or billboard, each 3D view drew: the same mesh showing the same texture, and one for each view's sky. |
 | `lights` | How many [lights at places](#lights) lit the frame's 3D views. |
 | `lights_left_out` | How many lights reached what a 3D view saw but didn't light it, there being more than the 32 that light a view at once. |
-| `shadow_maps` | How many [shadow maps](#shadows) those lights took. Each draws its view's meshes that cast shadows again, from a light, in draw calls `draw_calls` doesn't count. |
+| `shadow_maps` | How many [shadow maps](#shadows) those lights took, and one for each 3D view whose [sun cast shadows](#the-suns-shadows). Each draws its view's meshes that cast shadows again, from a light or along the sun's, in draw calls `draw_calls` doesn't count. |
 | `shadows_left_out` | How many lights with `shadows` lit a 3D view without them, there being more than the 24 shadow maps a view has. |
 | `libraries` | What each [native library](../native-libraries.md) cost the frame, by the name of its table: its share of `update` and `draw`. |
 
@@ -1224,6 +1224,7 @@ The lighting's table:
 | `direction` | The way the sun's light goes, a vector of any length. By default, `vector.create(-0.3, -1, -0.5)`: down from above, a little to the right and in front. |
 | `color` | The sun's light, a [`Color`](README.md#color), on surfaces facing it, and less on those turned partly away. By default, `"#cccccc"`. |
 | `ambient` | The light on every surface, even those facing away from the sun. By default, `"#808080"`. |
+| `shadows` | How the sun casts [shadows](#the-suns-shadows): a table of a `reach` and, optionally, a `darkness`. By default, the sun casts none. |
 | `lights` | Lights at places in the view, such as lamps and torches: a list of tables, below. By default, none. |
 
 White light shows a surface as it is, and all of a view's light together lights it no brighter
@@ -1303,7 +1304,7 @@ not the light; the pixels of a mesh's sprite less than half opaque, which aren't
 mesh or model drawn with [`casts_shadow`](#graphicsdraw_mesh) `false`, or with a `blend`; and
 anything nearer the light than 0.002 of its range. A light inside a mesh, such as a lamp's bulb,
 is shaded by it all round, so draw that one with `casts_shadow = false`. The sun casts no
-shadows.
+shadows unless the view's lighting [says so](#the-suns-shadows).
 
 ```lua
 -- A lamp whose light stops at the crate, but not at its own bulb, which it's inside.
@@ -1327,6 +1328,52 @@ light. A view has 24 shadow maps, which the lights nearest its camera take first
 are none left for lights the view without shadows: the engine logs a warning the first time, and
 [`graphics.frame_stats`](#graphicsframe_stats) counts such lights as `shadows_left_out`, and the
 maps taken as `shadow_maps`.
+
+#### The sun's shadows
+
+With `shadows` in its lighting, a view's sun casts shadows too: out of doors, the ones a world
+has.
+
+| Field | What it is |
+|---|---|
+| `reach` | How far from the point the camera looks at, its `target`, shadows fall, in world units, above 0. Every sun's shadows have one. |
+| `darkness` | How much of the sun's light a shadow takes, from 0, none of it, to 1, all of it. By default, 1. |
+
+What casts a shadow from a light casts one from the sun, and what casts none there casts none
+here. A place in shadow gets `1 - darkness` of the sun's light, and all of the view's ambient
+light and its lights', so with ambient light a shadow is never black, and a `darkness` under 1
+leaves it some of the sun besides.
+
+```lua
+-- A yard in the afternoon: everything within 30 units of what the camera looks at has a shadow.
+wg.graphics.begin_3d({
+    camera = camera,
+    lighting = {
+        direction = vector.create(-0.4, -1, -0.6),
+        color = "#fff4e0",
+        ambient = "#7080a0",
+        shadows = { reach = 30 },
+    },
+})
+```
+
+The shadows are in one map of the sun's own, 2048 pixels square, which looks along the sunlight
+at everything within `reach` of the camera's `target`. So:
+
+- **Nothing farther than `reach` from the camera's target is shaded.** The shadows end there, at
+  a hard edge, so reach past what the view shows, or as far as its [fog](#fog).
+- **What's up the sunlight from there still casts**, however far up it is: a tower outside the
+  reach shades the ground inside it.
+- **The shorter the reach, the finer the shadows.** Their edges are hard, and stepped by the
+  map's pixels, each `2 * reach / 2042` world units wide: 0.03 for a reach of 30, and 0.1 for a
+  reach of 100.
+- **Shadows keep still as the camera moves.** The map moves with the camera's target only by
+  whole pixels of its own, so a shadow's edge doesn't crawl over the ground as the camera pans.
+
+A sun that gives no light, a black `color`, casts no shadows, and neither do shadows with a
+`darkness` of 0. A view whose sun casts shadows draws its meshes that cast them once more, along
+the sunlight, which [`graphics.frame_stats`](#graphicsframe_stats) counts as one of its
+`shadow_maps`. The map is beside the 24 that lights share, and takes none of them.
 
 #### Fog
 

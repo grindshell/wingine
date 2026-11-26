@@ -14,7 +14,7 @@ use std::{
 
 use wingine::{
     Context,
-    graphics::{Align, Blend, Camera3d, Color, Fog, Projection, Sky},
+    graphics::{Align, Blend, Camera3d, Color, Fog, Projection, Sky, SunShadows},
     gui::egui,
     math::Bounds3,
     particles::{Look, ParticleSettings},
@@ -680,6 +680,29 @@ impl Inspector {
                     over.label(ui, "ambient", &["lighting"]);
                     color(ui, &mut lighting.ambient);
                     ui.end_row();
+                    over.label(ui, "sun's shadows", &["lighting"]);
+                    let mut shaded = lighting.shadows.is_some();
+                    let response = ui.checkbox(&mut shaded, "");
+                    response.widget_info(|| {
+                        let label = "sun's shadows";
+                        egui::WidgetInfo::selected(egui::Role::CheckBox, true, shaded, label)
+                    });
+                    if response.changed() {
+                        // As far as shows a room, to begin with.
+                        lighting.shadows = shaded.then(|| SunShadows::new(20.0));
+                    }
+                    ui.end_row();
+                    if let Some(shadows) = &mut lighting.shadows {
+                        over.label(ui, "shadows' reach", &["lighting"]);
+                        number(ui, "shadows' reach", &mut shadows.reach, 0.1);
+                        ui.end_row();
+                        over.label(ui, "shadows' darkness", &["lighting"]);
+                        number(ui, "shadows' darkness", &mut shadows.darkness, 0.01);
+                        ui.end_row();
+                        // They reach somewhere, and take none of the sun's light to all of it.
+                        shadows.reach = shadows.reach.max(0.01);
+                        shadows.darkness = shadows.darkness.clamp(0.0, 1.0);
+                    }
                 });
                 ui.strong("Fog");
                 grid(ui, "fog", |ui| {

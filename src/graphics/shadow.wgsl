@@ -1,5 +1,6 @@
-// Draws a 3D view's meshes into a shadow map: how far the nearest of them is from a light, along
-// the way the map looks. It takes the vertices and instances `mesh.wgsl` does.
+// Draws a 3D view's meshes into a shadow map: how far the nearest of them is from a light, or
+// along the sun's light, along the way the map looks. It takes the vertices and instances
+// `mesh.wgsl` does.
 
 struct Map {
     // Maps the world onto the shadow map, as a camera at the light would see it.
@@ -35,8 +36,7 @@ struct VertexOut {
     @location(1) alpha: f32,
 }
 
-@vertex
-fn vs_main(vertex: VertexIn, instance: InstanceIn) -> VertexOut {
+fn placed(vertex: VertexIn, instance: InstanceIn) -> VertexOut {
     let p = vertex.position;
     let world = instance.model_x * p.x + instance.model_y * p.y + instance.model_z * p.z
         + instance.model_translation;
@@ -44,6 +44,21 @@ fn vs_main(vertex: VertexIn, instance: InstanceIn) -> VertexOut {
     out.clip_position = map.light_proj * vec4<f32>(world, 1.0);
     out.uv = mix(instance.uv_bounds.xy, instance.uv_bounds.zw, vertex.uv);
     out.alpha = vertex.color.a * instance.tint.a;
+    return out;
+}
+
+@vertex
+fn vs_main(vertex: VertexIn, instance: InstanceIn) -> VertexOut {
+    return placed(vertex, instance);
+}
+
+// Into a sun's map, which looks along the sunlight without perspective, at a box: what's nearer
+// the sun than the box begins is drawn where it begins, so it shades what's in the box however
+// far up the sunlight it is.
+@vertex
+fn vs_sun(vertex: VertexIn, instance: InstanceIn) -> VertexOut {
+    var out = placed(vertex, instance);
+    out.clip_position.z = max(out.clip_position.z, 0.0);
     return out;
 }
 

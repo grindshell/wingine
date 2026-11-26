@@ -14,7 +14,7 @@ use std::{
 use wingine::{
     Redraw, WindowConfig,
     audio::Sound,
-    graphics::{Blend, Color, Fog, Sky},
+    graphics::{Blend, Color, Fog, Sky, SunShadows},
     headless::{Headless, Simulation},
     input::{Key, MouseButton},
     music::{Pitch, SongFile},
@@ -892,6 +892,10 @@ fn views_and_their_nodes_are_added_and_inspected() {
         tick.y + tick.h / 2.0,
     );
     simulation.run_frames(3);
+    // The Inspector is longer than the window is tall by now, and the sky's fields are at its
+    // end: it scrolls, the cursor being over it.
+    simulation.scroll(0.0, -10.0);
+    simulation.run_frames(2);
     set_field(&mut simulation, "sky's band", "0.5");
     let KindDef::View3d(view) = &node(&simulation, "view3d").kind else {
         unreachable!()
@@ -901,9 +905,31 @@ fn views_and_their_nodes_are_added_and_inspected() {
         ..Sky::flat(Color::WHITE)
     };
     assert_eq!(view.sky, Some(sky));
+    assert_eq!(view.lighting.shadows, None);
+
+    // Its sun's shadows, which it has once their box is ticked: then how far they reach. They're
+    // with its lighting, back up the Inspector.
+    simulation.scroll(0.0, 10.0);
+    simulation.run_frames(2);
+    assert!(simulation.gui_rect("shadows' reach").is_none());
+    let tick = *simulation
+        .gui_rects("sun's shadows")
+        .last()
+        .expect("a box for the sun's shadows");
+    simulation.click(
+        MouseButton::Left,
+        tick.x + tick.w / 2.0,
+        tick.y + tick.h / 2.0,
+    );
+    simulation.run_frames(3);
+    set_field(&mut simulation, "shadows' reach", "12");
+    let KindDef::View3d(view) = &node(&simulation, "view3d").kind else {
+        unreachable!()
+    };
+    assert_eq!(view.lighting.shadows, Some(SunShadows::new(12.0)));
 
     // Each was a change of its own.
-    for _ in 0..10 {
+    for _ in 0..12 {
         control(&mut simulation, Key::Z);
     }
     assert!(!simulation.game().document().unwrap().is_dirty());

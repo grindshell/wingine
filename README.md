@@ -18,7 +18,8 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
   window, which can cover the screen.
 - **Timing**: an update a frame, or at a fixed rate so games play the same at any frame rate.
   Frame stats and a headless benchmark show where the time goes.
-- **3D views** among the 2D: meshes, glTF models and billboarded sprites, lit by a sun and by
+- **3D views** among the 2D: meshes, glTF models and billboarded sprites, lit by a sun that can
+  cast shadows and by
   lights at places that can cast shadows or keep to a box, glowing where they give off light of
   their own, see-through where they're drawn blended, fading
   into fog with distance, under a sky that fog fades into, for 2.5D games, rendered at the
@@ -204,12 +205,13 @@ Walk with the arrow keys, and point at a prop to name it.
 [`examples/course`](examples/course) is a course to run around in 3D, collecting coins, built
 from Kenney's [Prototype Kit](https://kenney.nl/assets/prototype-kit) and made solid by a
 [physics world](docs/api/physics.md#in-3d). Its far side fades into the view's sky, a pale
-haze toward the horizon, by the view's fog.
+haze toward the horizon, by the view's fog, and everything in it casts a shadow from the view's
+sun.
 
 ![The figurine jumping, its shadow on the ground below, the course's far side fading into a pale sky](docs/screenshots/course.png)
 
 Walk with the arrow keys or a stick, jump with Space, and zoom with the mouse wheel. The player
-climbs the stairs, pushes crates over, and casts a shadow where a jump will land.
+climbs the stairs, pushes crates over, and has a shadow straight below it, where a jump will land.
 
 ### Quarry
 

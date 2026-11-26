@@ -48,6 +48,15 @@ struct View {
     sky_up: vec4<f32>,
     // What places the view's clip space on the target's: across and down scaled, then moved.
     sky_crop: vec4<f32>,
+    // What maps the world onto the sun's shadow map, which looks along its light without
+    // perspective: from -1 to 1 across and up it, and from 0, nearest the sun, to 1.
+    sun_map: mat4x4<f32>,
+    // How large a texel of that map is, in world units; how much of the sun's light a shadow
+    // takes; how far from `sun_center` shadows reach, squared; then 1 for a sun that casts
+    // shadows, or 0.
+    sun_shadow: vec4<f32>,
+    // The point the sun's shadows reach out from.
+    sun_center: vec4<f32>,
     lights: array<Light, 32>,
     // What maps the world onto each shadow map, as a camera at its light would see it.
     shadow_maps: array<mat4x4<f32>, 24>,
@@ -60,6 +69,9 @@ var<uniform> view: View;
 var shadow_texture: texture_depth_2d_array;
 @group(0) @binding(2)
 var shadow_sampler: sampler_comparison;
+// How far along the sun's light the nearest thing casting a shadow is, in the sun's shadow map.
+@group(0) @binding(3)
+var sun_texture: texture_depth_2d;
 
 @group(1) @binding(0)
 var mesh_texture: texture_2d<f32>;
@@ -188,6 +200,24 @@ fn lit(index: u32, world: vec3<f32>, normal: vec3<f32>, toward: vec3<f32>) -> f3
     return textureSampleCompareLevel(shadow_texture, shadow_sampler, uv, i32(map), place.z);
 }
 
+// How much of the sun's light reaches `world`: all of it, 1, or with something casting a shadow
+// nearer the sun, what a shadow leaves. All of it too past the shadows' reach. `normal` is the
+// surface's, or nothing for a billboard's. A texel is one size all over the map, there being no
+// perspective in it.
+fn sun_lit(world: vec3<f32>, normal: vec3<f32>) -> f32 {
+    let shadow = view.sun_shadow;
+    let away = world - view.sun_center.xyz;
+    if dot(away, away) > shadow.z {
+        return 1.0;
+    }
+    let moved = world + normal * (shadow.x * SHADOW_OFF_SURFACE)
+        - view.light_direction.xyz * (shadow.x * SHADOW_TOWARD_LIGHT);
+    let place = (view.sun_map * vec4<f32>(moved, 1.0)).xyz;
+    let uv = place.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
+    let reached = textureSampleCompareLevel(sun_texture, shadow_sampler, uv, place.z);
+    return 1.0 - shadow.y * (1.0 - reached);
+}
+
 @fragment
 fn fs_main(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
     let color = textureSample(mesh_texture, mesh_sampler, in.uv) * in.color;
@@ -293,6 +323,12 @@ fn shade(in: VertexOut, front_facing: bool, color: vec3<f32>, emitted: vec3<f32>
     if normal_length > 0.0 {
         normal = normal / normal_length;
         facing = max(dot(normal, -view.light_direction.xyz), 0.0);
+    }
+    if facing > 0.0 && view.sun_shadow.w > 0.5 {
+        // A billboard's normals aren't its surface's, so it's looked up where it is, as lights
+        // at places find it.
+        let surface = select(normal, vec3<f32>(0.0), in.world.w > 0.5);
+        facing *= sun_lit(in.world.xyz, surface);
     }
     var light = view.ambient.rgb + view.light_color.rgb * facing;
     for (var i = 0u; i < view.light_count.x; i++) {

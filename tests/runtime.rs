@@ -4990,6 +4990,106 @@ fn views_take_shadows_from_luau() {
     );
 }
 
+/// A floor seen from above, 10 pixels a world unit, and a slab a unit over it to the left, under
+/// a sun shining down and to the right: the slab's shadow is on the floor in the middle.
+#[test]
+fn views_take_a_suns_shadows_from_luau() {
+    let folder = game(
+        "view_sun_shadows",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "local wg = require('@wingine')
+                floor = wg.graphics.new_cuboid(6, 0.1, 6)
+                slab = wg.graphics.new_cuboid(1, 0.1, 1)
+                shadows = { reach = 5 }
+                options = nil
+                function draw()
+                    wg.graphics.clear('#000000')
+                    wg.graphics.begin_3d({
+                        camera = { position = vector.create(0, 5, 0), target = vector.zero, height = 2 },
+                        lighting = {
+                            direction = vector.create(1, -1, 0),
+                            color = '#ffffff',
+                            ambient = '#000000',
+                            shadows = shadows,
+                        },
+                    })
+                    wg.graphics.draw_mesh(floor, vector.create(0, -0.05, 0))
+                    wg.graphics.draw_mesh(slab, vector.create(-1, 1, 0), options)
+                    stats = wg.graphics.frame_stats()
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    simulation.step();
+    assert_eq!(simulation.game().error().map(ToString::to_string), None);
+    // The floor in the middle, under the slab's shadow, and right of it, in the sun; then the
+    // shadow maps the frame took.
+    let shown = |simulation: &mut Simulation<LuauGame>| {
+        simulation.step();
+        let image = simulation.screenshot().unwrap();
+        simulation.step();
+        let maps = simulation.eval::<u32>("stats.shadow_maps");
+        (image.pixel(10, 10), image.pixel(17, 10), maps)
+    };
+    let (shaded, lit, maps) = shown(&mut simulation);
+    assert_eq!(shaded, BLACK);
+    assert!(lit[0] > 200, "{lit:?}");
+    assert_eq!(maps, 1, "the sun's");
+    assert_eq!(simulation.eval::<u32>("stats.shadows_left_out"), 0);
+
+    // A shadow that takes less of the sun's light leaves the rest.
+    simulation.exec("shadows = { reach = 5, darkness = 0.5 }");
+    let (shaded, sunlit, maps) = shown(&mut simulation);
+    assert!(shaded[0] > 100 && shaded[0] < lit[0] - 20, "{shaded:?}");
+    assert_eq!((sunlit, maps), (lit, 1));
+
+    // Drawn as casting none, the slab leaves the floor lit, and so does a sun without shadows,
+    // or one whose shadows don't reach it, which take no map or still take one.
+    simulation.exec("shadows = { reach = 5 } options = { casts_shadow = false }");
+    assert_eq!(shown(&mut simulation), (lit, lit, 1));
+    simulation.exec("options = nil shadows = nil");
+    assert_eq!(shown(&mut simulation), (lit, lit, 0));
+    simulation.exec("shadows = { reach = 0.25 }");
+    let (near, _, maps) = shown(&mut simulation);
+    assert_eq!((near, maps), (BLACK, 1), "within a quarter of a unit");
+    simulation.exec(
+        "local wg = require('@wingine')
+        function draw()
+            wg.graphics.clear('#000000')
+            wg.graphics.begin_3d({
+                camera = { position = vector.create(0.6, 5, 0), target = vector.create(0.6, 0, 0), height = 2 },
+                lighting = {
+                    direction = vector.create(1, -1, 0),
+                    color = '#ffffff',
+                    ambient = '#000000',
+                    shadows = shadows,
+                },
+            })
+            wg.graphics.draw_mesh(floor, vector.create(0, -0.05, 0))
+            wg.graphics.draw_mesh(slab, vector.create(-1, 1, 0))
+        end",
+    );
+    // The camera looks 0.6 to the right, so the shadow's middle is 6 pixels left of the view's,
+    // and past the shadows' reach.
+    simulation.step();
+    let image = simulation.screenshot().unwrap();
+    assert_eq!(image.pixel(4, 10), lit, "past the reach");
+    // The table this `draw` found as it loaded, which a new one wouldn't replace for it.
+    simulation.exec("shadows.reach = 5");
+    simulation.step();
+    assert_eq!(simulation.screenshot().unwrap().pixel(4, 10), BLACK);
+
+    // Shadows have a reach, above 0.
+    simulation.exec("shadows.reach = nil");
+    simulation.step();
+    let err = stopped_with(&simulation);
+    assert!(err.contains("`reach`"), "{err}");
+}
+
 /// A 3D view filling the canvas, seen from the front through an orthographic camera 2 units high,
 /// unlit, so a unit is 10 pixels with the world's origin in the middle: a red box to the left in
 /// front of a blue wall, and a red billboard to the right, inside a plain node.
@@ -5091,6 +5191,16 @@ fn scene_views_work_from_luau() {
         simulation.eval::<(f32, f32, String)>("view:camera().height, view:camera().target.z, string.format('%08x', view:lighting().ambient)"
         ),
         (2.0, 0.0, "ffffffff".into())
+    );
+    // Its sun casts no shadows until it's given some, which it then says.
+    assert!(simulation.eval::<bool>("view:lighting().shadows == nil"));
+    simulation.exec(
+        "view:set_lighting({ color = '#000000', ambient = '#ffffff', shadows = { reach = 6 } })",
+    );
+    assert_eq!(
+        simulation
+            .eval::<(f32, f32)>("view:lighting().shadows.reach, view:lighting().shadows.darkness"),
+        (6.0, 1.0)
     );
 
     // Moved, turned, stretched and recolored, as the next frame shows.

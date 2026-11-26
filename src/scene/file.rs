@@ -16,7 +16,9 @@ use super::{
 };
 use crate::{
     Error, Result,
-    graphics::{Align, Blend, Camera3d, Color, Fog, Light, Lighting, MeshData, Projection, Sky},
+    graphics::{
+        Align, Blend, Camera3d, Color, Fog, Light, Lighting, MeshData, Projection, Sky, SunShadows,
+    },
     lua::{
         DEFAULT_FOV, is_identifier,
         mlua::{self, chunk::ChunkMode},
@@ -2536,7 +2538,7 @@ fn read_camera(camera: Value) -> Result<Camera3d, String> {
     }
 }
 
-/// A view's lighting, `{ direction, color, ambient }`, each the default's if left out.
+/// A view's lighting, `{ direction, color, ambient, shadows }`, each the default's if left out.
 fn read_lighting(lighting: Value) -> Result<Lighting, String> {
     let mut fields = Fields::new(lighting, "`lighting`")?;
     let default = Lighting::default();
@@ -2559,12 +2561,33 @@ fn read_lighting(lighting: Value) -> Result<Lighting, String> {
     };
     let color = light("color", default.color)?;
     let ambient = light("ambient", default.ambient)?;
+    let shadows = fields.take("shadows").map(read_sun_shadows).transpose()?;
     fields.finish("`lighting`")?;
     Ok(Lighting {
         direction,
         color,
         ambient,
+        shadows,
     })
+}
+
+/// A sun's shadows, `{ reach, darkness }`: taking all of its light where that's left out.
+fn read_sun_shadows(shadows: Value) -> Result<SunShadows, String> {
+    let mut fields = Fields::new(shadows, "`lighting.shadows`")?;
+    let Some(reach) = fields.take("reach") else {
+        return Err("`lighting.shadows` must have a `reach`".into());
+    };
+    let reach = finite(reach, "lighting.shadows.reach")?;
+    let darkness = match fields.take("darkness") {
+        Some(darkness) => finite(darkness, "lighting.shadows.darkness")?,
+        None => 1.0,
+    };
+    fields.finish("`lighting.shadows`")?;
+    let shadows = SunShadows { reach, darkness };
+    match shadows.problem() {
+        Some(problem) => Err(problem),
+        None => Ok(shadows),
+    }
 }
 
 /// A view's fog, `{ color, near, far }`: white from 0 where those are left out.
@@ -3246,14 +3269,23 @@ fn camera_value(camera: &Camera3d) -> Value {
 
 /// Lighting as a scene file holds it, with every field.
 fn lighting_value(lighting: &Lighting) -> Value {
-    Value::Map(
-        [
-            ("direction".to_owned(), triple_value(lighting.direction)),
-            ("color".to_owned(), hex_value(lighting.color)),
-            ("ambient".to_owned(), hex_value(lighting.ambient)),
-        ]
-        .into(),
-    )
+    let mut fields: BTreeMap<String, Value> = [
+        ("direction".to_owned(), triple_value(lighting.direction)),
+        ("color".to_owned(), hex_value(lighting.color)),
+        ("ambient".to_owned(), hex_value(lighting.ambient)),
+    ]
+    .into();
+    if let Some(shadows) = lighting.shadows {
+        let shadows = [
+            ("reach".to_owned(), Value::Number(shadows.reach.into())),
+            (
+                "darkness".to_owned(),
+                Value::Number(shadows.darkness.into()),
+            ),
+        ];
+        fields.insert("shadows".to_owned(), Value::Map(shadows.into()));
+    }
+    Value::Map(fields)
 }
 
 /// Fog as a scene file holds it, with every field.
@@ -4234,6 +4266,43 @@ mod tests {
                 ..Sky::flat(dusk)
             })
         );
+        // A sun's shadows take all of its light where they don't say how much, and a view's sun
+        // casts none unless it says so.
+        let shadows_of = |fields: &str| -> std::result::Result<Option<SunShadows>, String> {
+            let source = format!(
+                "return {{ format = 4, children = {{ {{ name = 'view', kind = 'view3d', \
+                 width = 1, height = 1, {bare} lighting = {{ {fields} }} }} }} }}"
+            );
+            let scene = parse(&source).map_err(|err| err.to_string())?;
+            match &scene.children[0].kind {
+                KindDef::View3d(def) => Ok(def.lighting.shadows),
+                kind => panic!("{kind:?}"),
+            }
+        };
+        assert_eq!(shadows_of(""), Ok(None));
+        assert_eq!(def.lighting.shadows, None);
+        assert_eq!(
+            shadows_of("shadows = { reach = 30 }"),
+            Ok(Some(SunShadows::new(30.0)))
+        );
+        let faint = SunShadows {
+            reach: 30.0,
+            darkness: 0.5,
+        };
+        assert_eq!(
+            shadows_of("shadows = { reach = 30, darkness = 0.5 }"),
+            Ok(Some(faint))
+        );
+        for (fields, said) in [
+            ("shadows = {}", "`reach`"),
+            ("shadows = { reach = 0 }", "reach"),
+            ("shadows = { reach = 5, darkness = 2 }", "darkness"),
+            ("shadows = { reach = 5, soft = true }", "soft"),
+            ("shadows = true", "shadows"),
+        ] {
+            let err = shadows_of(fields).unwrap_err();
+            assert!(err.contains(said), "{fields}: {err}");
+        }
 
         let [floor, stack, barrel, hero, prop] = &view.children[..] else {
             panic!("{:?}", view.children);

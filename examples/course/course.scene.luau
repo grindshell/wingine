@@ -15,6 +15,10 @@ return {
                 direction = { -0.4, -1, -0.6 },
                 color = "#fff4e0",
                 ambient = "#7080a0",
+                shadows = {
+                    reach = 16,
+                    darkness = 0.75,
+                },
             },
             fog = {
                 near = 8,
@@ -224,6 +228,7 @@ return {
                     shape = "sphere",
                     radius = 0.2,
                     tint = "#4a5a40",
+                    casts_shadow = false,
                 },
                 {
                     name = "player",

@@ -299,6 +299,44 @@ fn the_shadow_is_hidden_off_the_course() {
     assert!(!shown);
 }
 
+#[test]
+fn the_sun_casts_shadows_over_the_course() {
+    let mut simulation = simulation();
+    simulation.run_for(1.0);
+    check(&simulation);
+    // The scene's lighting says how far they reach, and a frame takes the sun's map for them.
+    assert_eq!(
+        simulation.eval::<(f32, f32)>(
+            "course.view:lighting().shadows.reach, course.view:lighting().shadows.darkness"
+        ),
+        (16.0, 0.75)
+    );
+    assert_eq!(simulation.context().frame_stats().shadow_maps, 1);
+    let shaded = simulation.screenshot().unwrap();
+    // The next frame, under a sun that casts none, takes no map: the walls', the platform's,
+    // the crates' and the player's shadows are gone from the ground, and nothing else has
+    // changed but the coins, which have turned a little.
+    simulation.exec(
+        "local lighting = course.view:lighting()
+        lighting.shadows = nil
+        course.view:set_lighting(lighting)",
+    );
+    simulation.step();
+    check(&simulation);
+    assert_eq!(simulation.context().frame_stats().shadow_maps, 0);
+    let open = simulation.screenshot().unwrap();
+    let pairs = shaded.pixels().iter().zip(open.pixels());
+    let lighter = pairs
+        .clone()
+        .filter(|(shaded, open)| shaded.saturating_sub(**open) > 20);
+    let darker = pairs.filter(|(shaded, open)| open.saturating_sub(**shaded) > 20);
+    let [lighter, darker] = [lighter.count(), darker.count()];
+    assert!(
+        darker > 10_000 && lighter < darker / 20,
+        "{darker} channels of the frame were darker in shadow, and {lighter} lighter"
+    );
+}
+
 /// How far the camera is from what it looks at.
 fn camera_distance(simulation: &mut Simulation<LuauGame>) -> f32 {
     simulation.eval(

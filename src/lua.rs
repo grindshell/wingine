@@ -112,7 +112,11 @@
 //!   table `{ position, target, up, fov, height, near, far }`: `position` and `target` are
 //!   vectors, and the rest optional, `fov` (radians, for perspective, 0.8 by default) and
 //!   `height` (world units, for none) being the projection, one or the other. [`Lighting`] is a
-//!   table `{ direction, color, ambient }`, any of them left out keeping its default. [`Fog`] is
+//!   table `{ direction, color, ambient, shadows }`, any of them left out keeping its default:
+//!   `shadows` ([`SunShadows`], none) is a table `{ reach, darkness }`, with which the view's
+//!   meshes and models in the sunlight's way shade what's behind them, out to `reach` world
+//!   units, which it must have, above 0, from the point the camera looks at, a shadow taking
+//!   `darkness` (1, from 0 to 1) of the sun's light. [`Fog`] is
 //!   a table `{ color, near, far }`: what a view shows fades to `color` (white) from `near` (0)
 //!   world units from its camera to `far`, which it must have, more than `near`. [`Sky`] is a
 //!   table `{ zenith, horizon, ground, band }`: what a view shows wherever nothing is drawn,
@@ -304,7 +308,7 @@ use crate::{
     folders::{Entry, EntryKind, Folder},
     graphics::{
         Animation, Blend, Camera3d, Color, Fog, Font, Light, Lighting, Mesh, Model, Projection,
-        Scaling, Sky, Sprite, SpriteSheet, TextLayout,
+        Scaling, Sky, Sprite, SpriteSheet, SunShadows, TextLayout,
     },
     grid::{Direction, GridMover},
     input::{Control, GamepadButton, Key, MouseButton},
@@ -1404,7 +1408,7 @@ impl FromLua for Camera3d {
 impl FromLua for Lighting {
     fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
         let mlua::Value::Table(table) = &value else {
-            let message = "expected a table { direction, color, ambient }".into();
+            let message = "expected a table { direction, color, ambient, shadows }".into();
             return Err(conversion_error(&value, "Lighting", message));
         };
         let default = Lighting::default();
@@ -1418,7 +1422,31 @@ impl FromLua for Lighting {
             ambient: table
                 .get::<Option<Color>>("ambient")?
                 .unwrap_or(default.ambient),
+            shadows: table.get("shadows")?,
         })
+    }
+}
+
+impl FromLua for SunShadows {
+    /// A table of a `reach`, and a `darkness` unless it's 1.
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        let mlua::Value::Table(table) = &value else {
+            let message = "expected a table { reach, darkness }".into();
+            return Err(conversion_error(&value, "SunShadows", message));
+        };
+        let Some(reach) = table.get::<Option<f32>>("reach")? else {
+            let message = "a sun's shadows have a `reach`, how far from what the camera looks \
+                           at they fall";
+            return Err(mlua::Error::runtime(message));
+        };
+        let shadows = SunShadows {
+            reach,
+            darkness: table.get::<Option<f32>>("darkness")?.unwrap_or(1.0),
+        };
+        match shadows.problem() {
+            Some(problem) => Err(mlua::Error::runtime(problem)),
+            None => Ok(shadows),
+        }
     }
 }
 
@@ -1627,12 +1655,19 @@ impl IntoLua for Camera3d {
 }
 
 impl IntoLua for Lighting {
-    /// A table `{ direction, color, ambient }`, its colors numbers `0xRRGGBBAA`.
+    /// A table `{ direction, color, ambient }`, its colors numbers `0xRRGGBBAA`, with `shadows`,
+    /// a table `{ reach, darkness }`, if its sun casts them.
     fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
-        let table = lua.create_table_with_capacity(0, 3)?;
+        let table = lua.create_table_with_capacity(0, 4)?;
         table.set("direction", vector(self.direction))?;
         table.set("color", packed_color(self.color))?;
         table.set("ambient", packed_color(self.ambient))?;
+        if let Some(shadows) = self.shadows {
+            let sun = lua.create_table_with_capacity(0, 2)?;
+            sun.set("reach", shadows.reach)?;
+            sun.set("darkness", shadows.darkness)?;
+            table.set("shadows", sun)?;
+        }
         Ok(mlua::Value::Table(table))
     }
 }

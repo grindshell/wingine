@@ -585,8 +585,12 @@ fills the canvas; it moves with its node, but doesn't turn or stretch. Its other
   (`0.1` and `1000`).
 - `lighting`: `direction`, the way the sun's light goes, `{ x, y, z }`; `color`, the sun's light;
   and `ambient`, the light on every surface. Each is the default's if left out, and so is the
-  whole of it: a sun high above and in front. Lights at places aren't listed here: they're the
-  view's `light` nodes.
+  whole of it: a sun high above and in front. With `shadows`, `{ reach = 16, darkness = 0.75 }`,
+  the sun casts them: the view's meshes and models shade what's behind them from it, out to
+  `reach` world units, which shadows must have, from the point the camera looks at, a shadow
+  taking `darkness` (`1`) of the sun's light, from 0 to 1. See
+  [the sun's shadows](api/graphics.md#the-suns-shadows). Lights at places aren't listed here:
+  they're the view's `light` nodes.
 - `fog`, if the view has any: `{ color = "#10141f", near = 24, far = 48 }`. What the view shows
   fades to `color` (`"#ffffff"`) with its distance from the camera, from none at `near` (`0`)
   world units to nothing else at `far`, which a fog must have, more than `near`. A view without
@@ -676,7 +680,8 @@ meshes and models shade what's behind them from it, with hard edges: the crate s
 around it. Billboards are shaded but shade nothing, and a mesh or model whose `casts_shadow` is
 `false` doesn't either, which a lamp's own model wants, if its light is inside it. Shadows cost
 drawing the view's meshes again from each light, into a view's few shadow maps: see
-[shadows](api/graphics.md#shadows) for how many each light takes, and which go without.
+[shadows](api/graphics.md#shadows) for how many each light takes, and which go without. The
+view's sun casts shadows too, if its `lighting` has `shadows`, in a map of its own.
 
 Meshes and models hide what's behind them, whatever order they're drawn in; the view draws over
 what was drawn before it, and nodes after it draw over it. Scripts move nodes in views with

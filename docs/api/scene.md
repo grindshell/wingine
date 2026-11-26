@@ -707,7 +707,8 @@ view:set_camera({ position = feet + vector.create(0, 7, 3.5), target = feet })
 node:lighting(): Lighting
 ```
 
-Returns the view's lighting: `direction`, and `color` and `ambient` as numbers `0xRRGGBBAA`.
+Returns the view's lighting: `direction`, `color` and `ambient` as numbers `0xRRGGBBAA`, and
+`shadows`, a table of `reach` and `darkness`, if its sun casts them.
 
 ### `node:set_lighting`
 
@@ -715,7 +716,8 @@ Returns the view's lighting: `direction`, and `color` and `ambient` as numbers `
 node:set_lighting(lighting: Lighting)
 ```
 
-Changes the view's lighting, its sun and ambient light, whose fields are the defaults where
+Changes the view's lighting, its sun, the [shadows](graphics.md#the-suns-shadows) it casts and
+its ambient light, whose fields are the defaults where
 they're left out, as in [`graphics.begin_3d`](graphics.md#graphicsbegin_3d). A scene's view is lit
 at places by its [light nodes](#nodelight), so `lights` here is an error.
 

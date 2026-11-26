@@ -96,6 +96,9 @@ pub struct Lighting {
     pub color: Color,
     /// Light on every surface, even those facing away from the sun.
     pub ambient: Color,
+    /// How the sun casts shadows, or `None` for a sun that casts none. Shadows that can't be,
+    /// such as ones with no `reach`, are none, and so are those of a sun that gives no light.
+    pub shadows: Option<SunShadows>,
 }
 
 impl Lighting {
@@ -104,18 +107,145 @@ impl Lighting {
         direction: [0.0, -1.0, 0.0],
         color: Color::BLACK,
         ambient: Color::WHITE,
+        shadows: None,
     };
 }
 
 impl Default for Lighting {
     /// A sun high above and a little in front, to the right, so the tops of things are brightest,
-    /// then their fronts, then their right-hand sides.
+    /// then their fronts, then their right-hand sides. It casts no shadows.
     fn default() -> Self {
         Self {
             direction: [-0.3, -1.0, -0.5],
             color: Color::rgb(0.8, 0.8, 0.8),
             ambient: Color::rgb(0.5, 0.5, 0.5),
+            shadows: None,
         }
+    }
+}
+
+/// How a view's sun casts shadows ([`Lighting::shadows`]): the view's meshes and models in the
+/// sunlight's way shade what's behind them, but for those drawn after
+/// [`Canvas3d::set_casts_shadow`] says not, and never its billboards, as from a [`Light`] with
+/// shadows. A place in shadow gets less of the sun's light, and all of the view's other light.
+///
+/// The shadows are in one map of the sun's own, [`SunShadows::RESOLUTION`] texels across and
+/// down, which looks along the sunlight at what's within `reach` of the point the camera looks
+/// at ([`Camera3d::target`](super::Camera3d::target)). Nothing farther from that point is
+/// shaded, though what's up the sunlight from there shades what's within, however far up it
+/// is. Shadows have hard edges, a texel of the map wide ([`SunShadows::texel`]): the shorter
+/// the reach, the finer. The map moves by whole texels as the camera does, so their edges keep
+/// still on what they fall on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SunShadows {
+    /// How far from the point the camera looks at they reach, in world units: above 0.
+    pub reach: f32,
+    /// How much of the sun's light a shadow takes, from 0, none of it, to 1, all of it.
+    pub darkness: f32,
+}
+
+impl SunShadows {
+    /// How many texels across and down the sun's shadow map is. It's made when a view's sun
+    /// first casts shadows, so a game without any doesn't hold it.
+    pub const RESOLUTION: u32 = 2048;
+    /// How many texels of the map lie past `reach` at each of its edges: room for the half a
+    /// texel the map is moved by, and for how far off a surface it's looked up.
+    const MARGIN: u32 = 3;
+
+    /// Shadows reaching `reach` world units from the point the camera looks at, which take all
+    /// of the sun's light.
+    pub const fn new(reach: f32) -> Self {
+        Self {
+            reach,
+            darkness: 1.0,
+        }
+    }
+
+    /// What's wrong with them, if they can't be.
+    pub(crate) fn problem(&self) -> Option<String> {
+        if !(self.reach > 0.0 && self.reach.is_finite()) {
+            return Some(format!(
+                "the reach of a sun's shadows must be above 0, not {}",
+                self.reach
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.darkness) {
+            return Some(format!(
+                "the darkness of a sun's shadows is from 0 to 1, not {}",
+                self.darkness
+            ));
+        }
+        None
+    }
+
+    /// How large a texel of the sun's shadow map is, in world units: how wide a shadow's edge
+    /// is, and the steps along it.
+    pub fn texel(&self) -> f32 {
+        2.0 * self.reach / (Self::RESOLUTION - 2 * Self::MARGIN) as f32
+    }
+}
+
+/// A view's sun's shadow map, as the renderer draws it and `mesh.wgsl` reads it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SunMap {
+    /// What maps the world onto the map: from -1 to 1 across and up it, and from 0, nearest the
+    /// sun, to 1 along its light.
+    pub onto_map: Mat4,
+    /// How large a texel of it is, in world units.
+    pub texel: f32,
+    /// The point shadows reach out from, and how far.
+    pub center: [f32; 3],
+    pub reach: f32,
+    /// How much of the sun's light a shadow takes.
+    pub darkness: f32,
+}
+
+impl View3d {
+    /// Its sun's shadow map, if its sun casts shadows that can be: one looking along the
+    /// sunlight, without perspective, at the box that reaches a little past the shadows' reach
+    /// every way from the point the camera looks at. Which ways are across and up the map depend
+    /// only on the sunlight's, and the map's middle is a whole number of texels from the world's
+    /// origin, so texels stay where they are in the world as the camera moves.
+    pub(crate) fn sun_map(&self) -> Option<SunMap> {
+        let lighting = &self.lighting;
+        let shadows = lighting.shadows.filter(|s| s.problem().is_none())?;
+        let direction = normalize3(lighting.direction).filter(|d| d.iter().all(|v| v.is_finite()));
+        let direction = direction?;
+        let [r, g, b, _] = lighting.color.to_rgba8();
+        if [r, g, b] == [0; 3] || shadows.darkness == 0.0 {
+            return None;
+        }
+        let center = self.camera.target;
+        if !center.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        let Basis { right, up, forward } = Camera3d::orthographic([0.0; 3], direction, 1.0).basis();
+        let texel = shadows.texel();
+        let half = texel * (SunShadows::RESOLUTION / 2) as f32;
+        let whole = |along: f32| (along / texel).round() * texel;
+        let [across, over] = [whole(dot3(right, center)), whole(dot3(up, center))];
+        let deep = dot3(forward, center);
+        let column = |axis: usize| {
+            [
+                right[axis] / half,
+                up[axis] / half,
+                forward[axis] / (2.0 * half),
+                0.0,
+            ]
+        };
+        let onto_map = [
+            column(0),
+            column(1),
+            column(2),
+            [-across / half, -over / half, 0.5 - deep / (2.0 * half), 1.0],
+        ];
+        Some(SunMap {
+            onto_map,
+            texel,
+            center,
+            reach: shadows.reach,
+            darkness: shadows.darkness,
+        })
     }
 }
 
@@ -1857,6 +1987,147 @@ mod tests {
             assert!(transform(&onto_map, behind)[3] < 0.0, "{way:?}");
         }
         assert_near([lamp.shadow_texel() * 512.0], [2.0]);
+    }
+
+    /// A view looking at `target`, whose sun, shining down and across, casts `shadows`.
+    fn sunlit(target: [f32; 3], shadows: SunShadows) -> View3d {
+        let camera = Camera3d::perspective(add3(target, [0.0, 6.0, 8.0]), target, 0.8);
+        View3d {
+            lighting: Lighting {
+                direction: [-0.4, -1.0, -0.6],
+                shadows: Some(shadows),
+                ..Lighting::default()
+            },
+            ..View3d::new(camera, Rect::new(0.0, 0.0, 64.0, 48.0))
+        }
+    }
+
+    /// Where `point` is on a sun's shadow map: across and up it from -1 to 1, then how far
+    /// along the sunlight, from 0 to 1.
+    fn on_map(map: &SunMap, [x, y, z]: [f32; 3]) -> [f32; 3] {
+        let m = &map.onto_map;
+        [0, 1, 2].map(|i| m[0][i] * x + m[1][i] * y + m[2][i] * z + m[3][i])
+    }
+
+    #[test]
+    fn a_suns_shadow_map_holds_what_its_shadows_reach() {
+        let target = [30.5, 2.0, -17.25];
+        let shadows = SunShadows::new(10.0);
+        let view = sunlit(target, shadows);
+        let map = view.sun_map().expect("its sun casts shadows");
+        assert_eq!(
+            [map.reach, map.darkness, map.texel],
+            [10.0, 1.0, shadows.texel()]
+        );
+        assert_eq!(map.center, target);
+        // A texel is the reach's part of the map, but for a few at each edge.
+        assert_near([shadows.texel()], [20.0 / 2042.0]);
+        let texel_on_map = 2.0 / SunShadows::RESOLUTION as f32;
+        // What the camera looks at is within half a texel of the map's middle, halfway along.
+        let [x, y, depth] = on_map(&map, target);
+        assert!(x.abs() <= texel_on_map / 2.0 + 1e-5, "{x}");
+        assert!(y.abs() <= texel_on_map / 2.0 + 1e-5, "{y}");
+        assert_near([depth], [0.5]);
+        // Everything within the reach is in it, with room to be looked up off a surface.
+        let sun = normalize3(view.lighting.direction).unwrap();
+        let ways = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            sun,
+            normalize3([1.0, 1.0, 1.0]).unwrap(),
+        ];
+        for way in ways {
+            for side in [-10.0, 10.0] {
+                let [x, y, depth] = on_map(&map, add3(target, scale3(way, side)));
+                let inside = 1.0 - 2.0 * texel_on_map;
+                assert!(x.abs() < inside && y.abs() < inside, "{way:?}: {x}, {y}");
+                assert!(depth > 0.001 && depth < 0.999, "{way:?}: {depth}");
+            }
+        }
+        // It looks along the sunlight: what's down it is farther along, and nowhere else.
+        let [x0, y0, near] = on_map(&map, target);
+        let [x1, y1, far] = on_map(&map, add3(target, scale3(sun, 5.0)));
+        assert_near([x1, y1], [x0, y0]);
+        assert!(far > near, "{far} is not past {near}");
+        // A world unit across the sunlight is as many texels wherever it is and whichever way.
+        let across = normalize3(cross3(sun, [0.0, 1.0, 0.0])).unwrap();
+        let [x2, y2, _] = on_map(&map, add3(target, across));
+        let moved = ((x2 - x0).powi(2) + (y2 - y0).powi(2)).sqrt();
+        assert_near([moved / texel_on_map * shadows.texel()], [1.0]);
+    }
+
+    #[test]
+    fn a_suns_shadow_map_moves_by_whole_texels() {
+        let shadows = SunShadows::new(12.0);
+        let size = SunShadows::RESOLUTION as f32;
+        // Where a place in the world is on the map, in texels.
+        let place = [3.3, 0.7, -1.9];
+        let texels = |target: [f32; 3]| {
+            let map = sunlit(target, shadows).sun_map().unwrap();
+            let [x, y, _] = on_map(&map, place);
+            [x * size / 2.0, y * size / 2.0]
+        };
+        let from = texels([0.0; 3]);
+        let mut moved = 0;
+        for step in 1..200 {
+            let along = step as f32 * 0.0137;
+            let to = texels([along, along * 0.3, -along * 0.7]);
+            for axis in 0..2 {
+                let by = to[axis] - from[axis];
+                assert!((by - by.round()).abs() < 0.01, "{by} texels at {along}");
+                moved += u32::from(by.round() != 0.0);
+            }
+        }
+        assert!(
+            moved > 100,
+            "the map moved with the camera only {moved} times"
+        );
+    }
+
+    #[test]
+    fn a_sun_casts_no_shadows_that_cant_be() {
+        let target = [1.0, 2.0, 3.0];
+        let shadows = SunShadows::new(10.0);
+        assert_eq!(shadows.problem(), None);
+        assert!(sunlit(target, shadows).sun_map().is_some());
+        // A view's sun casts none unless it says so.
+        let camera = Camera3d::perspective([0.0, 1.0, 5.0], [0.0; 3], 0.8);
+        let plain = View3d::new(camera, Rect::new(0.0, 0.0, 64.0, 48.0));
+        assert_eq!(plain.lighting.shadows, None);
+        assert_eq!(plain.sun_map(), None);
+        assert_eq!(Lighting::UNLIT.shadows, None);
+
+        for reach in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let shadows = SunShadows::new(reach);
+            assert!(shadows.problem().unwrap().contains("reach"), "{reach}");
+            assert_eq!(sunlit(target, shadows).sun_map(), None, "{reach}");
+        }
+        for darkness in [-0.1, 1.1, f32::NAN] {
+            let shadows = SunShadows {
+                darkness,
+                ..shadows
+            };
+            assert!(
+                shadows.problem().unwrap().contains("darkness"),
+                "{darkness}"
+            );
+            assert_eq!(sunlit(target, shadows).sun_map(), None, "{darkness}");
+        }
+        // Shadows that take none of the sun's light are none, and so are a sun's that gives
+        // none, or shines no way.
+        let faint = SunShadows {
+            darkness: 0.0,
+            ..shadows
+        };
+        assert_eq!(faint.problem(), None);
+        assert_eq!(sunlit(target, faint).sun_map(), None);
+        let mut view = sunlit(target, shadows);
+        view.lighting.color = Color::BLACK;
+        assert_eq!(view.sun_map(), None);
+        let mut view = sunlit(target, shadows);
+        view.lighting.direction = [0.0; 3];
+        assert_eq!(view.sun_map(), None);
     }
 
     #[test]

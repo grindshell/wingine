@@ -173,7 +173,11 @@
 //!   and optionally `up`, `fov` (with perspective, 0.8 radians by default) or `height` (without),
 //!   `near` and `far`; `rect`, where on the canvas it shows (the whole canvas by default, moved by
 //!   the camera `set_camera` sets); and `lighting`, a table of any of `direction` (a vector),
-//!   `color` and `ambient`, a sun's light and light from all around, and `lights`, a list of
+//!   `color` and `ambient`, a sun's light and light from all around, `shadows`, a table of a
+//!   `reach` and optionally a `darkness` (1), with which the view's meshes and models in the
+//!   sunlight's way shade what's behind them, out to `reach` world units from the point the
+//!   camera looks at, a shadow taking `darkness` of the sun's light, from 0 to 1, in a shadow
+//!   map of the sun's own, 2048 texels across the reach each way; and `lights`, a list of
 //!   lights at places: each a table of a `position` (a vector), and optionally a `color`
 //!   (white), a `range` in world units (5), across which its light falls off in a straight line
 //!   to nothing, and an `energy` (1), times its color; and for a spot light, a `cone`, half its

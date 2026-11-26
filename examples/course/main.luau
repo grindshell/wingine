@@ -23,7 +23,10 @@
 --
 -- The view has fog and a sky, the scene's: the course fades into the sky with its distance from
 -- the camera, most at its far side and with the camera far off, and what it fades into is the sky
--- it's seen against, a pale haze toward the horizon and bluer under it.
+-- it's seen against, a pale haze toward the horizon and bluer under it. Its sun casts shadows, the
+-- scene's too (`lighting.shadows`): everything in the course shades what's behind it from the
+-- sun, out to 16 units from what the camera looks at, which is all of it. The shadow under the
+-- player isn't the sun's: it's a mesh, drawn straight below, which casts none.
 --
 -- Run with `cargo run -- examples/course`. The models are Kenney's Prototype Kit
 -- (<https://kenney.nl/assets/prototype-kit>, CC0). The game's state is in the global table

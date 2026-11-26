@@ -313,10 +313,23 @@ export type Lighting = {
     color: Color?,
     --- The light on every surface. By default, `"#808080"`.
     ambient: Color?,
+    --- How the sun casts shadows. By default, it casts none.
+    shadows: SunShadows?,
     --- Lights at places in the view, for `graphics.begin_3d`. A scene's view is lit by its light
     --- nodes instead. A view is lit by 32 at once: of those that reach what its camera sees, the
     --- nearest to the camera.
     lights: { Light }?,
+}
+
+--- How a view's sun casts shadows: its meshes and models in the sunlight's way shade what's behind
+--- them, but for those drawn with `casts_shadow = false` or a `blend`, and never billboards. They
+--- have hard edges, and reach only so far from the point the camera looks at.
+export type SunShadows = {
+    --- How far from the point the camera looks at shadows fall, in world units, above 0. The
+    --- shorter, the finer their edges: a 2048th of twice the reach.
+    reach: number,
+    --- How much of the sun's light a shadow takes, from 0 to 1. By default, 1, all of it.
+    darkness: number?,
 }
 
 --- What a light gives: a light node's settings, for `node:light` and `node:set_light`. Its light

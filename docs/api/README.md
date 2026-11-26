@@ -196,7 +196,8 @@ A kind of tile, for [`tileset:add`](tilemap.md#tilesetadd): a table
 
 A 3D view, a table `{ camera = ..., rect = ..., lighting = ..., fog = ..., sky = ... }`, its
 camera a table `{ position = ..., target = ..., ... }`, its lighting a table `{ direction = ...,
-color = ..., ambient = ..., lights = ... }`, its fog, if it has any, a table `{ color = ...,
+color = ..., ambient = ..., shadows = ..., lights = ... }`, whose `shadows`, a `SunShadows`, if
+its sun casts any, are a table `{ reach = ..., darkness = ... }`, its fog, if it has any, a table `{ color = ...,
 near = ..., far = ... }` and its sky, if it has one, a table `{ zenith = ..., horizon = ...,
 ground = ..., band = ... }`, for [`graphics.begin_3d`](graphics.md#graphicsbegin_3d),
 [`graphics.project`](graphics.md#graphicsproject) and [`graphics.ray`](graphics.md#graphicsray).

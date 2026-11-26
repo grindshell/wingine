@@ -9,7 +9,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use super::{
-    Blend, Color, Light, Mesh, MeshData, Projection, Texture,
+    Blend, Color, Light, Mesh, MeshData, Projection, SunShadows, Texture,
     camera3d::{self, Basis, Mat4},
     canvas::{Batch, Canvas, Vertex},
     mesh::GpuVertex,
@@ -71,8 +71,16 @@ struct ViewUniform {
     /// What places the view's clip space on the target's, where the view is cut to it: across
     /// and down scaled, then moved.
     sky_crop: [f32; 4],
+    /// What maps the world onto its sun's shadow map, if its sun casts shadows.
+    sun_map: Mat4,
+    /// How large a texel of that map is, in world units; how much of the sun's light a shadow
+    /// takes; how far from `sun_center` shadows reach, squared; then 1 if the sun casts shadows,
+    /// or 0.
+    sun_shadow: [f32; 4],
+    /// The point the sun's shadows reach out from, then nothing.
+    sun_center: [f32; 4],
     lights: [LightUniform; Light::MAX],
-    /// What maps the world onto each of its shadow maps.
+    /// What maps the world onto each of its lights' shadow maps.
     shadow_maps: [Mat4; Light::SHADOW_MAPS],
 }
 
@@ -205,20 +213,51 @@ struct MeshRenderer {
     shadowed: Vec<(u32, u32)>,
     /// Draws meshes into a shadow map: every side of them, and no colors.
     shadow_pipeline: wgpu::RenderPipeline,
+    /// The same into a sun's shadow map, where what's nearer the sun than the map begins is
+    /// drawn where it begins.
+    sun_pipeline: wgpu::RenderPipeline,
     shadow_layout: wgpu::BindGroupLayout,
-    /// What maps the world onto each shadow map drawn this frame, the views' in turn,
-    /// `shadow_stride` bytes apart.
+    /// What maps the world onto each shadow map drawn this frame, the views' in turn, a view's
+    /// lights' and then its sun's, `shadow_stride` bytes apart.
     shadow_buffer: wgpu::Buffer,
     shadow_bind_group: wgpu::BindGroup,
     shadow_stride: u64,
     /// The same, as they're uploaded.
     shadow_views: Vec<u8>,
-    /// Each view's shadow maps, among all those drawn this frame.
+    /// Each view's lights' shadow maps, among all those drawn this frame.
     view_shadows: Vec<Range<u32>>,
-    /// The shadow maps every view draws into in turn, and then reads.
+    /// Each view's sun's shadow map among them, if its sun casts shadows.
+    view_suns: Vec<Option<u32>>,
+    /// The shadow maps every view's lights draw into in turn, and then reads.
     shadow_maps: ShadowMaps,
+    /// The shadow map every view's sun draws into in turn, and then reads. Until a sun casts
+    /// shadows, it's a single texel, which nothing reads.
+    sun_map: wgpu::TextureView,
+    sun_map_made: bool,
     /// Compares a depth with a shadow map's nearest texel.
     shadow_sampler: wgpu::Sampler,
+}
+
+/// A depth texture `size` texels across and down, for a sun's shadow map.
+fn sun_map_texture(device: &wgpu::Device, size: u32) -> wgpu::TextureView {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("sun's shadow map"),
+        size: wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: DEPTH_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    texture.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2),
+        ..Default::default()
+    })
 }
 
 /// A view's shadow maps: the layers of one depth texture. Until a light has shadows, it's a
@@ -725,6 +764,16 @@ impl MeshRenderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         // A mesh's texture, then the texture its emission is multiplied by.
@@ -898,34 +947,39 @@ impl MeshRenderer {
         });
         // Whichever side of a mesh faces the light shades what's behind it, so nothing is culled.
         // What keeps a surface from shading itself is in `mesh.wgsl`, where the map is read.
-        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("shadow map"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shadow_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &buffers,
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shadow_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let shadow_pipeline = |entry_point| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("shadow map"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shadow_shader,
+                    entry_point: Some(entry_point),
+                    compilation_options: Default::default(),
+                    buffers: &buffers,
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shadow_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let sun_pipeline = shadow_pipeline("vs_sun");
+        let shadow_pipeline = shadow_pipeline("vs_main");
         let shadow_maps = ShadowMaps::new(device, 1, 1);
+        let sun_map = sun_map_texture(device, 1);
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow maps"),
             mag_filter: wgpu::FilterMode::Nearest,
@@ -955,6 +1009,7 @@ impl MeshRenderer {
             &views_layout,
             &views_buffer,
             &shadow_maps,
+            &sun_map,
             &shadow_sampler,
         );
         let instance_buffer = create_buffer(
@@ -982,13 +1037,17 @@ impl MeshRenderer {
             lights: Vec::new(),
             shadowed: Vec::new(),
             shadow_pipeline,
+            sun_pipeline,
             shadow_layout,
             shadow_buffer,
             shadow_bind_group,
             shadow_stride,
             shadow_views: Vec::new(),
             view_shadows: Vec::new(),
+            view_suns: Vec::new(),
             shadow_maps,
+            sun_map,
+            sun_map_made: false,
             shadow_sampler,
         }
     }
@@ -1009,33 +1068,43 @@ impl MeshRenderer {
         let shadow_stride = self.shadow_stride as usize;
         self.shadow_views.clear();
         self.view_shadows.clear();
+        self.view_suns.clear();
         for (index, (segment, viewport)) in canvas.segments.iter().zip(viewports).enumerate() {
             let first_map = (self.shadow_views.len() / shadow_stride) as u32;
             let Some(viewport) = viewport else {
                 self.view_shadows.push(first_map..first_map);
+                self.view_suns.push(None);
                 continue;
             };
             let Range { start, end } = segment.lights.clone();
             let lights = &canvas.lights[start as usize..end as usize];
             let (chosen, shadowed) = (&mut self.lights, &mut self.shadowed);
-            let (uniform, maps) = view_uniform(segment, viewport, lights, chosen, shadowed);
+            let (uniform, maps, sun) = view_uniform(segment, viewport, lights, chosen, shadowed);
             let start = index * stride;
             views[start..start + size_of::<ViewUniform>()]
                 .copy_from_slice(bytemuck::bytes_of(&uniform));
-            for onto_map in &uniform.shadow_maps[..maps as usize] {
+            let onto_maps = uniform.shadow_maps[..maps as usize].iter();
+            for onto_map in onto_maps.chain(sun.then_some(&uniform.sun_map)) {
                 let start = self.shadow_views.len();
                 self.shadow_views.resize(start + shadow_stride, 0);
                 self.shadow_views[start..start + size_of::<Mat4>()]
                     .copy_from_slice(bytemuck::bytes_of(onto_map));
             }
             self.view_shadows.push(first_map..first_map + maps);
+            self.view_suns.push(sun.then_some(first_map + maps));
         }
-        // The maps are made when a light first has shadows, so a game without any doesn't hold
-        // them.
+        // The maps are made when a light first has shadows, and the sun's when a sun first
+        // does, so a game without any doesn't hold them.
         let mut rebind = false;
-        if !self.shadow_views.is_empty() && !self.shadow_maps.are_made() {
+        let lights_maps = self.view_shadows.iter().any(|maps| !maps.is_empty());
+        if lights_maps && !self.shadow_maps.are_made() {
             let [size, maps] = [Light::SHADOW_RESOLUTION, Light::SHADOW_MAPS as u32];
             self.shadow_maps = ShadowMaps::new(device, size, maps);
+            rebind = true;
+        }
+        if self.view_suns.iter().any(Option::is_some) && !self.sun_map_made {
+            self.sun_map = sun_map_texture(device, SunShadows::RESOLUTION);
+            self.sun_map_made = true;
             rebind = true;
         }
         let size = self.views_buffer.size();
@@ -1046,6 +1115,7 @@ impl MeshRenderer {
                 &self.views_layout,
                 &self.views_buffer,
                 &self.shadow_maps,
+                &self.sun_map,
                 &self.shadow_sampler,
             );
         }
@@ -1146,8 +1216,9 @@ impl MeshRenderer {
     }
 
     /// Draws the shadow maps of the `index`th of `canvas`'s 3D views, as uploaded: for each, in
-    /// a pass of its own, the view's meshes that cast shadows, as its light sees them. The maps
-    /// are the same ones for every view, so a view's are drawn just before it is.
+    /// a pass of its own, the view's meshes that cast shadows, as its light sees them, and as
+    /// its sun does, if its sun casts shadows. The maps are the same ones for every view, so a
+    /// view's are drawn just before it is.
     fn draw_shadows(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1157,12 +1228,19 @@ impl MeshRenderer {
     ) {
         let maps = self.view_shadows[index].clone();
         let runs = &self.runs[self.view_runs[index].clone()];
-        for (layer, map) in maps.enumerate() {
+        let layers = self.shadow_maps.layers.iter();
+        let lights = maps.zip(layers).map(|(map, layer)| (map, layer, false));
+        let sun = self.view_suns[index].map(|map| (map, &self.sun_map, true));
+        for (map, into, of_sun) in lights.chain(sun) {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("shadow map"),
+                label: Some(if of_sun {
+                    "sun's shadow map"
+                } else {
+                    "shadow map"
+                }),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.shadow_maps.layers[layer],
+                    view: into,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -1173,7 +1251,11 @@ impl MeshRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.shadow_pipeline);
+            pass.set_pipeline(if of_sun {
+                &self.sun_pipeline
+            } else {
+                &self.shadow_pipeline
+            });
             let offset = (u64::from(map) * self.shadow_stride) as u32;
             pass.set_bind_group(0, &self.shadow_bind_group, &[offset]);
             pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
@@ -1280,6 +1362,7 @@ fn views_bind_group(
     layout: &wgpu::BindGroupLayout,
     buffer: &wgpu::Buffer,
     shadow_maps: &ShadowMaps,
+    sun_map: &wgpu::TextureView,
     shadow_sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1301,6 +1384,10 @@ fn views_bind_group(
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: wgpu::BindingResource::Sampler(shadow_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(sun_map),
             },
         ],
     })
@@ -1327,14 +1414,16 @@ fn shadow_bind_group(
 
 /// What `segment`'s meshes are drawn with, placed at `viewport` and lit by those of `lights`,
 /// the view's, that light it, which `chosen` is room to choose, and `shadowed` room to choose
-/// those with shadows; and how many shadow maps they take, the first so many of the view's.
+/// those with shadows; how many shadow maps they take, the first so many of the view's; and
+/// whether its sun's shadow map is to be drawn, as it is for a view with anything in it whose
+/// sun casts shadows.
 fn view_uniform(
     segment: &Segment3d,
     viewport: &Viewport,
     lights: &[Light],
     chosen: &mut Vec<u32>,
     shadowed: &mut Vec<(u32, u32)>,
-) -> (ViewUniform, u32) {
+) -> (ViewUniform, u32, bool) {
     let view = &segment.view;
     let aspect = view.rect.w / view.rect.h;
     let view_proj = camera3d::mul(&viewport.crop, &view.camera.view_projection(aspect));
@@ -1385,6 +1474,15 @@ fn view_uniform(
     };
     let crop = &viewport.crop;
     let sky_crop = [crop[0][0], crop[1][1], crop[3][0], crop[3][1]];
+    let sun = view.sun_map().filter(|_| !segment.draws.is_empty());
+    let (sun_map, sun_shadow, sun_center) = match sun {
+        Some(sun) => {
+            let [cx, cy, cz] = sun.center;
+            let shadow = [sun.texel, sun.darkness, sun.reach * sun.reach, 1.0];
+            (sun.onto_map, shadow, [cx, cy, cz, 0.0])
+        }
+        None => (Zeroable::zeroed(), [0.0; 4], [0.0; 4]),
+    };
     let mut uniform = ViewUniform {
         view_proj,
         light_direction: [x, y, z, 0.0],
@@ -1401,6 +1499,9 @@ fn view_uniform(
         sky_right,
         sky_up,
         sky_crop,
+        sun_map,
+        sun_shadow,
+        sun_center,
         lights: Zeroable::zeroed(),
         shadow_maps: Zeroable::zeroed(),
     };
@@ -1422,7 +1523,7 @@ fn view_uniform(
             uniform.shadow_maps[map] = onto_map;
         }
     }
-    (uniform, maps)
+    (uniform, maps, sun.is_some())
 }
 
 /// Where on a target a 3D view's rect falls.

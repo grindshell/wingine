@@ -1886,6 +1886,7 @@ mod host {
                         direction: vec3(lighting.direction),
                         color: color(lighting.color),
                         ambient: color(lighting.ambient),
+                        shadows: None,
                     },
                     fog: None,
                     sky: None,

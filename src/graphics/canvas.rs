@@ -156,14 +156,19 @@ impl Canvas {
 
     /// How many lights light the 3D views drawn so far this frame, and how many more would but
     /// for being more than [`Light::MAX`] in a view; then how many shadow maps those lights
-    /// take, and how many of them go without shadows for want of one.
+    /// take, with one for each view whose sun casts shadows, and how many of the lights go
+    /// without shadows for want of a map.
     pub(crate) fn light_counts(&self) -> [u32; 4] {
         let mut chosen = Vec::new();
         let mut shadowed = Vec::new();
         let mut counts = [0; 4];
         for segment in &self.segments {
+            if segment.draws.is_empty() {
+                continue;
+            }
+            counts[2] += u32::from(segment.view.sun_map().is_some());
             let Range { start, end } = segment.lights.clone();
-            if start == end || segment.draws.is_empty() {
+            if start == end {
                 continue;
             }
             let lights = &self.lights[start as usize..end as usize];

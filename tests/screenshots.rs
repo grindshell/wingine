@@ -16,8 +16,8 @@ use wingine::{
     Context,
     graphics::{
         Align, Blend, Camera, Camera3d, Canvas, Color, Fog, Font, Light, Lighting, Mesh, MeshData,
-        MeshVertex, Model, ModelPart, Resolution, Scaling, Sky, Sprite, SpriteSheet, Texture,
-        View3d,
+        MeshVertex, Model, ModelPart, Resolution, Scaling, Sky, Sprite, SpriteSheet, SunShadows,
+        Texture, View3d,
     },
     headless::{Comparison, Headless, Image},
     math::{Affine, Affine3, Bounds3, Rect},
@@ -1608,6 +1608,7 @@ fn blended_meshes_mirrored_are_lit_by_the_way_they_face() {
             direction: [0.0, 0.0, -1.0],
             color: Color::WHITE,
             ambient: Color::BLACK,
+            shadows: None,
         },
         ..View3d::new(camera, Rect::new(0.0, 0.0, 20.0, 20.0))
     };
@@ -2076,6 +2077,7 @@ fn models_repeat_textures_and_show_double_sided_backs() {
                         direction: [0.0, 0.0, -from.signum()],
                         color: Color::WHITE,
                         ambient: Color::BLACK,
+                        shadows: None,
                     },
                     ..View3d::new(camera, Rect::new(0.0, 0.0, 64.0, 64.0))
                 };
@@ -2260,6 +2262,7 @@ fn meshes_normals() {
                         direction: [0.0, -1.0, 0.0],
                         color: Color::WHITE,
                         ambient: Color::BLACK,
+                        shadows: None,
                     },
                     ..View3d::new(camera, Rect::new(0.0, 0.0, 64.0, 64.0))
                 };
@@ -2300,6 +2303,7 @@ fn lights_at_places() {
             direction: [0.0, -1.0, 0.0],
             color: Color::BLACK,
             ambient: Color::rgb8(0x18, 0x18, 0x20),
+            shadows: None,
         },
         ..View3d::new(camera, Rect::new(0.0, 0.0, 128.0, 96.0))
     };
@@ -2376,6 +2380,7 @@ fn lights_spots() {
             direction: [0.0, -1.0, 0.0],
             color: Color::BLACK,
             ambient: Color::BLACK,
+            shadows: None,
         },
         ..View3d::new(camera, Rect::new(0.0, 0.0, 128.0, 64.0))
     };
@@ -2443,6 +2448,7 @@ fn lights_on_billboards() {
             direction: [0.0, -1.0, 0.0],
             color: Color::BLACK,
             ambient: Color::BLACK,
+            shadows: None,
         },
         ..View3d::new(camera, Rect::new(0.0, 0.0, 64.0, 32.0))
     };
@@ -2895,6 +2901,7 @@ fn dark_view(camera: Camera3d, [width, height]: [f32; 2]) -> View3d {
             direction: [0.0, -1.0, 0.0],
             color: Color::BLACK,
             ambient: Color::BLACK,
+            shadows: None,
         },
         ..View3d::new(camera, Rect::new(0.0, 0.0, width, height))
     }
@@ -3335,6 +3342,271 @@ fn shadows_run_out_farthest_from_the_camera_first() {
     }
 }
 
+/// A view lit by a white sun alone, shining down and to the right as steeply as it goes across,
+/// which casts `shadows`, if any.
+fn sun_view(camera: Camera3d, [width, height]: [f32; 2], shadows: Option<SunShadows>) -> View3d {
+    View3d {
+        lighting: Lighting {
+            direction: [1.0, -1.0, 0.0],
+            color: Color::WHITE,
+            ambient: Color::BLACK,
+            shadows,
+        },
+        ..View3d::new(camera, Rect::new(0.0, 0.0, width, height))
+    }
+}
+
+/// A floor seen from above under a sun shining down and to the right, and two slabs a world unit
+/// over it: each shades the floor a world unit to its right, in a shadow its own size with a
+/// hard edge. Past the shadows' reach nothing is shaded, a shadow that takes half the sun's
+/// light leaves half, and a slab drawn as casting none shades nothing.
+#[test]
+fn shadows_from_the_sun() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let ground = ctx.create_mesh(&MeshData::plane([12.0, 6.0])).unwrap();
+    let slab = ctx.create_mesh(&MeshData::cuboid([1.0, 0.1, 1.0])).unwrap();
+    let camera = Camera3d::orthographic([0.0, 10.0, 0.0], [0.0; 3], 6.0);
+    let size = [128.0, 64.0];
+    // One near what the camera looks at, and one far from it.
+    let [near, far] = [[-2.03, 1.0, 0.04], [3.02, 1.0, -0.03]];
+    #[derive(Clone, Copy, PartialEq)]
+    enum Slabs {
+        None,
+        Casting,
+        NotCasting,
+    }
+    let mut render = |shadows: Option<SunShadows>, slabs: Slabs| {
+        headless
+            .render(128, 64, |canvas| {
+                canvas.clear(Color::rgb8(0x20, 0x30, 0x60));
+                let mut view = canvas.begin_3d(sun_view(camera, size, shadows));
+                view.draw_mesh(&ground, Affine3::IDENTITY, None, Color::WHITE);
+                view.set_casts_shadow(slabs != Slabs::NotCasting);
+                if slabs != Slabs::None {
+                    for at in [near, far] {
+                        let over = Affine3::from_translation(at);
+                        view.draw_mesh(&slab, over, None, Color::rgb8(0x60, 0xa0, 0xff));
+                    }
+                }
+            })
+            .unwrap()
+    };
+    let view = sun_view(camera, size, None);
+    let pixel = |image: &Image, point: [f32; 3]| {
+        let [x, y] = view.project(point).expect("it's in view");
+        image.pixel(x as u32, y as u32)
+    };
+    let black = [0, 0, 0, 255];
+    // A slab reaches 0.5 from its middle, and its shadow from there to 1.5: the floor between,
+    // across and along, and the floor past it, beside it and before the slab.
+    let shaded = |[x, _, z]: [f32; 3]| {
+        let across = [1.2, 0.95, 0.7];
+        across.map(|dx| {
+            [
+                [x + dx, 0.0, z],
+                [x + dx, 0.0, z + 0.35],
+                [x + dx, 0.0, z - 0.35],
+            ]
+        })
+    };
+    let reached = |[x, _, z]: [f32; 3]| {
+        [
+            [x + 1.8, 0.0, z],
+            [x + 0.95, 0.0, z + 0.75],
+            [x + 0.95, 0.0, z - 0.75],
+            [x - 0.9, 0.0, z],
+        ]
+    };
+
+    // A sun that casts no shadows shades nothing, whatever is in its way.
+    let open = render(Some(SunShadows::new(8.0)), Slabs::None);
+    let plain = render(None, Slabs::Casting);
+    for at in [near, far] {
+        for point in shaded(at).into_iter().flatten().chain(reached(at)) {
+            assert_ne!(pixel(&open, point), black, "{point:?} with no slabs");
+            assert_eq!(pixel(&plain, point), pixel(&open, point), "{point:?}");
+        }
+    }
+    // A floor alone shades nothing of itself, though it casts shadows.
+    assert_alike(&open, &render(None, Slabs::None), 0, "a floor with shadows");
+
+    let frame = render(Some(SunShadows::new(8.0)), Slabs::Casting);
+    for at in [near, far] {
+        for point in shaded(at).into_iter().flatten() {
+            assert_eq!(pixel(&frame, point), black, "{point:?}");
+        }
+        for point in reached(at) {
+            assert_eq!(pixel(&frame, point), pixel(&open, point), "{point:?}");
+        }
+        // The slab's top is in the sun, as it is with no shadows.
+        let top = [at[0], at[1] + 0.05, at[2]];
+        assert_ne!(pixel(&frame, top), black, "{top:?}");
+        assert_eq!(pixel(&frame, top), pixel(&plain, top), "{top:?}");
+    }
+    // Shadows only take light away.
+    let pairs = frame.pixels().iter().zip(plain.pixels());
+    assert!(pairs.clone().all(|(shaded, lit)| shaded <= lit));
+    assert!(pairs.filter(|(shaded, lit)| shaded < lit).count() > 400);
+
+    // Shadows that reach 2.5 from what the camera looks at take in the near slab's and not the
+    // far one's.
+    let short = render(Some(SunShadows::new(2.5)), Slabs::Casting);
+    for point in shaded(near).into_iter().flatten() {
+        assert_eq!(pixel(&short, point), black, "{point:?} within the reach");
+    }
+    for point in shaded(far).into_iter().flatten() {
+        assert_eq!(pixel(&short, point), pixel(&open, point), "{point:?}");
+    }
+
+    // A shadow that takes half the sun's light leaves half of it, in linear light.
+    let faint = SunShadows {
+        darkness: 0.5,
+        ..SunShadows::new(8.0)
+    };
+    let half = render(Some(faint), Slabs::Casting);
+    for point in shaded(near).into_iter().flatten() {
+        let [r, g, b, _] = pixel(&open, point);
+        let lit = Color::rgb8(r, g, b).to_linear();
+        let left = Color::from_linear([lit[0] / 2.0, lit[1] / 2.0, lit[2] / 2.0, 1.0]);
+        let wanted = [left.r, left.g, left.b].map(|part| (part * 255.0).round() as u8);
+        let shown = pixel(&half, point);
+        let off = (0..3).map(|i| shown[i].abs_diff(wanted[i])).max();
+        assert!(off <= Some(CHANNEL_TOLERANCE), "{point:?}: {shown:?}");
+    }
+
+    // Slabs drawn as casting no shadows shade nothing.
+    let uncast = render(Some(SunShadows::new(8.0)), Slabs::NotCasting);
+    assert_alike(&plain, &uncast, 0, "slabs that cast no shadows");
+
+    assert_screenshot(&headless.adapter_name(), "shadows_from_the_sun", frame);
+}
+
+/// A slab's shadow from the sun, in a map so coarse that a texel is four pixels wide: moving
+/// the camera two pixels, half a texel, moves everything in the frame two pixels and changes
+/// nothing else, since the map moves only by whole texels, which stay where they are in the
+/// world.
+#[test]
+fn the_suns_shadows_keep_still_as_the_camera_moves() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let ground = ctx.create_mesh(&MeshData::plane([40.0, 40.0])).unwrap();
+    let slab = ctx.create_mesh(&MeshData::cuboid([3.0, 0.2, 3.0])).unwrap();
+    let shadows = SunShadows::new(400.0);
+    // A pixel is 3/32 of a world unit.
+    let pixel = 6.0 / 64.0;
+    let texel = shadows.texel() / pixel;
+    assert!(texel > 4.0 && texel < 4.5, "a texel is {texel} pixels");
+    let mut render = |along: f32| {
+        let camera = Camera3d::orthographic([along, 10.0, 0.0], [along, 0.0, 0.0], 6.0);
+        headless
+            .render(128, 64, |canvas| {
+                canvas.clear(Color::BLACK);
+                let view = sun_view(camera, [128.0, 64.0], Some(shadows));
+                let mut view = canvas.begin_3d(view);
+                view.draw_mesh(&ground, Affine3::IDENTITY, None, Color::WHITE);
+                let over = Affine3::from_translation([-1.0, 2.0, 0.0]);
+                view.draw_mesh(&slab, over, None, Color::WHITE);
+            })
+            .unwrap()
+    };
+    let still = render(0.0);
+    let dark = |image: &Image| {
+        let pixels = image.pixels().chunks(4);
+        pixels.filter(|p| *p == [0, 0, 0, 255]).count()
+    };
+    assert!(dark(&still) > 200, "{} pixels in shadow", dark(&still));
+    for pixels in [2, 3, 6] {
+        let moved = render(pixels as f32 * pixel);
+        // What was at a pixel is so many pixels to its left.
+        let mut differing = 0;
+        for y in 0..64 {
+            for x in 0..128 - pixels {
+                let [was, is] = [still.pixel(x + pixels, y), moved.pixel(x, y)];
+                let off = (0..4).map(|i| was[i].abs_diff(is[i])).max();
+                differing += usize::from(off > Some(CHANNEL_TOLERANCE));
+            }
+        }
+        assert!(
+            differing <= 4,
+            "{differing} pixels changed as the camera moved {pixels}"
+        );
+    }
+}
+
+/// A floor seen from above, a slab over it, a spot light over the slab and a sun shining down
+/// and to the right: the slab has a shadow from each, the light's under it and the sun's to its
+/// right, and each shadow is lit by the other light.
+#[test]
+fn shadows_from_the_sun_and_a_light() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let ground = ctx.create_mesh(&MeshData::plane([12.0, 6.0])).unwrap();
+    let slab = ctx.create_mesh(&MeshData::cuboid([0.6, 0.1, 0.6])).unwrap();
+    let camera = Camera3d::orthographic([0.0, 10.0, 0.0], [0.0; 3], 6.0);
+    let size = [128.0, 64.0];
+    let lamp = Light {
+        shadows: true,
+        ..Light::spot(
+            [3.0, 3.0, 0.0],
+            [0.0, -1.0, 0.0],
+            0.5,
+            Color::rgb8(0xff, 0xd0, 0x90),
+            6.0,
+        )
+    };
+    let mut render = |sun: bool, lit: bool| {
+        let mut view = sun_view(camera, size, Some(SunShadows::new(8.0)));
+        if !sun {
+            view.lighting.color = Color::BLACK;
+        }
+        headless
+            .render(128, 64, |canvas| {
+                canvas.clear(Color::rgb8(0x20, 0x30, 0x60));
+                let mut view = canvas.begin_3d(view);
+                if lit {
+                    view.add_light(lamp);
+                }
+                view.draw_mesh(&ground, Affine3::IDENTITY, None, Color::WHITE);
+                let under = Affine3::from_translation([3.0, 1.5, 0.0]);
+                view.draw_mesh(&slab, under, None, Color::rgb8(0x60, 0xa0, 0xff));
+            })
+            .unwrap()
+    };
+    let view = sun_view(camera, size, None);
+    let pixel = |image: &Image, point: [f32; 3]| {
+        let [x, y] = view.project(point).expect("it's in view");
+        image.pixel(x as u32, y as u32)
+    };
+    let black = [0, 0, 0, 255];
+    let [by_sun, by_lamp, frame] = [render(true, false), render(false, true), render(true, true)];
+    // The lamp's shadow reaches 0.58 from under it, twice as far as the slab: there the sun
+    // alone lights the floor.
+    let under = [3.45, 0.0, 0.0];
+    assert_eq!(pixel(&by_lamp, under), black);
+    assert_ne!(pixel(&by_sun, under), black);
+    assert_eq!(pixel(&frame, under), pixel(&by_sun, under));
+    // The sun's shadow is 1.5 to the slab's right, as far as the slab is high, within the
+    // lamp's cone: there the lamp alone does.
+    let beside = [4.5, 0.0, 0.0];
+    assert_eq!(pixel(&by_sun, beside), black);
+    assert_ne!(pixel(&by_lamp, beside), black);
+    assert_eq!(pixel(&frame, beside), pixel(&by_lamp, beside));
+    // Between them both light it, and outside the lamp's cone the sun alone.
+    let between = [3.9, 0.0, 0.0];
+    assert!(pixel(&frame, between)[0] > pixel(&by_sun, between)[0]);
+    assert!(pixel(&frame, between)[2] > pixel(&by_lamp, between)[2]);
+    let outside = [1.0, 0.0, 0.0];
+    assert_eq!(pixel(&by_lamp, outside), black);
+    assert_eq!(pixel(&frame, outside), pixel(&by_sun, outside));
+
+    assert_screenshot(
+        &headless.adapter_name(),
+        "shadows_from_the_sun_and_a_light",
+        frame,
+    );
+}
+
 /// A 3D view covers the pixels a 2D fill of its rect does, whichever pixels' middles its edges
 /// fall on, on the target or hanging off it: a plane bigger than the view, seen face on, fills
 /// it.
@@ -3603,6 +3875,7 @@ fn particles_in_a_view() {
                 direction: [-0.4, -1.0, -0.5],
                 color: Color::rgb8(0xa0, 0xa0, 0xa0),
                 ambient: Color::rgb8(0x30, 0x30, 0x38),
+                shadows: None,
             },
             fog: Some(Fog {
                 color: Color::rgb8(0x08, 0x08, 0x0c),

@@ -180,8 +180,12 @@
 //!   `stretch`, and moves with its node, but doesn't turn or stretch. `camera`, required, is
 //!   `{ position = { x, y, z }, target = { x, y, z } }`, with `up` (`{ 0, 1, 0 }`), `fov`
 //!   (`0.8`) or for an orthographic camera `height`, `near` (`0.1`) and `far` (`1000`) if they
-//!   aren't the defaults; `lighting`, `{ direction, color, ambient }`, is the default lighting,
-//!   field by field, where it leaves fields out; `fog`, `{ color, near, far }`, if it has
+//!   aren't the defaults; `lighting`, `{ direction, color, ambient, shadows }`, is the default
+//!   lighting, field by field, where it leaves fields out, its sun casting no shadows unless
+//!   `shadows` is `{ reach, darkness }`: the view's meshes and models in the sunlight's way then
+//!   shade what's behind them, but for those whose `casts_shadow` is `false`, out to `reach`
+//!   world units, above 0, from the point the camera looks at, a shadow taking `darkness` (`1`)
+//!   of the sun's light, from 0 to 1; `fog`, `{ color, near, far }`, if it has
 //!   any, is what it shows fading to `color` (`"#ffffff"`) from `near` (`0`) world units
 //!   from its camera to `far`, which it must have, more than `near`; and `sky`,
 //!   `{ zenith, horizon, ground, band }`, if it has one, is what it shows wherever nothing is
