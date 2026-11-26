@@ -1,0 +1,13 @@
+[package]
+name = "wingine-nav"
+version = "0.1.0"
+edition = "2024"
+description = "Obstacles on a plane, indexed, and the ways round them, for games and native libraries"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+
+# What the index and the ways cost against asking every box: `cargo bench -p wingine-nav`.
+[[bench]]
+name = "nav"
+harness = false

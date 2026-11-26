@@ -3,6 +3,7 @@ members = [
     "crates/wingine-abi",
     "crates/wingine-editor",
     "crates/wingine-native",
+    "crates/wingine-nav",
     "examples/native-danmaku",
     "examples/native-particles",
 ]
@@ -12,6 +13,7 @@ default-members = [
     "crates/wingine-abi",
     "crates/wingine-editor",
     "crates/wingine-native",
+    "crates/wingine-nav",
     "examples/native-danmaku",
     "examples/native-particles",
 ]

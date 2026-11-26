@@ -32,6 +32,7 @@ that requires it. Pages are named for the module's tables, and functions for the
 | [Interfaces](gui.md) | Interfaces over the game, such as debug tools, laid out with egui in the game's own `gui` function: the `Ui` it's passed, which isn't one of the module's tables |
 | [Tests](testing.md) | What only tests have: `test`, `sim` to drive the game and run its frames, `assert_equal` and `assert_near` |
 | [`wingine-native`](native.md) | The Rust crate native libraries are written with |
+| [`wingine-nav`](nav.md) | A Rust crate of obstacles on a plane, indexed, and the shortest ways round them, which native libraries and Rust games compile in |
 
 The module and its tables are read-only. Luau's standard library is there too, as globals, in its
 sandboxed form:

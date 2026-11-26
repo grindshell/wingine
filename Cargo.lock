@@ -4302,6 +4302,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "wingine-nav"
+version = "0.1.0"
+
+[[package]]
 name = "winit"
 version = "0.30.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -27,7 +27,9 @@ thousands of things every frame:
 - **Drawing many sprites.** Each call from Luau into the engine costs more than the engine takes
   to record the sprite, so a script drawing 100,000 bullets spends most of its time calling. A
   library hands the engine every sprite of a kind in one call.
-- **Heavy computation**, such as pathfinding over a large map, or procedural generation.
+- **Heavy computation**, such as pathfinding over a large map, or procedural generation. For
+  crowds among walls and buildings, a library can compile in
+  [`wingine-nav`](api/nav.md), the engine's index of obstacles and the ways round them.
 
 The [shmup example](../examples/shmup) has both: its bullets are in [`bullets.luau`](../examples/shmup/bullets.luau)
 and in the [`danmaku`](../examples/native-danmaku/src/lib.rs) library, behind one interface, and

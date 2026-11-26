@@ -34,6 +34,10 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
 - **Menus** over scenes' nodes, moved through by the keys and the mouse.
 - **Rigged characters** animated by clips of keyframes, layered and crossfaded.
 - **Grid movement** from tile to tile, and **sprite animation**.
+- **Ways round obstacles**, for crowds in Rust and native libraries
+  ([`wingine-nav`](docs/api/nav.md)): walls and buildings indexed in cells, what a body walks
+  into, is near or is pushed out of, and the shortest way round them, the same to the bit on every
+  platform.
 - **Physics** with [Rapier](https://rapier.rs), the same to the bit on every platform: solid
   scene nodes and tile maps, bodies that fall, roll and stack, lifts that carry what's on them,
   and characters that climb steps and slopes, pushing what they walk into, in 2D and 3D; and

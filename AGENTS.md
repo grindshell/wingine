@@ -278,6 +278,9 @@ references in their own right.
   since two readings of the clock are a tenth of a call. A frame ends for it as the game's
   `draw` returns. `crates/wingine-abi` is the C ABI (`ABI_MAJOR`, `ABI_MINOR`), and
   `crates/wingine-native` the crate libraries are written with, which never depends on `wingine`.
+  `crates/wingine-nav` is obstacles on a plane and the ways round them, which a library or a Rust
+  game compiles in: it depends on nothing, uses only `+`, `-`, `*`, `/` and `sqrt`, and each of
+  its index's answers is held, by its tests, to the one asking every box would give, to the bit.
 - `export.rs`: `wingine export`, the CLI's executable copied as the game, beside `game/` and
   `licenses/`; on Windows it's patched to open no console and given the game's icon.
 - `testing.rs`: Luau games' own tests in `*.test.luau`, each against a fresh `Simulation`. A test
