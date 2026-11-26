@@ -232,7 +232,9 @@ impl Default for KeyRepeat {
 /// for scripted runs (see the `WINGINE_SCRIPT` variable in [`run`](crate::run)).
 ///
 /// Frames only advance when asked to, each by exactly [`Simulation::FRAME_TIME`], so runs are
-/// deterministic. With an [update rate](WindowConfig::update_rate), each frame runs the updates
+/// deterministic, and come as fast as they're made unless the simulation is asked to keep the
+/// wall's pace ([`Simulation::set_real_time`]). With an
+/// [update rate](WindowConfig::update_rate), each frame runs the updates
 /// that time holds, as a window would. Input takes effect on the next frame, as events from a
 /// window would: for example, a key held down is pressed on the next frame and held until
 /// released. Keys held down repeat as a window's system would repeat them, at the delay and rate
@@ -255,6 +257,9 @@ pub struct Simulation<G> {
     drawn: bool,
     render_every_frame: bool,
     frames: u64,
+    /// When the simulation began keeping the wall's pace, if it is, and the frames it had run by
+    /// then.
+    paced: Option<(Instant, u64)>,
     /// How keys held down repeat, if they do.
     key_repeat: Option<KeyRepeat>,
     /// The key that repeats, the last pressed, while it's held, and the frame it repeats next,
@@ -327,6 +332,7 @@ impl<G: Game> Simulation<G> {
         headless.ctx.canvas_size = headless.ctx.screen.canvas_size(output, 1.0);
         #[cfg(feature = "egui")]
         {
+            headless.ctx.output = (output, 1.0);
             headless.ctx.gui.debug_key = config.debug_key;
             headless.ctx.gui.enable_labels();
         }
@@ -339,6 +345,7 @@ impl<G: Game> Simulation<G> {
             drawn: false,
             render_every_frame: false,
             frames: 0,
+            paced: None,
             key_repeat: Some(KeyRepeat::default()),
             repeating: None,
             keys_held: HashSet::new(),
@@ -435,6 +442,33 @@ impl<G: Game> Simulation<G> {
         self.render_every_frame = render;
     }
 
+    /// Whether frames keep the wall's pace: with it on, each frame waits until its game time
+    /// has passed in real time since this was turned on, so game time never runs ahead of the
+    /// wall's, as it does otherwise, frames coming as fast as they're made. It's for a game that
+    /// talks to something keeping real time, as a server does whose ticks are the wall's, which
+    /// a run at any other pace would outrun. Off by default.
+    ///
+    /// Frames still advance by [`Simulation::FRAME_TIME`] each, and one that takes longer than
+    /// that leaves game time behind, which the frames after make up by not waiting. A frame's
+    /// [`FrameStats`](crate::FrameStats) leave its wait out. On the web, where nothing waits,
+    /// it does nothing.
+    pub fn set_real_time(&mut self, real_time: bool) {
+        self.paced = real_time.then(|| (Instant::now(), self.frames));
+    }
+
+    /// Waits until the frame about to run is due by the wall's clock, if the simulation keeps
+    /// its pace.
+    fn keep_pace(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((began, from)) = self.paced {
+            let frames = (self.frames - from) as f64;
+            let due = std::time::Duration::from_secs_f64(frames * f64::from(Self::FRAME_TIME));
+            if let Some(wait) = due.checked_sub(began.elapsed()) {
+                std::thread::sleep(wait);
+            }
+        }
+    }
+
     /// For a game that [redraws on demand](crate::Redraw::OnDemand), how long its window would
     /// wait before its next frame, in seconds: 0 if it wants one now, as after input, or `None`
     /// if it waits for input or a [`Waker`](crate::Waker). [`Simulation::step`] runs a frame
@@ -508,6 +542,7 @@ impl<G: Game> Simulation<G> {
 
     /// Runs one frame: updates the game, runs its interface, then draws it.
     pub fn step(&mut self) {
+        self.keep_pace();
         let start = Instant::now();
         self.headless.ctx.redraws.begin_frame();
         self.repeat_key();
@@ -520,12 +555,11 @@ impl<G: Game> Simulation<G> {
             output,
             ..
         } = self;
-        let canvas_size = headless.ctx.screen.canvas_size(*output, 1.0);
         let mut stats = run_frame(
             game,
             &mut headless.ctx,
             &mut headless.canvas,
-            canvas_size,
+            (*output, 1.0),
             timestep,
             Self::FRAME_TIME,
         );

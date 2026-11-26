@@ -1795,7 +1795,8 @@ What it leaves out: skins and morph targets (parts are drawn as modelled), anima
 lights and the rest of materials. A file whose meshes are points or lines, one with a JPEG texture,
 one whose emission texture is on other coordinates than its base color's, and one that needs an
 extension the engine doesn't read, such as Draco or meshopt compression, are errors, saying what
-to export differently.
+to export differently. A file with a lamp in it is none: Blender says such a file needs
+`KHR_lights_punctual`, and it's read without its lights, as it would be if it only used them.
 
 From Blender, export glTF 2.0 as a `.glb`, with the scene's units in metres, so a metre is a world
 unit, and its axes converted, as they are by default, so Blender's up is `+y`. Put each model's

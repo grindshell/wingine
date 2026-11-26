@@ -16,6 +16,9 @@
 //! grass sprite, whose transparent background shows the ground through. The table and the barrels
 //! are models made in Blender (`examples/models`), drawn a draw call for each of their parts.
 //!
+//! The cursor names the model under it, by the model's triangles (`Model::read_triangles`,
+//! `Ray::hit_triangle`) and not its box: between a table's legs, it's over the grass.
+//!
 //! Left and Right (or A and D) turn the camera round faster either way. Run with
 //! `cargo run --example meshes`.
 
@@ -24,7 +27,7 @@ use std::f32::consts::TAU;
 use wingine::{
     Context, FrameStats, Game, WindowConfig,
     graphics::{
-        Blend, Camera3d, Canvas, Canvas3d, Color, Font, Mesh, MeshData, MeshVertex, Model,
+        Blend, Camera3d, Canvas, Canvas3d, Color, Font, Mesh, MeshData, MeshVertex, Model, Ray,
         Resolution, Sprite, SpriteSheet, View3d,
     },
     input::Key,
@@ -41,6 +44,8 @@ const TILESET: &str = concat!(
 );
 const TABLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/models/table.glb");
 const BARREL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/models/barrel.glb");
+/// Where the table stands, and how far it's turned.
+const TABLE_PLACE: ([f32; 3], f32) = ([2.0, 0.0, -1.6], -0.4);
 /// Where the barrels stand, and how far each is turned.
 const BARRELS: [([f32; 3], f32); 2] = [([-2.6, 0.0, 0.2], 0.0), ([-3.0, 0.0, -0.6], 0.7)];
 /// How many tiles the field is across, each 1 world unit.
@@ -79,6 +84,12 @@ struct Meshes {
     puddle: Mesh,
     table: Model,
     barrel: Model,
+    /// The models' triangles, as their files place them, which the cursor is tried against.
+    table_triangles: Vec<[[f32; 3]; 3]>,
+    barrel_triangles: Vec<[[f32; 3]; 3]>,
+    /// Where the cursor is, and the model under it, if it's over the view and over one.
+    cursor: Option<[f32; 2]>,
+    under: Option<&'static str>,
     grass: Sprite,
     /// What the flag shows, made of pixels worked out here.
     banner: Sprite,
@@ -108,6 +119,10 @@ impl Meshes {
             puddle: ctx.create_mesh(&MeshData::plane(PUDDLE_SIZE))?,
             table: ctx.load_model(TABLE)?,
             barrel: ctx.load_model(BARREL)?,
+            table_triangles: Model::read_triangles(TABLE)?,
+            barrel_triangles: Model::read_triangles(BARREL)?,
+            cursor: None,
+            under: None,
             grass: sheet.sprite(5, 0),
             banner,
             font: ctx.default_font().clone(),
@@ -145,11 +160,9 @@ impl Meshes {
         view.draw_mesh(&self.flag, hoist, Some(&self.banner), Color::WHITE);
 
         // The models, as they were made: a table across from the crates, and barrels by the post.
-        let table = Affine3::from_translation([2.0, 0.0, -1.6]) * Affine3::from_rotation_y(-0.4);
-        view.draw_model(&self.table, table, Color::WHITE);
-        for (position, turn) in BARRELS {
-            let barrel = Affine3::from_translation(position) * Affine3::from_rotation_y(turn);
-            view.draw_model(&self.barrel, barrel, Color::WHITE);
+        view.draw_model(&self.table, placed(TABLE_PLACE), Color::WHITE);
+        for barrel in BARRELS {
+            view.draw_model(&self.barrel, placed(barrel), Color::WHITE);
         }
 
         let ball = Affine3::from_translation(self.ball_position());
@@ -169,12 +182,52 @@ impl Meshes {
         view.set_blend(None);
     }
 
+    /// The model that shows at `point` of the canvas, if one does: the nearest whose triangles
+    /// the ray through the point meets. A model's box is tried first, since most rays miss it
+    /// and a box is one test where a model is a triangle each.
+    fn model_at(&self, point: [f32; 2]) -> Option<&'static str> {
+        let [width, height] = match RESOLUTION {
+            Resolution::Fixed { width, height } => [width as f32, height as f32],
+            Resolution::Window => unreachable!("the example draws at a fixed resolution"),
+        };
+        let ray = self.camera().ray(point, [width, height]);
+        let table = ("table", &self.table, &self.table_triangles, TABLE_PLACE);
+        let barrels = BARRELS.map(|place| ("barrel", &self.barrel, &self.barrel_triangles, place));
+        let mut nearest: Option<(f32, &'static str)> = None;
+        for (name, model, triangles, place) in [table].into_iter().chain(barrels) {
+            let Some(distance) = hit(&ray, model, triangles, placed(place)) else {
+                continue;
+            };
+            if nearest.is_none_or(|(least, _)| distance < least) {
+                nearest = Some((distance, name));
+            }
+        }
+        nearest.map(|(_, name)| name)
+    }
+
     /// Where the ball's middle is: bouncing on the spot, slowing toward the top of each bounce.
     fn ball_position(&self) -> [f32; 3] {
         let phase = (self.time * BOUNCES).fract();
         let height = 4.0 * phase * (1.0 - phase) * BOUNCE_HEIGHT;
         [1.5, BALL_RADIUS + height, 1.0]
     }
+}
+
+/// A model's place in the world: standing at a position, turned about its upright.
+fn placed((position, turn): ([f32; 3], f32)) -> Affine3 {
+    Affine3::from_translation(position) * Affine3::from_rotation_y(turn)
+}
+
+/// How far along `ray` it meets `model`, standing at `place`, by its `triangles`, if it does.
+fn hit(ray: &Ray, model: &Model, triangles: &[[[f32; 3]; 3]], place: Affine3) -> Option<f32> {
+    ray.hit_box(&model.bounds()?.transformed(&place))?;
+    triangles
+        .iter()
+        .filter_map(|triangle| {
+            let [a, b, c] = triangle.map(|corner| place.apply(corner));
+            ray.hit_triangle(a, b, c)
+        })
+        .min_by(f32::total_cmp)
 }
 
 /// The field: a quad for each tile, facing up, each showing the whole sprite, alternately a
@@ -281,6 +334,8 @@ impl Game for Meshes {
         self.time += dt;
         ctx.write_mesh(&self.flag, &flag(self.time).vertices)
             .expect("the flag has as many corners however it flies");
+        self.cursor = ctx.input().mouse_position();
+        self.under = self.cursor.and_then(|cursor| self.model_at(cursor));
         self.stats = ctx.frame_stats();
     }
 
@@ -301,6 +356,11 @@ impl Game for Meshes {
             let label = "ball";
             let width = self.font.measure(label)[0];
             canvas.draw_text(&self.font, label, [x - width / 2.0, y - 10.0], Color::WHITE);
+        }
+
+        // The model under the cursor, named beside it.
+        if let (Some([x, y]), Some(name)) = (self.cursor, self.under) {
+            canvas.draw_text(&self.font, name, [x + 8.0, y - 4.0], Color::WHITE);
         }
 
         let stats = format!(
@@ -409,6 +469,65 @@ mod tests {
         let bounds = game.barrel.bounds().unwrap();
         assert_eq!(bounds.min[1], 0.0, "standing on its origin");
         assert!((bounds.max[1] - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_cursor_names_a_model_by_its_triangles_not_its_box() {
+        let mut simulation = simulation();
+        simulation.run_frames(1);
+        let game = simulation.game();
+        assert_eq!(game.under, None, "the cursor isn't over the window");
+        assert_eq!(
+            game.table_triangles.len() as u32,
+            game.table.triangle_count()
+        );
+        assert_eq!(
+            game.barrel_triangles.len() as u32,
+            game.barrel.triangle_count()
+        );
+
+        // Every pixel of the view: under more of them is the table's box than the table.
+        let camera = game.camera();
+        let size = [320.0, 180.0];
+        let table = placed(TABLE_PLACE);
+        let bounds = game.table.bounds().unwrap().transformed(&table);
+        let [mut boxed, mut shown] = [0, 0];
+        let mut between = None;
+        for y in 0..180 {
+            for x in 0..320 {
+                let point = [x as f32 + 0.5, y as f32 + 0.5];
+                if camera.ray(point, size).hit_box(&bounds).is_none() {
+                    assert_ne!(game.model_at(point), Some("table"), "{point:?}");
+                    continue;
+                }
+                boxed += 1;
+                match game.model_at(point) {
+                    Some("table") => shown += 1,
+                    None => between = Some(point),
+                    Some(_) => {}
+                }
+            }
+        }
+        assert!(shown > 200 && boxed > shown + 200, "{shown} of {boxed}");
+        assert!(between.is_some(), "the grass shows past its legs");
+
+        // The cursor over the middle of the table's top, and of a barrel, names each.
+        let top = game.table.bounds().unwrap().max[1];
+        let (position, _) = BARRELS[0];
+        let places = [
+            ("table", table.apply([0.0, top, 0.0])),
+            ("barrel", [position[0], 0.35, position[2]]),
+        ];
+        for (name, place) in places {
+            let [x, y] = simulation.game().camera().project(place, size).unwrap();
+            simulation.move_mouse(x, y);
+            simulation.step();
+            assert_eq!(simulation.game().under, Some(name));
+        }
+        // Off the models, it names nothing.
+        simulation.move_mouse(4.0, 170.0);
+        simulation.step();
+        assert_eq!(simulation.game().under, None);
     }
 
     #[test]

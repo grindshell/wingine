@@ -6,7 +6,8 @@
 //! `KHR_texture_transform`), emission (its factor, its PNG texture on the base color's
 //! coordinates, and `KHR_materials_emissive_strength`) and whether it's double-sided. Skins,
 //! morph targets, animations, cameras, lights and the rest of materials are left out, and files
-//! that require an extension the engine doesn't read are refused.
+//! that require an extension the engine doesn't read are refused, but for
+//! `KHR_lights_punctual`, whose lights are left out whether a file requires them or not.
 
 use std::{
     borrow::Cow,
@@ -32,6 +33,11 @@ const MAX_DEPTH: u32 = 256;
 
 /// The extensions the engine reads, which a file may require.
 const READ_EXTENSIONS: [&str; 2] = ["KHR_materials_emissive_strength", "KHR_texture_transform"];
+
+/// The extensions a file may require though the engine reads nothing of them, since what they
+/// add is left out anyway and the rest of the file is as it would be without: a file's lights.
+/// Blender says a file with a lamp in it requires them.
+const LEFT_OUT_EXTENSIONS: [&str; 1] = ["KHR_lights_punctual"];
 
 /// What a model file holds that the engine draws.
 #[derive(Debug, Default)]
@@ -83,6 +89,25 @@ pub(crate) struct PartData {
 
 /// Reads a model file's `bytes`, `.gltf` or `.glb`, finding the files it names in `folder`.
 pub(crate) fn read(bytes: &[u8], folder: &Path) -> Result<ModelData, String> {
+    read_parts(bytes, folder, true)
+}
+
+/// The triangles of a model file's `bytes`, each its three corners where the file's nodes place
+/// them, in the order its parts are drawn. Its textures aren't read, so nor are their files.
+pub(crate) fn read_triangles(bytes: &[u8], folder: &Path) -> Result<Vec<[[f32; 3]; 3]>, String> {
+    let data = read_parts(bytes, folder, false)?;
+    let mut triangles = Vec::new();
+    for part in &data.parts {
+        let mesh = &data.meshes[part.mesh];
+        let corner = |index: u32| part.transform.apply(mesh.vertices[index as usize].position);
+        let (corners, _) = mesh.indices.as_chunks::<3>();
+        triangles.extend(corners.iter().map(|triangle| triangle.map(corner)));
+    }
+    Ok(triangles)
+}
+
+/// Reads a model file's parts, with their textures if `textured`, or as though it had none.
+fn read_parts(bytes: &[u8], folder: &Path, textured: bool) -> Result<ModelData, String> {
     // Parsed once, and checked for what it needs before it's validated, which would fail on what
     // the engine doesn't know with a less helpful error.
     let ::gltf::Gltf {
@@ -91,7 +116,7 @@ pub(crate) fn read(bytes: &[u8], folder: &Path) -> Result<ModelData, String> {
     } = ::gltf::Gltf::from_slice_without_validation(bytes).map_err(|err| err.to_string())?;
     let required: Vec<&str> = unchecked
         .extensions_required()
-        .filter(|name| !READ_EXTENSIONS.contains(name))
+        .filter(|name| !READ_EXTENSIONS.contains(name) && !LEFT_OUT_EXTENSIONS.contains(name))
         .collect();
     if !required.is_empty() {
         return Err(format!(
@@ -99,7 +124,10 @@ pub(crate) fn read(bytes: &[u8], folder: &Path) -> Result<ModelData, String> {
             required.join(", ")
         ));
     }
-    let json = unchecked.into_json();
+    let mut json = unchecked.into_json();
+    // Validating refuses a file that requires what it wasn't built to read.
+    json.extensions_required
+        .retain(|name| !LEFT_OUT_EXTENSIONS.contains(&name.as_str()));
     // Validating looks up a primitive's positions without checking they're there, panicking.
     for (m, mesh) in json.meshes.iter().enumerate() {
         for (p, primitive) in mesh.primitives.iter().enumerate() {
@@ -136,6 +164,7 @@ pub(crate) fn read(bytes: &[u8], folder: &Path) -> Result<ModelData, String> {
     let mut reader = Reader {
         buffers,
         folder,
+        textured,
         placed: HashSet::new(),
         meshes: HashMap::new(),
         textures: HashMap::new(),
@@ -173,6 +202,8 @@ pub(crate) fn read(bytes: &[u8], folder: &Path) -> Result<ModelData, String> {
 struct Reader<'a> {
     buffers: Vec<Vec<u8>>,
     folder: &'a Path,
+    /// Whether materials' textures are read, or every part is read as showing none.
+    textured: bool,
     /// The file's nodes placed so far. Each is in one place: a node under two parents, or in a
     /// loop, is an error, since nodes under several could be placed exponentially many times.
     placed: HashSet<usize>,
@@ -256,7 +287,7 @@ impl Reader<'_> {
         opaque: bool,
         mesh: usize,
     ) -> Result<Option<usize>, String> {
-        let Some(info) = info else {
+        let Some(info) = info.filter(|_| self.textured) else {
             return Ok(None);
         };
         let image = info.texture().source();
@@ -841,6 +872,30 @@ mod tests {
     }
 
     #[test]
+    fn triangles_are_read_where_nodes_place_them_without_their_textures() {
+        let mut buffer = Buffer::new();
+        let (positions, indices) = triangle(&mut buffer);
+        // One mesh placed twice, the second time twice the size and moved, and showing an image
+        // that isn't there to read.
+        let json = buffer.gltf(&format!(
+            r#""images":[{{"uri":"gone.png"}}],"textures":[{{"source":0}}],
+            "materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}}}}}}],
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":{positions}}},"indices":{indices},"material":0}}]}}],
+            "nodes":[{{"mesh":0}},{{"mesh":0,"scale":[2,2,2],"translation":[10,0,0]}}]"#
+        ));
+        assert!(read_str(&json).is_err(), "drawing it needs the image");
+        let triangles = read_triangles(json.as_bytes(), Path::new(".")).unwrap();
+        assert_eq!(
+            triangles,
+            [
+                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                [[10.0, 0.0, 0.0], [12.0, 0.0, 0.0], [10.0, 2.0, 0.0]],
+            ]
+        );
+        assert!(read_triangles(b"not a model", Path::new(".")).is_err());
+    }
+
+    #[test]
     fn without_a_scene_every_top_node_is_placed() {
         let mut buffer = Buffer::new();
         let (positions, indices) = triangle(&mut buffer);
@@ -997,6 +1052,29 @@ mod tests {
                 .iter()
                 .all(|part| part.emission_texture.is_none())
         );
+    }
+
+    #[test]
+    fn a_file_that_requires_its_lights_is_read_without_them() {
+        let mut buffer = Buffer::new();
+        let (positions, indices) = triangle(&mut buffer);
+        let plain = buffer.gltf(&format!(
+            r#""meshes":[{{"primitives":[{{"attributes":{{"POSITION":{positions}}},"indices":{indices}}}]}}],
+            "nodes":[{{"mesh":0}}]"#
+        ));
+        // As Blender writes a model with a lamp in it: a node holding a light, which the file
+        // says it requires.
+        let lit = buffer.gltf(&format!(
+            r#""extensionsUsed":["KHR_lights_punctual"],"extensionsRequired":["KHR_lights_punctual"],
+            "extensions":{{"KHR_lights_punctual":{{"lights":[{{"type":"point","color":[1,0.8,0.6],"intensity":54}}]}}}},
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":{positions}}},"indices":{indices}}}]}}],
+            "nodes":[{{"mesh":0}},{{"name":"lamp","translation":[0,2,0],"extensions":{{"KHR_lights_punctual":{{"light":0}}}}}}]"#
+        ));
+        let [plain, lit] = [plain, lit].map(|json| read_str(&json).unwrap());
+        assert_eq!(lit.parts.len(), 1, "the lamp is no part");
+        assert_eq!(lit.meshes, plain.meshes);
+        assert_eq!(lit.parts[0].transform, plain.parts[0].transform);
+        assert_eq!(lit.parts[0].emission, [0.0; 3], "nor does it glow");
     }
 
     #[test]

@@ -307,6 +307,41 @@ impl Ray {
         // Infinitely far from an origin infinitely far, which it never reaches.
         near.is_finite().then_some(near)
     }
+
+    /// How far along the ray it meets the triangle with corners `a`, `b` and `c`, from either
+    /// side, or `None` if it misses it, runs along it, or the triangle is behind its origin or
+    /// has no area. Picking by a shape and not its box tries the shape's triangles, as
+    /// [`Model::read_triangles`](super::Model::read_triangles) gives a model file's, and takes
+    /// the nearest hit: worth it only for what the ray's [box](Ray::hit_box) test passed.
+    ///
+    /// A triangle is a hundred-thousandth of itself wider than its corners say, so a ray along
+    /// an edge two triangles share, which rounding could put outside both, meets one of them.
+    pub fn hit_triangle(&self, a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> Option<f32> {
+        /// How far outside a triangle a ray may pass and still meet it, as a part of the way
+        /// from one corner to another.
+        const EDGE: f32 = 1e-5;
+        // Möller and Trumbore's test: the hit as a mix of the corners, and how far along it is.
+        let [ab, ac] = [sub3(b, a), sub3(c, a)];
+        let across = cross3(self.direction, ac);
+        let facing = dot3(ab, across);
+        // Next to nothing beside the triangle's own size: the ray runs along it, or it's a sliver.
+        let size = dot3(ab, ab) * dot3(ac, ac);
+        if facing * facing <= 1e-12 * size || !facing.is_finite() {
+            return None;
+        }
+        let from = sub3(self.origin, a);
+        let u = dot3(from, across) / facing;
+        if !(-EDGE..=1.0 + EDGE).contains(&u) {
+            return None;
+        }
+        let around = cross3(from, ab);
+        let v = dot3(self.direction, around) / facing;
+        if v < -EDGE || u + v > 1.0 + EDGE {
+            return None;
+        }
+        let distance = dot3(ac, around) / facing;
+        (distance >= 0.0 && distance.is_finite()).then_some(distance)
+    }
 }
 
 /// `a` times `b`: `b`, then `a`.
@@ -495,6 +530,95 @@ mod tests {
             direction: [0.0, 0.0, -1.0],
         };
         assert_eq!(toward.hit_box(&lost), None);
+    }
+
+    #[test]
+    fn rays_hit_triangles_from_either_side() {
+        // Upright on the ground, facing `+z`.
+        let [a, b, c] = [[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 2.0, 0.0]];
+        let ray = |origin: [f32; 3], direction: [f32; 3]| Ray {
+            origin,
+            direction: normalize3(direction).unwrap(),
+        };
+        let toward = ray([0.0, 0.5, 10.0], [0.0, 0.0, -1.0]);
+        assert_eq!(toward.hit_triangle(a, b, c), Some(10.0));
+        // Wound the other way, and from behind.
+        assert_eq!(toward.hit_triangle(a, c, b), Some(10.0));
+        let behind = ray([0.0, 0.5, -3.0], [0.0, 0.0, 1.0]);
+        assert_eq!(behind.hit_triangle(a, b, c), Some(3.0));
+        // At a slant, to where it meets it.
+        let slant = ray([4.0, 1.0, 4.0], [-1.0, 0.0, -1.0]);
+        let distance = slant.hit_triangle(a, b, c).unwrap();
+        assert_near(slant.at(distance), [0.0, 1.0, 0.0]);
+
+        let misses = [
+            ("away", [0.0, 0.5, 10.0], [0.0, 0.0, 1.0]),
+            // In its box, past its sloping side.
+            ("beside", [0.9, 1.5, 10.0], [0.0, 0.0, -1.0]),
+            ("over", [0.0, 2.5, 10.0], [0.0, 0.0, -1.0]),
+            ("under", [0.0, -0.1, 10.0], [0.0, 0.0, -1.0]),
+            ("along it", [-5.0, 0.5, 0.0], [1.0, 0.0, 0.0]),
+        ];
+        for (how, origin, direction) in misses {
+            assert_eq!(ray(origin, direction).hit_triangle(a, b, c), None, "{how}");
+        }
+        // Its edges and corners are its own.
+        let edge = ray([0.0, 0.0, 10.0], [0.0, 0.0, -1.0]);
+        assert_eq!(edge.hit_triangle(a, b, c), Some(10.0));
+    }
+
+    #[test]
+    fn a_ray_along_an_edge_two_triangles_share_meets_one_of_them() {
+        // A square split corner to corner, seen from many places through points on the split.
+        let corners = [
+            [0.3, 0.0, -1.7],
+            [4.1, 0.2, -1.3],
+            [4.4, 0.1, 2.9],
+            [0.1, 0.3, 3.3],
+        ];
+        let [a, b, c, d] = corners;
+        let mut missed = 0;
+        for step in 0..1000 {
+            let along = (step as f32 + 0.5) / 1000.0;
+            let on = [0, 1, 2].map(|i| a[i] + (c[i] - a[i]) * along);
+            let from = [
+                7.0 * (step as f32 * 0.37).sin(),
+                3.0 + along,
+                7.0 * (step as f32 * 0.37).cos(),
+            ];
+            let ray = Ray {
+                origin: from,
+                direction: normalize3(sub3(on, from)).unwrap(),
+            };
+            let hits = [ray.hit_triangle(a, b, c), ray.hit_triangle(a, c, d)];
+            missed += usize::from(hits == [None, None]);
+        }
+        assert_eq!(missed, 0);
+    }
+
+    #[test]
+    fn rays_hit_nothing_of_triangles_with_no_area_or_of_nan() {
+        let toward = Ray {
+            origin: [0.0, 0.5, 10.0],
+            direction: [0.0, 0.0, -1.0],
+        };
+        let [a, b, c] = [[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 2.0, 0.0]];
+        // A line, and a point.
+        assert_eq!(toward.hit_triangle(a, b, [0.0; 3]), None);
+        assert_eq!(toward.hit_triangle(a, a, a), None);
+        let nan = f32::NAN;
+        assert_eq!(toward.hit_triangle([nan, 0.0, 0.0], b, c), None);
+        assert_eq!(toward.hit_triangle(a, b, [0.0, f32::INFINITY, 0.0]), None);
+        let lost = Ray {
+            origin: [0.0, nan, 10.0],
+            ..toward
+        };
+        assert_eq!(lost.hit_triangle(a, b, c), None);
+        let turned = Ray {
+            direction: [nan; 3],
+            ..toward
+        };
+        assert_eq!(turned.hit_triangle(a, b, c), None);
     }
 
     #[test]

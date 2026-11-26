@@ -42,11 +42,12 @@ pub trait Game {
 
     /// Lays out the game's egui interface, drawn over the frame: debug panels, or a tool's whole
     /// window. Called once a frame, after the updates and before [`Game::draw`], with `ui`
-    /// covering the window. See the [`gui`](crate::gui) module.
+    /// covering the window, unless the game has said it has none for now
+    /// ([`Context::set_has_gui`]). See the [`gui`](crate::gui) module.
     #[cfg(feature = "egui")]
     fn gui(&mut self, ctx: &mut Context, _ui: &mut egui::Ui) {
         // Frames needn't run egui at all, unless the debug window is open.
-        ctx.gui.game_has_gui = false;
+        ctx.set_has_gui(false);
     }
 
     /// Draws the current frame.
@@ -70,6 +71,15 @@ pub struct WindowConfig {
     pub width: u32,
     /// Initial height in logical pixels.
     pub height: u32,
+    /// Where the window opens: its top-left corner, title bar and borders included, in physical
+    /// pixels from the top-left of the main screen, so windows can open side by side, as two
+    /// players' do on one machine. `None`, the default, leaves it to the system. On Windows the
+    /// frame that shows begins a few pixels to the right of it, past the unseen border the
+    /// system gives a window to be resized by, and on macOS it's the corner of what's inside the
+    /// title bar. Where the system places windows itself, as Wayland and the web do, and for a
+    /// window that opens covering the screen, it does nothing, as in a
+    /// [`Simulation`](crate::headless::Simulation).
+    pub position: Option<[i32; 2]>,
     pub resizable: bool,
     /// Whether the window opens covering the screen. The game changes it with
     /// [`Context::set_fullscreen`].
@@ -111,6 +121,7 @@ impl Default for WindowConfig {
             icon: None,
             width: 1280,
             height: 720,
+            position: None,
             resizable: true,
             fullscreen: Fullscreen::Off,
             resolution: Resolution::Window,
@@ -303,20 +314,26 @@ fn event_loop() -> Result<EventLoop<()>> {
 }
 
 /// Runs one frame of `game`, as both the window and a [`Simulation`] do: updates it as `timestep`
-/// says for a frame `elapsed` seconds long, with a canvas `canvas_size` canvas pixels in size,
-/// runs its interface with the input the caller gave the GUI, then has it draw on `canvas`.
-/// Returns the frame's stats so far: the caller adds rendering and the frame's whole time.
+/// says for a frame `elapsed` seconds long, shown on an output of `output` physical pixels at
+/// `scale_factor`, runs its interface with the input the caller gave the GUI, then has it draw on
+/// `canvas`. Returns the frame's stats so far: the caller adds rendering and the frame's whole
+/// time.
 ///
 /// [`Simulation`]: crate::headless::Simulation
 pub(crate) fn run_frame(
     game: &mut impl Game,
     ctx: &mut Context,
     canvas: &mut Canvas,
-    canvas_size: [f32; 2],
+    (output, scale_factor): ([u32; 2], f64),
     timestep: &mut Timestep,
     elapsed: f32,
 ) -> FrameStats {
+    let canvas_size = ctx.screen.canvas_size(output, scale_factor);
     ctx.canvas_size = canvas_size;
+    #[cfg(feature = "egui")]
+    {
+        ctx.output = (output, scale_factor);
+    }
     let (updates, dt) = timestep.updates(elapsed);
     // With an update rate, a frame may come too soon after the last for an update, as one a window
     // that redraws on demand runs for input may: another comes when one's due, so the game sees
@@ -827,6 +844,10 @@ fn create_window(
     #[cfg(not(target_arch = "wasm32"))]
     let attributes =
         attributes.with_inner_size(winit::dpi::LogicalSize::new(config.width, config.height));
+    let attributes = match config.position {
+        Some([x, y]) => attributes.with_position(winit::dpi::PhysicalPosition::new(x, y)),
+        None => attributes,
+    };
     // The page's styles size the canvas, which a size here would override.
     #[cfg(target_arch = "wasm32")]
     let attributes = {
@@ -994,6 +1015,10 @@ impl<G: Game> State<G> {
         ctx.canvas_size = ctx
             .screen
             .canvas_size([size.width, size.height], window.scale_factor());
+        #[cfg(feature = "egui")]
+        {
+            ctx.output = ([size.width, size.height], window.scale_factor());
+        }
         #[cfg(feature = "egui")]
         let gui_window = {
             ctx.gui.debug_key = config.debug_key;
@@ -1254,8 +1279,6 @@ impl<G: Game> State<G> {
         if let Some(gamepads) = &mut self.gamepads {
             gamepads.poll(&mut self.ctx.input, self.focused);
         }
-        let canvas_size = self.ctx.screen.canvas_size(output, scale_factor);
-
         let now = Instant::now();
         let elapsed = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
@@ -1271,7 +1294,7 @@ impl<G: Game> State<G> {
             &mut self.game,
             &mut self.ctx,
             &mut self.canvas,
-            canvas_size,
+            (output, scale_factor),
             &mut self.timestep,
             elapsed,
         );

@@ -231,6 +231,8 @@ The script has one command per line. `#` starts a comment.
 | `stick 1 Left 0.5 -1` | Moves gamepad 1's left stick to `x`, `y`, each from -1 to 1, with `y` down: here, up and a little right. |
 | `key-repeat 0.25s 20` | Repeats keys held down after a quarter of a second (or a number of frames), 20 times a second. |
 | `key-repeat off` | Stops repeating keys held down. |
+| `real-time on` | Keeps the wall's pace from here, so a second of frames takes a second: for a game that talks to something keeping real time, such as a server, which a run at any other pace would outrun. |
+| `real-time off` | Runs frames as fast as they're made again. |
 | `resize 640 360` | Resizes the virtual window, in physical pixels. |
 | `pick projects/drafts` | Answers the game's dialog for [picking a folder](api/files.md), the one open or else the next, with a copy of the folder, relative to the script's, which goes when the run ends. |
 | `pick` | Answers it with none, as when the player cancels it. |

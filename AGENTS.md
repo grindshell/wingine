@@ -83,11 +83,15 @@ references in their own right.
   `WindowConfig::update_rate`, as many fixed steps as the frame holds, tolerant of jitter), then
   egui (`Game::gui`), then `draw`. `WINGINE_SCRIPT` hands off to the script runner. Fullscreen
   falls back to borderless where there's no exclusive mode. With `Redraw::OnDemand`, frames come
-  only when asked for (`Redraws`, shared with the `Context`, `Waker`s and egui).
+  only when asked for (`Redraws`, shared with the `Context`, `Waker`s and egui). A window opens
+  where `WindowConfig::position` says, if it says; `conf.luau` has no setting for it.
 - `src/context.rs`: `Context`, the services games get: input, audio, saves, canvas size, fonts,
   loading textures, fonts and models, making a texture of pixels a game worked out
   (`create_texture`, the upload `load_texture` and the ABI's `create_sprite` end in),
-  `FrameStats`, and redraw requests.
+  `FrameStats`, redraw requests, whether the interface has a point of the canvas (`gui_covers`,
+  what the engine asks of a press) and whether the game has an interface just now
+  (`set_has_gui`). Luau has no call for either. `src/error.rs`: `Error`, whose `Game` holds a
+  game's own error as it starts (`Error::game`).
 - `src/graphics/`: `Canvas` records quads, all through one textured shader (fills use a white
   texture), batched by texture and `Blend` into draw calls, a pipeline for each blend mode, all
   blending premultiplied colors; rotation, transforms, slicing, outlines, lines and circles are
@@ -105,8 +109,11 @@ references in their own right.
   the meshes and models a game draws blended (`Canvas3d::set_blend`, Luau's `blend` option), so
   billboards need no sorting; a view's draws of a kind are one instanced draw, in the order
   `MeshOrder` gives, blended ones after the opaque, ordered whole by one distance each, showing
-  both sides and casting no shadow. Native libraries' draws are never blended. `model_file::read` reads glTF without a GPU into `ModelData`. Picking is by boxes
-  (`Bounds3`, `Ray::hit_box`), not triangles. A mesh's vertices can be written again
+  both sides and casting no shadow. Native libraries' draws are never blended. `model_file::read` reads glTF without a GPU into `ModelData`, leaving out the lights of a file
+  that requires them (`KHR_lights_punctual`) as of one that only uses them. Picking is by boxes
+  (`Bounds3`, `Ray::hit_box`), and in Rust by triangles a game holds itself (`Ray::hit_triangle`):
+  no mesh keeps its own where games read them, so a model file's are read again, without a GPU
+  or its textures (`Model::read_triangles`). A mesh's vertices can be written again
   (`Context::write_mesh`, the ABI's `write_mesh`; Luau has no call for it): the mesh keeps them
   until the renderer uploads them for a frame that draws it (`Mesh::upload`), so writes in a
   simulation that renders nothing queue nothing, and its bounds are worked out when asked for.
@@ -209,7 +216,9 @@ references in their own right.
   60 fps with simulated input, egui included, and screenshots. Key repeats run in game time, and
   typing is as on a US keyboard. All simulations in a process share one GPU device, held by one
   thread at a time (a reentrant lease): lavapipe crashes with a device per thread and WARP
-  renders wrongly with a shared one. Frames render only for screenshots unless asked. `Image`
+  renders wrongly with a shared one. Frames render only for screenshots unless asked, and come as
+  fast as they're made unless asked to keep the wall's pace (`set_real_time`, a script's
+  `real-time on`), for a game that talks to a server; a frame is a sixtieth either way. `Image`
   compares frames (`compare`, `diff`), as screenshot tests and games' tests do.
 - `src/lua.rs`: `Scripts`, a sandboxed Luau VM with tasks (`wait`, `wait_until`, `spawn`), and
   the conversions and userdata of engine types. Its built-ins are the start of the API module

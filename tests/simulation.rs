@@ -92,6 +92,57 @@ fn a_fixed_resolution_larger_than_the_gpu_renders_is_an_error() {
 }
 
 #[test]
+fn a_games_own_error_as_it_starts_comes_back_as_it_reads() {
+    let refuse = |_: &mut Context| Err::<Probe, _>(Error::game("the map has no tiles"));
+    let err = Simulation::new(&config(), refuse)
+        .err()
+        .expect("the game didn't start");
+    assert!(matches!(err, Error::Game(_)), "{err:?}");
+    assert_eq!(err.to_string(), "the map has no tiles");
+
+    // A scripted run starts the game the same way.
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("simulation-own-error");
+    fs::create_dir_all(&directory).unwrap();
+    let script = directory.join("run.txt");
+    fs::write(&script, "wait 1\n").unwrap();
+    let err = wingine::script::run(&config(), refuse, &script).unwrap_err();
+    assert_eq!(err.to_string(), "the map has no tiles");
+}
+
+#[test]
+fn a_simulation_asked_to_keeps_the_walls_pace() {
+    use std::time::{Duration, Instant};
+
+    // Twelve sixtieths, less what turning them into a time rounds off: waits never end early,
+    // so this is no timing a slow machine could miss.
+    let twelve_frames = Duration::from_millis(199);
+    let mut simulation = simulation();
+    simulation.run_frames(30);
+    simulation.set_real_time(true);
+    let start = Instant::now();
+    // The first comes at once, and each after it a sixtieth of a second after the one before.
+    simulation.run_frames(13);
+    let paced = start.elapsed();
+    assert!(paced >= twelve_frames, "{paced:?}");
+    assert_eq!(simulation.frame_count(), 43);
+    assert_eq!(simulation.game().updates, 43, "a frame is still a sixtieth");
+
+    // A script asks the same with a line.
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("simulation-real-time");
+    fs::create_dir_all(&directory).unwrap();
+    let script = directory.join("paced.txt");
+    fs::write(
+        &script,
+        "wait 5\nreal-time on\nwait 13\nreal-time off\nwait 5\n",
+    )
+    .unwrap();
+    let start = Instant::now();
+    wingine::script::run(&config(), |_| Ok(Probe::default()), &script).unwrap();
+    let paced = start.elapsed();
+    assert!(paced >= twelve_frames, "{paced:?}");
+}
+
+#[test]
 fn a_tap_is_pressed_once_and_held_for_one_frame() {
     let mut simulation = simulation();
     simulation.tap(Key::Space);

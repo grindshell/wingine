@@ -9,6 +9,11 @@
 //! is left held. Tab reaches egui only while one of its widgets has keyboard focus, to move it to
 //! the next, so a game can use Tab itself while its interface shows ([`Gui::hears_key`]).
 //!
+//! A game asks where the interface would take a press with [`Context::gui_covers`], to say
+//! nothing of its world under the cursor there. One with an interface only sometimes, as while a
+//! menu is open, says when it has none with [`Context::set_has_gui`], and frames skip egui until
+//! it has one again.
+//!
 //! [`GuiCanvas`] draws with the engine into an image egui shows, such as a view of a scene in a
 //! panel, and [`Context::gui_texture`] shows a texture, such as a sprite sheet. Both are sampled
 //! nearest-neighbor, so pixel art stays crisp.

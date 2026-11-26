@@ -46,8 +46,10 @@ impl Color {
         [self.r, self.g, self.b, self.a].map(|c| (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
     }
 
-    /// Converts to linear-space components for the GPU. Alpha is already linear.
-    pub(crate) fn to_linear(self) -> [f32; 4] {
+    /// Its components in linear space, as the GPU blends them and as light adds up: what a game
+    /// that mixes or lights colors itself works in. Alpha is already linear. Components outside
+    /// `0.0..=1.0` are converted as they are.
+    pub fn to_linear(self) -> [f32; 4] {
         [
             srgb_to_linear(self.r),
             srgb_to_linear(self.g),
@@ -56,9 +58,11 @@ impl Color {
         ]
     }
 
-    /// The color of linear-space components, as model files give them and a sky mixes them.
-    /// Alpha is already linear.
-    pub(crate) fn from_linear([r, g, b, a]: [f32; 4]) -> Self {
+    /// The color of linear-space components, as model files give them, a sky mixes them, and a
+    /// game has them that works a color out in linear light: the inverse of
+    /// [`Color::to_linear`]. Alpha is already linear. Components outside `0.0..=1.0` are
+    /// converted as they are, so light past white stays past it.
+    pub fn from_linear([r, g, b, a]: [f32; 4]) -> Self {
         Self::rgba(linear_to_srgb(r), linear_to_srgb(g), linear_to_srgb(b), a)
     }
 }
@@ -121,5 +125,15 @@ mod tests {
             );
             assert!((b - (1.0 - c)).abs() < 1e-5 && a == c, "{back:?}");
         }
+    }
+
+    #[test]
+    fn linear_light_past_white_stays_past_it() {
+        // Half of linear light is sRGB 0.735, and twice white is past 1 both ways.
+        let color = Color::from_linear([0.5, 2.0, 0.0, 1.0]);
+        assert!((color.r - 0.735).abs() < 0.001, "{color:?}");
+        assert!(color.g > 1.3, "{color:?}");
+        let [_, g, ..] = color.to_linear();
+        assert!((g - 2.0).abs() < 1e-5, "{g}");
     }
 }

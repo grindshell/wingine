@@ -31,6 +31,8 @@
 //! stick 1 Left 0.5 -1    # move gamepad 1's left stick to x, y, each from -1 to 1 (y down)
 //! key-repeat 0.25s 20    # repeat held keys after 0.25 seconds (or frames), 20 times a second
 //! key-repeat off         # don't repeat held keys
+//! real-time on           # keep the wall's pace from here: a second of frames takes a second
+//! real-time off          # run frames as fast as they're made again
 //! resize 640 360         # resize the virtual window, in physical pixels
 //! pick drafts            # answer the dialog for picking a folder with a copy of this one
 //! pick                   # answer it with none, as when the player cancels
@@ -60,6 +62,10 @@
 //! [`Simulation::click_gui`] does, by its label: a button's text, or what a field is labelled by.
 //! The interface must have laid it out in the frame before, and a window shows from the frame
 //! after it opens, so `wait` a frame or two for one. It needs the `egui` feature.
+//!
+//! `real-time on` has frames wait for the wall's clock, as [`Simulation::set_real_time`] does,
+//! for a game that talks to something keeping real time, such as a server, which a run at any
+//! other pace would outrun. Frames still advance a 60th of a second each.
 //!
 //! A key held down repeats as a window's system would repeat it, the last key pressed only: by
 //! default, after half a second, 30 times a second (see [`KeyRepeat`]). Keys pressed, and their
@@ -119,6 +125,7 @@ enum Command {
     PadHold(u32, GamepadButton, u32),
     Stick(u32, Stick, [f32; 2]),
     KeyRepeat(Option<KeyRepeat>),
+    RealTime(bool),
     Resize(u32, u32),
     Pick(Option<PathBuf>),
     Screenshot(PathBuf),
@@ -213,6 +220,7 @@ pub fn run<G: Game>(
             }
             Command::Stick(gamepad, stick, [x, y]) => simulation.move_stick(gamepad, stick, x, y),
             Command::KeyRepeat(repeat) => simulation.set_key_repeat(repeat),
+            Command::RealTime(real_time) => simulation.set_real_time(real_time),
             Command::Resize(width, height) => simulation.resize(width, height),
             Command::Pick(folder) => {
                 let folder = folder.map(|folder| directory.join(folder));
@@ -423,6 +431,8 @@ fn parse_command(name: &str, args: &[&str]) -> Result<Command, String> {
             delay: frames(delay)? as f32 / 60.0,
             rate: repeat_rate(rate)?,
         })),
+        ("real-time", ["on"]) => Command::RealTime(true),
+        ("real-time", ["off"]) => Command::RealTime(false),
         ("resize", [width, height]) => Command::Resize(size(width)?, size(height)?),
         ("screenshot", [file]) => Command::Screenshot(PathBuf::from(file)),
         ("benchmark", [duration]) => Command::Benchmark(some_frames(duration)?, None),
@@ -432,7 +442,7 @@ fn parse_command(name: &str, args: &[&str]) -> Result<Command, String> {
         (
             "wait" | "press" | "release" | "tap" | "hold" | "mouse" | "mouse-by" | "mouse-down"
             | "mouse-up" | "click" | "scroll" | "pad-down" | "pad-up" | "pad-tap" | "pad-hold"
-            | "stick" | "key-repeat" | "resize" | "screenshot" | "benchmark",
+            | "stick" | "key-repeat" | "real-time" | "resize" | "screenshot" | "benchmark",
             _,
         ) => return Err(format!("wrong arguments for `{name}`")),
         _ => return Err(format!("unknown command `{name}`")),
@@ -533,6 +543,8 @@ mod tests {
             key-repeat 0.25s 20
             key-repeat 15 2.5
             key-repeat off
+            real-time on
+            real-time off
             resize 640 360
             pick my drafts
             pick
@@ -575,6 +587,8 @@ mod tests {
                     rate: 2.5
                 })),
                 Command::KeyRepeat(None),
+                Command::RealTime(true),
+                Command::RealTime(false),
                 Command::Resize(640, 360),
                 Command::Pick(Some(PathBuf::from("my drafts"))),
                 Command::Pick(None),
@@ -632,6 +646,10 @@ mod tests {
             Err("line 1: `0` is not a number of repeats a second".into())
         );
         assert!(parse("key-repeat on").is_err());
+        assert_eq!(
+            parse("real-time 60"),
+            Err("line 1: wrong arguments for `real-time`".into())
+        );
         assert_eq!(
             parse("type # nothing"),
             Err("line 1: wrong arguments for `type`".into())

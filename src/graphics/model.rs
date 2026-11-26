@@ -62,6 +62,30 @@ impl Model {
         }
     }
 
+    /// The triangles of the model file at `path`, each its three corners where the file's nodes
+    /// place them: where a model [loaded](crate::Context::load_model) from the file draws them,
+    /// before it's placed. For picking what's under the cursor by a model's shape and not its
+    /// box, which is under more of the screen than the model is: place the corners as the model
+    /// is drawn and try each triangle with [`Ray::hit_triangle`](super::Ray::hit_triangle), for
+    /// the models whose boxes the ray hits.
+    ///
+    /// It reads the file again, without a GPU, and keeps nothing: a loaded model doesn't hold its
+    /// triangles where a game can read them. Textures aren't read, so a file gives its triangles
+    /// though its images are missing.
+    #[cfg(feature = "models")]
+    pub fn read_triangles(path: impl AsRef<std::path::Path>) -> crate::Result<Vec<[[f32; 3]; 3]>> {
+        let path = path.as_ref();
+        let bytes = crate::files::read(path).map_err(|source| crate::Error::ReadFile {
+            path: path.to_owned(),
+            source,
+        })?;
+        let folder = path.parent().unwrap_or(std::path::Path::new(""));
+        super::model_file::read_triangles(&bytes, folder).map_err(|message| crate::Error::Model {
+            path: path.to_owned(),
+            message,
+        })
+    }
+
     /// The files besides the model file that it was read from, such as a `.gltf`'s buffers and
     /// images, so tools know to read it again when they change. A `.glb` holding everything, or a
     /// model made with [`Model::new`], has none.

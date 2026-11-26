@@ -199,6 +199,138 @@ fn widgets_are_found_where_they_are_in_canvas_pixels() {
 }
 
 #[test]
+fn the_interface_covers_where_a_press_would_be_its_own() {
+    // Nothing, before a frame has laid it out.
+    let mut unlaid = Simulation::new(&config(), |_| Ok(Panel::default())).unwrap();
+    assert!(!unlaid.context().gui_covers([40.0, 40.0]));
+    drop(unlaid);
+
+    let mut window = simulation(config());
+    let button = window.gui_rect("Press me").unwrap();
+    let middle = [button.x + button.w / 2.0, button.y + button.h / 2.0];
+    let ctx = window.context();
+    assert!(ctx.gui_covers(middle));
+    assert!(!ctx.gui_covers([300.0, 250.0]));
+    assert!(!ctx.gui_covers([3.0, 3.0]), "its window is at (10, 10)");
+
+    drop(window);
+
+    // While the interface drags something, it has the pointer wherever it goes.
+    struct Mixer(f32);
+    impl Game for Mixer {
+        fn gui(&mut self, _ctx: &mut Context, ui: &mut egui::Ui) {
+            egui::Window::new("Mixer")
+                .fixed_pos([10.0, 10.0])
+                .show(ui.ctx(), |ui| {
+                    ui.add(egui::Slider::new(&mut self.0, 0.0..=1.0).text("Volume"))
+                });
+        }
+
+        fn draw(&mut self, _canvas: &mut Canvas) {}
+    }
+    let mut mixer = Simulation::new(&config(), |_| Ok(Mixer(0.0))).unwrap();
+    mixer.run_frames(2);
+    // Its rail starts the row its name ends.
+    let name = mixer.gui_rect("Volume").expect("the slider is laid out");
+    mixer.move_mouse(40.0, name.y + name.h / 2.0);
+    mixer.mouse_down(MouseButton::Left);
+    mixer.step();
+    mixer.move_mouse(300.0, 250.0);
+    mixer.step();
+    assert!(mixer.game().0 > 0.5, "dragged to its end");
+    assert!(mixer.context().gui_covers([300.0, 250.0]));
+    mixer.mouse_up(MouseButton::Left);
+    mixer.run_frames(2);
+    assert!(!mixer.context().gui_covers([300.0, 250.0]));
+    drop(mixer);
+
+    // In canvas pixels, through a fixed resolution's scaling: the 100x75 canvas is drawn at 4x,
+    // so its pixel (3, 3) is the window's (12, 12), inside the interface's.
+    let mut scaled = simulation(WindowConfig {
+        resolution: wingine::graphics::Resolution::Fixed {
+            width: 100,
+            height: 75,
+        },
+        ..config()
+    });
+    let button = scaled.gui_rect("Press me").unwrap();
+    let ctx = scaled.context();
+    assert!(ctx.gui_covers([button.x + button.w / 2.0, button.y + button.h / 2.0]));
+    assert!(ctx.gui_covers([3.0, 3.0]));
+    assert!(!ctx.gui_covers([75.0, 62.5]));
+}
+
+/// A game with a menu only while it's open, which says so, and counts the passes its interface
+/// is laid out in.
+#[derive(Default)]
+struct Sometimes {
+    open: bool,
+    passes: u32,
+    clicks: u32,
+}
+
+impl Game for Sometimes {
+    fn update(&mut self, ctx: &mut Context, _dt: f32) {
+        if ctx.input().key_pressed(Key::M) {
+            self.open = !self.open;
+        }
+        ctx.set_has_gui(self.open);
+        self.clicks += u32::from(ctx.input().mouse_pressed(MouseButton::Left));
+    }
+
+    fn gui(&mut self, _ctx: &mut Context, ui: &mut egui::Ui) {
+        self.passes += 1;
+        if self.open {
+            egui::Window::new("Menu")
+                .fixed_pos([10.0, 10.0])
+                .show(ui.ctx(), |ui| ui.label("Paused"));
+        }
+    }
+
+    fn draw(&mut self, canvas: &mut Canvas) {
+        canvas.clear(Color::BLACK);
+    }
+}
+
+#[test]
+fn a_game_with_an_interface_only_sometimes_skips_it_the_rest_of_the_time() {
+    let mut simulation = Simulation::new(&config(), |_| Ok(Sometimes::default())).unwrap();
+    simulation.run_frames(5);
+    assert_eq!(simulation.game().passes, 1, "one pass, with nothing in it");
+
+    // Open, it's laid out every frame, and keeps the clicks on it.
+    simulation.tap(Key::M);
+    simulation.run_frames(2);
+    assert_eq!(simulation.game().passes, 4);
+    let label = simulation.gui_rect("Paused").expect("the menu is open");
+    let [x, y] = [label.x + label.w / 2.0, label.y + label.h / 2.0];
+    assert!(simulation.context().gui_covers([x, y]));
+    simulation.click(MouseButton::Left, x, y);
+    assert_eq!(simulation.game().clicks, 0);
+
+    // Closed, one pass more forgets the menu, and a click where it was is the game's.
+    simulation.tap(Key::M);
+    let passes = simulation.game().passes;
+    simulation.run_frames(5);
+    assert_eq!(simulation.game().passes, passes);
+    assert!(simulation.gui_rect("Paused").is_none());
+    assert!(!simulation.context().gui_covers([x, y]));
+    simulation.click(MouseButton::Left, x, y);
+    assert_eq!(simulation.game().clicks, 1);
+
+    // With the engine's debug window open, passes run whatever the game says.
+    let config = WindowConfig {
+        debug_key: Some(Key::F3),
+        ..config()
+    };
+    let mut simulation = Simulation::new(&config, |_| Ok(Sometimes::default())).unwrap();
+    simulation.tap(Key::F3);
+    simulation.run_frames(3);
+    assert!(simulation.gui_rect("Wingine").is_some());
+    assert!(simulation.game().passes >= 3);
+}
+
+#[test]
 fn the_debug_key_shows_frame_stats_and_never_reaches_the_game() {
     let mut simulation = simulation(WindowConfig {
         debug_key: Some(Key::F3),

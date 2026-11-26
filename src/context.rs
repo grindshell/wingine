@@ -46,6 +46,10 @@ pub struct Context {
     pub(crate) redraws: Arc<Redraws>,
     #[cfg(feature = "egui")]
     pub(crate) gui: crate::gui::Gui,
+    /// The size of what the frame being run is shown on, in physical pixels, and its scale
+    /// factor: with the screen, what places a canvas pixel in the interface.
+    #[cfg(feature = "egui")]
+    pub(crate) output: ([u32; 2], f64),
     default_font: Font,
 }
 
@@ -102,6 +106,8 @@ impl Context {
         Self {
             #[cfg(feature = "egui")]
             gui,
+            #[cfg(feature = "egui")]
+            output: ([0, 0], 1.0),
             gpu,
             renderer,
             input: Input::new(),
@@ -223,6 +229,37 @@ impl Context {
     /// game is being created, the size the first frame will have.
     pub fn canvas_size(&self) -> [f32; 2] {
         self.canvas_size
+    }
+
+    /// Whether the game's [interface](crate::gui) has `point` of the canvas, in canvas pixels, as
+    /// the frame before laid it out: one of its windows or menus is there, or a panel, though
+    /// not the space panels leave, or it's dragging something, wherever the pointer has got to.
+    /// It's what the engine asks of a press, which it keeps from the game where this is true, so
+    /// a game that says what's under the cursor in its world asks it too, and says nothing where
+    /// the interface is. False until a frame has laid an interface out, and with the engine's
+    /// own [debug window](crate::WindowConfig::debug_key) open, true over that as well.
+    #[cfg(feature = "egui")]
+    pub fn gui_covers(&self, point: [f32; 2]) -> bool {
+        let (output, scale_factor) = self.output;
+        let [x, y] = self.screen.to_output(point, output, scale_factor);
+        let pixels_per_point = self.gui.egui.pixels_per_point();
+        self.gui
+            .wants_pointer_at(egui::pos2(x as f32, y as f32) / pixels_per_point)
+    }
+
+    /// Says whether the game has an interface to lay out, for a game that has one only
+    /// sometimes, as while a menu is open: without, frames skip egui altogether, and
+    /// [`Game::gui`](crate::Game::gui) isn't called, until the game says it has one again, from
+    /// its `update`. A game that implements `gui` has one unless it says not, and the `gui` of
+    /// one that doesn't implement it says not.
+    ///
+    /// `gui` is called once more after this is turned off, in a pass that should lay nothing
+    /// out, so the interface forgets the windows it showed, and with them where it kept presses
+    /// from the game. While the engine's [debug window](crate::WindowConfig::debug_key) is
+    /// open, passes run and `gui` is called whatever this says.
+    #[cfg(feature = "egui")]
+    pub fn set_has_gui(&mut self, has_gui: bool) {
+        self.gui.game_has_gui = has_gui;
     }
 
     /// Uploads `data` to the GPU as a mesh, to draw in 3D views. Fails if its indices aren't three
@@ -397,7 +434,12 @@ impl Context {
     /// `KHR_texture_transform`. A material's alpha cuts out what's less than half opaque, as
     /// meshes do, unless it's opaque, when its alpha is ignored, and a double-sided material shows
     /// from behind too. Skins, morph targets, animations, cameras, lights and the rest of
-    /// materials are left out, and files that need an extension are refused.
+    /// materials are left out, and files that need an extension the engine doesn't read are
+    /// refused, but for `KHR_lights_punctual`, which a file with a lamp in it says it needs: its
+    /// lights are left out all the same.
+    ///
+    /// The model doesn't keep its triangles where a game can read them: to pick by them, read
+    /// them with [`Model::read_triangles`].
     #[cfg(feature = "models")]
     pub fn load_model(&mut self, path: impl AsRef<Path>) -> Result<Model> {
         let path = path.as_ref();

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 /// Errors from starting the engine, loading or saving files, saves, audio, meshes, headless
-/// rendering, Luau scripts, native libraries, or scripted runs.
+/// rendering, Luau scripts, native libraries, or scripted runs, and a game's own as it starts.
 ///
 /// Errors from winit and wgpu are boxed, so their types stay out of the engine's API.
 #[derive(Debug, Error)]
@@ -117,9 +117,57 @@ pub enum Error {
     /// A game couldn't be exported to ship.
     #[error("can't export {}: {message}", .game.display())]
     Export { game: PathBuf, message: String },
+    /// A game's own failure, which the engine knows nothing of: content it couldn't read as it
+    /// started, a server it couldn't reach. Made with [`Error::game`], it reads as the game's
+    /// error does, and holds it to downcast.
+    #[error(transparent)]
+    Game(BoxedError),
+}
+
+impl Error {
+    /// A game's own error, for the `init` it gives [`run`](crate::run) to return, so what stopped
+    /// a game starting comes back from `run` whether it was the engine's or the game's: any
+    /// error, or a string.
+    pub fn game(error: impl Into<BoxedError>) -> Self {
+        Self::Game(error.into())
+    }
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// An error from a library whose types the engine doesn't expose.
+/// An error from a library whose types the engine doesn't expose, or a game's own.
 pub type BoxedError = Box<dyn std::error::Error + Send + Sync>;
+
+#[cfg(test)]
+mod tests {
+    use std::fmt;
+
+    use super::*;
+
+    #[derive(Debug, PartialEq)]
+    struct NoServer(u16);
+
+    impl fmt::Display for NoServer {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "no server answers on port {}", self.0)
+        }
+    }
+
+    impl std::error::Error for NoServer {}
+
+    #[test]
+    fn a_games_own_error_reads_as_it_does_and_is_there_to_downcast() {
+        let error = Error::game(NoServer(7777));
+        assert_eq!(error.to_string(), "no server answers on port 7777");
+        let Error::Game(held) = &error else {
+            panic!("{error:?}");
+        };
+        assert_eq!(held.downcast_ref(), Some(&NoServer(7777)));
+
+        assert_eq!(
+            Error::game("the map has no tiles").to_string(),
+            "the map has no tiles"
+        );
+        assert_eq!(Error::game(format!("{} tiles", 3)).to_string(), "3 tiles");
+    }
+}
