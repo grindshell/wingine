@@ -101,9 +101,11 @@ references in their own right.
   `shadow.wgsl`): `Canvas::begin_3d` records a `View3d` and starts the next batch of quads empty,
   so 2D never joins across a view; `Renderer::render` draws each view in a pass of its own with a
   depth buffer, and its shadow maps, the same ones for every view, just before it. Right-handed,
-  `y` up, as glTF. Texels under half opaque are discarded and only particles blend, so billboards
-  need no sorting; a view's draws of a kind are one instanced draw, in the order `MeshOrder`
-  gives. `model_file::read` reads glTF without a GPU into `ModelData`. Picking is by boxes
+  `y` up, as glTF. Texels under half opaque are discarded, and nothing blends but particles and
+  the meshes and models a game draws blended (`Canvas3d::set_blend`, Luau's `blend` option), so
+  billboards need no sorting; a view's draws of a kind are one instanced draw, in the order
+  `MeshOrder` gives, blended ones after the opaque, ordered whole by one distance each, showing
+  both sides and casting no shadow. Native libraries' draws are never blended. `model_file::read` reads glTF without a GPU into `ModelData`. Picking is by boxes
   (`Bounds3`, `Ray::hit_box`), not triangles. A mesh's vertices can be written again
   (`Context::write_mesh`, the ABI's `write_mesh`; Luau has no call for it): the mesh keeps them
   until the renderer uploads them for a frame that draws it (`Mesh::upload`), so writes in a

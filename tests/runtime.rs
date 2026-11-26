@@ -4853,6 +4853,70 @@ fn glow_works_from_luau() {
 }
 
 #[test]
+fn meshes_blend_from_luau() {
+    let folder = game(
+        "blend",
+        &[
+            ("conf.luau", SMALL_WINDOW),
+            (
+                "main.luau",
+                "local wg = require('@wingine')
+                -- A plane stood up to face the camera: one layer, where a box, blended, would
+                -- show its far side through its near one.
+                pane = wg.graphics.new_plane(0.8, 1.6)
+                -- White, half see-through.
+                options = { tint = '#ffffff80', blend = 'normal', pitch = math.pi / 2 }
+                view = {
+                    camera = { position = vector.create(0, 0, 5), target = vector.zero, height = 2 },
+                    lighting = { color = '#000000', ambient = '#ffffff' },
+                }
+                function draw()
+                    wg.graphics.clear('#000000')
+                    wg.graphics.begin_3d(view)
+                    wg.graphics.draw_mesh(pane, vector.create(-0.5, 0, 0), options)
+                    -- With no blend, the same tint is opaque, whatever was drawn before it.
+                    local plain = { tint = '#ffffff80', pitch = math.pi / 2 }
+                    wg.graphics.draw_mesh(pane, vector.create(0.5, 0, 0), plain)
+                end",
+            ),
+        ],
+    );
+    let mut simulation = simulation(&folder);
+    let shown = |simulation: &mut Simulation<LuauGame>| {
+        simulation.step();
+        assert_eq!(simulation.game().error().map(ToString::to_string), None);
+        let image = simulation.screenshot().unwrap();
+        let [width, height] = [image.width(), image.height()];
+        let at = |x: u32| image.pixel(x, height / 2);
+        (at(width / 4), at(width * 3 / 4))
+    };
+    // Blended over black, half of white's light is the grey sRGB shows it as.
+    let white = [255; 4];
+    let half = |[r, g, b, a]: [u8; 4]| r.abs_diff(188) <= 2 && r == g && g == b && a == 255;
+    let (left, right) = shown(&mut simulation);
+    assert!(half(left), "{left:?}");
+    assert_eq!(right, white);
+    // Added to black, it's the same light.
+    simulation.exec("options.blend = 'add'");
+    let (left, right) = shown(&mut simulation);
+    assert!(half(left), "{left:?}");
+    assert_eq!(right, white);
+    // Multiplied into black, nothing.
+    simulation.exec("options.blend = 'multiply'");
+    assert_eq!(shown(&mut simulation), (BLACK, white));
+    simulation.exec("options.blend = nil");
+    assert_eq!(shown(&mut simulation), (white, white));
+
+    simulation.exec("options.blend = 'alpha'");
+    simulation.step();
+    let err = stopped_with(&simulation);
+    assert!(
+        err.contains(r#"expected "normal", "add", "multiply" or "screen""#),
+        "{err}"
+    );
+}
+
+#[test]
 fn views_take_shadows_from_luau() {
     let folder = game(
         "view_shadows",

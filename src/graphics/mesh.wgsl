@@ -210,8 +210,8 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @locatio
 // then darkens nothing.
 override fades_to: u32 = 0u;
 
-// A blended mesh's pixel, which only particles are: shaded as an opaque one is, whatever its
-// alpha, and given as a premultiplied color, as blending wants.
+// A blended mesh's pixel, a particle's or a mesh's drawn blended: shaded as an opaque one is,
+// whatever its alpha, and given as a premultiplied color, as blending wants.
 @fragment
 fn fs_blended(in: VertexOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
     let color = textureSample(mesh_texture, mesh_sampler, in.uv) * in.color;

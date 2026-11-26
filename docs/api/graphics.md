@@ -1300,9 +1300,10 @@ With `shadows`, the view's meshes and models shade what's behind them from the l
 too. The shadows have hard
 edges: a place is in one or it isn't. Some things cast none: billboards, which face the camera,
 not the light; the pixels of a mesh's sprite less than half opaque, which aren't drawn either; a
-mesh or model drawn with [`casts_shadow`](#graphicsdraw_mesh) `false`; and anything nearer the
-light than 0.002 of its range. A light inside a mesh, such as a lamp's bulb, is shaded by it all
-round, so draw that one with `casts_shadow = false`. The sun casts no shadows.
+mesh or model drawn with [`casts_shadow`](#graphicsdraw_mesh) `false`, or with a `blend`; and
+anything nearer the light than 0.002 of its range. A light inside a mesh, such as a lamp's bulb,
+is shaded by it all round, so draw that one with `casts_shadow = false`. The sun casts no
+shadows.
 
 ```lua
 -- A lamp whose light stops at the crate, but not at its own bulb, which it's inside.
@@ -1443,16 +1444,37 @@ colors it:
 | `tint` | A color its colors are multiplied by. By default, white. |
 | `casts_shadow` | Whether it shades what's behind it from [lights with `shadows`](#shadows). By default, `true`. |
 | `glow` | How much of its own colors it shows whatever lights it, a [`Color`](README.md#color): white, as full light would show them, black, as by default, none. See [glow](#glow). |
+| `blend` | How it blends with what's behind it, a [blend mode](#blend-modes)'s name, such as `"normal"`. By default, none: it's opaque. See below. |
 
 The mesh is scaled, rolled, pitched and turned, in that order, about its origin, then moved to
 `position`. Pixels of the sprite less than half opaque aren't drawn, so what's behind shows through
-them, and the rest are drawn opaque: meshes don't blend.
+them, and the rest are drawn opaque, unless the mesh has a `blend`.
 
 ```lua
 -- A crate turned the way the player last walked, showing planks, and a ball stretched tall.
 wg.graphics.draw_mesh(crate, vector.create(2, 0.5, -1), { yaw = facing, sprite = planks })
 wg.graphics.draw_mesh(ball, vector.create(0, 1, 0), { scale = vector.create(1, 2, 1), tint = "#e05040" })
 ```
+
+With a `blend`, a mesh is as see-through as its colors say: its sprite's alpha, times its
+corners' colors', times its tint's, with no pixel left out for being under half opaque. It's drawn
+after the view's opaque meshes, whatever order it's drawn in: what's in front of it hides it, and
+it hides nothing. Meshes blended `"normal"` are drawn the farthest from the camera first, by where
+each one's origin is, so they show through each other as they should; those that `"add"`,
+`"multiply"` or `"screen"` make the same picture in any order. A blended mesh shows both its
+sides, casts no shadow, and is lit, glows and fades into fog as an opaque one does.
+
+```lua
+-- A window's pane, a third as see-through as glass that isn't there, and a warning laid on
+-- the floor that brightens what's under it.
+wg.graphics.draw_mesh(pane, vector.create(0, 1.5, -4), { tint = "#a0c8e055", blend = "normal" })
+wg.graphics.draw_mesh(tile, vector.create(3, 0.01, 2), { tint = "#ff404080", blend = "add" })
+```
+
+A mesh is ordered whole, by that one distance. Two see-through meshes that cross each other show
+one wholly over the other; and a mesh seen through itself, such as a box or a ball, shows its far
+side through its near one, in the order its triangles come. So make a pane a flat mesh, such as a
+[plane](#graphicsnew_plane) turned to stand, not a thin box. Billboards and text never blend.
 
 A view's meshes that are the same mesh, showing the same sprite sheet's texture, are drawn together
 in one draw call wherever they're drawn among its others, so a view of many copies of a few meshes
@@ -1468,9 +1490,10 @@ Draws each part of a [model](#models) in the 3D view begun last, as
 [`draw_mesh`](#graphicsdraw_mesh) would, each placed where the model file puts it, and the whole
 model placed by `position` and `options` as a mesh is. Its parts show their own sprites, so
 `options.sprite` is an error, `options.tint` multiplies all their colors,
-`options.casts_shadow` is whether all of them cast shadows, and `options.glow` how much of their
-own colors all of them show whatever lights them. Parts whose file's materials emit give that off
-besides, whatever `options` say. Each part is a draw call of its own.
+`options.casts_shadow` is whether all of them cast shadows, `options.glow` how much of their
+own colors all of them show whatever lights them, and `options.blend` how all of them blend, each
+part ordered by where it is. Parts whose file's materials emit give that off besides, whatever
+`options` say. Each part is a draw call of its own.
 
 ```lua
 local barrel = wg.graphics.load_model("models/barrel.glb")

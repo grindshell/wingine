@@ -8,6 +8,9 @@
 //! Its colors are a texture the example works out, pixel by pixel (`Context::create_texture`),
 //! where the grass's is read from a file.
 //!
+//! Under the ball is a puddle, the one mesh here that blends with what's behind it
+//! (`Canvas3d::set_blend`): the grass shows through it, where every other mesh is opaque.
+//!
 //! The field is a mesh built by hand, a quad for each tile, shaded a little lighter or darker by
 //! its corners' colors. It's drawn twice: plain, as the ground, then a little above it showing the
 //! grass sprite, whose transparent background shows the ground through. The table and the barrels
@@ -21,8 +24,8 @@ use std::f32::consts::TAU;
 use wingine::{
     Context, FrameStats, Game, WindowConfig,
     graphics::{
-        Camera3d, Canvas, Canvas3d, Color, Font, Mesh, MeshData, MeshVertex, Model, Resolution,
-        Sprite, SpriteSheet, View3d,
+        Blend, Camera3d, Canvas, Canvas3d, Color, Font, Mesh, MeshData, MeshVertex, Model,
+        Resolution, Sprite, SpriteSheet, View3d,
     },
     input::Key,
     math::{Affine3, Rect},
@@ -52,6 +55,8 @@ const CAMERA_HEIGHT: f32 = 3.5;
 const BOUNCES: f32 = 0.8;
 const BOUNCE_HEIGHT: f32 = 1.2;
 const BALL_RADIUS: f32 = 0.4;
+/// How wide and deep the puddle under the ball is.
+const PUDDLE_SIZE: [f32; 2] = [1.5, 1.1];
 /// Where the post stands, by its middle, and how thick and tall it is.
 const POST: [f32; 3] = [-2.0, 1.0, 1.5];
 const POST_SIZE: [f32; 3] = [0.25, 2.0, 0.25];
@@ -70,6 +75,8 @@ struct Meshes {
     /// Written every update, as it flies.
     flag: Mesh,
     ball: Mesh,
+    /// Flat on the grass under the ball, and drawn blended.
+    puddle: Mesh,
     table: Model,
     barrel: Model,
     grass: Sprite,
@@ -98,6 +105,7 @@ impl Meshes {
             post: ctx.create_mesh(&MeshData::cuboid(POST_SIZE))?,
             flag: ctx.create_mesh(&flag(0.0))?,
             ball: ctx.create_mesh(&MeshData::sphere(BALL_RADIUS, 16, 8))?,
+            puddle: ctx.create_mesh(&MeshData::plane(PUDDLE_SIZE))?,
             table: ctx.load_model(TABLE)?,
             barrel: ctx.load_model(BARREL)?,
             grass: sheet.sprite(5, 0),
@@ -146,6 +154,19 @@ impl Meshes {
 
         let ball = Affine3::from_translation(self.ball_position());
         view.draw_mesh(&self.ball, ball, None, Color::rgb8(0xe0, 0x50, 0x40));
+
+        // The puddle under it, as see-through as its tint: blended, it's drawn after everything
+        // opaque, wherever it comes here, and hides nothing.
+        view.set_blend(Some(Blend::Normal));
+        let [x, _, z] = self.ball_position();
+        let puddle = Affine3::from_translation([x, 0.02, z]);
+        view.draw_mesh(
+            &self.puddle,
+            puddle,
+            None,
+            Color::rgba(0.2, 0.42, 0.85, 0.55),
+        );
+        view.set_blend(None);
     }
 
     /// Where the ball's middle is: bouncing on the spot, slowing toward the top of each bounce.
@@ -331,13 +352,15 @@ mod tests {
             + MeshData::cuboid(POST_SIZE).triangle_count()
             + flag(0.0).triangle_count()
             + MeshData::sphere(BALL_RADIUS, 16, 8).triangle_count()
+            + MeshData::plane(PUDDLE_SIZE).triangle_count()
             + game.table.triangle_count() as usize
             + BARRELS.len() * game.barrel.triangle_count() as usize;
         assert_eq!(stats.triangles as usize, triangles);
         // The field, then the field again showing grass, the three crates, one mesh, together,
         // the post, the flag, the table's top, then its four legs together, the two barrels
-        // together, and the ball, then the HUD: its shade, then its text.
-        assert_eq!(stats.draw_calls, 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 2);
+        // together, the ball, and the puddle, blended, after them all, then the HUD: its
+        // shade, then its text.
+        assert_eq!(stats.draw_calls, 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 2);
     }
 
     #[test]

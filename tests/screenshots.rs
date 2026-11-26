@@ -1402,6 +1402,291 @@ fn meshes_depth() {
     assert_screenshot(&headless.adapter_name(), "meshes_depth", far_first);
 }
 
+/// A rectangle standing upright, facing `+z`, `width` by `height` about its origin: one layer,
+/// where a thin box, blended, would show its far side through its near one.
+fn standing_quad(width: f32, height: f32) -> MeshData {
+    let [w, h] = [width / 2.0, height / 2.0];
+    let corners = [[-w, -h], [w, -h], [w, h], [-w, h]];
+    MeshData {
+        vertices: corners
+            .map(|[x, y]| MeshVertex::new([x, y, 0.0], [0.0, 0.0, 1.0], [0.0; 2]))
+            .to_vec(),
+        indices: vec![0, 1, 2, 0, 2, 3],
+    }
+}
+
+/// Meshes drawn blended: a blue pane and a red one before a crate, as see-through as their tints
+/// say, the far one under the near one whichever is drawn first; a pane that adds its light,
+/// half of it hidden behind the crate; and a small cube drawn once the view stops blending,
+/// which is opaque in the same tint.
+#[test]
+fn meshes_blended() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let cube = ctx.create_mesh(&MeshData::cube(1.0)).unwrap();
+    let ground = ctx.create_mesh(&MeshData::plane([6.0, 6.0])).unwrap();
+    let pane = ctx.create_mesh(&standing_quad(1.0, 0.8)).unwrap();
+    let blue = Color::rgba(0.2, 0.4, 1.0, 0.5);
+    let red = Color::rgba(1.0, 0.25, 0.2, 0.5);
+    let panes = [
+        (Affine3::from_translation([-0.35, 0.15, 1.0]), blue),
+        (Affine3::from_translation([0.3, -0.05, 1.6]), red),
+    ];
+    let small = [-1.3, -0.25, 0.8];
+    let camera = Camera3d::perspective([0.03, 1.21, 4.02], [0.0; 3], 0.8);
+    let view = View3d::new(camera, Rect::new(0.0, 0.0, 96.0, 64.0));
+    #[derive(Clone, Copy, PartialEq)]
+    enum Panes {
+        None,
+        Opaque,
+        Blended,
+        BlendedNearFirst,
+    }
+    let mut render = |how: Panes| {
+        headless
+            .render(96, 64, |canvas| {
+                canvas.clear(Color::rgb8(0x10, 0x10, 0x18));
+                let mut view = canvas.begin_3d(view);
+                let floor = Affine3::from_translation([0.0, -0.5, 0.0]);
+                view.draw_mesh(&ground, floor, None, Color::rgb8(0x4f, 0x8a, 0x3c));
+                let turned = Affine3::from_rotation_y(0.4);
+                view.draw_mesh(&cube, turned, None, Color::rgb8(0xb0, 0x7a, 0x48));
+                if how == Panes::None {
+                    return;
+                }
+                let blended = how != Panes::Opaque;
+                view.set_blend(blended.then_some(Blend::Normal));
+                let mut order: Vec<_> = panes.iter().collect();
+                if how == Panes::BlendedNearFirst {
+                    order.reverse();
+                }
+                for (placed, tint) in order {
+                    view.draw_mesh(&pane, *placed, None, *tint);
+                }
+                view.set_blend(blended.then_some(Blend::Add));
+                let behind = Affine3::from_translation([0.9, 0.2, -1.2]);
+                view.draw_mesh(&pane, behind, None, Color::rgba(1.0, 0.9, 0.5, 0.6));
+                view.set_blend(None);
+                let placed = Affine3::from_translation(small) * Affine3::from_scale([0.5; 3]);
+                view.draw_mesh(&cube, placed, None, blue);
+            })
+            .unwrap()
+    };
+    let none = render(Panes::None);
+    let opaque = render(Panes::Opaque);
+    let blended = render(Panes::Blended);
+    let near_first = render(Panes::BlendedNearFirst);
+    assert!(
+        blended.pixels() == near_first.pixels(),
+        "the order blended meshes are drawn in changed what shows"
+    );
+    // Through a pane, neither what's behind it alone nor the pane alone.
+    let through = (0..96 * 64)
+        .filter(|&i| {
+            let at = |image: &Image| image.pixel(i % 96, i / 96);
+            at(&blended) != at(&opaque) && at(&blended) != at(&none)
+        })
+        .count();
+    assert!(
+        through > 400,
+        "{through} pixels show a pane and what's behind it"
+    );
+    // The small cube is as it is among opaque meshes, and there.
+    let [x, y] = view.project(small).unwrap().map(|v| v as u32);
+    assert_eq!(blended.pixel(x, y), opaque.pixel(x, y));
+    assert_ne!(blended.pixel(x, y), none.pixel(x, y));
+    assert_screenshot(&headless.adapter_name(), "meshes_blended", blended);
+}
+
+/// A blended mesh casts no shadow, though the same mesh opaque does, and fades into fog as
+/// everything does: past where the fog is whole, nothing of it shows.
+#[test]
+fn blended_meshes_cast_no_shadows_and_fade_into_fog() {
+    let mut headless = headless();
+    let ctx = headless.context();
+    let wall = ctx
+        .create_mesh(&MeshData::cuboid([10.0, 4.0, 0.2]))
+        .unwrap();
+    let card = ctx
+        .create_mesh(&MeshData::cuboid([1.0, 1.0, 0.02]))
+        .unwrap();
+    let tint = Color::rgba(1.0, 0.2, 0.2, 0.6);
+
+    // A light on the camera's line, twice as far from the wall as the card before it: the
+    // card's shadow is twice its size, and falls to its right, from 2 to 4 across.
+    let camera = Camera3d::orthographic([0.0, 0.5, 5.0], [0.0, 0.5, 0.0], 3.0);
+    let view = dark_view(camera, [128.0, 48.0]);
+    let lamp = Light {
+        shadows: true,
+        ..Light::point([0.0, 0.5, 3.0], Color::WHITE, 12.0)
+    };
+    let [left, top] = view.project([2.1, 0.9, 0.0]).unwrap().map(|v| v as u32);
+    let [right, bottom] = view.project([3.9, 0.1, 0.0]).unwrap().map(|v| v as u32);
+    let shadowed = |image: &Image| -> Vec<[u8; 4]> {
+        let pixels = (left..right).flat_map(|x| (top..bottom).map(move |y| (x, y)));
+        pixels.map(|(x, y)| image.pixel(x, y)).collect()
+    };
+    // No card, the card opaque, or the card blended.
+    let mut lit = |card_blend: Option<Option<Blend>>| {
+        headless
+            .render(128, 48, |canvas| {
+                canvas.clear(Color::BLACK);
+                let mut view = canvas.begin_3d(view);
+                view.add_light(lamp);
+                let back = Affine3::from_translation([0.0, 0.5, -0.1]);
+                view.draw_mesh(&wall, back, None, Color::WHITE);
+                if let Some(blend) = card_blend {
+                    view.set_blend(blend);
+                    let before = Affine3::from_translation([1.5, 0.5, 1.5]);
+                    view.draw_mesh(&card, before, None, tint);
+                }
+            })
+            .unwrap()
+    };
+    let bare = lit(None);
+    let shaded = lit(Some(None));
+    let blended = lit(Some(Some(Blend::Normal)));
+    assert!(shadowed(&bare).len() > 300);
+    assert!(
+        shadowed(&shaded)
+            .iter()
+            .all(|&pixel| pixel == [0, 0, 0, 255]),
+        "the card, opaque, shades the wall"
+    );
+    assert!(
+        shadowed(&blended) == shadowed(&bare),
+        "a blended mesh shaded the wall"
+    );
+    assert!(blended.pixels() != bare.pixels(), "and it shows");
+
+    // Fog from 2 to 4 units off, before what the canvas is cleared to.
+    let fog = Color::rgb8(0x40, 0x50, 0x60);
+    let camera = Camera3d::perspective([0.0, 0.0, 5.0], [0.0; 3], 0.8);
+    let foggy = View3d {
+        fog: Some(Fog::new(fog, 2.0, 4.0)),
+        ..View3d::new(camera, Rect::new(0.0, 0.0, 64.0, 48.0))
+    };
+    let mut fogged = |z: Option<f32>| {
+        headless
+            .render(64, 48, |canvas| {
+                canvas.clear(fog);
+                let mut view = canvas.begin_3d(foggy);
+                if let Some(z) = z {
+                    view.set_blend(Some(Blend::Normal));
+                    view.draw_mesh(&card, Affine3::from_translation([0.0, 0.0, z]), None, tint);
+                }
+            })
+            .unwrap()
+    };
+    let empty = fogged(None);
+    let far = fogged(Some(-1.0));
+    let near = fogged(Some(3.5));
+    assert!(
+        empty.compare(&far, CHANNEL_TOLERANCE).differs_by_at_most(0),
+        "a blended mesh shows past where the fog is whole"
+    );
+    assert!(
+        !empty
+            .compare(&near, CHANNEL_TOLERANCE)
+            .differs_by_at_most(100),
+        "a blended mesh nearer than the fog doesn't show"
+    );
+}
+
+/// A mesh its transform mirrors is lit by the way it faces, blended as it is opaque: a pane
+/// facing a sun that's the view's only light is as bright mirrored as not.
+#[test]
+fn blended_meshes_mirrored_are_lit_by_the_way_they_face() {
+    let mut headless = headless();
+    let pane = headless
+        .context()
+        .create_mesh(&standing_quad(1.0, 1.0))
+        .unwrap();
+    let camera = Camera3d::orthographic([0.0, 0.0, 5.0], [0.0; 3], 2.0);
+    let view = View3d {
+        lighting: Lighting {
+            direction: [0.0, 0.0, -1.0],
+            color: Color::WHITE,
+            ambient: Color::BLACK,
+        },
+        ..View3d::new(camera, Rect::new(0.0, 0.0, 20.0, 20.0))
+    };
+    let mut render = |mirrored: bool, blend: Option<Blend>| {
+        headless
+            .render(20, 20, |canvas| {
+                canvas.clear(Color::BLACK);
+                let mut view = canvas.begin_3d(view);
+                view.set_blend(blend);
+                let scale = if mirrored { [-1.0, 1.0, 1.0] } else { [1.0; 3] };
+                view.draw_mesh(&pane, Affine3::from_scale(scale), None, Color::WHITE);
+            })
+            .unwrap()
+    };
+    let lit = render(false, None);
+    assert_eq!(lit.pixel(10, 10), [255; 4]);
+    for (mirrored, blend) in [
+        (true, None),
+        (false, Some(Blend::Normal)),
+        (true, Some(Blend::Normal)),
+    ] {
+        assert!(
+            render(mirrored, blend).pixels() == lit.pixels(),
+            "mirrored {mirrored}, blended {blend:?}"
+        );
+    }
+}
+
+/// A game draws a mesh blended, in a simulation: white, half see-through over black, is the grey
+/// that half the light is, and the same mesh not blended is white.
+#[test]
+fn meshes_blend_in_a_simulation() {
+    use wingine::{Game, WindowConfig, headless::Simulation};
+
+    struct Glass {
+        pane: Mesh,
+    }
+    impl Game for Glass {
+        fn draw(&mut self, canvas: &mut Canvas) {
+            canvas.clear(Color::BLACK);
+            // The middle of the world, 2 units across.
+            let camera = Camera3d::orthographic([0.0, 0.0, 5.0], [0.0; 3], 2.0);
+            let mut view = canvas.begin_3d(View3d {
+                lighting: Lighting::UNLIT,
+                ..View3d::new(camera, Rect::new(0.0, 0.0, 20.0, 20.0))
+            });
+            let half = Color::rgba(1.0, 1.0, 1.0, 0.5);
+            view.set_blend(Some(Blend::Normal));
+            let left = Affine3::from_translation([-0.5, 0.0, 0.0]);
+            view.draw_mesh(&self.pane, left, None, half);
+            view.set_blend(None);
+            let right = Affine3::from_translation([0.5, 0.0, 0.0]);
+            view.draw_mesh(&self.pane, right, None, half);
+        }
+    }
+
+    let config = WindowConfig {
+        width: 20,
+        height: 20,
+        ..Default::default()
+    };
+    let mut simulation = Simulation::new(&config, |ctx| {
+        Ok(Glass {
+            pane: ctx.create_mesh(&standing_quad(1.0, 2.0))?,
+        })
+    })
+    .expect("a GPU adapter is available");
+    simulation.run_frames(2);
+    let frame = simulation.screenshot().unwrap();
+    let [red, green, blue, alpha] = frame.pixel(5, 10);
+    // Half of white's light, as sRGB shows it.
+    assert!(
+        red.abs_diff(188) <= CHANNEL_TOLERANCE && red == green && green == blue && alpha == 255,
+        "{:?}",
+        frame.pixel(5, 10)
+    );
+    assert_eq!(frame.pixel(15, 10), [255; 4]);
+}
+
 /// A cube written with the corners of a slab whose top is green: every handle to it then shows
 /// what a mesh made of those corners does, their places, the ways they face and their colors.
 #[test]

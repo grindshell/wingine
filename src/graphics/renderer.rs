@@ -172,9 +172,9 @@ struct MeshRenderer {
     /// For meshes showing only the side their triangles face, then for double-sided ones, each
     /// as they are, then mirrored, whose triangles wind the other way.
     pipelines: [[wgpu::RenderPipeline; 2]; 2],
-    /// For blended draws, in each of [`Blend::ALL`]: showing both sides, tested against the
-    /// view's depth and not writing it.
-    blended: [wgpu::RenderPipeline; 4],
+    /// For blended draws, as they are and then mirrored, in each of [`Blend::ALL`]: showing
+    /// both sides, tested against the view's depth and not writing it.
+    blended: [[wgpu::RenderPipeline; 4]; 2],
     /// For a view's sky: one triangle over the view, at the far end of its depth, where nothing
     /// is nearer, writing no depth.
     sky: wgpu::RenderPipeline,
@@ -833,7 +833,10 @@ impl MeshRenderer {
             [wgpu::FrontFace::Ccw, wgpu::FrontFace::Cw]
                 .map(|front| pipeline(front, cull_mode, None))
         });
-        let blended = Blend::ALL.map(|blend| pipeline(wgpu::FrontFace::Ccw, None, Some(blend)));
+        // A blended mesh shows both its sides, and which is its front still tells the shader
+        // which way it faces the light, so a mirrored one winds the other way here too.
+        let blended = [wgpu::FrontFace::Ccw, wgpu::FrontFace::Cw]
+            .map(|front| Blend::ALL.map(|blend| pipeline(front, None, Some(blend))));
         // The sky is drawn after the view's opaque meshes, where the depth is still as cleared,
         // the far end, which its triangle is at: so only pixels nothing hides work it out. It
         // reads only the view's uniform, so a view with nothing in it needs no texture bound.
@@ -1248,7 +1251,7 @@ impl MeshRenderer {
                 match draw.blend {
                     Some(blend) => {
                         let index = Blend::ALL.iter().position(|&b| b == blend).unwrap_or(0);
-                        pass.set_pipeline(&self.blended[index]);
+                        pass.set_pipeline(&self.blended[usize::from(draw.mirrored)][index]);
                     }
                     None => {
                         let [sides, winding] = [draw.double_sided, draw.mirrored].map(usize::from);

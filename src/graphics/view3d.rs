@@ -604,7 +604,8 @@ pub struct Canvas3d<'a> {
 impl Canvas3d<'_> {
     /// Draws `mesh` placed by `transform`, showing `sprite`, or white without one, multiplied by
     /// the mesh's colors and by `tint`. Pixels of the sprite less than half opaque aren't drawn,
-    /// so what's behind shows through them; the rest are drawn opaque.
+    /// so what's behind shows through them; the rest are drawn opaque, unless the view's meshes
+    /// now blend ([`set_blend`](Self::set_blend)).
     pub fn draw_mesh(
         &mut self,
         mesh: &Mesh,
@@ -649,7 +650,14 @@ impl Canvas3d<'_> {
         if mesh.index_count() > 0 {
             let normal = transform.normal_matrix();
             let segment = self.canvas.segments.last().expect("begin_3d adds one");
-            let how = How::of(segment);
+            let mut how = How::of(segment);
+            if segment.blend.is_some() {
+                // Blended, it's drawn after the view's opaque meshes, by how far its origin is
+                // from the camera, and shades nothing behind it.
+                how.blend = segment.blend;
+                how.depth = segment.view.distance(transform.translation);
+                how.casts_shadow = false;
+            }
             self.push(
                 Some(mesh),
                 transform,
@@ -677,6 +685,24 @@ impl Canvas3d<'_> {
     pub fn set_casts_shadow(&mut self, casts: bool) {
         let segment = self.canvas.segments.last_mut().expect("begin_3d adds one");
         segment.casting = casts;
+    }
+
+    /// How the meshes and models drawn in the view from now on blend with what's behind them:
+    /// `None`, as a view begins, draws them opaque. Blended, a mesh is as see-through as its
+    /// colors say, its sprite's alpha times its vertices' times its tint's, with none of its
+    /// pixels left out for being under half opaque. It's drawn after the view's opaque meshes,
+    /// hidden by what's in front of it and hiding nothing, as blended particles are: among
+    /// those blended normally, the farthest from the camera first, by where its transform puts
+    /// its origin. It shows both its sides, casts no shadow, and is lit, glows and fades into
+    /// fog as an opaque mesh does. Billboards and text never blend.
+    ///
+    /// A mesh is ordered whole, by that one distance: two see-through meshes that cross show
+    /// one wholly over the other, and one seen through itself, such as a box or a glass ball,
+    /// shows its far side through its near one, in the order its triangles come. A pane is
+    /// one layer if it's a flat mesh, not a thin box.
+    pub fn set_blend(&mut self, blend: Option<Blend>) {
+        let segment = self.canvas.segments.last_mut().expect("begin_3d adds one");
+        segment.blend = blend;
     }
 
     /// Draws `sprite` standing upright with the middle of its bottom edge at `position`, `size`
@@ -1015,6 +1041,9 @@ pub(crate) struct Segment3d {
     pub casting: bool,
     /// How much of their own colors what's drawn in it now shows whatever lights it.
     pub glow: Color,
+    /// How the meshes and models drawn in it now blend with what's behind them, `None` for
+    /// opaque.
+    pub blend: Option<Blend>,
     /// The ways its billboards' right and front point ([`Camera3d::billboard_axes`]), the same
     /// for all of them.
     pub billboard_axes: ([f32; 3], [f32; 3]),
@@ -1091,7 +1120,8 @@ pub(crate) struct MeshDraw {
     pub double_sided: bool,
     /// Whether it shades what's behind it from lights with shadows.
     pub casts_shadow: bool,
-    /// How it blends with what's behind it, `None` for opaque: only particles blend.
+    /// How it blends with what's behind it, `None` for opaque: particles blend, and meshes and
+    /// models drawn after [`Canvas3d::set_blend`].
     pub blend: Option<Blend>,
     /// How far it is from the camera, as [`View3d::distance`] says, for a blended draw.
     pub depth: f32,
@@ -1130,11 +1160,11 @@ struct DrawKind {
 /// The order a 3D view's meshes draw in: draws of a kind together, so each kind is one draw call,
 /// the kinds in the order each was first drawn, and each kind's in the order they were drawn, so
 /// the order is the same every frame. Opaque draws have a depth buffer to sort them, so their
-/// order shows only in which of two surfaces at the same depth is in front. Blended ones, which
-/// only particles are, come after every opaque one: those that add, multiply or screen by kind,
-/// since their order doesn't change what they make, and then those blended normally, the
-/// farthest from the camera first, each run of a kind among them a draw call. Kept from frame to
-/// frame for what it allocates.
+/// order shows only in which of two surfaces at the same depth is in front. Blended ones,
+/// particles and meshes drawn blended, come after every opaque one: those that add, multiply or
+/// screen by kind, since their order doesn't change what they make, and then those blended
+/// normally, the farthest from the camera first, each run of a kind among them a draw call.
+/// Kept from frame to frame for what it allocates.
 #[derive(Default)]
 pub(crate) struct MeshOrder {
     /// Whether the draws draw in the order they were drawn, each kind's together already.

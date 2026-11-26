@@ -579,6 +579,7 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
                     let mut view = canvas.open_view()?;
                     view.set_casts_shadow(options.casts_shadow);
                     view.set_glow(options.glow);
+                    view.set_blend(options.blend);
                     view.draw_mesh(&mesh, transform, sprite, options.tint);
                     Some(())
                 })?
@@ -600,6 +601,7 @@ fn add_3d(lua: &Lua, graphics: &Table, lent: &Lent) -> mlua::Result<()> {
                     let mut view = canvas.open_view()?;
                     view.set_casts_shadow(options.casts_shadow);
                     view.set_glow(options.glow);
+                    view.set_blend(options.blend);
                     view.draw_model(&model, transform, options.tint);
                     Some(())
                 })?
@@ -833,6 +835,8 @@ struct MeshOptions {
     tint: Color,
     casts_shadow: bool,
     glow: Color,
+    /// How it blends with what's behind it, `None` for opaque.
+    blend: Option<Blend>,
 }
 
 impl MeshOptions {
@@ -847,6 +851,7 @@ impl MeshOptions {
                 tint: Color::WHITE,
                 casts_shadow: true,
                 glow: Color::BLACK,
+                blend: None,
             });
         };
         let angle = |name: &str| -> mlua::Result<f32> {
@@ -875,6 +880,7 @@ impl MeshOptions {
             glow: options
                 .get::<Option<Color>>("glow")?
                 .unwrap_or(Color::BLACK),
+            blend: options.get("blend")?,
         })
     }
 

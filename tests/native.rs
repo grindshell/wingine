@@ -738,8 +738,10 @@ fn a_librarys_draws_glow_a_batch_at_a_time() {
                 camera = { position = vector.create(0, 0, 5), target = vector.zero, height = 2 },
                 lighting = { color = '#000000', ambient = '#000000' },
             })
-            -- A script's glow before the library draws is none of the library's.
-            wg.graphics.draw_mesh(square, vector.create(0, 0, -1), { scale = 0.1, glow = '#ffffff' })
+            -- A script's glow before the library draws is none of the library's, nor is how
+            -- its mesh blends: multiplied into the black behind it, the library's would be black.
+            local options = { scale = 0.1, glow = '#ffffff', blend = 'multiply' }
+            wg.graphics.draw_mesh(square, vector.create(0, 0, -1), options)
             probe.glowing_scene(square, glow)
         end",
     );

@@ -1926,9 +1926,11 @@ mod host {
         let Some(mut view) = canvas.open_view() else {
             return no_view(function);
         };
-        // Whatever the script drew last in the view, a library's meshes cast shadows, and glow
-        // only as it says: a batch at a time, since the ABI's draws have no glow of their own.
+        // Whatever the script drew last in the view, a library's meshes cast shadows, are
+        // opaque, and glow only as it says: a batch at a time, since the ABI's draws have no
+        // glow of their own.
         view.set_casts_shadow(true);
+        view.set_blend(None);
         view.set_glow(glow);
         for draw in draws {
             view.draw_mesh(mesh, affine3(draw.transform), sprite, color(draw.tint));

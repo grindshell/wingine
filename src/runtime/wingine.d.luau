@@ -447,6 +447,10 @@ export type MeshOptions = {
     --- How much of its own colors it shows whatever lights it, as full light would show them at
     --- white. By default, black: none. A model's parts give off their file's emission besides.
     glow: Color?,
+    --- How it blends with what's behind it, as see-through as its colors say: drawn after the
+    --- view's opaque meshes, the farthest of those blended `"normal"` first, showing both its
+    --- sides and casting no shadow. By default, none: it's opaque.
+    blend: Blend?,
 }
 
 --- A corner of a mesh's triangles, for `graphics.new_mesh`.

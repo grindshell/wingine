@@ -1,7 +1,8 @@
 /// How what's drawn mixes with what's under it. Blending is in linear space, as all drawing is.
 ///
 /// Set with [`Canvas::set_blend`](super::Canvas::set_blend), which applies to everything drawn
-/// after it, until the frame ends or it's set again. Meshes in 3D views don't blend.
+/// after it, until the frame ends or it's set again. Meshes in 3D views are opaque unless their
+/// view is told otherwise, with [`Canvas3d::set_blend`](super::Canvas3d::set_blend).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Blend {
     /// Covers what's under it as much as it's opaque.

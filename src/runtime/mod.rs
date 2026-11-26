@@ -193,11 +193,15 @@
 //!   at `position`, a vector, scaled by `options.scale` (a number, or a vector for each axis),
 //!   turned by `roll` about `z`, `pitch` about `x` and `yaw` about `y`, in that order, showing
 //!   `sprite` multiplied by `tint`. It casts shadows from lights with `shadows` unless
-//!   `options.casts_shadow` is `false`. Drawing one with no view open is an error.
+//!   `options.casts_shadow` is `false`. With `options.blend`, a blend mode's name, it blends
+//!   with what's behind it, as see-through as its colors say: drawn after the view's opaque
+//!   meshes, the farthest of those blended normally first, by where its origin is, showing both
+//!   its sides and casting no shadow. Drawing one with no view open is an error.
 //! - `graphics.draw_model(model, position, options)` draws each part of a model as `draw_mesh`
 //!   would, placed in the model, and the model placed by `position` and `options` as a mesh is,
-//!   all multiplied by `options.tint`, and casting shadows or not by `options.casts_shadow`. Its
-//!   parts show their own sprites, so `options.sprite` is an error.
+//!   all multiplied by `options.tint`, casting shadows or not by `options.casts_shadow`, and
+//!   blended by `options.blend`, each part ordered by where it is. Its parts show their own
+//!   sprites, so `options.sprite` is an error.
 //! - `graphics.draw_billboard(sprite, position, tint, width, height)` draws a sprite standing
 //!   upright in the view begun last, the middle of its bottom edge at `position`, turned to face
 //!   the camera across the ground: `height` tall (1 by default) and `width` wide (by default, as

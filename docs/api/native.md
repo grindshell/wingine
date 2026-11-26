@@ -795,8 +795,9 @@ engine's default sun and ambient light; `Lighting::UNLIT` shows every surface as
 `Lighting` has no `lights`, and a `View3d` no `fog` or `sky`: a library can't add lights at
 places to a view, or fog, or a sky. What it draws in a
 view a script began is lit by that view's lights, as the rest of the view is, and shaded from
-those with `shadows`. Its meshes always cast shadows from them: a [`MeshDraw`](#meshdraw) has no
-`casts_shadow`. Nor has it a `glow`, nor a billboard's draw: what a library draws
+those with `shadows`. Its meshes always cast shadows from them, and are always opaque: a
+[`MeshDraw`](#meshdraw) has no `casts_shadow` and no `blend`. Nor has it a `glow`, nor a
+billboard's draw: what a library draws
 [glows](graphics.md#glow) a call at a time, with `Canvas::draw_meshes_glowing` and
 `Canvas::draw_billboards_glowing`, so draws that glow differently go in calls of their own.
 

@@ -20,7 +20,7 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
   Frame stats and a headless benchmark show where the time goes.
 - **3D views** among the 2D: meshes, glTF models and billboarded sprites, lit by a sun and by
   lights at places that can cast shadows or keep to a box, glowing where they give off light of
-  their own, fading
+  their own, see-through where they're drawn blended, fading
   into fog with distance, under a sky that fog fades into, for 2.5D games, rendered at the
   canvas's resolution, and picked with the mouse.
 - **Tilemaps** with layers, and a **camera** that follows the player.
@@ -275,11 +275,11 @@ outlined.
 ### Meshes
 
 [`examples/meshes.rs`](examples/meshes.rs) draws meshes and models in a 3D view at 320x180, lit
-by the sun, with a HUD over it, and flies a flag whose corners it writes again each update, in
-colors it works out pixel by pixel. Its models are in [`examples/models`](examples/models), made in Blender
+by the sun, with a HUD over it, flies a flag whose corners it writes again each update, in
+colors it works out pixel by pixel, and has a puddle the grass shows through. Its models are in [`examples/models`](examples/models), made in Blender
 ([`props.blend`](examples/models/props.blend)).
 
-![Crates, a table, barrels, a post flying a flag and a ball on a field of grass](docs/screenshots/meshes.png)
+![Crates, a table, barrels, a post flying a flag and a ball over a puddle on a field of grass](docs/screenshots/meshes.png)
 
 ### egui
 

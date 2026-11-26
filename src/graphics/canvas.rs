@@ -211,6 +211,7 @@ impl Canvas {
             lights: first_light..first_light,
             casting: true,
             glow: Color::BLACK,
+            blend: None,
             billboard_axes: view.camera.billboard_axes(),
         });
         Canvas3d { canvas: self }
