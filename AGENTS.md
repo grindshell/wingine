@@ -223,7 +223,10 @@ references in their own right.
   60 fps with simulated input, egui included, and screenshots. Key repeats run in game time, and
   typing is as on a US keyboard. All simulations in a process share one GPU device, held by one
   thread at a time (a reentrant lease): lavapipe crashes with a device per thread and WARP
-  renders wrongly with a shared one. Frames render only for screenshots unless asked, and come as
+  renders wrongly with a shared one. A `Headless` dropped submits and waits for the device
+  (`Release`), which frees what it made only then: one that rendered nothing left every upload
+  waiting for a submission, and with it every texture, so a run of tests held each game's.
+  Frames render only for screenshots unless asked, and come as
   fast as they're made unless asked to keep the wall's pace (`set_real_time`, a script's
   `real-time on`), for a game that talks to a server; a frame is a sixtieth either way. `Image`
   compares frames (`compare`, `diff`), as screenshot tests and games' tests do.

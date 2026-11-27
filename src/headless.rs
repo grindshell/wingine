@@ -34,13 +34,15 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// Every `Headless` in a process shares one GPU device, and only one thread at a time can have
 /// any: creating one waits until other threads have dropped theirs. Software adapters render
 /// wrongly or crash when used from several threads at once, so this keeps parallel tests
-/// reliable.
+/// reliable. Dropped, it gives the device back the GPU memory of everything it made.
 pub struct Headless {
     ctx: Context,
     canvas: Canvas,
     /// What frames render to when they aren't read back, kept while frames stay the same size.
     target: Option<(wgpu::Texture, wgpu::TextureView)>,
-    /// Declared last so it's released after the GPU resources above are dropped.
+    /// Declared after the GPU resources above, so it gives them back once they're dropped.
+    _release: Release,
+    /// Declared last so it's released after the GPU resources above are given back.
     _lease: GpuLease,
 }
 
@@ -49,6 +51,7 @@ impl Headless {
         let lease = GpuLease::acquire();
         let gpu = shared_gpu()?;
         let renderer = Renderer::new(&gpu.device, &gpu.queue, FORMAT);
+        let release = Release(gpu.clone());
         #[cfg_attr(not(feature = "egui"), expect(unused_mut))]
         let mut ctx = Context::new(gpu, renderer, Audio::silent());
         #[cfg(feature = "egui")]
@@ -57,6 +60,7 @@ impl Headless {
             ctx,
             canvas: Canvas::new(),
             target: None,
+            _release: release,
             _lease: lease,
         })
     }
@@ -1165,6 +1169,24 @@ enum Pressed {
     Button(u32, GamepadButton),
 }
 
+/// Gives the shared device back what a [`Headless`] held, once it's dropped.
+///
+/// The device lives on after each `Headless`, so what one leaves behind stays unless the device
+/// frees it, which it does only as it submits work and is polled. A `Headless` that rendered no
+/// frame did neither: the uploads of every texture and mesh it made wait for a submission, and
+/// keep them, so a run of simulations that render nothing, as tests are, held every one's.
+struct Release(Gpu);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        let Gpu { device, queue, .. } = &self.0;
+        queue.submit(std::iter::empty());
+        if let Err(err) = device.poll(wgpu::PollType::wait_indefinitely()) {
+            log::warn!("couldn't wait for the GPU to give back what a simulation held: {err}");
+        }
+    }
+}
+
 /// The device shared by every [`Headless`] in the process.
 ///
 /// Creating a device is slow on software adapters, and Mesa's lavapipe intermittently crashes
@@ -1558,5 +1580,25 @@ mod tests {
         let err = Image::load_png(folder.join("missing.png")).unwrap_err();
         assert!(err.to_string().contains("missing.png"), "{err}");
         std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn a_dropped_headless_gives_the_device_back_what_it_made() {
+        // Held throughout, so no other test's simulations come and go on the device meanwhile.
+        let _lease = GpuLease::acquire();
+        let gpu = shared_gpu().unwrap();
+        // The memory textures take, which Vulkan's and DirectX 12's devices count, where not
+        // both count the textures.
+        let textures = || gpu.device.get_internal_counters().hal.texture_memory.read();
+        let before = textures();
+        // Each renders nothing, as most tests' simulations don't, so nothing it uploaded was
+        // ever submitted.
+        for _ in 0..3 {
+            let mut headless = Headless::new().unwrap();
+            let made = headless.context().create_texture(2, 2, &[255; 16]).unwrap();
+            assert!(textures() > before);
+            drop(made);
+        }
+        assert_eq!(textures(), before, "every texture of theirs is gone");
     }
 }

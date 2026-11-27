@@ -92,6 +92,8 @@ web-sys = { version = "0.3.106", features = ["Storage", "Window"] }
 
 [dev-dependencies]
 env_logger = "0.11.11"
+# Counts what the device holds, for tests that check it's given back.
+wgpu = { version = "30.0.1", features = ["counters"] }
 # Native libraries for the runtime's tests, linked into them rather than loaded from files.
 wingine-native = { path = "crates/wingine-native" }
 
