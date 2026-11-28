@@ -473,6 +473,7 @@ pub(super) fn module(
             table.set("quads", stats.quads)?;
             table.set("triangles", stats.triangles)?;
             table.set("draw_calls", stats.draw_calls)?;
+            table.set("out_of_sight", stats.out_of_sight)?;
             table.set("lights", stats.lights)?;
             table.set("lights_left_out", stats.lights_left_out)?;
             table.set("shadow_maps", stats.shadow_maps)?;

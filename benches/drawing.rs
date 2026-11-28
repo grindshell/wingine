@@ -4,7 +4,8 @@
 //! Each case draws [`SPRITES`] sprites, or characters, a frame in a [`Simulation`], and reports
 //! the median time `draw` took over [`FRAMES`] frames, per sprite, from the frame stats. The last
 //! cases render the frames too, for what rendering that many quads, billboards and meshes costs,
-//! and what one blended particle among meshes of many kinds adds to it.
+//! and what one blended particle among meshes of many kinds adds to it; and the last draws a
+//! city of models all round the camera, as a game set in one would, most of them out of sight.
 
 use std::{
     fs,
@@ -14,7 +15,10 @@ use std::{
 
 use wingine::{
     Context, FrameStats, Game, WindowConfig,
-    graphics::{Camera3d, Canvas, Color, Font, FontSettings, Mesh, MeshData, Sprite, View3d},
+    graphics::{
+        Camera3d, Canvas, Color, Font, FontSettings, Mesh, MeshData, Model, ModelPart, Sprite,
+        View3d,
+    },
     headless::Simulation,
     math::{Affine, Affine3, Rect},
     particles::{ParticleSettings, ParticleSettings3d, Particles, Particles3d},
@@ -25,6 +29,13 @@ use wingine_native as native;
 const SPRITES: u32 = 10_000;
 /// How many meshes [`Shape::Kinds`] draws its cubes of.
 const KINDS: u32 = 1_000;
+/// How many blocks [`Shape::City`] has each way from the camera, each a model: twice as many
+/// across, and as many again from front to back.
+const BLOCKS: u32 = 4;
+/// How far apart its blocks are, in world units.
+const STREET: f32 = 24.0;
+/// How many parts each of its models has, each a mesh of its own.
+const PARTS: u32 = 6;
 /// Frames run before measuring, so caches and buffers have warmed up.
 const WARMUP: u32 = 30;
 const FRAMES: u32 = 120;
@@ -191,6 +202,24 @@ fn main() {
             frame * 1000.0
         );
     }
+    let mut simulation =
+        Simulation::new(&config(), |ctx| RustGame::load(ctx, &image, Shape::City)).unwrap();
+    simulation.set_render_every_frame(true);
+    let draw = draw_time(&mut simulation);
+    let render = median(&mut simulation, |stats| stats.render);
+    let frame = median(&mut simulation, |stats| stats.frame);
+    let stats = simulation.context().frame_stats();
+    println!(
+        "Rendering a city of {} models of {PARTS} meshes each round the camera: {:.3} ms \
+         drawing, {:.3} ms rendering on the CPU, {:.3} ms for the whole frame waiting for the \
+         GPU, {} draw calls, {} meshes out of sight",
+        (2 * BLOCKS).pow(2),
+        draw * 1000.0,
+        render * 1000.0,
+        frame * 1000.0,
+        stats.draw_calls,
+        stats.out_of_sight,
+    );
     // Tests and scripted runs read frames back, which a screenshot renders first.
     let config = WindowConfig {
         width: 1280,
@@ -330,6 +359,9 @@ enum Shape {
     /// [`TEXT`] laid out wrapped to [`WRAP`] pixels wide in [`VECTOR_FONT`], as often as makes
     /// [`SPRITES`] characters, and drawn.
     WrappedText,
+    /// A city of blocks all round the camera, which stands in a street among them: each block a
+    /// model of [`PARTS`] meshes of its own, a draw call each, stacked into a tower.
+    City,
 }
 
 /// A line of text, as a game's interface would show.
@@ -349,6 +381,8 @@ struct RustGame {
     post: Mesh,
     /// [`KINDS`] cubes, a mesh each, for [`Shape::Kinds`].
     kinds: Vec<Mesh>,
+    /// The blocks of [`Shape::City`], row by row.
+    city: Vec<Model>,
     /// One particle that never ages, half see-through, so it blends.
     particle: Particles3d,
     /// [`SPRITES`] still particles over the canvas, of every age, for [`Shape::Particles`].
@@ -369,6 +403,26 @@ impl RustGame {
                 .collect::<wingine::Result<_>>()?,
             _ => Vec::new(),
         };
+        let blocks = match shape {
+            Shape::City => (2 * BLOCKS).pow(2),
+            _ => 0,
+        };
+        let city = (0..blocks)
+            .map(|_| {
+                let parts = (0..PARTS).map(|part| {
+                    let storey = ctx.create_mesh(&MeshData::cuboid([12.0, 4.0, 12.0]))?;
+                    Ok(ModelPart {
+                        mesh: storey,
+                        sprite: Some(sprite.clone()),
+                        transform: Affine3::from_translation([0.0, 2.0 + 4.0 * part as f32, 0.0]),
+                        double_sided: false,
+                        emission: Color::BLACK,
+                        emission_sprite: None,
+                    })
+                });
+                Ok(Model::new(parts.collect::<wingine::Result<_>>()?))
+            })
+            .collect::<wingine::Result<_>>()?;
         let blended = ParticleSettings3d {
             common: ParticleSettings {
                 rate: 0.0,
@@ -402,6 +456,7 @@ impl RustGame {
             cube,
             post,
             kinds,
+            city,
             particle,
             particles,
             font,
@@ -413,6 +468,20 @@ impl RustGame {
 impl Game for RustGame {
     fn draw(&mut self, canvas: &mut Canvas) {
         let tint = Color::rgb8(0xff, 0x80, 0x40);
+        if let Shape::City = self.shape {
+            // In a street among the blocks, a little way up, looking along it.
+            let camera = Camera3d::perspective([0.0, 6.0, 0.0], [0.0, 4.0, -20.0], 0.8);
+            let view = View3d::new(camera, Rect::new(0.0, 0.0, 320.0, 180.0));
+            let mut world = canvas.begin_3d(view);
+            let across = 2 * BLOCKS;
+            for (i, block) in self.city.iter().enumerate() {
+                let [column, row] = [i as u32 % across, i as u32 / across];
+                let at = [column, row].map(|n| (n as f32 - BLOCKS as f32 + 0.5) * STREET);
+                let placed = Affine3::from_translation([at[0], 0.0, at[1]]);
+                world.draw_model(block, placed, Color::WHITE);
+            }
+            return;
+        }
         if let Shape::Billboard
         | Shape::Cube
         | Shape::CubesAndPosts
@@ -483,7 +552,8 @@ impl Game for RustGame {
                 | Shape::Particles
                 | Shape::Text
                 | Shape::VectorText
-                | Shape::WrappedText => unreachable!("drawn above"),
+                | Shape::WrappedText
+                | Shape::City => unreachable!("drawn above"),
             }
         }
     }

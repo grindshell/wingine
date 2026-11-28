@@ -320,9 +320,10 @@ fn summary(stats: &[FrameStats]) -> String {
             percentile(&ms, 1.0),
         );
     }
-    let counts: [(&str, Stat<u32>); 2] = [
+    let counts: [(&str, Stat<u32>); 3] = [
         ("quads", |stats| stats.quads),
         ("draw calls", |stats| stats.draw_calls),
+        ("meshes out of sight", |stats| stats.out_of_sight),
     ];
     for (name, count) in counts {
         let total: u64 = stats.iter().map(|stats| u64::from(count(stats))).sum();

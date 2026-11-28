@@ -247,6 +247,12 @@ struct MeshInner {
     /// Whether the GPU has yet to be given the vertices last written. Read for every draw call
     /// of the mesh, so it's beside the lock, not behind it.
     stale: AtomicBool,
+    /// Whether it's been written since it was made, which leaves behind `made` and the box of a
+    /// model it's a part of ([`Model::bounds`](super::Model::bounds)).
+    rewritten: AtomicBool,
+    /// The box its vertices took up as it was made, which views ask of every mesh drawn, so
+    /// it's beside the lock, not behind it.
+    made: Option<Bounds3>,
     #[cfg(feature = "physics")]
     geometry: Geometry,
 }
@@ -310,6 +316,8 @@ impl Mesh {
                     unmeasured: false,
                 }),
                 stale: AtomicBool::new(false),
+                rewritten: AtomicBool::new(false),
+                made: data.bounds(),
                 #[cfg(feature = "physics")]
                 geometry: Geometry {
                     points: data.vertices.iter().map(|vertex| vertex.position).collect(),
@@ -333,6 +341,9 @@ impl Mesh {
     /// The box its vertices take up, as it was made or last written, or `None` if it has none.
     /// After a write it's worked out the first time it's asked for.
     pub fn bounds(&self) -> Option<Bounds3> {
+        if !self.is_rewritten() {
+            return self.inner.made;
+        }
         let mut written = self.written();
         if written.unmeasured {
             let points = written.vertices.iter().map(|vertex| vertex.position);
@@ -362,7 +373,14 @@ impl Mesh {
         written.unmeasured = true;
         // Set under the lock, as `upload` clears it, so a write is never taken for uploaded.
         self.inner.stale.store(true, Ordering::Release);
+        self.inner.rewritten.store(true, Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Whether it's been written since it was made, so its vertices may have left the box they
+    /// took up then.
+    pub(crate) fn is_rewritten(&self) -> bool {
+        self.inner.rewritten.load(Ordering::Relaxed)
     }
 
     /// Gives the GPU the vertices last written, if it hasn't them yet. The renderer calls it for

@@ -151,7 +151,8 @@
 //!   color made a number once can fade a little each frame.
 //! - `graphics.frame_stats()` returns how long the frame before took, and how much it drew, as a
 //!   table: `frame`, `update`, `draw` and `render` are seconds, and `quads`, `triangles`,
-//!   `draw_calls`, `lights`, `lights_left_out`, `shadow_maps` and `shadows_left_out` counts.
+//!   `draw_calls`, `out_of_sight`, `lights`, `lights_left_out`, `shadow_maps` and
+//!   `shadows_left_out` counts.
 //!   Before the first frame has finished, all are 0. See `FrameStats` for what each measures.
 //!   `libraries` is what each native library cost the frame, by its table's name: its `update`
 //!   and its `draw`, each a table of `hooks`, the seconds its hooks took, `calls`, how many calls
@@ -200,12 +201,13 @@
 //!   `options.casts_shadow` is `false`. With `options.blend`, a blend mode's name, it blends
 //!   with what's behind it, as see-through as its colors say: drawn after the view's opaque
 //!   meshes, the farthest of those blended normally first, by where its origin is, showing both
-//!   its sides and casting no shadow. Drawing one with no view open is an error.
+//!   its sides and casting no shadow. Drawing one with no view open is an error. One wholly out
+//!   of sight is left out, as `Canvas3d` says, which shows the same.
 //! - `graphics.draw_model(model, position, options)` draws each part of a model as `draw_mesh`
 //!   would, placed in the model, and the model placed by `position` and `options` as a mesh is,
 //!   all multiplied by `options.tint`, casting shadows or not by `options.casts_shadow`, and
 //!   blended by `options.blend`, each part ordered by where it is. Its parts show their own
-//!   sprites, so `options.sprite` is an error.
+//!   sprites, so `options.sprite` is an error. A part out of sight is left out.
 //! - `graphics.draw_billboard(sprite, position, tint, width, height)` draws a sprite standing
 //!   upright in the view begun last, the middle of its bottom edge at `position`, turned to face
 //!   the camera across the ground: `height` tall (1 by default) and `width` wide (by default, as

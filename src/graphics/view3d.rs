@@ -641,15 +641,7 @@ pub(crate) fn lights_of(view: &View3d, lights: &[Light], chosen: &mut Vec<u32>) 
     if lights.is_empty() {
         return 0;
     }
-    let aspect = view.rect.w / view.rect.h;
-    let matrix = view.camera.view_projection(aspect);
-    let row = |i: usize| [matrix[0][i], matrix[1][i], matrix[2][i], matrix[3][i]];
-    let [x, y, z, w] = [row(0), row(1), row(2), row(3)];
-    let add = |a: [f32; 4], b: [f32; 4]| [0, 1, 2, 3].map(|i| a[i] + b[i]);
-    let sub = |a: [f32; 4], b: [f32; 4]| [0, 1, 2, 3].map(|i| a[i] - b[i]);
-    // The sides of what the camera sees, each facing inward: left and right, bottom and top,
-    // near and far.
-    let planes = [add(w, x), sub(w, x), add(w, y), sub(w, y), z, sub(w, z)];
+    let planes = sides_of(view);
     // What a light must reach nearer than to light anything that shows through the fog.
     let hidden = view.fog().map(|fog| fog.far);
     let reaches = |light: &Light| {
@@ -683,6 +675,161 @@ pub(crate) fn lights_of(view: &View3d, lights: &[Light], chosen: &mut Vec<u32>) 
         chosen.sort_unstable();
     }
     extra as u32
+}
+
+/// The sides of what `view`'s camera sees, each facing inward: left and right, bottom and top,
+/// near and far, each `[a, b, c, d]`, with a point on its inside where `a * x + b * y + c * z + d`
+/// is 0 or more. A side the camera's matrix doesn't give, as of a view with no size, is nothing
+/// but zeros, which leaves nothing outside it.
+fn sides_of(view: &View3d) -> [[f32; 4]; 6] {
+    let aspect = view.rect.w / view.rect.h;
+    let matrix = view.camera.view_projection(aspect);
+    let row = |i: usize| [matrix[0][i], matrix[1][i], matrix[2][i], matrix[3][i]];
+    let [x, y, z, w] = [row(0), row(1), row(2), row(3)];
+    let add = |a: [f32; 4], b: [f32; 4]| [0, 1, 2, 3].map(|i| a[i] + b[i]);
+    let sub = |a: [f32; 4], b: [f32; 4]| [0, 1, 2, 3].map(|i| a[i] - b[i]);
+    [add(w, x), sub(w, x), add(w, y), sub(w, y), z, sub(w, z)]
+}
+
+/// How much more a box takes up than it does, as a part of how far it is from the world's origin
+/// and how far it reaches, and how far past where a view's fog is whole it must be, as a part of
+/// that, to be out of sight: room for the roundoff between the box's corners worked out on the
+/// CPU and a mesh's placed by the GPU.
+const ROUNDOFF: f32 = 1e-5;
+
+/// What a 3D view can show: the sides of what its camera sees, and in a view with a sky, how far
+/// its fog lets anything show. A mesh wholly outside it is left out of the view, having nothing
+/// that would show (see [`Canvas3d`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Sight {
+    /// The sides, as [`sides_of`] gives them, by their terms: every side's `a`, then every
+    /// side's `b`, `c` and `d`, so the sides are tested together.
+    sides: [[f32; 6]; 4],
+    /// How far a box reaching 1 along each axis from its middle reaches across each side: the
+    /// sizes of every side's `a`, `b` and `c`.
+    spans: [[f32; 6]; 3],
+    /// Where the camera is, which the fog measures from.
+    eye: [f32; 3],
+    /// For an orthographic camera, the way it looks: its fog measures how far ahead of it
+    /// things are, as there's no place it is to be far from.
+    ahead: Option<[f32; 3]>,
+    /// How far off the fog hides everything, in a view with a sky, past which a mesh shows as
+    /// the very sky that shows without it. `None` without fog or a sky, or both.
+    hidden: Option<f32>,
+}
+
+/// How much of a box a view's [`Sight`] takes in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Seen {
+    /// None of it: it's wholly outside one of the view's sides, or past where its fog hides
+    /// everything.
+    Not,
+    /// Some of it, or perhaps all.
+    Partly,
+    /// All of it: it's inside every side, and none of it is past the fog.
+    Wholly,
+}
+
+impl Sight {
+    /// Everything: what a view sees that leaves nothing out, as tests draw to hold what's left
+    /// out to what shows.
+    #[cfg(test)]
+    pub(crate) const EVERYTHING: Self = Self {
+        sides: [[0.0; 6]; 4],
+        spans: [[0.0; 6]; 3],
+        eye: [0.0; 3],
+        ahead: None,
+        hidden: None,
+    };
+
+    /// What `view` can show.
+    pub(crate) fn of(view: &View3d) -> Self {
+        let camera = &view.camera;
+        let ahead = match camera.projection {
+            Projection::Perspective { .. } => None,
+            Projection::Orthographic { .. } => Some(camera.forward()),
+        };
+        let sides = sides_of(view);
+        let terms = [0, 1, 2, 3].map(|term| sides.map(|side| side[term]));
+        Self {
+            sides: terms,
+            spans: [0, 1, 2].map(|term| terms[term].map(f32::abs)),
+            eye: camera.position,
+            ahead,
+            hidden: view.sky().and(view.fog()).map(|fog| fog.far),
+        }
+    }
+
+    /// How much of `bounds`, a box in the world, it takes in.
+    #[cfg(test)]
+    pub(crate) fn sees(&self, bounds: &Bounds3) -> Seen {
+        self.sees_placed(bounds, &Affine3::IDENTITY)
+    }
+
+    /// How much of `bounds` placed by `transform` it takes in: of the smallest box round it with
+    /// its sides along the world's axes, as [`Bounds3::transformed`] gives. A box that isn't
+    /// numbers is taken in partly, as nothing can be said of it.
+    pub(crate) fn sees_placed(&self, bounds: &Bounds3, transform: &Affine3) -> Seen {
+        // The box round it in the world, by its middle and how far it reaches from there along
+        // each axis, which is quicker to work out than its corners and to test.
+        let middle = transform.apply(bounds.center());
+        let half = bounds.size().map(|size| size / 2.0);
+        let axes = [transform.x_axis, transform.y_axis, transform.z_axis];
+        // Grown by a little of how far it is from the world's origin, for the roundoff between
+        // its corners worked out here and a mesh's placed by the GPU.
+        let reach = [0, 1, 2].map(|i| {
+            let reach = (axes[0][i] * half[0]).abs()
+                + (axes[1][i] * half[1]).abs()
+                + (axes[2][i] * half[2]).abs();
+            reach + (middle[i].abs() + reach) * ROUNDOFF
+        });
+        if !middle.iter().chain(&reach).all(|v| v.is_finite()) {
+            return Seen::Partly;
+        }
+        let [x, y, z] = middle;
+        let ([a, b, c, d], [sa, sb, sc]) = (&self.sides, &self.spans);
+        let (mut outside, mut wholly) = (false, true);
+        // Every side in turn, with nothing to stop for, which tests them a few at once.
+        for side in 0..6 {
+            // How far inside the side its middle is, and how far it reaches across it.
+            let inside = a[side] * x + b[side] * y + c[side] * z + d[side];
+            let across = sa[side] * reach[0] + sb[side] * reach[1] + sc[side] * reach[2];
+            outside |= inside + across < 0.0;
+            wholly &= inside >= across;
+        }
+        if outside {
+            return Seen::Not;
+        }
+        if let Some(hidden) = self.hidden {
+            let [past, within] = [hidden * (1.0 + ROUNDOFF), hidden * (1.0 - ROUNDOFF)];
+            let away = sub3(middle, self.eye);
+            let (wholly_past, wholly_within) = match self.ahead {
+                // How far ahead of the camera its nearest corner and its farthest are.
+                Some(ahead) => {
+                    let along = dot3(away, ahead);
+                    let across: f32 = (0..3).map(|i| ahead[i].abs() * reach[i]).sum();
+                    (along - across > past, along + across < within)
+                }
+                // How far from the camera its nearest point and its farthest corner are.
+                None => {
+                    let [mut nearest, mut farthest] = [0.0f32; 2];
+                    for i in 0..3 {
+                        let off = away[i].abs();
+                        let near = (off - reach[i]).max(0.0);
+                        let far = off + reach[i];
+                        nearest += near * near;
+                        farthest += far * far;
+                    }
+                    (nearest > past * past, farthest < within * within)
+                }
+            };
+            if wholly_past {
+                return Seen::Not;
+            }
+            wholly &= wholly_within;
+        }
+        if wholly { Seen::Wholly } else { Seen::Partly }
+    }
 }
 
 /// How near a light, as a part of its range, something must be to cast no shadow.
@@ -727,6 +874,16 @@ pub(crate) fn shadows_of(
 /// this is dropped, and what's drawn on the canvas after goes over it.
 ///
 /// Meshes hide what's behind them, whatever order they're drawn in.
+///
+/// A mesh, or a model's part, that couldn't show is left out of the view: one whose box, placed as
+/// it's drawn, is wholly outside what the camera sees, beside, above, below, nearer than its
+/// `near` or farther than its `far`; or in a view with a [`Sky`], wholly past where its [`Fog`] is
+/// whole, where it would show as the very sky that shows without it. A model wholly in sight or
+/// out of it is tested once, by its box ([`Model::bounds`]), and one partly in sight part by
+/// part. What's left out would have shown nothing, so the view looks the same; one that casts
+/// shadows still draws into the view's shadow maps, since its shadow may fall in sight, and is
+/// left out of the view itself. Billboards, text and particles are drawn whatever.
+/// [`FrameStats::out_of_sight`](crate::FrameStats::out_of_sight) counts what's left out.
 pub struct Canvas3d<'a> {
     pub(super) canvas: &'a mut Canvas,
 }
@@ -748,7 +905,7 @@ impl Canvas3d<'_> {
             emission: Color::BLACK,
             emission_sprite: None,
         };
-        self.draw_sides(mesh, transform, sprite, colors, false);
+        self.draw_sides(mesh, transform, sprite, colors, false, None);
     }
 
     /// Draws each part of `model` as [`draw_mesh`](Self::draw_mesh) would, placed in the model,
@@ -756,6 +913,7 @@ impl Canvas3d<'_> {
     /// Double-sided parts show from behind too, and each part gives off its
     /// [`emission`](ModelPart::emission).
     pub fn draw_model(&mut self, model: &Model, transform: Affine3, tint: Color) {
+        let in_sight = self.model_in_sight(model, &transform);
         for part in model.parts() {
             let placed = transform * part.transform;
             let sprite = part.sprite.as_ref();
@@ -764,11 +922,29 @@ impl Canvas3d<'_> {
                 emission: part.emission,
                 emission_sprite: part.emission_sprite.as_ref(),
             };
-            self.draw_sides(&part.mesh, placed, sprite, colors, part.double_sided);
+            let sides = part.double_sided;
+            self.draw_sides(&part.mesh, placed, sprite, colors, sides, in_sight);
         }
     }
 
-    /// Draws `mesh` as [`draw_mesh`](Self::draw_mesh) does, from behind too if `double_sided`.
+    /// Whether `model`, placed by `transform`, is wholly in sight or wholly out of it, by its
+    /// box; or `None` if it's partly in sight, or one of its parts' meshes has been written since
+    /// it was made, which may have moved it out of the box, so each part is tested on its own.
+    fn model_in_sight(&self, model: &Model, transform: &Affine3) -> Option<bool> {
+        if model.parts().iter().any(|part| part.mesh.is_rewritten()) {
+            return None;
+        }
+        let segment = self.canvas.segments.last().expect("begin_3d adds one");
+        match segment.sight.sees_placed(&model.bounds()?, transform) {
+            Seen::Not => Some(false),
+            Seen::Partly => None,
+            Seen::Wholly => Some(true),
+        }
+    }
+
+    /// Draws `mesh` as [`draw_mesh`](Self::draw_mesh) does, from behind too if `double_sided`,
+    /// unless it's out of sight and casts no shadow: as `in_sight` says, or by its box if that's
+    /// `None`.
     fn draw_sides(
         &mut self,
         mesh: &Mesh,
@@ -776,28 +952,38 @@ impl Canvas3d<'_> {
         sprite: Option<&Sprite>,
         colors: Colors,
         double_sided: bool,
+        in_sight: Option<bool>,
     ) {
-        if mesh.index_count() > 0 {
-            let normal = transform.normal_matrix();
-            let segment = self.canvas.segments.last().expect("begin_3d adds one");
-            let mut how = How::of(segment);
-            if segment.blend.is_some() {
-                // Blended, it's drawn after the view's opaque meshes, by how far its origin is
-                // from the camera, and shades nothing behind it.
-                how.blend = segment.blend;
-                how.depth = segment.view.distance(transform.translation);
-                how.casts_shadow = false;
-            }
-            self.push(
-                Some(mesh),
-                transform,
-                normal,
-                sprite,
-                colors,
-                double_sided,
-                how,
-            );
+        if mesh.index_count() == 0 {
+            return;
         }
+        let segment = self.canvas.segments.last_mut().expect("begin_3d adds one");
+        let mut how = How::of(segment);
+        if segment.blend.is_some() {
+            // Blended, it's drawn after the view's opaque meshes, by how far its origin is from
+            // the camera, and shades nothing behind it.
+            how.blend = segment.blend;
+            how.depth = segment.view.distance(transform.translation);
+            how.casts_shadow = false;
+        }
+        how.in_sight = in_sight.unwrap_or_else(|| {
+            let bounds = mesh.bounds();
+            bounds.is_none_or(|bounds| segment.sight.sees_placed(&bounds, &transform) != Seen::Not)
+        });
+        if !how.in_sight && !how.casts_shadow {
+            segment.out_of_sight += 1;
+            return;
+        }
+        let normal = transform.normal_matrix();
+        self.push(
+            Some(mesh),
+            transform,
+            normal,
+            sprite,
+            colors,
+            double_sided,
+            how,
+        );
     }
 
     /// How much of their own colors the meshes, models and billboards drawn in the view from now
@@ -1079,6 +1265,7 @@ impl Canvas3d<'_> {
                 casts_shadow: false,
                 blend,
                 depth: view.distance(position),
+                in_sight: true,
             };
             self.push(mesh, transform, normal, sprite, colors, false, how);
         }
@@ -1122,9 +1309,17 @@ impl Canvas3d<'_> {
         let ([u0, v0], [u1, v1]) = sprite.map_or(([0.0, 0.0], [1.0, 1.0]), Sprite::uv_bounds);
         let canvas = &mut *self.canvas;
         let segment = canvas.segments.last_mut().expect("begin_3d adds a segment");
-        segment.draws.end += 1;
+        // Out of sight, it draws only into the view's shadow maps, if it has any, and is kept
+        // apart from what the view draws, which keeps its order.
+        let (draws, instances) = if how.in_sight {
+            segment.draws.end += 1;
+            (&mut canvas.mesh_draws, &mut canvas.instances)
+        } else {
+            segment.shadow_draws.end += 1;
+            (&mut canvas.shadow_draws, &mut canvas.shadow_instances)
+        };
         let casts_shadow = how.casts_shadow && mesh.is_some();
-        canvas.instances.push(Instance {
+        instances.push(Instance {
             model: [
                 transform.x_axis,
                 transform.y_axis,
@@ -1137,7 +1332,7 @@ impl Canvas3d<'_> {
             emission: colors.emission.to_rgba8(),
             glow: how.glow.to_rgba8(),
         });
-        canvas.mesh_draws.push(MeshDraw {
+        draws.push(MeshDraw {
             mesh: mesh.cloned(),
             texture: sprite.map(|sprite| sprite.texture().clone()),
             emission_texture: colors
@@ -1165,6 +1360,9 @@ pub(crate) struct Segment3d {
     pub before_batch: u32,
     /// Its meshes, in the canvas's `mesh_draws`.
     pub draws: Range<u32>,
+    /// Its meshes out of sight that cast shadows, in the canvas's `shadow_draws`, which draw only
+    /// into its shadow maps, if it has any.
+    pub shadow_draws: Range<u32>,
     /// Its lights, in the canvas's `lights`.
     pub lights: Range<u32>,
     /// Whether the meshes drawn in it now cast shadows.
@@ -1177,6 +1375,18 @@ pub(crate) struct Segment3d {
     /// The ways its billboards' right and front point ([`Camera3d::billboard_axes`]), the same
     /// for all of them.
     pub billboard_axes: ([f32; 3], [f32; 3]),
+    /// What it can show, which meshes wholly outside are left out of.
+    pub sight: Sight,
+    /// How many meshes it left out unrecorded, for being out of sight and casting no shadow.
+    pub out_of_sight: u32,
+}
+
+impl Segment3d {
+    /// How many meshes it left out for being out of sight: those left unrecorded, and those
+    /// recorded only for their shadows.
+    pub fn out_of_sight_count(&self) -> u32 {
+        self.out_of_sight + self.shadow_draws.len() as u32
+    }
 }
 
 /// What a mesh drawn is colored by besides the view's light: its tint, and what it gives off.
@@ -1188,24 +1398,27 @@ struct Colors<'a> {
 }
 
 /// How a mesh drawn shows besides its colors: how much of them it shows whatever lights it,
-/// whether it casts shadows, how it blends, `None` for opaque, and how far it is from the camera,
-/// which blended draws are ordered by.
+/// whether it casts shadows, how it blends, `None` for opaque, how far it is from the camera,
+/// which blended draws are ordered by, and whether any of it may be in sight.
 #[derive(Clone, Copy)]
 struct How {
     glow: Color,
     casts_shadow: bool,
     blend: Option<Blend>,
     depth: f32,
+    in_sight: bool,
 }
 
 impl How {
-    /// As `segment` now has what's drawn in it: opaque, glowing and casting as it says.
+    /// As `segment` now has what's drawn in it: opaque, glowing and casting as it says, and in
+    /// sight.
     fn of(segment: &Segment3d) -> Self {
         Self {
             glow: segment.glow,
             casts_shadow: segment.casting,
             blend: None,
             depth: 0.0,
+            in_sight: true,
         }
     }
 }
@@ -2238,5 +2451,317 @@ mod tests {
         order.arrange(&draws);
         assert_eq!(order.order()[..200], expected);
         assert_eq!(order.ends.len(), 9);
+    }
+
+    /// A box with its middle at `at`, reaching `half` from it each way.
+    fn cube(at: [f32; 3], half: f32) -> Bounds3 {
+        Bounds3 {
+            min: at.map(|v| v - half),
+            max: at.map(|v| v + half),
+        }
+    }
+
+    #[test]
+    fn a_view_sees_a_box_unless_its_wholly_outside_one_of_its_sides() {
+        // Looking along `-z` from the origin, twice as wide as it's tall: 10 ahead, it takes in
+        // 4.23 up and down, and 8.46 across.
+        let camera = Camera3d {
+            far: 100.0,
+            ..Camera3d::perspective([0.0; 3], [0.0, 0.0, -1.0], 0.8)
+        };
+        let wide = Sight::of(&View3d::new(camera, Rect::new(0.0, 0.0, 200.0, 100.0)));
+        assert_eq!(wide.sees(&cube([0.0, 0.0, -10.0], 1.0)), Seen::Wholly);
+        assert_eq!(wide.sees(&cube([6.0, 0.0, -10.0], 1.0)), Seen::Wholly);
+        for (at, side) in [
+            ([0.0, 0.0, 10.0], "behind"),
+            ([12.0, 0.0, -10.0], "right"),
+            ([-12.0, 0.0, -10.0], "left"),
+            ([0.0, 6.0, -10.0], "above"),
+            ([0.0, -6.0, -10.0], "below"),
+            ([0.0, 0.0, -102.0], "past far"),
+        ] {
+            assert_eq!(wide.sees(&cube(at, 1.0)), Seen::Not, "{side}");
+        }
+        assert_eq!(
+            wide.sees(&cube([0.0, 0.0, -0.05], 0.01)),
+            Seen::Not,
+            "nearer than near"
+        );
+        assert_eq!(
+            wide.sees(&cube([8.5, 0.0, -10.0], 1.0)),
+            Seen::Partly,
+            "across the right"
+        );
+        assert_eq!(
+            wide.sees(&cube([0.0; 3], 1.0)),
+            Seen::Partly,
+            "round the camera"
+        );
+        assert_eq!(
+            wide.sees(&cube([0.0, 0.0, -100.0], 1.0)),
+            Seen::Partly,
+            "across far"
+        );
+
+        // Half as wide as it's tall, it takes in 2.11 across, 10 ahead.
+        let tall = Sight::of(&View3d::new(camera, Rect::new(0.0, 0.0, 50.0, 100.0)));
+        assert_eq!(tall.sees(&cube([6.0, 0.0, -10.0], 1.0)), Seen::Not);
+        assert_eq!(tall.sees(&cube([0.0, 6.0, -10.0], 1.0)), Seen::Not);
+
+        // Without perspective, 4 tall and 8 across however far ahead.
+        let flat = Camera3d {
+            far: 100.0,
+            ..Camera3d::orthographic([0.0; 3], [0.0, 0.0, -1.0], 4.0)
+        };
+        let ortho = Sight::of(&View3d::new(flat, Rect::new(0.0, 0.0, 200.0, 100.0)));
+        assert_eq!(ortho.sees(&cube([3.0, 1.0, -50.0], 0.5)), Seen::Wholly);
+        assert_eq!(ortho.sees(&cube([5.0, 0.0, -50.0], 0.5)), Seen::Not);
+        assert_eq!(ortho.sees(&cube([0.0, 2.6, -1.0], 0.5)), Seen::Not);
+        assert_eq!(ortho.sees(&cube([0.0, 0.0, 5.0], 1.0)), Seen::Not, "behind");
+
+        // Nothing can be said of a box that isn't numbers, or in a view of no size.
+        let lost = Bounds3 {
+            min: [f32::NAN; 3],
+            max: [0.0; 3],
+        };
+        assert_eq!(wide.sees(&lost), Seen::Partly);
+        let empty = Sight::of(&View3d::new(camera, Rect::new(0.0, 0.0, 0.0, 0.0)));
+        assert_eq!(empty.sees(&cube([12.0, 0.0, -10.0], 1.0)), Seen::Partly);
+    }
+
+    #[test]
+    fn a_view_with_a_sky_sees_nothing_past_where_its_fog_is_whole() {
+        let rect = Rect::new(0.0, 0.0, 200.0, 100.0);
+        let camera = Camera3d::perspective([0.0; 3], [0.0, 0.0, -1.0], 0.8);
+        let fog = Some(Fog::new(Color::WHITE, 10.0, 40.0));
+        let sky = Some(Sky::flat(Color::WHITE));
+        let hazy = Sight::of(&View3d {
+            fog,
+            sky,
+            ..View3d::new(camera, rect)
+        });
+        assert_eq!(hazy.sees(&cube([0.0, 0.0, -20.0], 1.0)), Seen::Wholly);
+        assert_eq!(hazy.sees(&cube([0.0, 0.0, -40.0], 1.0)), Seen::Partly);
+        assert_eq!(hazy.sees(&cube([0.0, 0.0, -42.0], 1.0)), Seen::Not);
+        // From where the camera is, not ahead of it: 41.5 off, though 35.5 ahead.
+        assert_eq!(hazy.sees(&cube([22.0, 0.0, -36.0], 0.5)), Seen::Not);
+        assert_eq!(hazy.sees(&cube([15.0, 0.0, -38.0], 1.0)), Seen::Partly);
+
+        // Without a sky, the fog shows over what's behind the view, so what's past it stays.
+        let foggy = Sight::of(&View3d {
+            fog,
+            ..View3d::new(camera, rect)
+        });
+        assert_eq!(foggy.sees(&cube([0.0, 0.0, -42.0], 1.0)), Seen::Wholly);
+        let clear = Sight::of(&View3d {
+            sky,
+            ..View3d::new(camera, rect)
+        });
+        assert_eq!(clear.sees(&cube([0.0, 0.0, -42.0], 1.0)), Seen::Wholly);
+
+        // Without perspective, by how far ahead of the camera.
+        let flat = Camera3d::orthographic([0.0; 3], [0.0, 0.0, -1.0], 20.0);
+        let ortho = Sight::of(&View3d {
+            fog,
+            sky,
+            ..View3d::new(flat, rect)
+        });
+        assert_eq!(ortho.sees(&cube([15.0, 0.0, -38.0], 1.0)), Seen::Wholly);
+        assert_eq!(ortho.sees(&cube([0.0, 0.0, -42.0], 1.0)), Seen::Not);
+    }
+
+    #[test]
+    fn meshes_and_models_parts_out_of_sight_are_left_out_unless_they_cast_shadows() {
+        use crate::{
+            graphics::{MeshData, MeshVertex, ModelPart},
+            headless::Headless,
+        };
+        let mut headless = Headless::new().expect("a GPU adapter is available");
+        let ctx = headless.context();
+        let box_data = MeshData::cube(1.0);
+        let cube = ctx.create_mesh(&box_data).unwrap();
+        let mut part = |at: [f32; 3]| ModelPart {
+            mesh: ctx.create_mesh(&box_data).unwrap(),
+            sprite: None,
+            transform: Affine3::from_translation(at),
+            double_sided: false,
+            emission: Color::BLACK,
+            emission_sprite: None,
+        };
+        // Two parts 20 apart across.
+        let pair = Model::new(vec![part([0.0; 3]), part([20.0, 0.0, 0.0])]);
+        let moved = Model::new(vec![part([0.0; 3]), part([20.0, 0.0, 0.0])]);
+        // Its second part's mesh written 20 farther across, out of the box the model was made
+        // with.
+        let farther = box_data.vertices.iter().map(|vertex| MeshVertex {
+            position: add3(vertex.position, [20.0, 0.0, 0.0]),
+            ..*vertex
+        });
+        let farther: Vec<MeshVertex> = farther.collect();
+        ctx.write_mesh(&moved.parts()[1].mesh, &farther).unwrap();
+
+        // Looking along `-z` from the origin: 10 ahead, it takes in 8.46 across.
+        let camera = Camera3d::perspective([0.0; 3], [0.0, 0.0, -1.0], 0.8);
+        let view = View3d::new(camera, Rect::new(0.0, 0.0, 200.0, 100.0));
+        let at = |x: f32, z: f32| Affine3::from_translation([x, 0.0, z]);
+        // Stretched 30 along `x`, and the same turned to lie along `z`: from 10 ahead to 20
+        // behind, 5 across.
+        let along_x = |x: f32, z: f32| Affine3 {
+            x_axis: [30.0, 0.0, 0.0],
+            ..at(x, z)
+        };
+        let along_z = |x: f32, z: f32| Affine3 {
+            x_axis: [0.0, 0.0, -30.0],
+            z_axis: [1.0, 0.0, 0.0],
+            ..at(x, z)
+        };
+        let mirrored = |x: f32, z: f32| Affine3 {
+            x_axis: [-1.0, 0.0, 0.0],
+            ..at(x, z)
+        };
+        let white = Color::WHITE;
+        let mut canvas = Canvas::new();
+        canvas.begin(200.0, 100.0);
+        let mut world = canvas.begin_3d(view);
+        world.set_casts_shadow(false);
+        world.draw_mesh(&cube, at(0.0, -10.0), None, white);
+        world.draw_mesh(&cube, at(0.0, 10.0), None, white);
+        world.draw_mesh(&cube, along_z(5.0, 5.0), None, white);
+        world.draw_mesh(&cube, along_x(5.0, 5.0), None, white);
+        // Its parts at 12 across, out of sight, and at -8, in it; and unmirrored, at 12 and 32.
+        world.draw_model(&pair, mirrored(12.0, -10.0), white);
+        world.draw_model(&pair, at(12.0, -10.0), white);
+        world.draw_model(&pair, at(0.0, -10.0), white);
+        // By the box it was made with, it's out of sight, but its moved part is in it.
+        world.draw_model(&moved, at(-40.0, -10.0), white);
+        // Out of sight, but casting shadows, unless blended.
+        world.set_casts_shadow(true);
+        world.draw_mesh(&cube, at(0.0, 10.0), None, white);
+        world.draw_model(&pair, at(0.0, 10.0), white);
+        world.set_blend(Some(Blend::Normal));
+        world.draw_mesh(&cube, at(0.0, 10.0), None, white);
+        world.draw_mesh(&cube, at(0.0, -10.0), None, white);
+
+        let meshes = |draws: &[MeshDraw]| -> Vec<Option<usize>> {
+            draws
+                .iter()
+                .map(|draw| draw.mesh.as_ref().map(Mesh::id))
+                .collect()
+        };
+        let [cube, first, second, moved] = [
+            &cube,
+            &pair.parts()[0].mesh,
+            &pair.parts()[1].mesh,
+            &moved.parts()[1].mesh,
+        ]
+        .map(|mesh| Some(mesh.id()));
+        assert_eq!(
+            meshes(&canvas.mesh_draws),
+            [cube, cube, second, first, moved, cube]
+        );
+        // Those out of sight that cast shadows, apart.
+        assert_eq!(meshes(&canvas.shadow_draws), [cube, first, second]);
+        assert_eq!(canvas.instances.len(), 6);
+        assert_eq!(canvas.shadow_instances.len(), 3);
+        assert_eq!(canvas.segments[0].out_of_sight, 8);
+        assert_eq!(canvas.out_of_sight_count(), 11);
+        // Those in sight: six cubes of 12 triangles, of five kinds, the blended one among them.
+        assert_eq!(canvas.triangle_count(), 72);
+        assert_eq!(canvas.draw_call_count(), 5);
+    }
+
+    /// How far a channel of a pixel may be off where a block past the fog was left out: the sky
+    /// shows there, the same color by the same way it's seen, but the way worked out across the
+    /// sky's triangle and not from where the block was, which may round differently. On an RTX
+    /// 3080, it doesn't.
+    const SKY_ROUNDOFF: u8 = 1;
+
+    /// A field of blocks all round the camera, near and far, some past where the fog is whole,
+    /// under a sun that casts shadows, and a slab over the view, out of sight, whose shadow falls
+    /// in it: leaving out what's out of sight leaves the same frame as drawing everything, with
+    /// the slab's shadow, and with no shadows, the same frame again.
+    #[test]
+    fn leaving_out_what_is_out_of_sight_shows_the_same() {
+        use crate::{graphics::MeshData, headless::Headless};
+        let mut headless = Headless::new().expect("a GPU adapter is available");
+        let ctx = headless.context();
+        let floor = ctx.create_mesh(&MeshData::plane([200.0, 200.0])).unwrap();
+        let block = ctx.create_mesh(&MeshData::cuboid([2.0, 3.0, 2.0])).unwrap();
+        let slab = ctx.create_mesh(&MeshData::cuboid([3.0, 0.2, 3.0])).unwrap();
+        // A little over the floor, looking a little down along `-z`.
+        let camera = Camera3d::perspective([0.0, 2.0, 0.0], [0.0, 0.0, -10.0], 0.8);
+        let sky = Sky {
+            zenith: Color::rgb8(0x20, 0x30, 0x60),
+            horizon: Color::rgb8(0x90, 0xa0, 0xb0),
+            ground: Color::rgb8(0x30, 0x28, 0x20),
+            band: 0.5,
+        };
+        let view = |shadows| View3d {
+            lighting: Lighting {
+                direction: [1.0, -1.0, 0.0],
+                shadows,
+                ..Lighting::default()
+            },
+            fog: Some(Fog::new(Color::WHITE, 10.0, 45.0)),
+            sky: Some(sky),
+            ..View3d::new(camera, Rect::new(0.0, 0.0, 128.0, 64.0))
+        };
+        let mut render = |shadows: Option<SunShadows>, leaves_out: bool, with_slab: bool| {
+            let mut left_out = 0;
+            let frame = headless
+                .render(128, 64, |canvas| {
+                    canvas.leaves_out = leaves_out;
+                    let mut world = canvas.begin_3d(view(shadows));
+                    world.draw_mesh(&floor, Affine3::IDENTITY, None, Color::WHITE);
+                    for ring in [12.0, 25.0, 38.0, 60.0] {
+                        for step in 0..16 {
+                            let angle = step as f32 / 16.0 * std::f32::consts::TAU;
+                            let at = [ring * angle.cos(), 1.5, ring * angle.sin()];
+                            let tint = Color::rgb8(0xc0, (step * 15) as u8, 0x40);
+                            world.set_casts_shadow(step % 2 == 0);
+                            world.draw_mesh(&block, Affine3::from_translation(at), None, tint);
+                        }
+                    }
+                    // Over the view, 8 ahead, its shadow falling 6 to its right, in sight.
+                    world.set_casts_shadow(true);
+                    if with_slab {
+                        let over = Affine3::from_translation([-6.0, 6.0, -8.0]);
+                        world.draw_mesh(&slab, over, None, Color::WHITE);
+                    }
+                    left_out = canvas.out_of_sight_count();
+                })
+                .unwrap();
+            (frame, left_out)
+        };
+        let shadows = Some(SunShadows::new(30.0));
+        let (everything, none_left_out) = render(shadows, false, true);
+        assert_eq!(none_left_out, 0);
+        let (frame, left_out) = render(shadows, true, true);
+        assert!(left_out > 32, "{left_out} left out");
+        assert!(
+            frame
+                .compare(&everything, SKY_ROUNDOFF)
+                .differs_by_at_most(0),
+            "leaving out what's out of sight changed the frame"
+        );
+        let (without_slab, _) = render(shadows, true, false);
+        let shaded = frame.compare(&without_slab, 0);
+        assert!(
+            !shaded.differs_by_at_most(50),
+            "the slab out of sight casts no shadow: {shaded:?}"
+        );
+
+        let (everything, _) = render(None, false, true);
+        let (frame, _) = render(None, true, true);
+        assert!(
+            frame
+                .compare(&everything, SKY_ROUNDOFF)
+                .differs_by_at_most(0)
+        );
+        let (without_slab, _) = render(None, true, false);
+        assert!(
+            frame.compare(&without_slab, 0).differs_by_at_most(0),
+            "with no shadows, the slab out of sight changes nothing"
+        );
     }
 }

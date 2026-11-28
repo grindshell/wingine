@@ -207,6 +207,14 @@ struct MeshRenderer {
     runs: Vec<MeshRun>,
     /// Each view's draw calls, in `runs`.
     view_runs: Vec<Range<usize>>,
+    /// The instances of the meshes out of sight that cast shadows, in the order they draw, for
+    /// the views that have shadow maps, which come after the rest in the instance buffer.
+    shadow_instances: Vec<Instance>,
+    /// Each draw call of those into shadow maps, the views' in turn, of the canvas's
+    /// `shadow_draws`.
+    shadow_runs: Vec<MeshRun>,
+    /// Each view's draw calls of those, in `shadow_runs`: none for a view without shadow maps.
+    view_shadow_runs: Vec<Range<usize>>,
     /// Which of a view's lights light it, as each view's uniform is made.
     lights: Vec<u32>,
     /// Which of those have shadows, and the first shadow map of each.
@@ -314,7 +322,8 @@ impl ShadowMaps {
 struct MeshRun {
     /// Where their instances are in the instance buffer.
     instances: Range<u32>,
-    /// One of them, in the canvas's `mesh_draws`, whose mesh, texture and way round they share.
+    /// One of them, in the canvas's `mesh_draws`, or its `shadow_draws`, whose mesh, texture and
+    /// way round they share.
     draw: u32,
 }
 
@@ -1034,6 +1043,9 @@ impl MeshRenderer {
             instances: Vec::new(),
             runs: Vec::new(),
             view_runs: Vec::new(),
+            shadow_instances: Vec::new(),
+            shadow_runs: Vec::new(),
+            view_shadow_runs: Vec::new(),
             lights: Vec::new(),
             shadowed: Vec::new(),
             shadow_pipeline,
@@ -1167,17 +1179,61 @@ impl MeshRenderer {
         } else {
             &self.instances
         };
+        // The meshes out of sight that cast shadows, of the views that have shadow maps, after
+        // the rest: a view without them leaves those out altogether.
+        self.shadow_instances.clear();
+        self.shadow_runs.clear();
+        self.view_shadow_runs.clear();
+        let after = instances.len() as u32;
+        for (index, segment) in canvas.segments.iter().enumerate() {
+            let first_run = self.shadow_runs.len();
+            let shadowed = !self.view_shadows[index].is_empty() || self.view_suns[index].is_some();
+            let Range { start, end } = segment.shadow_draws.clone();
+            if shadowed && start < end {
+                self.order
+                    .arrange(&canvas.shadow_draws[start as usize..end as usize]);
+                let first = after + self.shadow_instances.len() as u32;
+                let mut run_start = 0;
+                for &run_end in &self.order.ends {
+                    self.shadow_runs.push(MeshRun {
+                        instances: first + run_start..first + run_end,
+                        draw: start + self.order.draw_at(run_start),
+                    });
+                    run_start = run_end;
+                }
+                let these = &canvas.shadow_instances[start as usize..end as usize];
+                if self.order.in_order {
+                    self.shadow_instances.extend_from_slice(these);
+                } else {
+                    let order = self.order.order().iter();
+                    self.shadow_instances
+                        .extend(order.map(|&i| these[i as usize]));
+                }
+            }
+            self.view_shadow_runs
+                .push(first_run..self.shadow_runs.len());
+        }
         let instances: &[u8] = bytemuck::cast_slice(instances);
+        let shadow_instances: &[u8] = bytemuck::cast_slice(&self.shadow_instances);
         ensure_capacity(
             device,
             &mut self.instance_buffer,
             "mesh instances",
-            instances.len(),
+            instances.len() + shadow_instances.len(),
         );
         queue.write_buffer(&self.instance_buffer, 0, instances);
+        if !shadow_instances.is_empty() {
+            let offset = instances.len() as u64;
+            queue.write_buffer(&self.instance_buffer, offset, shadow_instances);
+        }
         // Meshes written since a frame last drew them get their vertices, each once.
-        for run in &self.runs {
-            if let Some(mesh) = &canvas.mesh_draws[run.draw as usize].mesh {
+        let drawn = self
+            .runs
+            .iter()
+            .map(|run| &canvas.mesh_draws[run.draw as usize]);
+        let shaded = (self.shadow_runs.iter()).map(|run| &canvas.shadow_draws[run.draw as usize]);
+        for draw in drawn.chain(shaded) {
+            if let Some(mesh) = &draw.mesh {
                 mesh.upload(queue);
             }
         }
@@ -1216,9 +1272,9 @@ impl MeshRenderer {
     }
 
     /// Draws the shadow maps of the `index`th of `canvas`'s 3D views, as uploaded: for each, in
-    /// a pass of its own, the view's meshes that cast shadows, as its light sees them, and as
-    /// its sun does, if its sun casts shadows. The maps are the same ones for every view, so a
-    /// view's are drawn just before it is.
+    /// a pass of its own, the view's meshes that cast shadows, those out of its sight too, as its
+    /// light sees them, and as its sun does, if its sun casts shadows. The maps are the same ones
+    /// for every view, so a view's are drawn just before it is.
     fn draw_shadows(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1227,7 +1283,13 @@ impl MeshRenderer {
         white: &Texture,
     ) {
         let maps = self.view_shadows[index].clone();
-        let runs = &self.runs[self.view_runs[index].clone()];
+        let drawn = self.runs[self.view_runs[index].clone()]
+            .iter()
+            .map(|run| (run, &canvas.mesh_draws[run.draw as usize]));
+        let out_of_sight = self.shadow_runs[self.view_shadow_runs[index].clone()]
+            .iter()
+            .map(|run| (run, &canvas.shadow_draws[run.draw as usize]));
+        let runs = drawn.chain(out_of_sight);
         let layers = self.shadow_maps.layers.iter();
         let lights = maps.zip(layers).map(|(map, layer)| (map, layer, false));
         let sun = self.view_suns[index].map(|map| (map, &self.sun_map, true));
@@ -1259,8 +1321,7 @@ impl MeshRenderer {
             let offset = (u64::from(map) * self.shadow_stride) as u32;
             pass.set_bind_group(0, &self.shadow_bind_group, &[offset]);
             pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-            for run in runs {
-                let draw = &canvas.mesh_draws[run.draw as usize];
+            for (run, draw) in runs.clone() {
                 let Some(mesh) = draw.mesh.as_ref().filter(|_| draw.casts_shadow) else {
                     continue;
                 };

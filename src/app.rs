@@ -370,6 +370,7 @@ pub(crate) fn run_frame(
         stats.quads += canvas.quad_count();
         stats.triangles += canvas.triangle_count();
         stats.draw_calls += canvas.draw_call_count();
+        stats.out_of_sight += canvas.out_of_sight_count();
         let [lights, left_out, maps, shadows_left_out] = canvas.light_counts();
         stats.lights += lights;
         stats.lights_left_out += left_out;

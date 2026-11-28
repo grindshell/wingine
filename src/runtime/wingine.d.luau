@@ -243,11 +243,13 @@ export type FrameStats = {
     render: number,
     --- Quads drawn: sprites, rectangles and glyphs of text.
     quads: number,
-    --- Triangles of the meshes and billboards drawn in 3D views.
+    --- Triangles of the meshes and billboards drawn in 3D views, less those out of sight.
     triangles: number,
     --- Draw calls: one for each run of quads with the same texture, and one for each kind of mesh,
     --- or billboard, each 3D view drew: the same mesh showing the same texture.
     draw_calls: number,
+    --- Meshes, and parts of models, that 3D views left out for being out of sight.
+    out_of_sight: number,
     --- Lights that lit 3D views.
     lights: number,
     --- Lights that reached what a 3D view saw but didn't light it, there being more than the 32

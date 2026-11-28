@@ -481,6 +481,7 @@ frames 61 to 660, rendered on NVIDIA GeForce RTX 3080 (Vulkan):
   render     0.111    0.102    0.208    2.143
   quads: 503 on average, 512 at most
   draw calls: 4 on average, 7 at most
+  meshes out of sight: 0 on average, 0 at most
 ```
 
 Each frame waits for the GPU to finish before the next starts, so `frame` includes the GPU's

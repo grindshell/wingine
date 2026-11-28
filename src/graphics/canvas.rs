@@ -6,7 +6,7 @@ use super::{
     Blend, Camera, Canvas3d, Color, Font, Light, Mesh, Sprite, TextLayout, Texture, View3d,
     camera::Transform,
     font::PlacedGlyph,
-    view3d::{Instance, MeshDraw, MeshOrder, Segment3d, lights_of, shadows_of},
+    view3d::{Instance, MeshDraw, MeshOrder, Segment3d, Sight, lights_of, shadows_of},
 };
 use crate::{
     FrameStats,
@@ -48,6 +48,10 @@ pub struct Canvas {
     /// The meshes drawn in them, in order, and how each is placed.
     pub(crate) mesh_draws: Vec<MeshDraw>,
     pub(crate) instances: Vec<Instance>,
+    /// The meshes drawn in them out of sight that cast shadows, in order, and how each is placed,
+    /// which draw only into their views' shadow maps.
+    pub(crate) shadow_draws: Vec<MeshDraw>,
+    pub(crate) shadow_instances: Vec<Instance>,
     /// The lights added to them, in order.
     pub(crate) lights: Vec<Light>,
     width: f32,
@@ -57,6 +61,10 @@ pub struct Canvas {
     /// The stats of the frame before, as the context has them, for Luau games, which are lent the
     /// canvas and not the context while they draw.
     pub(crate) frame_stats: FrameStats,
+    /// Whether 3D views begun from now on leave out what's out of sight, which tests turn off to
+    /// hold what's left out to what shows.
+    #[cfg(test)]
+    pub(crate) leaves_out: bool,
 }
 
 impl Canvas {
@@ -68,12 +76,16 @@ impl Canvas {
             segments: Vec::new(),
             mesh_draws: Vec::new(),
             instances: Vec::new(),
+            shadow_draws: Vec::new(),
+            shadow_instances: Vec::new(),
             lights: Vec::new(),
             width: 0.0,
             height: 0.0,
             transform: Transform::IDENTITY,
             blend: Blend::Normal,
             frame_stats: FrameStats::default(),
+            #[cfg(test)]
+            leaves_out: true,
         }
     }
 
@@ -146,11 +158,19 @@ impl Canvas {
         (quads + meshes) as u32
     }
 
-    /// The triangles of the meshes drawn so far this frame.
+    /// The triangles of the meshes drawn so far this frame, less those out of sight.
     pub(crate) fn triangle_count(&self) -> u32 {
         self.mesh_draws
             .iter()
             .map(|draw| draw.mesh.as_ref().map_or(2, Mesh::triangle_count))
+            .sum()
+    }
+
+    /// How many meshes the 3D views drawn so far this frame left out for being out of sight.
+    pub(crate) fn out_of_sight_count(&self) -> u32 {
+        self.segments
+            .iter()
+            .map(Segment3d::out_of_sight_count)
             .sum()
     }
 
@@ -189,6 +209,8 @@ impl Canvas {
         self.segments.clear();
         self.mesh_draws.clear();
         self.instances.clear();
+        self.shadow_draws.clear();
+        self.shadow_instances.clear();
         self.lights.clear();
     }
 
@@ -208,16 +230,28 @@ impl Canvas {
             quads: quad..quad,
         });
         let first = self.mesh_draws.len() as u32;
+        let first_shadow = self.shadow_draws.len() as u32;
         let first_light = self.lights.len() as u32;
+        let view = View3d { rect, ..view };
+        let sight = Sight::of(&view);
+        #[cfg(test)]
+        let sight = if self.leaves_out {
+            sight
+        } else {
+            Sight::EVERYTHING
+        };
         self.segments.push(Segment3d {
-            view: View3d { rect, ..view },
+            view,
             before_batch: (self.batches.len() - 1) as u32,
             draws: first..first,
+            shadow_draws: first_shadow..first_shadow,
             lights: first_light..first_light,
             casting: true,
             glow: Color::BLACK,
             blend: None,
             billboard_axes: view.camera.billboard_axes(),
+            sight,
+            out_of_sight: 0,
         });
         Canvas3d { canvas: self }
     }

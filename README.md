@@ -23,7 +23,8 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
   lights at places that can cast shadows or keep to a box, glowing where they give off light of
   their own, see-through where they're drawn blended, fading
   into fog with distance, under a sky that fog fades into, for 2.5D games, rendered at the
-  canvas's resolution, and picked with the mouse, by their boxes or, in Rust, their triangles.
+  canvas's resolution, leaving out what's out of sight, and picked with the mouse, by their boxes
+  or, in Rust, their triangles.
 - **Tilemaps** with layers, and a **camera** that follows the player.
 - **Particles**: emitters of sprites or squares that fly, turn, change color and size as they
   age, and leave trails, in scenes or made by scripts, the same to the bit on every platform.

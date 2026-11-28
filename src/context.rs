@@ -70,11 +70,14 @@ pub struct FrameStats {
     pub render: f32,
     /// The quads the game drew: sprites, rectangles and glyphs.
     pub quads: u32,
-    /// The triangles of the meshes the game drew in 3D views.
+    /// The triangles of the meshes the game drew in 3D views, less those out of sight.
     pub triangles: u32,
     /// The draw calls they took: one for each run of quads drawn with the same texture, and one
     /// for each kind of mesh each 3D view drew, the same mesh showing the same texture.
     pub draw_calls: u32,
+    /// The meshes, and models' parts, the 3D views left out for being out of sight: see
+    /// [`Canvas3d`](crate::graphics::Canvas3d). `triangles` and `draw_calls` don't count them.
+    pub out_of_sight: u32,
     /// The [lights](crate::graphics::Light) that lit 3D views.
     pub lights: u32,
     /// The lights that reached what a 3D view saw but didn't light it, there being more than

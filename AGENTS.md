@@ -109,7 +109,16 @@ references in their own right.
   the meshes and models a game draws blended (`Canvas3d::set_blend`, Luau's `blend` option), so
   billboards need no sorting; a view's draws of a kind are one instanced draw, in the order
   `MeshOrder` gives, blended ones after the opaque, ordered whole by one distance each, showing
-  both sides and casting no shadow. Native libraries' draws are never blended. `model_file::read` reads glTF without a GPU into `ModelData`, leaving out the lights of a file
+  both sides and casting no shadow. Native libraries' draws are never blended. A view leaves out
+  each mesh and model's part whose box, placed, is wholly out of its `Sight` (outside a side of
+  what its camera sees, or with a sky, past where its fog is whole), a model wholly in or out by
+  its own box unless a part's mesh was written since (`Mesh::is_rewritten`), by the box round
+  it in the world worked out from its middle and reach. One that casts shadows is recorded
+  apart (`Canvas::shadow_draws`, `shadow_instances`), so what the view draws keeps its order
+  and its fast path, and only a view with shadow maps arranges and uploads them, after its other
+  instances, for its shadow maps alone (`shadow_runs`). Billboards, text and particles aren't
+  tested. A unit test renders with and without leaving out (the canvas's test-only
+  `leaves_out`) and holds the frames to the same. `model_file::read` reads glTF without a GPU into `ModelData`, leaving out the lights of a file
   that requires them (`KHR_lights_punctual`) as of one that only uses them. Picking is by boxes
   (`Bounds3`, `Ray::hit_box`), and in Rust by triangles a game holds itself (`Ray::hit_triangle`):
   no mesh keeps its own where games read them, so a model file's are read again, without a GPU

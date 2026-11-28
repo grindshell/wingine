@@ -445,8 +445,9 @@ seconds, measured on the CPU:
 | `draw` | `draw` and native libraries' draw hooks: recording what to draw. |
 | `render` | Rendering what was drawn: uploading it to the GPU and submitting draw calls. Not the GPU's own work. |
 | `quads` | How many quads the frame drew: sprites, rectangles and glyphs of text. |
-| `triangles` | How many triangles of meshes and billboards the frame drew in [3D views](#3d-views). |
+| `triangles` | How many triangles of meshes and billboards the frame drew in [3D views](#3d-views), less those [out of sight](#whats-out-of-sight). |
 | `draw_calls` | How many draw calls those took: one for each run of quads with the same texture and blend mode, one for each kind of mesh, or billboard, each 3D view drew: the same mesh showing the same texture, and one for each view's sky. |
+| `out_of_sight` | How many meshes, and parts of models, the frame's 3D views left out for being [out of sight](#whats-out-of-sight). |
 | `lights` | How many [lights at places](#lights) lit the frame's 3D views. |
 | `lights_left_out` | How many lights reached what a 3D view saw but didn't light it, there being more than the 32 that light a view at once. |
 | `shadow_maps` | How many [shadow maps](#shadows) those lights took, and one for each 3D view whose [sun cast shadows](#the-suns-shadows). Each draws its view's meshes that cast shadows again, from a light or along the sun's, in draw calls `draw_calls` doesn't count. |
@@ -1471,6 +1472,23 @@ wg.graphics.draw_model(sign, vector.create(0, 3, -4), { glow = "#ffffff" })
 wg.graphics.draw_mesh(bulb, lamp, { casts_shadow = false, glow = "#ffffff" })
 ```
 
+#### What's out of sight
+
+A view leaves out the meshes, and the parts of models, that couldn't show in it, so a game can
+draw a whole town or a city's streets and pay only for what's in sight. One is left out when the
+box its corners take up, placed as it's drawn, is wholly outside what the camera sees: to the left
+or right of the view, above or below it, nearer than the camera's `near` or farther than its
+`far`. In a view with a [sky](#sky), one wholly past the fog's `far` is left out too, since it would
+show as the very sky that shows without it. Without a sky, fog shows over what was drawn before
+the view, so what's past it is kept. A model wholly in sight or wholly out of it is tested once,
+and one partly in sight, part by part.
+
+Nothing that shows changes: what's left out would have shown nothing. One that casts shadows
+still shades what's in sight, from a light or the sun with `shadows`, since a shadow can fall in
+sight from outside it: it's drawn into the view's shadow maps, and left out of the view itself.
+Billboards, text and particles are drawn whatever, a quad each among many of their kind in one
+draw call. [`frame_stats`](#graphicsframe_stats) counts what's left out as `out_of_sight`.
+
 ### `graphics.draw_mesh`
 
 ```lua
@@ -1525,7 +1543,8 @@ side through its near one, in the order its triangles come. So make a pane a fla
 
 A view's meshes that are the same mesh, showing the same sprite sheet's texture, are drawn together
 in one draw call wherever they're drawn among its others, so a view of many copies of a few meshes
-takes a draw call for each kind.
+takes a draw call for each kind. A mesh out of sight is left out, and takes none: see
+[what's out of sight](#whats-out-of-sight).
 
 ### `graphics.draw_model`
 
@@ -1540,7 +1559,8 @@ model placed by `position` and `options` as a mesh is. Its parts show their own 
 `options.casts_shadow` is whether all of them cast shadows, `options.glow` how much of their
 own colors all of them show whatever lights them, and `options.blend` how all of them blend, each
 part ordered by where it is. Parts whose file's materials emit give that off besides, whatever
-`options` say. Each part is a draw call of its own.
+`options` say. Each part is a draw call of its own, unless it's
+[out of sight](#whats-out-of-sight).
 
 ```lua
 local barrel = wg.graphics.load_model("models/barrel.glb")
