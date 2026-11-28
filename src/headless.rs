@@ -1584,7 +1584,9 @@ mod tests {
 
     #[test]
     fn a_dropped_headless_gives_the_device_back_what_it_made() {
-        // Held throughout, so no other test's simulations come and go on the device meanwhile.
+        // Held throughout, so no other test makes anything on the device meanwhile. Other tests
+        // can still free what outlived their own simulations, so the memory may fall below where
+        // it started, but only this test's can raise it.
         let _lease = GpuLease::acquire();
         let gpu = shared_gpu().unwrap();
         // The memory textures take, which Vulkan's and DirectX 12's devices count, where not
@@ -1595,10 +1597,14 @@ mod tests {
         // ever submitted.
         for _ in 0..3 {
             let mut headless = Headless::new().unwrap();
+            let without = textures();
             let made = headless.context().create_texture(2, 2, &[255; 16]).unwrap();
-            assert!(textures() > before);
+            assert!(
+                textures() > without,
+                "the texture is counted while it's alive"
+            );
             drop(made);
         }
-        assert_eq!(textures(), before, "every texture of theirs is gone");
+        assert!(textures() <= before, "no texture of theirs is left");
     }
 }
