@@ -251,6 +251,167 @@ fn double_clicking_a_scene_opens_it_in_a_tab() {
     assert!(simulation.gui_rect("duck").is_some());
 }
 
+/// The errors in Output.
+fn output_errors(simulation: &Simulation<Editor>) -> Vec<String> {
+    let lines = simulation.game().output().lines();
+    lines
+        .iter()
+        .filter(|line| line.level == Level::Error)
+        .map(|line| line.text.clone())
+        .collect()
+}
+
+#[test]
+fn an_example_s_plugin_adds_a_screen_without_asking() {
+    let mut simulation = editor(Some(examples().join("rpg")));
+    simulation.run_frames(2);
+    // The repository's examples are trusted.
+    assert!(simulation.gui_rect("Trust Folder").is_none());
+    simulation.click_gui("🔌 Items");
+    simulation.run_frames(2);
+    assert_eq!(simulation.game().screen(), MainScreen::Plugin(0));
+    assert!(simulation.gui_rect("Every Item").is_some());
+    // The items, as `items.luau` defines them, with what they do.
+    assert!(simulation.gui_rect("Swift Feather").is_some());
+    assert!(
+        simulation
+            .gui_rect("A grey feather, light as air. Speed +3.")
+            .is_some()
+    );
+    assert_eq!(output_errors(&simulation), Vec::<String>::new());
+    // It draws only when something changes, as the rest of the editor does.
+    settle(&mut simulation);
+}
+
+#[test]
+fn a_game_s_plugins_run_only_once_its_folder_is_trusted() {
+    let folder = copy_of("rpg", "plugins_trusted");
+    let mut simulation = editor(Some(folder.clone()));
+    simulation.run_frames(2);
+    assert!(simulation.gui_rect("🔌 Items").is_none());
+    simulation.click_gui("Not Now");
+    simulation.run_frames(2);
+    assert!(simulation.gui_rect("Trust Folder").is_none());
+    assert!(simulation.gui_rect("🔌 Items").is_none());
+
+    // Opened again, it asks again, and trusting it runs them.
+    simulation.game_mut().open_project(&folder).unwrap();
+    simulation.run_frames(2);
+    simulation.click_gui("Trust Folder");
+    simulation.run_frames(2);
+    assert!(simulation.gui_rect("Trust Folder").is_none());
+    simulation.click_gui("🔌 Items");
+    simulation.run_frames(2);
+    assert!(simulation.gui_rect("Swift Feather").is_some());
+
+    // The editor remembers it.
+    simulation.game_mut().open_project(&folder).unwrap();
+    simulation.run_frames(2);
+    assert!(simulation.gui_rect("Trust Folder").is_none());
+    assert!(simulation.gui_rect("🔌 Items").is_some());
+}
+
+#[test]
+fn plugins_are_kept_from_the_game_and_the_editor() {
+    let folder = copy_of("rpg", "plugins_kept");
+    let outside = folder.with_file_name("plugins_kept_outside.luau");
+    fs::write(&outside, "return 'outside'").unwrap();
+    let plugins = [
+        (
+            "broken",
+            "return { name = 'Broken', api = 1, screens = { broken = { title = 'Broken', gui = \
+             function(ui)\n    ui:label('Before')\n    error('oops')\nend } } }",
+        ),
+        (
+            "outside",
+            "require('../../../plugins_kept_outside')\nreturn {}",
+        ),
+        (
+            "loads",
+            "require('@wingine').graphics.load_font('title.font.luau')\nreturn {}",
+        ),
+        (
+            "saves",
+            "require('@wingine').save.write('a', {})\nreturn {}",
+        ),
+        ("loops", "while true do end"),
+        (
+            "restyles",
+            "return { name = 'Restyles', api = 1, screens = { restyles = { title = \
+             'Restyles', gui = function(ui) ui:set_theme({}) end } } }",
+        ),
+        ("future", "return { name = 'Future', api = 2 }"),
+    ];
+    for (name, source) in plugins {
+        let plugin = folder.join(".editor").join(name);
+        fs::create_dir_all(&plugin).unwrap();
+        fs::write(plugin.join("plugin.luau"), source).unwrap();
+    }
+    let mut simulation = editor(Some(folder));
+    simulation.run_frames(2);
+    simulation.click_gui("Trust Folder");
+    simulation.run_frames(2);
+    // The screens that fail say so in their place, and stop.
+    for screen in ["🔌 Broken", "🔌 Restyles"] {
+        simulation.click_gui(screen);
+        simulation.run_frames(2);
+    }
+    assert!(
+        simulation
+            .gui_rect("The plugin Restyles stopped:")
+            .is_some()
+    );
+
+    let errors: Vec<(String, String)> = simulation
+        .game()
+        .plugins()
+        .unwrap()
+        .loaded()
+        .iter()
+        .filter_map(|plugin| Some((plugin.folder.clone(), plugin.error()?.to_owned())))
+        .collect();
+    let error = |folder: &str| {
+        let found = errors
+            .iter()
+            .find(|(of, _)| of == &format!(".editor/{folder}"));
+        found.map(|(_, err)| err.as_str()).unwrap_or_default()
+    };
+    // Errors name the file and line, in the game's folder.
+    assert!(
+        error("broken").contains(".editor/broken/plugin.luau:3: oops"),
+        "{errors:#?}"
+    );
+    assert!(
+        error("outside").contains("is outside the game's folder"),
+        "{errors:#?}"
+    );
+    assert!(
+        error("loads").contains("`graphics.load_font` needs a running game"),
+        "{errors:#?}"
+    );
+    assert!(
+        error("saves").contains("`save.write` needs a running game"),
+        "{errors:#?}"
+    );
+    assert!(error("loops").contains("ran too long"), "{errors:#?}");
+    assert!(
+        error("restyles").contains("`ui:set_theme` would restyle the whole editor"),
+        "{errors:#?}"
+    );
+    assert!(
+        error("future").contains("version 2 of the editor's API"),
+        "{errors:#?}"
+    );
+    // The RPG's own plugin carries on, and Output has each failure.
+    assert_eq!(error("items"), "");
+    assert_eq!(
+        output_errors(&simulation).len(),
+        7,
+        "{:#?}",
+        output_errors(&simulation)
+    );
+}
+
 #[test]
 fn every_example_scene_opens_without_errors() {
     for game in [

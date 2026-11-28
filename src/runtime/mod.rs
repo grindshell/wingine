@@ -580,6 +580,8 @@ mod gui;
 mod input;
 mod native;
 mod physics;
+#[cfg(all(feature = "egui", not(target_arch = "wasm32")))]
+mod plugin;
 #[cfg(target_arch = "wasm32")]
 mod require;
 mod save;
@@ -604,6 +606,8 @@ use wingine_abi::Phase;
 
 use native::Natives;
 pub use native::{LibraryDefinitions, link_library};
+#[cfg(all(feature = "egui", not(target_arch = "wasm32")))]
+pub use plugin::PluginVm;
 #[cfg(target_arch = "wasm32")]
 use require::FilesRequirer as FileRequirer;
 
@@ -1544,9 +1548,31 @@ impl Lent {
         T::loan(&self.0).with(f)
     }
 
+    /// What an editor plugin's functions hold, which is never lent anything, as there's no game
+    /// running: those that need one fail with [`NoGame`].
+    #[cfg(all(feature = "egui", not(target_arch = "wasm32")))]
+    fn for_plugin() -> Self {
+        Self(Rc::new(Loans {
+            plugin: true,
+            ..Loans::default()
+        }))
+    }
+
+    /// Whether this is an editor plugin's, which has no game running.
+    #[cfg_attr(
+        not(feature = "egui"),
+        allow(dead_code, reason = "only interfaces ask, and plugins need them")
+    )]
+    fn is_plugin(&self) -> bool {
+        self.0.plugin
+    }
+
     /// Runs `f` with the context, which the engine lends while the game loads and updates.
     fn context<R>(&self, f: impl FnOnce(&mut Context) -> R) -> mlua::Result<R> {
         self.with(f)?.ok_or_else(|| {
+            if self.0.plugin {
+                return mlua::Error::external(NoGame);
+            }
             mlua::Error::runtime(
                 "this only works while the game loads or in `update`, not in `draw`",
             )
@@ -1555,15 +1581,33 @@ impl Lent {
 
     /// Runs `f` with the canvas, which the engine lends while the game draws.
     fn canvas<R>(&self, f: impl FnOnce(&mut Canvas) -> R) -> mlua::Result<R> {
-        self.with(f)?
-            .ok_or_else(|| mlua::Error::runtime("drawing only works in `draw`"))
+        self.with(f)?.ok_or_else(|| {
+            if self.0.plugin {
+                return mlua::Error::external(NoGame);
+            }
+            mlua::Error::runtime("drawing only works in `draw`")
+        })
     }
 }
+
+/// Why something an editor plugin called failed: it needs a running game, and there's none.
+#[derive(Debug)]
+struct NoGame;
+
+impl std::fmt::Display for NoGame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("this needs a running game, and editor plugins have none")
+    }
+}
+
+impl std::error::Error for NoGame {}
 
 #[derive(Default)]
 struct Loans {
     context: Loan<Context>,
     canvas: Loan<Canvas>,
+    /// Whether these are an editor plugin's, which are never lent anything.
+    plugin: bool,
 }
 
 /// A value the engine lends its Luau functions, which one of them at a time may borrow.

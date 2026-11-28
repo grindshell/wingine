@@ -57,7 +57,8 @@ and games laid out in [scenes](docs/scenes.md). Scenes and scripts are edited in
   same way on every platform.
 - **Saves**, **headless runs** for tests and scripted screenshots, and **egui** interfaces over any
   game.
-- **An editor** for scenes, scripts and songs, laid out like Godot's.
+- **An editor** for scenes, scripts and songs, laid out like Godot's, which a game's own plugins
+  add screens to.
 
 Wingine targets Windows, macOS and Linux. CI builds and tests it on Windows and Linux. Games also
 run in a browser, experimentally: see [the web](docs/web.md).
@@ -312,7 +313,8 @@ cargo run -p wingine-editor -- examples/garden
 It selects, moves and changes nodes, paints tilemaps, places and overrides instances, lays out
 screens, animates rigs on a timeline, edits 3D views, undoes, saves in the canonical layout, and
 plays the game. Its Script screen checks Luau against the engine's API with
-[luau-lsp](https://github.com/JohnnyMorganz/luau-lsp), if it's installed. See
+[luau-lsp](https://github.com/JohnnyMorganz/luau-lsp), if it's installed, and a game's plugins,
+Luau in its `.editor` folder, add screens of its own, as the RPG's lists its items. See
 [the editor's docs](docs/editor.md).
 
 ## Making a game

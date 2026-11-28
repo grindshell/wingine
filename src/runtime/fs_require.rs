@@ -77,6 +77,10 @@ impl Lookups {
 pub(super) struct FsRequirer {
     lookups: Lookups,
     bytecode: Option<Bytecode>,
+    /// The folder an editor plugin's modules are kept to, made canonical: relative chunk names
+    /// are from it, rather than the current folder, and a module or config outside it isn't
+    /// read.
+    root: Option<PathBuf>,
     /// The module's path, made absolute, which needn't be a file.
     abs_path: PathBuf,
     /// The module's path as the requiring chunk's name gave it, which names the module's chunk.
@@ -96,10 +100,30 @@ impl FsRequirer {
         Self {
             lookups,
             bytecode,
+            root: None,
             abs_path: PathBuf::new(),
             rel_path: PathBuf::new(),
             resolved_path: None,
         }
+    }
+
+    /// A requirer kept to `folder`, as an editor plugin's is: chunks named by paths relative to
+    /// the folder require from there, and modules and configs are read only if they're in it,
+    /// once every link on the way is followed.
+    #[cfg(feature = "egui")]
+    pub(super) fn rooted(lookups: Lookups, folder: &Path) -> std::io::Result<Self> {
+        Ok(Self {
+            root: Some(files::canonicalize(folder)?),
+            ..Self::new(lookups, None)
+        })
+    }
+
+    /// Whether `path`, an absolute one this navigated to, is in the folder it's kept to, if it's
+    /// kept to one, without following links.
+    fn is_inside(&self, path: &Path) -> bool {
+        self.root
+            .as_deref()
+            .is_none_or(|root| path.starts_with(root))
     }
 
     /// `chunk_name` without the line number a traceback gives it.
@@ -182,7 +206,10 @@ impl Require for FsRequirer {
             return Err(NavigateError::NotFound);
         };
         let chunk_path = Self::normalize(Self::without_line(name).as_ref());
-        let cwd = || env::current_dir().map_err(|_| NavigateError::NotFound);
+        let cwd = || match &self.root {
+            Some(root) => Ok(root.clone()),
+            None => env::current_dir().map_err(|_| NavigateError::NotFound),
+        };
         if chunk_path.extension() == Some("rs".as_ref()) {
             // A chunk named for Rust source, as mlua names one by where it's loaded, requires
             // from the current folder.
@@ -241,7 +268,8 @@ impl Require for FsRequirer {
     }
 
     fn has_config(&self) -> bool {
-        self.lookups.is_dir(&self.abs_path)
+        self.is_inside(&self.abs_path)
+            && self.lookups.is_dir(&self.abs_path)
             && (self
                 .lookups
                 .is_file(&self.abs_path.join(Self::LUAURC_CONFIG))
@@ -261,6 +289,16 @@ impl Require for FsRequirer {
             .resolved_path
             .as_deref()
             .ok_or_else(|| mlua::Error::runtime("there's no module here"))?;
+        if let Some(root) = &self.root {
+            let real = files::canonicalize(path).map_err(mlua::Error::external)?;
+            if !real.starts_with(root) {
+                return Err(mlua::Error::runtime(format!(
+                    "{} is outside the game's folder, and editor plugins can only require \
+                     modules in it",
+                    path.display()
+                )));
+            }
+        }
         let source = files::read(path).map_err(mlua::Error::external)?;
         let name = format!("@{}", self.rel_path.display());
         load_script(lua, &source, name, None, self.bytecode.as_ref())

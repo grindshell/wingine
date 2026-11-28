@@ -14,6 +14,7 @@ pub mod lsp;
 pub mod luau;
 pub mod music;
 pub mod play;
+pub mod plugins;
 pub mod project;
 pub mod script;
 pub mod script_editor;

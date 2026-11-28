@@ -369,6 +369,13 @@ references in their own right.
   Its tests (`crates/wingine-editor/tests/editor.rs`) click widgets by label; those that wait in
   real time run frames
   only when it wants them (`wait_for`), and `settle` checks it stops wanting them.
+- Plugins (`plugins.rs`): a game's `.editor/<name>/plugin.luau`, found without running anything,
+  run only once the folder is trusted (remembered in the editor's saves; the repository's examples
+  always are), each in a `runtime::PluginVm` (`src/runtime/plugin.rs`): the game VM's API with a
+  `Lent` never lent, whose errors are `NoGame`, which the tables of what needs a running game turn
+  into errors naming the function; a `require` rooted at the game's folder (`FsRequirer::rooted`);
+  the `Ui` refusing what restyles egui's whole context; and an interrupt counting each call. A
+  plugin whose screen fails stops until it's loaded again.
 - The Music screen (`music.rs`) edits `SongFile`s: a `SongDocument` (`song_document.rs`) holds
   one, what's selected in it by name, and the song it makes, made again only once the file
   changes. `history.rs`'s `History<S>`, undo of whole-file snapshots, is shared with `Document`.

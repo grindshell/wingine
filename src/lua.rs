@@ -637,7 +637,7 @@ impl Scripts {
     }
 
     /// Freezes the API, as a script is about to run, if it isn't already.
-    fn freeze_api(&self) {
+    pub(crate) fn freeze_api(&self) {
         if !self.api.is_readonly() {
             self.api.set_readonly(true);
         }

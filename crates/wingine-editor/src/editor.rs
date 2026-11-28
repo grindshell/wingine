@@ -34,6 +34,7 @@ use crate::{
     edit::{self, NodePath},
     music::{self, MusicEditor},
     play::Play,
+    plugins::{Plugins, Trust},
     project::{self, AssetCache, Project},
     script_editor::{self, ScriptEditor},
     theme,
@@ -55,6 +56,9 @@ pub enum MainScreen {
     Script,
     /// The open songs: their instruments, arrangement and patterns.
     Music,
+    /// A screen a plugin of the game's adds, by its place among them all
+    /// ([`Plugins::screens`]).
+    Plugin(usize),
 }
 
 /// The panels of the bottom panel, switched between by the tabs along its bottom.
@@ -92,6 +96,8 @@ pub struct Editor {
     animation: Animation,
     scripts: ScriptEditor,
     music: MusicEditor,
+    /// The open game's plugins, if a game is open.
+    plugins: Option<Plugins>,
     /// Seconds the last frame took, which a clip playing moves on by.
     dt: f32,
     /// Whether the panel along the bottom is open, and which of its panels it shows.
@@ -140,6 +146,7 @@ impl Editor {
             animation: Animation::default(),
             scripts: ScriptEditor::new(ctx.waker()),
             music: MusicEditor::default(),
+            plugins: None,
             dt: 0.0,
             bottom_open: true,
             bottom_tab: BottomTab::Output,
@@ -185,6 +192,10 @@ impl Editor {
         self.scripts.set_project(Some(project.folder.clone()));
         self.music.set_project(Some(project.folder.clone()));
         self.watcher = Some(project::watch(project.folder.clone(), self.waker.clone()));
+        self.plugins = Some(Plugins::find(&project.folder));
+        if matches!(self.screen, MainScreen::Plugin(_)) {
+            self.screen = MainScreen::TwoD;
+        }
         let message = format!("Opened {}", project.name);
         if let Err(err) = &project.config {
             self.output.push(Level::Error, format!("conf.luau: {err}"));
@@ -246,6 +257,11 @@ impl Editor {
 
     pub fn scripts_mut(&mut self) -> &mut ScriptEditor {
         &mut self.scripts
+    }
+
+    /// The open game's plugins, if a game is open.
+    pub fn plugins(&self) -> Option<&Plugins> {
+        self.plugins.as_ref()
     }
 
     /// The Music screen, and the songs open in it.
@@ -354,6 +370,8 @@ impl Editor {
                 self.output.push(level, message);
             }
             MainScreen::TwoD => self.save(),
+            // Plugins have nothing of their own to save yet.
+            MainScreen::Plugin(_) => {}
         }
     }
 
@@ -560,7 +578,7 @@ impl Editor {
         if pressed(ui, Modifiers::NONE, Key::F8) {
             self.stop();
         }
-        if typing || self.screen == MainScreen::Script {
+        if typing || matches!(self.screen, MainScreen::Script | MainScreen::Plugin(_)) {
             return;
         }
         let redo = pressed(ui, Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)
@@ -626,19 +644,29 @@ impl Editor {
         let has_document = !self.documents.is_empty();
         let can_play = self.project.as_ref().is_some_and(Project::has_main);
         let bar = ui.max_rect();
+        let plugin_screens: Vec<String> = self
+            .plugins
+            .iter()
+            .flat_map(Plugins::screens)
+            .map(|(_, screen)| format!("🔌 {}", screen.title))
+            .collect();
         // The menus take the bar's row; the main screens and Play go over it, in the middle and
         // at the right.
+        let width = 270.0 + 110.0 * plugin_screens.len() as f32;
         let mut middle = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(egui::Rect::from_center_size(
                     bar.center(),
-                    egui::vec2(270.0, bar.height()),
+                    egui::vec2(width, bar.height()),
                 ))
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         middle.selectable_value(&mut self.screen, MainScreen::TwoD, "🖼 2D");
         middle.selectable_value(&mut self.screen, MainScreen::Script, "📜 Script");
         middle.selectable_value(&mut self.screen, MainScreen::Music, "🎵 Music");
+        for (i, title) in plugin_screens.into_iter().enumerate() {
+            middle.selectable_value(&mut self.screen, MainScreen::Plugin(i), title);
+        }
         let mut right = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(bar)
@@ -718,6 +746,9 @@ impl Editor {
                         && let Some(project) = &mut self.project
                     {
                         project.rescan();
+                        if let Some(plugins) = &mut self.plugins {
+                            plugins.reload();
+                        }
                     }
                 });
                 ui.menu_button("Help", |ui| {
@@ -939,6 +970,38 @@ impl Editor {
         });
         if let Some(i) = close {
             self.close_tab(i, false);
+        }
+    }
+
+    /// Asks whether to trust the game's folder to run its plugins, along the top, while nothing
+    /// has said, without keeping the person from the rest of the editor.
+    fn trust_bar(&mut self, ui: &mut egui::Ui, ctx: &Context) {
+        let Some(plugins) = &mut self.plugins else {
+            return;
+        };
+        if plugins.trust() != Trust::Asking {
+            return;
+        }
+        let folders = plugins.found().join(", ");
+        let mut answer = None;
+        egui::Panel::top("plugin trust").show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!(
+                    "This game has editor plugins ({folders}), which run its own Luau in the \
+                     editor. Run them only if you trust where the game came from."
+                ));
+                if ui.button("Trust Folder").clicked() {
+                    answer = Some(true);
+                }
+                if ui.button("Not Now").clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        match answer {
+            Some(true) => plugins.trust_folder(ctx),
+            Some(false) => plugins.decline(),
+            None => {}
         }
     }
 
@@ -1208,6 +1271,17 @@ impl Game for Editor {
         for (level, message) in self.music.take_messages() {
             self.output.push(level, message);
         }
+        if let Some(plugins) = &mut self.plugins {
+            plugins.prepare(ctx);
+            for (level, message) in plugins.take_messages() {
+                self.output.push(level, message);
+            }
+        }
+        // A screen of a plugin that's gone, as plugins load again, is the 2D screen's.
+        let plugin_screens = self.plugins.iter().flat_map(Plugins::screens).count();
+        if matches!(self.screen, MainScreen::Plugin(i) if i >= plugin_screens) {
+            self.screen = MainScreen::TwoD;
+        }
         self.shortcuts(ui);
 
         egui::Panel::top("top bar").show(ui, |ui| self.top_bar(ui, ctx));
@@ -1216,6 +1290,7 @@ impl Game for Editor {
             self.open_dialog(ui);
             return;
         }
+        self.trust_bar(ui, ctx);
 
         let project = self.project.as_ref().expect("a game is open");
         let game_size = project.canvas_size();
@@ -1417,6 +1492,12 @@ impl Game for Editor {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| music_action = self.music.ui(ui, ctx));
+        } else if let MainScreen::Plugin(index) = self.screen {
+            egui::CentralPanel::default().show(ui, |ui| {
+                if let Some(plugins) = &mut self.plugins {
+                    plugins.screen_ui(ui, index);
+                }
+            });
         } else {
             egui::CentralPanel::default().show(ui, |ui| {
                 self.tabs(ui);
@@ -1496,6 +1577,14 @@ impl Game for Editor {
 
         self.open_dialog(ui);
         self.closing_dialog(ui, ctx);
+        if let Some(plugins) = &self.plugins {
+            for (level, message) in plugins.take_messages() {
+                self.output.push(level, message);
+            }
+            if plugins.take_redraw() {
+                ctx.request_redraw();
+            }
+        }
 
         // A change ends when nothing's being dragged or typed.
         let busy =

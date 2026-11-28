@@ -22,8 +22,8 @@ Folder…** opens any game.
 
 - **The top bar**: the **Scene**, **Edit**, **Project** and **Help** menus on the left; the main
   screens in the middle, the **2D** view of the
-  open scene, the **Script** screen of the open scripts and the **Music** screen of the open songs;
-  and **Play** and **Stop** on the right.
+  open scene, the **Script** screen of the open scripts and the **Music** screen of the open songs,
+  then any the game's [plugins](#plugins) add, marked 🔌; and **Play** and **Stop** on the right.
 - **The Scene dock**, at the top left: the open scene's tree of nodes.
 - **The FileSystem dock**, below it: the files in the game's folder. Double-click a scene to open
   it, or drag it into the viewport or onto a node to place it there. Drag a model file, `.glb` or
@@ -367,6 +367,65 @@ Renaming an instrument, track, pattern or section renames it wherever the song n
 song while it plays plays the changed song from where it was, once the change is made. **File >
 Bake to WAV** renders the song once through to a WAV file beside it, as
 [`wingine bake`](music.md#baking) does.
+
+## Plugins
+
+A game can carry plugins for the editor, which add screens of its own, for authoring what the
+game is made of in ways the editor's screens don't: its items laid out as a table, say, or its
+story as a map. Each is a folder in the game's `.editor` folder with a `plugin.luau`, which
+returns what the plugin adds. The RPG has one,
+[`examples/rpg/.editor/items/plugin.luau`](../examples/rpg/.editor/items/plugin.luau), whose
+**🔌 Items** screen lists every kind of item from the game's own `items.luau`:
+
+```lua
+local items = require("../../items")
+
+local function gui(ui: Ui, editor)
+    ui:heading("Every Item")
+    for name, item in items.kinds do
+        ui:label(`{item.name}: {items.describe(name)}`)
+    end
+end
+
+return {
+    name = "Items",
+    api = 1,
+    screens = {
+        items = { title = "Items", gui = gui },
+    },
+}
+```
+
+- **`name`** is what the editor calls the plugin, in Output.
+- **`api`** is the version of the editor's plugin API it's written for, which is 1. A plugin for a
+  newer one doesn't load, and Output says why.
+- **`screens`** are main screens, by id, each with its `title` in the top bar and a `gui` that
+  lays it out, called with the [`Ui`](api/gui.md) a game's `gui(ui)` gets and the `editor`. The
+  screens show in the order of their ids.
+
+What a plugin can ask of the editor is in `editor`: `editor.print(...)` writes a line to Output,
+and `editor.redraw()` asks for another frame, since the editor draws only when something changes,
+so a screen that animates asks for each frame it wants.
+
+Plugins run in the editor, not the game: export and the web build leave out every name starting
+with `.`, so `.editor` never ships. They don't run until the person trusts the game's folder, as a
+bar along the top asks, naming the plugins' folders, the first time the folder is opened. The
+editor remembers the folders trusted; the repository's examples are trusted without asking. Each
+plugin runs in a Luau VM of its own, kept from the rest of the editor:
+
+- **`require` and files stay in the game's folder.** A plugin requires the game's own modules, as
+  the RPG's requires `items.luau`, but not one outside the folder, wherever links lead.
+- **No running game.** The engine's API is all there, so the game's modules that require it still
+  load, but what needs a running game fails when it's called, naming itself: loading and drawing
+  graphics, audio, input, saves, picking folders and the window. Painting on a canvas works.
+  Native libraries aren't loaded.
+- **The `Ui`, less what restyles the editor.** `ui:set_theme`, `ui:set_fonts` and `ui:scale` given
+  a factor fail, since they'd change the whole editor.
+- **Limits.** A call into a plugin that runs too long, as one stuck in a loop would, is stopped,
+  and so is a plugin that takes more than 256 MiB.
+
+A plugin that fails to load, or whose screen fails, stops, and Output and its screen say why,
+naming the file and line. **Project > Read Files Again** loads every plugin again.
 
 ## Saving, undo and playing
 

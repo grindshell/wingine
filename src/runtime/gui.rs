@@ -100,23 +100,46 @@ impl Methods<'_, '_> {
     }
 }
 
+/// Fails if `lent` is an editor plugin's, which mustn't change the whole interface, since that's
+/// the editor's: `what` would.
+fn check_restyling(lent: &Lent, what: &str) -> mlua::Result<()> {
+    if lent.is_plugin() {
+        return Err(mlua::Error::runtime(format!(
+            "`ui:{what}` would restyle the whole editor, so editor plugins can't use it"
+        )));
+    }
+    Ok(())
+}
+
 fn add_methods(methods: &mut Methods<'_, '_>, lent: &Lent, folder: &Path) {
-    methods.add("scale", |_, ui, factor: Option<f32>| {
-        if let Some(factor) = factor {
-            if !(0.25..=4.0).contains(&factor) {
-                return Err(mlua::Error::runtime("UI scale must be between 0.25 and 4"));
+    methods.add("scale", {
+        let lent = lent.clone();
+        move |_, ui, factor: Option<f32>| {
+            if let Some(factor) = factor {
+                check_restyling(&lent, "scale")?;
+                if !(0.25..=4.0).contains(&factor) {
+                    return Err(mlua::Error::runtime("UI scale must be between 0.25 and 4"));
+                }
+                ui.ctx().set_zoom_factor(factor);
             }
-            ui.ctx().set_zoom_factor(factor);
+            Ok(ui.ctx().zoom_factor())
         }
-        Ok(ui.ctx().zoom_factor())
     });
-    methods.add("set_theme", |_, ui, palette: Table| set_theme(ui, palette));
+    methods.add("set_theme", {
+        let lent = lent.clone();
+        move |_, ui, palette: Table| {
+            check_restyling(&lent, "set_theme")?;
+            set_theme(ui, palette)
+        }
+    });
     methods.add("set_fonts", {
         let folder = folder.to_owned();
+        let lent = lent.clone();
         // The fonts set last, so a game setting the same ones each frame doesn't read their files
         // again, nor have egui compare them byte by byte with those it has.
         let set = RefCell::new(None);
         move |_, ui, fonts: Table| {
+            check_restyling(&lent, "set_fonts")?;
             let fonts = Fonts::read(&fonts)?;
             if set.borrow().as_ref() == Some(&fonts) {
                 return Ok(());
@@ -229,21 +252,31 @@ fn add_methods(methods: &mut Methods<'_, '_>, lent: &Lent, folder: &Path) {
                 egui::WidgetInfo::labeled(egui::Role::Canvas, response.enabled(), label.as_str())
             });
             let input = canvas_input(lua, ui, &response)?;
-            // Where it is on the game's canvas, where `draw` draws, as the mouse's position is.
-            let gui = ui.ctx();
-            let pixels_per_point = gui.pixels_per_point();
-            let scale_factor = gui.native_pixels_per_point().unwrap_or(pixels_per_point);
-            let viewport = gui.viewport_rect();
-            let output = [viewport.width(), viewport.height()]
-                .map(|points| (points * pixels_per_point).round() as u32);
-            let bounds = lent.context(|ctx| {
-                let to_canvas = |pos: egui::Pos2| {
-                    let pos = pos * pixels_per_point;
-                    ctx.screen
-                        .to_canvas([pos.x.into(), pos.y.into()], output, scale_factor.into())
-                };
-                crate::gui::rect_to_canvas(response.rect, to_canvas)
-            })?;
+            let bounds = if lent.is_plugin() {
+                // An editor plugin's has no game's canvas to be on, only the editor's window.
+                let rect = response.rect;
+                crate::math::Rect::new(rect.min.x, rect.min.y, rect.width(), rect.height())
+            } else {
+                // Where it is on the game's canvas, where `draw` draws, as the mouse's position
+                // is.
+                let gui = ui.ctx();
+                let pixels_per_point = gui.pixels_per_point();
+                let scale_factor = gui.native_pixels_per_point().unwrap_or(pixels_per_point);
+                let viewport = gui.viewport_rect();
+                let output = [viewport.width(), viewport.height()]
+                    .map(|points| (points * pixels_per_point).round() as u32);
+                lent.context(|ctx| {
+                    let to_canvas = |pos: egui::Pos2| {
+                        let pos = pos * pixels_per_point;
+                        ctx.screen.to_canvas(
+                            [pos.x.into(), pos.y.into()],
+                            output,
+                            scale_factor.into(),
+                        )
+                    };
+                    crate::gui::rect_to_canvas(response.rect, to_canvas)
+                })?
+            };
             let paint = Paint {
                 origin: response.rect.min,
                 size: response.rect.size(),
