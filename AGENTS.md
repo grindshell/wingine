@@ -101,15 +101,24 @@ references in their own right.
   Sprites aren't instanced: rendering is a fifth of the shmup's frame, so it isn't the limit. An
   `Animation` doesn't keep time; games ask it for the frame at a time. Shaders are WGSL files
   beside the code that loads them.
-- 3D (`camera3d.rs`, `mesh.rs`, `view3d.rs`, `model.rs`, `model_file.rs`, `mesh.wgsl`,
-  `shadow.wgsl`): `Canvas::begin_3d` records a `View3d` and starts the next batch of quads empty,
-  so 2D never joins across a view; `Renderer::render` draws each view in a pass of its own with a
-  depth buffer, and its shadow maps, the same ones for every view, just before it. Right-handed,
-  `y` up, as glTF. Texels under half opaque are discarded, and nothing blends but particles and
-  the meshes and models a game draws blended (`Canvas3d::set_blend`, Luau's `blend` option), so
-  billboards need no sorting; a view's draws of a kind are one instanced draw, in the order
-  `MeshOrder` gives, blended ones after the opaque, ordered whole by one distance each, showing
-  both sides and casting no shadow. Native libraries' draws are never blended. A view leaves out
+- 3D (`camera3d.rs`, `mesh.rs`, `mesh_buffers.rs`, `view3d.rs`, `model.rs`, `model_file.rs`,
+  `mesh.wgsl`, `shadow.wgsl`): `Canvas::begin_3d` records a `View3d` and starts the next batch of
+  quads empty, so 2D never joins across a view; `Renderer::render` draws each view in a pass of
+  its own with a depth buffer, and its shadow maps, the same ones for every view, just before it.
+  Right-handed, `y` up, as glTF. Texels under half opaque are discarded, and nothing blends but
+  particles and the meshes and models a game draws blended (`Canvas3d::set_blend`, Luau's `blend`
+  option), so billboards need no sorting; a view's draws of a kind are one instanced draw, in the
+  order `MeshOrder` gives, the kinds that look alike (`MeshDraw::look`: the same textures, drawn
+  the same way, in the same arena) one after another, binding nothing between them, blended ones
+  after the opaque, ordered whole by one distance each, showing both sides and casting no
+  shadow. Every mesh's corners and triangles are at offsets in the arenas of buffers meshes share
+  (`MeshBuffers`), which grow by copying, to 64 MiB, and take back a dropped mesh's room. Drawing
+  the runs that look alike in one call from a buffer (`multi_draw_indexed_indirect`) was
+  measured and left out: wgpu checks such draws on the GPU first, which made it slower than the
+  draws one after another, and without the checks it was no faster. Model files' textures are
+  shared by a hash of the image as stored, opaque or not and wrapped the same
+  (`model_file::TextureKey`), held weakly by the renderer, so a file storing one held isn't
+  decoded again. Native libraries' draws are never blended. A view leaves out
   each mesh and model's part whose box, placed, is wholly out of its `Sight` (outside a side of
   what its camera sees, or with a sky, past where its fog is whole), a model wholly in or out by
   its own box unless a part's mesh was written since (`Mesh::is_rewritten`), by the box round

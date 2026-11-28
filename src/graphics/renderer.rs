@@ -1,3 +1,5 @@
+#[cfg(feature = "models")]
+use std::collections::HashMap;
 use std::{
     mem::size_of,
     num::NonZeroU64,
@@ -13,8 +15,11 @@ use super::{
     camera3d::{self, Basis, Mat4},
     canvas::{Batch, Canvas, Vertex},
     mesh::GpuVertex,
-    view3d::{Instance, MeshOrder, Segment3d, lights_of, shadows_of},
+    mesh_buffers::MeshBuffers,
+    view3d::{Instance, MeshDraw, MeshOrder, Segment3d, lights_of, shadows_of},
 };
+#[cfg(feature = "models")]
+use super::{WeakTexture, model_file::TextureKey};
 use crate::math::{Rect, normalize3, scale3};
 
 /// Initial GPU buffer room, in quads. Buffers grow as needed.
@@ -22,6 +27,10 @@ const INITIAL_QUADS: u32 = 1024;
 /// Initial GPU buffer room, in meshes drawn and in 3D views. Buffers grow as needed.
 const INITIAL_MESHES: u64 = 64;
 const INITIAL_VIEWS: u64 = 4;
+/// How many textures of model files are kept track of at least before those no model holds are
+/// let go of.
+#[cfg(feature = "models")]
+const MODEL_TEXTURES_ROOM: usize = 64;
 /// How many depth textures to keep, one for each size of target 3D views were drawn on lately.
 const DEPTH_TEXTURES: usize = 4;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -163,6 +172,13 @@ pub(crate) struct Renderer {
     /// and down, made as they're first wanted.
     #[cfg(feature = "models")]
     wrapped_samplers: Vec<([wgpu::AddressMode; 2], wgpu::Sampler)>,
+    /// The textures model files have made, kept while any model holds them, so that a file
+    /// storing the same image gets the same texture.
+    #[cfg(feature = "models")]
+    model_textures: HashMap<TextureKey, WeakTexture>,
+    /// How many of those there may be before those gone are let go of.
+    #[cfg(feature = "models")]
+    model_textures_room: usize,
     /// 1x1 white texture used for solid fills.
     white: Texture,
     vertex_buffer: wgpu::Buffer,
@@ -195,6 +211,10 @@ struct MeshRenderer {
     instance_buffer: wgpu::Buffer,
     /// The most recently used last.
     depth_textures: Vec<DepthTexture>,
+    /// What every mesh's corners and triangles are in.
+    buffers: MeshBuffers,
+    /// Each of their arenas' vertex and index buffers, as a frame draws them.
+    arenas: Vec<[wgpu::Buffer; 2]>,
     /// The quad billboards are drawn as.
     billboard: Mesh,
     /// Each view's [`ViewUniform`], as they're uploaded.
@@ -447,7 +467,7 @@ impl Renderer {
             u64::from(INITIAL_QUADS) * 4 * size_of::<Vertex>() as u64,
         );
 
-        let meshes = MeshRenderer::new(device, target_format, &texture_layout);
+        let meshes = MeshRenderer::new(device, queue, target_format, &texture_layout);
         Self {
             pipelines,
             target_format,
@@ -457,6 +477,10 @@ impl Renderer {
             sampler,
             #[cfg(feature = "models")]
             wrapped_samplers: Vec::new(),
+            #[cfg(feature = "models")]
+            model_textures: HashMap::new(),
+            #[cfg(feature = "models")]
+            model_textures_room: MODEL_TEXTURES_ROOM,
             white,
             vertex_buffer,
             index_buffer: create_index_buffer(device, INITIAL_QUADS),
@@ -470,6 +494,11 @@ impl Renderer {
     #[cfg_attr(not(feature = "egui"), expect(dead_code))]
     pub fn target_format(&self) -> wgpu::TextureFormat {
         self.target_format
+    }
+
+    /// What meshes keep their corners and triangles in.
+    pub fn mesh_buffers(&self) -> &MeshBuffers {
+        &self.meshes.buffers
     }
 
     /// Uploads tightly packed RGBA8 pixels (sRGB) as a texture.
@@ -538,6 +567,33 @@ impl Renderer {
             height,
             rgba,
         )
+    }
+
+    /// The texture a model file made of the image `key` tells, while a model holds it.
+    #[cfg(feature = "models")]
+    pub fn model_texture(&self, key: &TextureKey) -> Option<Texture> {
+        self.model_textures.get(key)?.upgrade()
+    }
+
+    /// Keeps `texture`, which a model file made of the image `key` tells, for the next file
+    /// storing it, while a model holds it.
+    #[cfg(feature = "models")]
+    pub fn keep_model_texture(&mut self, key: TextureKey, texture: &Texture) {
+        if self.model_textures.len() >= self.model_textures_room {
+            self.model_textures.retain(|_, texture| texture.is_alive());
+            self.model_textures_room = MODEL_TEXTURES_ROOM.max(2 * self.model_textures.len());
+        }
+        self.model_textures.insert(key, texture.downgrade());
+    }
+
+    /// How many textures of model files are kept track of, and how many of those a model holds.
+    #[cfg(all(test, feature = "models"))]
+    pub fn model_textures_held(&self) -> [usize; 2] {
+        let kept = self.model_textures.values();
+        [
+            kept.len(),
+            kept.filter(|texture| texture.is_alive()).count(),
+        ]
     }
 
     /// What a vector font makes the pages of its glyphs with, and writes glyphs to them by, as
@@ -740,6 +796,7 @@ impl Renderer {
 impl MeshRenderer {
     fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         target_format: wgpu::TextureFormat,
         texture_layout: &wgpu::BindGroupLayout,
     ) -> Self {
@@ -1027,6 +1084,10 @@ impl MeshRenderer {
             wgpu::BufferUsages::VERTEX,
             size_of::<Instance>() as u64 * INITIAL_MESHES,
         );
+        let buffers = MeshBuffers::new(device, queue);
+        // The first mesh, so it's in the first arena, where billboards are drawn from.
+        let billboard = Mesh::new(&buffers, &MeshData::billboard()).expect("a quad can be drawn");
+        debug_assert_eq!(billboard.arena(), 0);
         Self {
             pipelines,
             blended,
@@ -1037,7 +1098,9 @@ impl MeshRenderer {
             view_stride,
             instance_buffer,
             depth_textures: Vec::new(),
-            billboard: Mesh::new(device, &MeshData::billboard()).expect("a quad can be drawn"),
+            buffers,
+            arenas: Vec::new(),
+            billboard,
             views: Vec::new(),
             order: MeshOrder::default(),
             instances: Vec::new(),
@@ -1234,7 +1297,48 @@ impl MeshRenderer {
         let shaded = (self.shadow_runs.iter()).map(|run| &canvas.shadow_draws[run.draw as usize]);
         for draw in drawn.chain(shaded) {
             if let Some(mesh) = &draw.mesh {
-                mesh.upload(queue);
+                mesh.upload();
+            }
+        }
+        self.buffers.buffers(&mut self.arenas);
+    }
+
+    /// Draws `runs`, each the draws' at `runs[i].draw` in `draws`, onto `pass`, a draw call each.
+    /// The runs that look alike, one after another, bind nothing between them: `bind` binds the
+    /// pipeline and textures for the first draw of each, unless it says to leave them out, and
+    /// their arena's buffers are bound if they aren't.
+    fn draw_runs(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        runs: &[MeshRun],
+        draws: &[MeshDraw],
+        bound_arena: &mut Option<u32>,
+        mut bind: impl FnMut(&mut wgpu::RenderPass, &MeshDraw) -> bool,
+    ) {
+        let mut at = 0;
+        while at < runs.len() {
+            let draw = &draws[runs[at].draw as usize];
+            let look = draw.look();
+            let alike = runs[at + 1..]
+                .iter()
+                .take_while(|run| draws[run.draw as usize].look() == look)
+                .count();
+            let these = &runs[at..at + 1 + alike];
+            at += these.len();
+            if !bind(pass, draw) {
+                continue;
+            }
+            let mesh = draw.mesh.as_ref().unwrap_or(&self.billboard);
+            if *bound_arena != Some(mesh.arena()) {
+                let [vertices, indices] = &self.arenas[mesh.arena() as usize];
+                pass.set_vertex_buffer(0, vertices.slice(..));
+                pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                *bound_arena = Some(mesh.arena());
+            }
+            for run in these {
+                let draw = &draws[run.draw as usize];
+                let mesh = draw.mesh.as_ref().unwrap_or(&self.billboard);
+                pass.draw_indexed(mesh.indices(), mesh.base_vertex(), run.instances.clone());
             }
         }
     }
@@ -1283,13 +1387,8 @@ impl MeshRenderer {
         white: &Texture,
     ) {
         let maps = self.view_shadows[index].clone();
-        let drawn = self.runs[self.view_runs[index].clone()]
-            .iter()
-            .map(|run| (run, &canvas.mesh_draws[run.draw as usize]));
-        let out_of_sight = self.shadow_runs[self.view_shadow_runs[index].clone()]
-            .iter()
-            .map(|run| (run, &canvas.shadow_draws[run.draw as usize]));
-        let runs = drawn.chain(out_of_sight);
+        let drawn = self.view_runs[index].clone();
+        let out_of_sight = self.view_shadow_runs[index].clone();
         let layers = self.shadow_maps.layers.iter();
         let lights = maps.zip(layers).map(|(map, layer)| (map, layer, false));
         let sun = self.view_suns[index].map(|map| (map, &self.sun_map, true));
@@ -1321,16 +1420,24 @@ impl MeshRenderer {
             let offset = (u64::from(map) * self.shadow_stride) as u32;
             pass.set_bind_group(0, &self.shadow_bind_group, &[offset]);
             pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-            for (run, draw) in runs.clone() {
-                let Some(mesh) = draw.mesh.as_ref().filter(|_| draw.casts_shadow) else {
-                    continue;
-                };
+            let (mut bound, mut arena) = (None, None);
+            // Meshes that cast shadows, which a call's draws all do or don't, as they look
+            // alike.
+            let mut bind = |pass: &mut wgpu::RenderPass, draw: &MeshDraw| {
+                if draw.mesh.is_none() || !draw.casts_shadow {
+                    return false;
+                }
                 let texture = draw.texture.as_ref().unwrap_or(white);
-                pass.set_bind_group(1, texture.bind_group(), &[]);
-                pass.set_vertex_buffer(0, mesh.vertex_buffer().slice(..));
-                pass.set_index_buffer(mesh.index_buffer().slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..mesh.index_count(), 0, run.instances.clone());
-            }
+                if bound != Some(texture.id()) {
+                    pass.set_bind_group(1, texture.bind_group(), &[]);
+                    bound = Some(texture.id());
+                }
+                true
+            };
+            let runs = &self.runs[drawn.clone()];
+            self.draw_runs(&mut pass, runs, &canvas.mesh_draws, &mut arena, &mut bind);
+            let runs = &self.shadow_runs[out_of_sight.clone()];
+            self.draw_runs(&mut pass, runs, &canvas.shadow_draws, &mut arena, &mut bind);
         }
     }
 
@@ -1378,16 +1485,17 @@ impl MeshRenderer {
         pass.set_bind_group(0, &self.views_bind_group, &[offset]);
         pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         let mut pipeline = None;
+        // The textures bound, by their IDs, which draws that look alike share.
+        let (mut bound, mut arena) = (None, None);
         let mut sky = canvas.segments[index].view.sky().is_some();
         let draw_sky = |pass: &mut wgpu::RenderPass| {
             pass.set_pipeline(&self.sky);
             pass.draw(0..3, 0..1);
         };
-        for run in &self.runs[self.view_runs[index].clone()] {
-            let draw = &canvas.mesh_draws[run.draw as usize];
+        let bind = |pass: &mut wgpu::RenderPass, draw: &MeshDraw| {
             if sky && draw.blend.is_some() {
-                draw_sky(&mut pass);
-                (sky, pipeline) = (false, None);
+                draw_sky(pass);
+                (sky, pipeline, bound) = (false, None, None);
             }
             let wanted = (draw.double_sided, draw.mirrored, draw.blend);
             if pipeline != Some(wanted) {
@@ -1404,14 +1512,16 @@ impl MeshRenderer {
                 pipeline = Some(wanted);
             }
             let texture = draw.texture.as_ref().unwrap_or(white);
-            pass.set_bind_group(1, texture.bind_group(), &[]);
             let emission = draw.emission_texture.as_ref().unwrap_or(white);
-            pass.set_bind_group(2, emission.bind_group(), &[]);
-            let mesh = draw.mesh.as_ref().unwrap_or(&self.billboard);
-            pass.set_vertex_buffer(0, mesh.vertex_buffer().slice(..));
-            pass.set_index_buffer(mesh.index_buffer().slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..mesh.index_count(), 0, run.instances.clone());
-        }
+            if bound != Some([texture.id(), emission.id()]) {
+                pass.set_bind_group(1, texture.bind_group(), &[]);
+                pass.set_bind_group(2, emission.bind_group(), &[]);
+                bound = Some([texture.id(), emission.id()]);
+            }
+            true
+        };
+        let runs = &self.runs[self.view_runs[index].clone()];
+        self.draw_runs(&mut pass, runs, &canvas.mesh_draws, &mut arena, bind);
         if sky {
             draw_sky(&mut pass);
         }

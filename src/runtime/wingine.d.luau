@@ -1714,7 +1714,8 @@ export type GraphicsApi = {
     --- corners `min` and `max`, in lengths of `direction`: 0 if it starts inside, or nothing if
     --- it misses.
     hit_box: (origin: vector, direction: vector, min: vector, max: vector) -> number?,
-    --- Loads the model file at `path`, glTF 2.0 as `.glb` or `.gltf`. Each file is read once.
+    --- Loads the model file at `path`, glTF 2.0 as `.glb` or `.gltf`. Each file is read once,
+    --- and models whose files store the same texture share it.
     load_model: (path: string) -> Model,
     --- Returns a mesh of `data`'s triangles.
     new_mesh: (data: MeshData) -> Mesh,

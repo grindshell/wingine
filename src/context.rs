@@ -20,10 +20,10 @@ use crate::{
     scene::FontFile,
 };
 #[cfg(feature = "models")]
-use crate::{
-    graphics::{Color, Model, ModelPart, Sprite, model_file},
-    math::Rect,
-};
+use std::collections::HashMap;
+
+#[cfg(feature = "models")]
+use crate::graphics::{Color, Model, ModelPart, Sprite, model_file};
 
 /// Engine services available to a game: input, audio, saves, folders the player picks, the canvas
 /// size, the built-in font, loading textures, fonts and models, and how long frames take.
@@ -270,7 +270,7 @@ impl Context {
     /// Uploads `data` to the GPU as a mesh, to draw in 3D views. Fails if its indices aren't three
     /// for each triangle, or reach past its vertices.
     pub fn create_mesh(&mut self, data: &MeshData) -> Result<Mesh> {
-        Mesh::new(&self.gpu.device, data).map_err(Error::Mesh)
+        Mesh::new(self.renderer.mesh_buffers(), data).map_err(Error::Mesh)
     }
 
     /// Writes `vertices` over those `mesh` was made with, so a mesh whose corners move, such as
@@ -443,6 +443,12 @@ impl Context {
     /// refused, but for `KHR_lights_punctual`, which a file with a lamp in it says it needs: its
     /// lights are left out all the same.
     ///
+    /// Models share textures: a file storing an image the same way as one a model loaded before
+    /// does, byte for byte, and showing it the same way, opaque or not and wrapped the same, gets
+    /// that model's texture, without decoding it again, while any model holds it. So a world of
+    /// many files exported with the same few images holds each once, and its meshes that show
+    /// one draw together.
+    ///
     /// The model doesn't keep its triangles where a game can read them: to pick by them, read
     /// them with [`Model::read_triangles`].
     #[cfg(feature = "models")]
@@ -457,9 +463,22 @@ impl Context {
             message,
         };
         let folder = path.parent().unwrap_or(Path::new(""));
-        let data = model_file::read(&bytes, folder).map_err(error)?;
-        for texture in &data.textures {
-            let size = [texture.image.width(), texture.image.height()];
+        // The textures other models have made that this file shows, held until it has them.
+        let mut held = HashMap::new();
+        let renderer = &self.renderer;
+        let data = model_file::read_sharing(&bytes, folder, &mut |key| {
+            let texture = renderer.model_texture(key);
+            let had = texture.is_some();
+            held.extend(texture.map(|texture| (*key, texture)));
+            had
+        })
+        .map_err(error)?;
+        for image in data
+            .textures
+            .iter()
+            .filter_map(|texture| texture.image.as_ref())
+        {
+            let size = [image.width(), image.height()];
             if let Some(problem) = texture_size_problem(&self.gpu.device, "a texture", size) {
                 return Err(error(problem));
             }
@@ -467,16 +486,17 @@ impl Context {
         let meshes = data
             .meshes
             .iter()
-            .map(|mesh| Mesh::new(&self.gpu.device, mesh))
+            .map(|mesh| Mesh::new(self.renderer.mesh_buffers(), mesh))
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(error)?;
         let sprites: Vec<Sprite> = data
             .textures
             .iter()
-            .map(|texture| {
-                let image = &texture.image;
-                let [width, height] = [image.width(), image.height()];
-                let address = texture.wrap.map(|wrap| match wrap {
+            .map(|data| {
+                let Some(image) = &data.image else {
+                    return held[&data.key].sprite();
+                };
+                let address = data.wrap.map(|wrap| match wrap {
                     model_file::Wrap::Clamp => wgpu::AddressMode::ClampToEdge,
                     model_file::Wrap::Repeat => wgpu::AddressMode::Repeat,
                     model_file::Wrap::Mirror => wgpu::AddressMode::MirrorRepeat,
@@ -484,11 +504,12 @@ impl Context {
                 let texture = self.renderer.create_wrapped_texture(
                     &self.gpu.device,
                     &self.gpu.queue,
-                    [width, height],
+                    [image.width(), image.height()],
                     image.as_raw(),
                     address,
                 );
-                Sprite::new(texture, Rect::new(0.0, 0.0, width as f32, height as f32))
+                self.renderer.keep_model_texture(data.key, &texture);
+                texture.sprite()
             })
             .collect();
         let parts = data
@@ -564,5 +585,65 @@ mod tests {
         // Linear 0.5 is sRGB 0.735.
         assert_eq!(part.emission.to_rgba8(), [255, 188, 0, 255]);
         assert!(part.emission_sprite.is_none());
+    }
+
+    #[cfg(feature = "models")]
+    #[test]
+    fn models_whose_files_store_the_same_image_share_its_texture_while_one_holds_it() {
+        let mut headless = Headless::new().expect("a GPU adapter is available");
+        let ctx = headless.context();
+        let folder = TemporaryFolder::new();
+        std::fs::create_dir(folder.path()).unwrap();
+        // A triangle and its texture coordinates.
+        let floats: [f32; 15] = [0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 1.];
+        std::fs::write(folder.path().join("tri.bin"), bytemuck::cast_slice(&floats)).unwrap();
+        let red = RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]));
+        red.save(folder.path().join("red.png")).unwrap();
+        red.save(folder.path().join("red again.png")).unwrap();
+        let blue = RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 255, 255]));
+        blue.save(folder.path().join("blue.png")).unwrap();
+        // A triangle showing `image`, opaque or with its alpha cutting it out.
+        let file = |name: &str, image: &str, opaque: bool| {
+            let alpha = if opaque { "" } else { r#","alphaMode":"MASK""# };
+            let json = format!(
+                r#"{{"asset":{{"version":"2.0"}},
+                "buffers":[{{"byteLength":60,"uri":"tri.bin"}}],
+                "bufferViews":[{{"buffer":0,"byteLength":36}},{{"buffer":0,"byteOffset":36,"byteLength":24}}],
+                "accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}},
+                    {{"bufferView":1,"componentType":5126,"count":3,"type":"VEC2"}}],
+                "images":[{{"uri":"{image}"}}],"textures":[{{"source":0}}],
+                "materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}}}}{alpha}}}],
+                "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"TEXCOORD_0":1}},"material":0}}]}}],
+                "nodes":[{{"mesh":0}}]}}"#
+            );
+            let path = folder.path().join(name);
+            std::fs::write(&path, json).unwrap();
+            path
+        };
+        let paths = [
+            file("a.gltf", "red.png", true),
+            file("b.gltf", "red again.png", true),
+            file("masked.gltf", "red.png", false),
+            file("blue.gltf", "blue.png", true),
+        ];
+        let models = paths.each_ref().map(|path| ctx.load_model(path).unwrap());
+        let texture = |model: &crate::graphics::Model| {
+            let sprite = model.parts()[0].sprite.as_ref().unwrap();
+            sprite.texture().clone()
+        };
+        let [a, b, masked, blue] = models.each_ref().map(texture);
+        assert!(a.same_as(&b), "the same image, in a file of another name");
+        assert!(!a.same_as(&masked), "the same image with its alpha");
+        assert!(!a.same_as(&blue), "another image");
+        assert!(!masked.same_as(&blue));
+
+        // Once no model holds them, nothing keeps the textures.
+        assert_eq!(ctx.renderer.model_textures_held(), [3, 3]);
+        drop([a, b, masked, blue]);
+        drop(models);
+        assert_eq!(ctx.renderer.model_textures_held(), [3, 0]);
+        let again = ctx.load_model(&paths[0]).unwrap();
+        assert_eq!(ctx.renderer.model_textures_held(), [3, 1], "made again");
+        drop(again);
     }
 }

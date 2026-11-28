@@ -873,7 +873,10 @@ pub(crate) fn shadows_of(
 /// Draws meshes into a 3D view on a canvas, from [`Canvas::begin_3d`]. The view is finished when
 /// this is dropped, and what's drawn on the canvas after goes over it.
 ///
-/// Meshes hide what's behind them, whatever order they're drawn in.
+/// Meshes hide what's behind them, whatever order they're drawn in. Draws of the same mesh,
+/// showing the same textures the same way, are one draw call, wherever they're drawn among the
+/// view's others; and those of meshes showing the same textures the same way are drawn one after
+/// another, binding nothing between them, as all meshes' corners are in buffers they share.
 ///
 /// A mesh, or a model's part, that couldn't show is left out of the view: one whose box, placed as
 /// it's drawn, is wholly outside what the camera sees, beside, above, below, nearer than its
@@ -1485,6 +1488,14 @@ impl MeshDraw {
             blend: self.blend,
         }
     }
+
+    /// What it looks like, its mesh aside: draws that look alike draw one after another, with
+    /// nothing bound between them but their meshes.
+    pub fn look(&self) -> DrawLook {
+        // A billboard's quad is in the first arena.
+        let arena = self.mesh.as_ref().map_or(0, Mesh::arena);
+        self.kind().look(arena)
+    }
 }
 
 /// The kind of a [`MeshDraw`]: its mesh's and textures' IDs, 0 for none, which way round it's
@@ -1500,13 +1511,46 @@ struct DrawKind {
     blend: Option<Blend>,
 }
 
-/// The order a 3D view's meshes draw in: draws of a kind together, so each kind is one draw call,
-/// the kinds in the order each was first drawn, and each kind's in the order they were drawn, so
-/// the order is the same every frame. Opaque draws have a depth buffer to sort them, so their
+impl DrawKind {
+    /// What a draw of this kind looks like, its mesh in `arena`.
+    fn look(self, arena: u32) -> DrawLook {
+        DrawLook {
+            billboard: self.mesh == 0,
+            arena,
+            texture: self.texture,
+            emission_texture: self.emission_texture,
+            mirrored: self.mirrored,
+            double_sided: self.double_sided,
+            casts_shadow: self.casts_shadow,
+            blend: self.blend,
+        }
+    }
+}
+
+/// What a [`MeshDraw`] looks like, its mesh aside: its [`DrawKind`] but for its mesh, and
+/// whether it's a billboard, which shadows leave out. Draws that look alike, one after another,
+/// are drawn in one call. Not a particle's [`Look`], which is what its particles are drawn as.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct DrawLook {
+    billboard: bool,
+    arena: u32,
+    texture: usize,
+    emission_texture: usize,
+    mirrored: bool,
+    double_sided: bool,
+    casts_shadow: bool,
+    blend: Option<Blend>,
+}
+
+/// The order a 3D view's meshes draw in: draws of a kind together, so each kind is one run of
+/// instances, and the kinds that look alike together ([`MeshDraw::look`]), so nothing is bound
+/// between them but their meshes. The looks go in the order each was first drawn, each look's
+/// kinds in the order each was first drawn, and each kind's draws in the order they were drawn,
+/// so the order is the same every frame. Opaque draws have a depth buffer to sort them, so their
 /// order shows only in which of two surfaces at the same depth is in front. Blended ones,
 /// particles and meshes drawn blended, come after every opaque one: those that add, multiply or
 /// screen by kind, since their order doesn't change what they make, and then those blended
-/// normally, the farthest from the camera first, each run of a kind among them a draw call.
+/// normally, the farthest from the camera first, each run of a kind among them a run of its own.
 /// Kept from frame to frame for what it allocates.
 #[derive(Default)]
 pub(crate) struct MeshOrder {
@@ -1514,10 +1558,18 @@ pub(crate) struct MeshOrder {
     pub in_order: bool,
     /// Unless they're in order, indices into the view's draws, in the order they draw.
     order: Vec<u32>,
-    /// Where each run of the order that's one draw call ends.
+    /// Where each run of the order that's one kind ends.
     pub ends: Vec<u32>,
     kinds: HashMap<DrawKind, u32>,
     kind_of: Vec<u32>,
+    /// The looks of the kinds being laid out, numbered as each first comes.
+    looks: HashMap<DrawLook, u32>,
+    /// Each of those kinds' look.
+    look_of: Vec<u32>,
+    /// Each of those kinds' place among their runs, when that isn't where it first came.
+    slot_of: Vec<u32>,
+    /// How many draws each kind has, or where each look's kinds begin, as they're laid out.
+    counts: Vec<u32>,
 }
 
 impl MeshOrder {
@@ -1529,6 +1581,8 @@ impl MeshOrder {
         }
         self.kinds.clear();
         self.kind_of.clear();
+        self.looks.clear();
+        self.look_of.clear();
         self.ends.clear();
         self.order.clear();
         // How many draws of each kind there are, in `ends` for now. Draws mostly come in runs of
@@ -1544,13 +1598,10 @@ impl MeshOrder {
                     let index = *self.kinds.entry(kind).or_insert(next);
                     if index == next {
                         self.ends.push(0);
+                        self.note_look(draw);
                     } else if self.in_order {
-                        // The kinds so far came one after another, as many of each as counted.
                         self.in_order = false;
-                        for (kind, &count) in self.ends.iter().enumerate() {
-                            let kinds = std::iter::repeat_n(kind as u32, count as usize);
-                            self.kind_of.extend(kinds);
-                        }
+                        self.count_kinds_so_far();
                     }
                     index
                 }
@@ -1561,7 +1612,8 @@ impl MeshOrder {
                 self.kind_of.push(index);
             }
         }
-        if self.in_order {
+        self.place_kinds();
+        if self.in_order && self.slot_of.is_empty() {
             let mut end = 0;
             for count in &mut self.ends {
                 end += *count;
@@ -1569,15 +1621,78 @@ impl MeshOrder {
             }
             return;
         }
-        // Where each kind starts, which becomes where it ends as its draws are put in order.
+        if self.in_order {
+            self.in_order = false;
+            self.count_kinds_so_far();
+        }
+        self.lay_out(0, 0..draws.len() as u32);
+    }
+
+    /// Notes that the draws so far came a kind at a time, the kinds one after another, as many
+    /// of each as counted in `ends`, in `kind_of`.
+    fn count_kinds_so_far(&mut self) {
+        for (kind, &count) in self.ends.iter().enumerate() {
+            let kinds = std::iter::repeat_n(kind as u32, count as usize);
+            self.kind_of.extend(kinds);
+        }
+    }
+
+    /// Numbers the look of `draw`, of a kind first come, as looks first come. Worked out a kind at
+    /// a time, not a draw, since it reads the draw's mesh.
+    fn note_look(&mut self, draw: &MeshDraw) {
+        let next = self.looks.len() as u32;
+        let look = *self.looks.entry(draw.look()).or_insert(next);
+        self.look_of.push(look);
+    }
+
+    /// Works out each kind's place among the kinds' runs, the kinds of a look together, in
+    /// `slot_of`; or leaves it empty when the kinds of each look come together already.
+    fn place_kinds(&mut self) {
+        self.slot_of.clear();
+        if self.look_of.is_sorted() {
+            return;
+        }
+        // Where each look's kinds begin, which becomes where the next goes.
+        self.counts.clear();
+        self.counts.resize(self.looks.len(), 0);
+        for &look in &self.look_of {
+            self.counts[look as usize] += 1;
+        }
         let mut start = 0;
-        for count in &mut self.ends {
+        for count in &mut self.counts {
             (*count, start) = (start, start + *count);
         }
-        self.order.resize(draws.len(), 0);
-        for (i, &kind) in self.kind_of.iter().enumerate() {
-            let at = &mut self.ends[kind as usize];
-            self.order[*at as usize] = i as u32;
+        for &look in &self.look_of {
+            let at = &mut self.counts[look as usize];
+            self.slot_of.push(*at);
+            *at += 1;
+        }
+    }
+
+    /// Lays the draws `indices` out in `order`, after those there, each kind's together and the
+    /// kinds where `slot_of` places them, `kind_of` saying each draw's kind and `ends[first..]`
+    /// how many draws each kind has, which become where each run ends.
+    fn lay_out(&mut self, first: usize, indices: impl Iterator<Item = u32>) {
+        if !self.slot_of.is_empty() {
+            self.counts.clear();
+            self.counts.extend_from_slice(&self.ends[first..]);
+            for (kind, &count) in self.counts.iter().enumerate() {
+                self.ends[first + self.slot_of[kind] as usize] = count;
+            }
+        }
+        // Where each run starts, which becomes where it ends as its draws are put in order.
+        let mut start = self.order.len() as u32;
+        for count in &mut self.ends[first..] {
+            (*count, start) = (start, start + *count);
+        }
+        self.order.resize(start as usize, 0);
+        for (i, &kind) in indices.zip(&self.kind_of) {
+            let slot = match self.slot_of.get(kind as usize) {
+                Some(&slot) => slot,
+                None => kind,
+            };
+            let at = &mut self.ends[first + slot as usize];
+            self.order[*at as usize] = i;
             *at += 1;
         }
     }
@@ -1625,35 +1740,30 @@ impl MeshOrder {
     }
 
     /// Adds the draws `indices` of `draws` to the order, those of a kind together, each kind's
-    /// in the order they're given, the kinds in the order each first comes.
+    /// in the order they're given, and the kinds that look alike together, the looks and each
+    /// look's kinds in the order each first comes.
     fn group(&mut self, draws: &[MeshDraw], indices: impl Iterator<Item = u32> + Clone) {
         // Each draw's kind, numbered as kinds first come, and how many draws each kind has, in
         // `ends` for now, after the runs already there: a view may hold a thousand kinds, so
         // each is looked up, not searched for among those so far.
         self.kinds.clear();
         self.kind_of.clear();
+        self.looks.clear();
+        self.look_of.clear();
         let first = self.ends.len();
         for i in indices.clone() {
             let next = (self.ends.len() - first) as u32;
-            let kind = *self.kinds.entry(draws[i as usize].kind()).or_insert(next);
+            let draw = &draws[i as usize];
+            let kind = *self.kinds.entry(draw.kind()).or_insert(next);
             if kind == next {
                 self.ends.push(0);
+                self.note_look(draw);
             }
             self.ends[first + kind as usize] += 1;
             self.kind_of.push(kind);
         }
-        // Where each kind's run starts in the order, which becomes where it ends as each draw
-        // is put in its kind's run.
-        let mut start = self.order.len() as u32;
-        for count in &mut self.ends[first..] {
-            (*count, start) = (start, start + *count);
-        }
-        self.order.resize(start as usize, 0);
-        for (i, &kind) in indices.zip(&self.kind_of) {
-            let at = &mut self.ends[first + kind as usize];
-            self.order[*at as usize] = i;
-            *at += 1;
-        }
+        self.place_kinds();
+        self.lay_out(first, indices);
     }
 
     /// Which of the draws draws `position`th.
@@ -2381,6 +2491,64 @@ mod tests {
     }
 
     #[test]
+    fn kinds_that_look_alike_draw_together_in_the_order_each_look_was_first_drawn() {
+        use crate::{graphics::MeshData, headless::Headless};
+        let mut headless = Headless::new().expect("a GPU adapter is available");
+        let ctx = headless.context();
+        let meshes = [0; 3].map(|_| ctx.create_mesh(&MeshData::cube(1.0)).unwrap());
+        let textures = [0; 2].map(|_| ctx.create_texture(1, 1, &[255; 4]).unwrap());
+        let draw = |(mesh, texture): (usize, usize)| MeshDraw {
+            mesh: Some(meshes[mesh].clone()),
+            texture: Some(textures[texture].clone()),
+            emission_texture: None,
+            mirrored: false,
+            double_sided: false,
+            casts_shadow: false,
+            blend: None,
+            depth: 0.0,
+        };
+        // Three meshes, the first and the third showing one texture, the second another.
+        let draws = [(0, 0), (1, 1), (2, 0), (0, 0), (1, 1)].map(draw);
+        let mut order = MeshOrder::default();
+        order.arrange(&draws);
+        assert!(!order.in_order);
+        let drawn = |order: &MeshOrder, n| (0..n).map(|i| order.draw_at(i)).collect::<Vec<_>>();
+        assert_eq!(drawn(&order, 5), [0, 3, 2, 1, 4]);
+        assert_eq!(order.ends, [2, 3, 5]);
+        assert_eq!(MeshOrder::kind_count(&draws), 3);
+
+        // A kind at a time, but the first look's kinds apart.
+        let draws = [(0, 0), (1, 1), (2, 0)].map(draw);
+        order.arrange(&draws);
+        assert!(!order.in_order);
+        assert_eq!(drawn(&order, 3), [0, 2, 1]);
+        assert_eq!(order.ends, [1, 2, 3]);
+        // A look at a time already.
+        let draws = [(0, 0), (2, 0), (1, 1)].map(draw);
+        order.arrange(&draws);
+        assert!(order.in_order);
+        assert_eq!(order.ends, [1, 2, 3]);
+
+        // Blended among them, the opaque ones are laid out the same, and so are those added.
+        let mut draws = Vec::from([(0, 0), (1, 1), (2, 0), (0, 0), (1, 1)].map(draw));
+        let added = [(0, 0), (1, 1), (2, 0)].map(|kind| MeshDraw {
+            blend: Some(Blend::Add),
+            ..draw(kind)
+        });
+        draws.extend(added);
+        order.arrange(&draws);
+        assert_eq!(drawn(&order, 8), [0, 3, 2, 1, 4, 5, 7, 6]);
+        assert_eq!(order.ends, [2, 3, 5, 6, 7, 8]);
+        let mut draws = Vec::from([(1, 1), (0, 0), (2, 0)].map(draw));
+        draws.extend([(1, 1), (0, 0), (2, 0)].map(|kind| MeshDraw {
+            blend: Some(Blend::Add),
+            ..draw(kind)
+        }));
+        order.arrange(&draws);
+        assert_eq!(drawn(&order, 6), [0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
     fn blended_draws_come_after_opaque_ones_and_those_blended_normally_far_to_near() {
         let draw = |blend, depth, mirrored| MeshDraw {
             mesh: None,
@@ -2763,5 +2931,97 @@ mod tests {
             frame.compare(&without_slab, 0).differs_by_at_most(0),
             "with no shadows, the slab out of sight changes nothing"
         );
+    }
+
+    #[test]
+    fn meshes_show_what_they_were_made_with_after_their_buffers_grow() {
+        use crate::{graphics::MeshData, headless::Headless};
+        let mut headless = Headless::new().expect("a GPU adapter is available");
+        let ctx = headless.context();
+        let floor = ctx.create_mesh(&MeshData::plane([60.0, 60.0])).unwrap();
+        // Blocks of a mesh each, of two textures, and a few spheres, which together outgrow
+        // the room the mesh buffers have at first.
+        let blocks: Vec<Mesh> = (0..24)
+            .map(|i| {
+                let height = 1.0 + (i % 5) as f32;
+                ctx.create_mesh(&MeshData::cuboid([1.5, height, 1.5]))
+                    .unwrap()
+            })
+            .collect();
+        let checks = [[0xff, 0x80, 0x40], [0x40, 0x80, 0xff]].map(|[r, g, b]| {
+            let rgba: Vec<u8> = (0..4)
+                .flat_map(|i| if i % 3 == 0 { [r, g, b, 255] } else { [255; 4] })
+                .collect();
+            ctx.create_texture(2, 2, &rgba).unwrap()
+        });
+        let camera = Camera3d::perspective([0.0, 8.0, 14.0], [0.0, 0.0, 0.0], 0.8);
+        let view = View3d {
+            lighting: Lighting {
+                direction: [1.0, -2.0, -1.0],
+                shadows: Some(SunShadows::new(30.0)),
+                ..Lighting::default()
+            },
+            ..View3d::new(camera, Rect::new(0.0, 0.0, 128.0, 96.0))
+        };
+        let sprite = checks[0].sprite();
+        let draw = |canvas: &mut Canvas, spheres: &[Mesh]| {
+            let mut world = canvas.begin_3d(view);
+            world.draw_mesh(&floor, Affine3::IDENTITY, None, Color::WHITE);
+            for (i, block) in blocks.iter().enumerate() {
+                let angle = i as f32 / 24.0 * std::f32::consts::TAU;
+                let at = [6.0 * angle.cos(), 1.0, 6.0 * angle.sin()];
+                // Some mirrored, some casting no shadow, a texture each in turn.
+                let placed = Affine3 {
+                    x_axis: [if i % 7 == 0 { -1.0 } else { 1.0 }, 0.0, 0.0],
+                    ..Affine3::from_translation(at)
+                };
+                world.set_casts_shadow(i % 4 != 0);
+                world.draw_mesh(block, placed, Some(&checks[i % 2].sprite()), Color::WHITE);
+            }
+            world.set_casts_shadow(true);
+            for (i, sphere) in spheres.iter().enumerate() {
+                let at = Affine3::from_translation([i as f32 - 2.0, 3.0, 0.0]);
+                world.draw_mesh(sphere, at, Some(&checks[1].sprite()), Color::WHITE);
+            }
+            // Billboards showing what blocks do, which cast no shadow.
+            world.draw_billboard(&sprite, [0.0, 0.5, 2.0], [1.0, 1.0], Color::WHITE);
+            world.set_blend(Some(Blend::Normal));
+            let half = Color::rgba(1.0, 1.0, 1.0, 0.5);
+            world.draw_mesh(
+                &blocks[3],
+                Affine3::from_translation([0.0, 1.0, 3.0]),
+                None,
+                half,
+            );
+        };
+        let before = headless
+            .render(128, 96, |canvas| draw(canvas, &[]))
+            .unwrap();
+        let ctx = headless.context();
+        let spheres: Vec<Mesh> = (0..5)
+            .map(|_| ctx.create_mesh(&MeshData::sphere(0.5, 48, 24)).unwrap())
+            .collect();
+        let sizes = ctx.renderer.mesh_buffers().sizes();
+        assert!(
+            sizes[0][0] > 4096 && sizes[0][1] > 12288,
+            "they grew: {sizes:?}"
+        );
+        let with_spheres = headless
+            .render(128, 96, |canvas| draw(canvas, &spheres))
+            .unwrap();
+        let shown = with_spheres.compare(&before, 0);
+        assert!(!shown.differs_by_at_most(50), "the spheres show: {shown:?}");
+        // What was made before the buffers grew shows as it did.
+        let after = headless
+            .render(128, 96, |canvas| draw(canvas, &[]))
+            .unwrap();
+        assert!(after.compare(&before, 0).differs_by_at_most(0));
+        // And meshes dropped give their room to the next.
+        let ctx = headless.context();
+        let (indices, base) = (spheres[0].indices(), spheres[0].base_vertex());
+        drop(spheres);
+        let again = ctx.create_mesh(&MeshData::sphere(0.5, 48, 24)).unwrap();
+        assert_eq!(again.base_vertex(), base);
+        assert_eq!(again.indices(), indices);
     }
 }

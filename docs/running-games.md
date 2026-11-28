@@ -494,7 +494,9 @@ than recording the sprite it draws, so:
 - Turn colors into numbers once, with `graphics.color`, rather than passing hex strings or tables
   each frame. Each string or table is read again every time it's passed.
 - Draw many sprites from one sheet in a row: the engine batches consecutive sprites with the same
-  texture into one draw call.
+  texture into one draw call. In 3D, it does that for you: it draws a view's meshes that show the
+  same texture one after another, wherever they were drawn, and models whose files store the same
+  texture share it, so export a world's pieces with the same images, not copies made different.
 - For tens of thousands of sprites, draw them from a [native library](native-libraries.md), which
   can hand the engine all of them in one call.
 

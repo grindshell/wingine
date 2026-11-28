@@ -1543,7 +1543,10 @@ side through its near one, in the order its triangles come. So make a pane a fla
 
 A view's meshes that are the same mesh, showing the same sprite sheet's texture, are drawn together
 in one draw call wherever they're drawn among its others, so a view of many copies of a few meshes
-takes a draw call for each kind. A mesh out of sight is left out, and takes none: see
+takes a draw call for each kind. The kinds showing the same textures, drawn the same way, are drawn
+one after another, so nothing is bound between their draw calls, which costs less than binding
+each one's textures and corners of its own, as a town or a city of many models of a few textures
+would. A mesh out of sight is left out, and takes none: see
 [what's out of sight](#whats-out-of-sight).
 
 ### `graphics.draw_model`
@@ -1850,6 +1853,13 @@ a texture's `KHR_texture_transform` moves its coordinates. A double-sided materi
 too, lit as though it faced that way; the rest show only from the side their triangles face, as
 meshes do. In Blender, a material is double-sided unless its Backface Culling is on. Parts that
 share a mesh in the file share it on the GPU.
+
+Models share textures. A file whose texture is stored the same, byte for byte, as one a model
+loaded before stores it, and shown the same way, opaque or not and repeating the same, gets that
+model's texture, without reading it again, while any model holds it. So a world exported as many
+files with the same few textures, as Blender exports each with its own copy of every image it
+shows, holds each texture once, and its parts that show one are drawn one after another (see
+[`draw_mesh`](#graphicsdraw_mesh)).
 
 A material's emission is what its parts [glow](#glow) with, whatever lights them: its
 emissive color, times its emission texture, if it has one, which must be a PNG on the same

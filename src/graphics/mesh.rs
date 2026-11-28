@@ -1,6 +1,7 @@
 use std::{
     f32::consts::{PI, TAU},
     fmt,
+    ops::Range,
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, Ordering},
@@ -8,9 +9,11 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use wgpu::util::DeviceExt;
 
-use super::Color;
+use super::{
+    Color,
+    mesh_buffers::{MeshBuffers, Place},
+};
 use crate::math::{Bounds3, add3, scale3};
 
 /// A corner of a mesh's triangles.
@@ -232,15 +235,17 @@ impl GpuVertex {
 /// and drawn with [`Canvas3d::draw_mesh`](super::Canvas3d::draw_mesh). Its corners can be moved
 /// with [`Context::write_mesh`](crate::Context::write_mesh).
 ///
-/// Cloning is cheap; clones share the same GPU buffers, so writing one writes them all.
+/// Cloning is cheap; clones share the same corners on the GPU, so writing one writes them all.
 #[derive(Clone)]
 pub struct Mesh {
     inner: Arc<MeshInner>,
 }
 
 struct MeshInner {
-    vertices: wgpu::Buffer,
-    indices: wgpu::Buffer,
+    /// Where its corners and triangles are, in buffers it shares with other meshes, so that
+    /// meshes drawn one after another bind nothing between them.
+    buffers: MeshBuffers,
+    place: Place,
     vertex_count: u32,
     index_count: u32,
     written: Mutex<Written>,
@@ -282,32 +287,25 @@ pub(crate) struct Geometry {
     pub triangles: Vec<[u32; 3]>,
 }
 
+impl Drop for MeshInner {
+    fn drop(&mut self) {
+        let counts = [self.vertex_count, self.index_count];
+        self.buffers.free(self.place, counts);
+    }
+}
+
 impl Mesh {
-    pub(crate) fn new(device: &wgpu::Device, data: &MeshData) -> Result<Self, String> {
+    /// Makes a mesh of `data`, its corners and triangles in `buffers`.
+    pub(crate) fn new(buffers: &MeshBuffers, data: &MeshData) -> Result<Self, String> {
         if let Some(problem) = data.problem() {
             return Err(problem);
         }
         let vertices: Vec<GpuVertex> = data.vertices.iter().copied().map(GpuVertex::of).collect();
-        let buffer = |label, contents, usage| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents,
-                usage,
-            })
-        };
+        let place = buffers.place(&vertices, &data.indices);
         Ok(Self {
             inner: Arc::new(MeshInner {
-                // Copied to by `upload`, once the mesh is written.
-                vertices: buffer(
-                    "mesh vertices",
-                    bytemuck::cast_slice(&vertices),
-                    wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                ),
-                indices: buffer(
-                    "mesh indices",
-                    bytemuck::cast_slice(&data.indices),
-                    wgpu::BufferUsages::INDEX,
-                ),
+                buffers: buffers.clone(),
+                place,
                 vertex_count: data.vertices.len() as u32,
                 index_count: data.indices.len() as u32,
                 written: Mutex::new(Written {
@@ -385,15 +383,15 @@ impl Mesh {
 
     /// Gives the GPU the vertices last written, if it hasn't them yet. The renderer calls it for
     /// every mesh a frame draws, before it submits the frame, whose draws then show them.
-    pub(crate) fn upload(&self, queue: &wgpu::Queue) {
+    pub(crate) fn upload(&self) {
         if !self.inner.stale.load(Ordering::Acquire) {
             return;
         }
         let written = self.written();
         self.inner.stale.store(false, Ordering::Release);
         if !written.vertices.is_empty() {
-            let bytes = bytemuck::cast_slice(&written.vertices);
-            queue.write_buffer(&self.inner.vertices, 0, bytes);
+            let inner = &self.inner;
+            inner.buffers.write_vertices(inner.place, &written.vertices);
         }
     }
 
@@ -416,12 +414,20 @@ impl Mesh {
         Arc::as_ptr(&self.inner).addr()
     }
 
-    pub(crate) fn vertex_buffer(&self) -> &wgpu::Buffer {
-        &self.inner.vertices
+    /// Which of the arenas of the buffers it's in has its corners and triangles.
+    pub(crate) fn arena(&self) -> u32 {
+        self.inner.place.arena
     }
 
-    pub(crate) fn index_buffer(&self) -> &wgpu::Buffer {
-        &self.inner.indices
+    /// Where its triangles' indices are in its arena's index buffer.
+    pub(crate) fn indices(&self) -> Range<u32> {
+        let first = self.inner.place.first_index;
+        first..first + self.inner.index_count
+    }
+
+    /// Where its first corner is in its arena's vertex buffer, which its indices count from.
+    pub(crate) fn base_vertex(&self) -> i32 {
+        self.inner.place.first_vertex as i32
     }
 }
 

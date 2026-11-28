@@ -10,6 +10,7 @@ mod default_font;
 mod font;
 pub(crate) mod gpu;
 mod mesh;
+mod mesh_buffers;
 mod model;
 #[cfg(feature = "models")]
 pub(crate) mod model_file;
@@ -32,6 +33,6 @@ pub use model::{Model, ModelPart};
 pub use screen::{Resolution, Scaling};
 pub use sprite::{Sprite, SpriteSheet};
 pub use texture::Texture;
-#[cfg(feature = "egui")]
+#[cfg(any(feature = "egui", feature = "models"))]
 pub(crate) use texture::WeakTexture;
 pub use view3d::{Canvas3d, Fog, Light, Lighting, Sky, SunShadows, View3d};

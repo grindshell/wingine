@@ -12,6 +12,7 @@
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
+    hash::{DefaultHasher, Hash, Hasher},
     path::{Path, PathBuf},
 };
 
@@ -54,9 +55,40 @@ pub(crate) struct ModelData {
 /// A texture of a model: its image, and how texture coordinates outside it pick its texels.
 #[derive(Debug)]
 pub(crate) struct TextureData {
-    pub image: RgbaImage,
+    /// `None` if the engine has the texture already, as [`read_sharing`] was told, which so
+    /// isn't decoded.
+    pub image: Option<RgbaImage>,
     /// Across, then down.
     pub wrap: [Wrap; 2],
+    pub key: TextureKey,
+}
+
+/// What tells a texture of a model file from others, in that file or any other: its image as
+/// the file stores it, whether its alpha is ignored, and how it wraps. Files storing the same
+/// image the same way, byte for byte, show the same texture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct TextureKey {
+    /// A hash of the stored image, of 128 bits, so that two images never share one by chance.
+    image: [u64; 2],
+    opaque: bool,
+    wrap: [Wrap; 2],
+}
+
+impl TextureKey {
+    fn new(stored: &[u8], opaque: bool, wrap: [Wrap; 2]) -> Self {
+        // Two hashes of it, each begun differently.
+        let image = [0_u8, 1].map(|seed| {
+            let mut hasher = DefaultHasher::new();
+            seed.hash(&mut hasher);
+            stored.hash(&mut hasher);
+            hasher.finish()
+        });
+        Self {
+            image,
+            opaque,
+            wrap,
+        }
+    }
 }
 
 /// How texture coordinates outside 0 to 1, along one of a texture's axes, pick its texels.
@@ -88,14 +120,25 @@ pub(crate) struct PartData {
 }
 
 /// Reads a model file's `bytes`, `.gltf` or `.glb`, finding the files it names in `folder`.
+#[cfg(test)]
 pub(crate) fn read(bytes: &[u8], folder: &Path) -> Result<ModelData, String> {
-    read_parts(bytes, folder, true)
+    read_sharing(bytes, folder, &mut |_| false)
+}
+
+/// Reads a model file's `bytes` as [`read`] does, but doesn't decode a texture `held` says the
+/// engine has already.
+pub(crate) fn read_sharing(
+    bytes: &[u8],
+    folder: &Path,
+    held: &mut dyn FnMut(&TextureKey) -> bool,
+) -> Result<ModelData, String> {
+    read_parts(bytes, folder, true, held)
 }
 
 /// The triangles of a model file's `bytes`, each its three corners where the file's nodes place
 /// them, in the order its parts are drawn. Its textures aren't read, so nor are their files.
 pub(crate) fn read_triangles(bytes: &[u8], folder: &Path) -> Result<Vec<[[f32; 3]; 3]>, String> {
-    let data = read_parts(bytes, folder, false)?;
+    let data = read_parts(bytes, folder, false, &mut |_| false)?;
     let mut triangles = Vec::new();
     for part in &data.parts {
         let mesh = &data.meshes[part.mesh];
@@ -106,8 +149,14 @@ pub(crate) fn read_triangles(bytes: &[u8], folder: &Path) -> Result<Vec<[[f32; 3
     Ok(triangles)
 }
 
-/// Reads a model file's parts, with their textures if `textured`, or as though it had none.
-fn read_parts(bytes: &[u8], folder: &Path, textured: bool) -> Result<ModelData, String> {
+/// Reads a model file's parts, with their textures if `textured`, decoding those `held` doesn't
+/// say the engine has, or as though it had none.
+fn read_parts(
+    bytes: &[u8],
+    folder: &Path,
+    textured: bool,
+    held: &mut dyn FnMut(&TextureKey) -> bool,
+) -> Result<ModelData, String> {
     // Parsed once, and checked for what it needs before it's validated, which would fail on what
     // the engine doesn't know with a less helpful error.
     let ::gltf::Gltf {
@@ -165,6 +214,7 @@ fn read_parts(bytes: &[u8], folder: &Path, textured: bool) -> Result<ModelData, 
         buffers,
         folder,
         textured,
+        held,
         placed: HashSet::new(),
         meshes: HashMap::new(),
         textures: HashMap::new(),
@@ -204,6 +254,8 @@ struct Reader<'a> {
     folder: &'a Path,
     /// Whether materials' textures are read, or every part is read as showing none.
     textured: bool,
+    /// Whether the engine has a texture already, which so isn't decoded.
+    held: &'a mut dyn FnMut(&TextureKey) -> bool,
     /// The file's nodes placed so far. Each is in one place: a node under two parents, or in a
     /// loop, is an error, since nodes under several could be placed exponentially many times.
     placed: HashSet<usize>,
@@ -310,50 +362,67 @@ impl Reader<'_> {
         if let Some(&index) = self.textures.get(&key) {
             return Ok(Some(index));
         }
-        let mut decoded = self
-            .decode(&image)
-            .map_err(|err| format!("{}: {err}", named("image", image.index(), image.name())))?;
-        if opaque {
-            for pixel in decoded.pixels_mut() {
-                pixel.0[3] = u8::MAX;
+        let name = || named("image", image.index(), image.name());
+        let stored = stored(&image, &self.buffers, self.folder, &mut self.data.files)
+            .map_err(|err| format!("{}: {err}", name()))?;
+        let shared = TextureKey::new(&stored, opaque, wrap);
+        let decoded = if (self.held)(&shared) {
+            None
+        } else {
+            let mut decoded = decode(&stored).map_err(|err| format!("{}: {err}", name()))?;
+            if opaque {
+                for pixel in decoded.pixels_mut() {
+                    pixel.0[3] = u8::MAX;
+                }
             }
-        }
+            Some(decoded)
+        };
         self.data.textures.push(TextureData {
             image: decoded,
             wrap,
+            key: shared,
         });
         let index = self.data.textures.len() - 1;
         self.textures.insert(key, index);
         Ok(Some(index))
     }
+}
 
-    fn decode(&mut self, image: &::gltf::Image) -> Result<RgbaImage, String> {
-        let bytes = match image.source() {
-            gltf_image::Source::View { view, .. } => {
-                let buffer = &self.buffers[view.buffer().index()];
-                let range = view.offset()..view.offset() + view.length();
-                Cow::Borrowed(
-                    buffer
-                        .get(range)
-                        .ok_or("it runs past the end of its buffer")?,
-                )
-            }
-            gltf_image::Source::Uri { uri, .. } => {
-                Cow::Owned(load_uri(uri, self.folder, &mut self.data.files)?)
-            }
-        };
-        if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
-            return Err(
-                "it's a JPEG, which the engine doesn't read: export textures as PNG".to_owned(),
-            );
+/// `image` as its file stores it: in `buffers`, or in a file in `folder`, which is added to
+/// `files`.
+fn stored<'a>(
+    image: &::gltf::Image,
+    buffers: &'a [Vec<u8>],
+    folder: &Path,
+    files: &mut Vec<PathBuf>,
+) -> Result<Cow<'a, [u8]>, String> {
+    Ok(match image.source() {
+        gltf_image::Source::View { view, .. } => {
+            let buffer = &buffers[view.buffer().index()];
+            let range = view.offset()..view.offset() + view.length();
+            Cow::Borrowed(
+                buffer
+                    .get(range)
+                    .ok_or("it runs past the end of its buffer")?,
+            )
         }
-        if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-            return Err("it isn't a PNG, the only images the engine reads".to_owned());
-        }
-        image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
-            .map(|image| image.into_rgba8())
-            .map_err(|err| err.to_string())
+        gltf_image::Source::Uri { uri, .. } => Cow::Owned(load_uri(uri, folder, files)?),
+    })
+}
+
+/// The image a file `stored`.
+fn decode(stored: &[u8]) -> Result<RgbaImage, String> {
+    if stored.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Err(
+            "it's a JPEG, which the engine doesn't read: export textures as PNG".to_owned(),
+        );
     }
+    if !stored.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("it isn't a PNG, the only images the engine reads".to_owned());
+    }
+    image::load_from_memory_with_format(stored, image::ImageFormat::Png)
+        .map(|image| image.into_rgba8())
+        .map_err(|err| err.to_string())
 }
 
 /// The triangles of `primitive`, its material's base color made part of its vertices' colors.
@@ -1004,7 +1073,7 @@ mod tests {
         let textures: Vec<_> = model.parts.iter().map(|part| part.texture).collect();
         assert_eq!(textures, [Some(0), Some(0), Some(1)]);
         // Opaque materials ignore its alpha; masked ones keep it.
-        let image = |i: usize| &model.textures[i].image;
+        let image = |i: usize| model.textures[i].image.as_ref().unwrap();
         assert_eq!(image(0).get_pixel(1, 0).0, [255, 0, 0, 255]);
         assert_eq!(image(1).get_pixel(1, 0).0, [255, 0, 0, 100]);
         assert_eq!(model.meshes[0].vertices[0].uv, [0.0, 1.0]);
@@ -1210,7 +1279,8 @@ mod tests {
         );
         let model = read(json.as_bytes(), folder.path()).unwrap();
         assert_eq!(model.meshes[0].vertices.len(), 3);
-        assert_eq!(model.textures[0].image.get_pixel(0, 0).0, [1, 2, 3, 255]);
+        let image = model.textures[0].image.as_ref().unwrap();
+        assert_eq!(image.get_pixel(0, 0).0, [1, 2, 3, 255]);
         // Each read once, and listed, so tools know to read the model again when they change.
         let files = ["tri data.bin", "skin.png"].map(|name| folder.path().join(name));
         assert_eq!(model.files, files);
@@ -1393,7 +1463,8 @@ mod tests {
         // the texture, so it clamps; and like the other props, it shows only from outside.
         let crate_ = prop("crate.glb");
         assert_eq!(crate_.parts[0].texture, Some(0));
-        assert_eq!(crate_.textures[0].image.dimensions(), (12, 12));
+        let image = crate_.textures[0].image.as_ref().unwrap();
+        assert_eq!(image.dimensions(), (12, 12));
         assert_eq!(crate_.textures[0].wrap, [Wrap::Clamp; 2]);
         assert!(crate_.files.is_empty());
         let props = [&barrel, &crate_];

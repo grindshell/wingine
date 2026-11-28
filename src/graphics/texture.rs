@@ -1,4 +1,4 @@
-#[cfg(feature = "egui")]
+#[cfg(any(feature = "egui", feature = "models"))]
 use std::sync::Weak;
 use std::{fmt, sync::Arc};
 
@@ -80,18 +80,19 @@ impl Texture {
     }
 
     /// A handle that doesn't keep the texture alive, for telling when it's gone.
-    #[cfg(feature = "egui")]
+    #[cfg(any(feature = "egui", feature = "models"))]
     pub(crate) fn downgrade(&self) -> WeakTexture {
         WeakTexture(Arc::downgrade(&self.inner))
     }
 }
 
 /// A [`Texture`] that may have been dropped.
-#[cfg(feature = "egui")]
+#[cfg(any(feature = "egui", feature = "models"))]
 pub(crate) struct WeakTexture(Weak<TextureInner>);
 
-#[cfg(feature = "egui")]
+#[cfg(any(feature = "egui", feature = "models"))]
 impl WeakTexture {
+    #[cfg(feature = "egui")]
     pub fn is(&self, texture: &Texture) -> bool {
         self.0.as_ptr() == Arc::as_ptr(&texture.inner)
     }
@@ -99,6 +100,12 @@ impl WeakTexture {
     /// Whether some handle still holds the texture.
     pub fn is_alive(&self) -> bool {
         self.0.strong_count() > 0
+    }
+
+    /// The texture, unless it's gone.
+    #[cfg(feature = "models")]
+    pub fn upgrade(&self) -> Option<Texture> {
+        self.0.upgrade().map(|inner| Texture { inner })
     }
 }
 

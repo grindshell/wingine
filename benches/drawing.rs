@@ -5,18 +5,19 @@
 //! the median time `draw` took over [`FRAMES`] frames, per sprite, from the frame stats. The last
 //! cases render the frames too, for what rendering that many quads, billboards and meshes costs,
 //! and what one blended particle among meshes of many kinds adds to it; and the last draws a
-//! city of models all round the camera, as a game set in one would, most of them out of sight.
+//! city of models all round the camera, as a game set in one would, most of them out of sight,
+//! each block loaded from a file of its own storing the same few images as the rest.
 
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
 use wingine::{
     Context, FrameStats, Game, WindowConfig,
     graphics::{
-        Camera3d, Canvas, Color, Font, FontSettings, Mesh, MeshData, Model, ModelPart, Sprite,
+        Camera3d, Canvas, Color, Font, FontSettings, Mesh, MeshData, MeshVertex, Model, Sprite,
         View3d,
     },
     headless::Simulation,
@@ -36,6 +37,8 @@ const BLOCKS: u32 = 4;
 const STREET: f32 = 24.0;
 /// How many parts each of its models has, each a mesh of its own.
 const PARTS: u32 = 6;
+/// How many images its blocks' files store between them, its parts showing each in turn.
+const IMAGES: u32 = 3;
 /// Frames run before measuring, so caches and buffers have warmed up.
 const WARMUP: u32 = 30;
 const FRAMES: u32 = 120;
@@ -202,24 +205,30 @@ fn main() {
             frame * 1000.0
         );
     }
-    let mut simulation =
-        Simulation::new(&config(), |ctx| RustGame::load(ctx, &image, Shape::City)).unwrap();
-    simulation.set_render_every_frame(true);
-    let draw = draw_time(&mut simulation);
-    let render = median(&mut simulation, |stats| stats.render);
-    let frame = median(&mut simulation, |stats| stats.frame);
-    let stats = simulation.context().frame_stats();
-    println!(
-        "Rendering a city of {} models of {PARTS} meshes each round the camera: {:.3} ms \
-         drawing, {:.3} ms rendering on the CPU, {:.3} ms for the whole frame waiting for the \
-         GPU, {} draw calls, {} meshes out of sight",
-        (2 * BLOCKS).pow(2),
-        draw * 1000.0,
-        render * 1000.0,
-        frame * 1000.0,
-        stats.draw_calls,
-        stats.out_of_sight,
-    );
+    // Its blocks are model files, which the engine reads with its `models` feature.
+    if cfg!(feature = "models") {
+        write_city(&folder);
+        let mut simulation =
+            Simulation::new(&config(), |ctx| RustGame::load(ctx, &image, Shape::City)).unwrap();
+        simulation.set_render_every_frame(true);
+        let draw = draw_time(&mut simulation);
+        let render = median(&mut simulation, |stats| stats.render);
+        let frame = median(&mut simulation, |stats| stats.frame);
+        let stats = simulation.context().frame_stats();
+        println!(
+            "Rendering a city of {} models of {PARTS} meshes each round the camera, showing \
+             {IMAGES} images between them: {:.3} ms drawing, {:.3} ms rendering on the CPU, \
+             {:.3} ms for the whole frame waiting for the GPU, {} draw calls, {} meshes out of \
+             sight; {:.3} ms loading its files",
+            (2 * BLOCKS).pow(2),
+            draw * 1000.0,
+            render * 1000.0,
+            frame * 1000.0,
+            stats.draw_calls,
+            stats.out_of_sight,
+            simulation.game().loading.as_secs_f64() * 1000.0,
+        );
+    }
     // Tests and scripted runs read frames back, which a screenshot renders first.
     let config = WindowConfig {
         width: 1280,
@@ -248,6 +257,125 @@ fn main() {
 
 /// Screenshots taken to time one.
 const SCREENSHOTS: usize = 15;
+
+/// Writes the files of [`Shape::City`]'s blocks into `folder`, `block-0.glb` on: each a model of
+/// [`PARTS`] storeys stacked into a tower, a mesh each, showing [`IMAGES`] images in turn. Every
+/// file stores the same images, as the pieces of a city exported one by one do.
+fn write_city(folder: &Path) {
+    let storey = MeshData::cuboid([12.0, 4.0, 12.0]);
+    // The binary chunk: the storey's corners and triangles, then the images, each 4-aligned,
+    // and the views of it that say where each is.
+    let mut bin = Vec::new();
+    let mut views = Vec::new();
+    let mut view = |bin: &mut Vec<u8>, bytes: &[u8], target: &str| {
+        views.push(format!(
+            r#"{{"buffer":0,"byteOffset":{},"byteLength":{}{target}}}"#,
+            bin.len(),
+            bytes.len()
+        ));
+        bin.extend_from_slice(bytes);
+        bin.resize(bin.len().next_multiple_of(4), 0);
+    };
+    let floats = |of: &dyn Fn(&MeshVertex) -> Vec<f32>| {
+        let values: Vec<f32> = storey.vertices.iter().flat_map(of).collect();
+        values
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect::<Vec<u8>>()
+    };
+    const VERTICES: &str = r#","target":34962"#;
+    view(&mut bin, &floats(&|v| v.position.to_vec()), VERTICES);
+    view(&mut bin, &floats(&|v| v.normal.to_vec()), VERTICES);
+    view(&mut bin, &floats(&|v| v.uv.to_vec()), VERTICES);
+    let indices: Vec<u8> = storey
+        .indices
+        .iter()
+        .flat_map(|i| i.to_le_bytes())
+        .collect();
+    view(&mut bin, &indices, r#","target":34963"#);
+    for image in 0..IMAGES {
+        let shade = (40 + 70 * image) as u8;
+        let pixels = image::RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+            image::Rgba([shade, 255 - shade, ((x + y) * 16) as u8, 255])
+        });
+        let mut png = Vec::new();
+        pixels
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        view(&mut bin, &png, "");
+    }
+    let picks: [fn(f32, f32) -> f32; 2] = [f32::min, f32::max];
+    let [least, most] = picks.map(|pick| {
+        let corner = storey
+            .vertices
+            .iter()
+            .map(|v| v.position)
+            .reduce(|a, b| [0, 1, 2].map(|axis| pick(a[axis], b[axis])));
+        format!("{:?}", corner.unwrap())
+    });
+    let count = storey.vertices.len();
+    let parts = 0..PARTS;
+    let json = format!(
+        r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[{nodes}]}}],
+        "nodes":[{placed}],"meshes":[{meshes}],
+        "materials":[{materials}],"textures":[{textures}],"images":[{images}],
+        "accessors":[
+            {{"bufferView":0,"componentType":5126,"count":{count},"type":"VEC3","min":{least},"max":{most}}},
+            {{"bufferView":1,"componentType":5126,"count":{count},"type":"VEC3"}},
+            {{"bufferView":2,"componentType":5126,"count":{count},"type":"VEC2"}},
+            {{"bufferView":3,"componentType":5125,"count":{indices},"type":"SCALAR"}}],
+        "bufferViews":[{views}],"buffers":[{{"byteLength":{length}}}]}}"#,
+        nodes = parts.clone().map(|p| p.to_string()).collect::<Vec<_>>().join(","),
+        placed = parts
+            .clone()
+            .map(|p| format!(r#"{{"mesh":{p},"translation":[0,{},0]}}"#, 2 + 4 * p))
+            .collect::<Vec<_>>()
+            .join(","),
+        meshes = parts
+            .map(|p| format!(
+                r#"{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2}},"indices":3,"material":{}}}]}}"#,
+                p % IMAGES
+            ))
+            .collect::<Vec<_>>()
+            .join(","),
+        materials = (0..IMAGES)
+            .map(|i| format!(r#"{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":{i}}}}}}}"#))
+            .collect::<Vec<_>>()
+            .join(","),
+        textures = (0..IMAGES)
+            .map(|i| format!(r#"{{"source":{i}}}"#))
+            .collect::<Vec<_>>()
+            .join(","),
+        images = (0..IMAGES)
+            .map(|i| format!(r#"{{"bufferView":{},"mimeType":"image/png"}}"#, 4 + i))
+            .collect::<Vec<_>>()
+            .join(","),
+        indices = storey.indices.len(),
+        views = views.join(","),
+        length = bin.len(),
+    );
+    let mut json = json.into_bytes();
+    json.resize(json.len().next_multiple_of(4), b' ');
+    let mut glb = Vec::new();
+    let length = 12 + 8 + json.len() + 8 + bin.len();
+    for word in [
+        0x4654_6c67,
+        2,
+        length as u32,
+        json.len() as u32,
+        0x4e4f_534a,
+    ] {
+        glb.extend_from_slice(&u32::to_le_bytes(word));
+    }
+    glb.extend_from_slice(&json);
+    for word in [bin.len() as u32, 0x004e_4942] {
+        glb.extend_from_slice(&u32::to_le_bytes(word));
+    }
+    glb.extend_from_slice(&bin);
+    for block in 0..(2 * BLOCKS).pow(2) {
+        fs::write(folder.join(format!("block-{block}.glb")), &glb).unwrap();
+    }
+}
 
 fn report(case: &str, draw: f32) {
     let each = draw / SPRITES as f32 * 1e9;
@@ -360,7 +488,8 @@ enum Shape {
     /// [`SPRITES`] characters, and drawn.
     WrappedText,
     /// A city of blocks all round the camera, which stands in a street among them: each block a
-    /// model of [`PARTS`] meshes of its own, a draw call each, stacked into a tower.
+    /// model of [`PARTS`] meshes of its own stacked into a tower, loaded from a file of its own
+    /// (`write_city`), which stores the same [`IMAGES`] images as the rest.
     City,
 }
 
@@ -383,6 +512,8 @@ struct RustGame {
     kinds: Vec<Mesh>,
     /// The blocks of [`Shape::City`], row by row.
     city: Vec<Model>,
+    /// How long loading them took.
+    loading: Duration,
     /// One particle that never ages, half see-through, so it blends.
     particle: Particles3d,
     /// [`SPRITES`] still particles over the canvas, of every age, for [`Shape::Particles`].
@@ -407,22 +538,18 @@ impl RustGame {
             Shape::City => (2 * BLOCKS).pow(2),
             _ => 0,
         };
+        let start = Instant::now();
+        let folder = image.parent().expect("the sprite is in the bench's folder");
+        #[cfg(feature = "models")]
         let city = (0..blocks)
-            .map(|_| {
-                let parts = (0..PARTS).map(|part| {
-                    let storey = ctx.create_mesh(&MeshData::cuboid([12.0, 4.0, 12.0]))?;
-                    Ok(ModelPart {
-                        mesh: storey,
-                        sprite: Some(sprite.clone()),
-                        transform: Affine3::from_translation([0.0, 2.0 + 4.0 * part as f32, 0.0]),
-                        double_sided: false,
-                        emission: Color::BLACK,
-                        emission_sprite: None,
-                    })
-                });
-                Ok(Model::new(parts.collect::<wingine::Result<_>>()?))
-            })
+            .map(|block| ctx.load_model(folder.join(format!("block-{block}.glb"))))
             .collect::<wingine::Result<_>>()?;
+        #[cfg(not(feature = "models"))]
+        let city = {
+            let _ = (blocks, folder);
+            Vec::new()
+        };
+        let loading = start.elapsed();
         let blended = ParticleSettings3d {
             common: ParticleSettings {
                 rate: 0.0,
@@ -457,6 +584,7 @@ impl RustGame {
             post,
             kinds,
             city,
+            loading,
             particle,
             particles,
             font,
